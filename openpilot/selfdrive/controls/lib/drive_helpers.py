@@ -13,9 +13,12 @@ MIN_STABLE_DELAY = 0.3
 MAX_LATERAL_JERK = 5.0  # m/s^3
 MAX_LATERAL_ACCEL_NO_ROLL = 3.0  # m/s^2
 
+STOP_SPEED = 0.3        # m/s, speed below which a stop can be latched
+STOP_ACCEL = 0.1        # m/s^2, plan is considered to not be asking for speed below this
+
 
 def should_stop(v_ego: float, a_target: float) -> bool:
-  return bool(v_ego < 0.3 and a_target < 0.1)
+  return bool(v_ego < STOP_SPEED and a_target < STOP_ACCEL)
 
 def clamp(val, min_val, max_val):
   clamped_val = float(np.clip(val, min_val, max_val))
