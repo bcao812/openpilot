@@ -20,10 +20,13 @@ class Maneuver:
     self.only_radar = kwargs.get("only_radar", False)
     self.ensure_start = kwargs.get("ensure_start", False)
     self.ensure_slowdown = kwargs.get("ensure_slowdown", False)
+    self.ensure_stop = kwargs.get("ensure_stop", False)
     self.enabled = kwargs.get("enabled", True)
     self.e2e = kwargs.get("e2e", False)
     self.personality = kwargs.get("personality", 0)
     self.force_decel = kwargs.get("force_decel", False)
+    self.actuator_dead_band = kwargs.get("actuator_dead_band", 0.0)
+    self.model_decel_gain = kwargs.get("model_decel_gain", 0.0)
 
     self.duration = duration
     self.title = title
@@ -39,6 +42,8 @@ class Maneuver:
       e2e=self.e2e,
       personality=self.personality,
       force_decel=self.force_decel,
+      actuator_dead_band=self.actuator_dead_band,
+      model_decel_gain=self.model_decel_gain,
     )
 
     valid = True
@@ -79,6 +84,10 @@ class Maneuver:
 
     if self.ensure_slowdown and log['speed'] > 5.5:
       print('LongitudinalPlanner not slowing down!')
+      valid = False
+
+    if self.ensure_stop and (log['speed'] > 1e-2 or not log['should_stop']):
+      print('LongitudinalPlanner not stopping!')
       valid = False
 
     if self.force_decel and log['speed'] > 1e-1 and log['acceleration'] > -0.04:

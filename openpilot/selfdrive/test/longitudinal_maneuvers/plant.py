@@ -6,6 +6,7 @@ from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
 from openpilot.common.realtime import Ratekeeper, DT_MDL
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+from openpilot.selfdrive.controls.lib.drive_helpers import should_stop
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
@@ -15,7 +16,8 @@ class Plant:
   messaging_initialized = False
 
   def __init__(self, lead_relevancy=False, speed=0.0, distance_lead=2.0,
-               enabled=True, only_lead2=False, only_radar=False, e2e=False, personality=0, force_decel=False):
+               enabled=True, only_lead2=False, only_radar=False, e2e=False, personality=0, force_decel=False,
+               actuator_dead_band=0.0, model_decel_gain=0.0):
     self.rate = 1. / DT_MDL
 
     if not Plant.messaging_initialized:
@@ -42,6 +44,8 @@ class Plant:
     self.e2e = e2e
     self.personality = personality
     self.force_decel = force_decel
+    self.actuator_dead_band = actuator_dead_band
+    self.model_decel_gain = model_decel_gain
 
     self.rk = Ratekeeper(self.rate, print_delay_threshold=100.0)
     self.ts = 1. / self.rate
@@ -112,7 +116,16 @@ class Plant:
     position = log.XYZTData.new_message()
     position.x = [float(x) for x in (self.speed + 0.5) * np.array(ModelConstants.T_IDXS)]
     model.modelV2.position = position
-    model.modelV2.action.desiredAcceleration = float(self.acceleration + 0.5)
+    if self.model_decel_gain > 0.:
+      # A converging model plan: decel proportional to the speed still to be taken off, so it
+      # approaches zero asymptotically instead of ever commanding a hard stop. This is what the
+      # plan settles into at a red light, and shouldStop is derived the way modeld derives it.
+      desired_accel = -self.model_decel_gain * self.speed
+      model.modelV2.action.shouldStop = bool(should_stop(self.speed, desired_accel))
+    else:
+      # Simulate model predicting slightly faster acceleration, so the lead policy stays in charge
+      desired_accel = self.acceleration + 0.5
+    model.modelV2.action.desiredAcceleration = float(desired_accel)
     velocity = log.XYZTData.new_message()
     velocity.x = [float(x) for x in (self.speed + 0.5) * np.ones_like(ModelConstants.T_IDXS)]
     velocity.x[0] = float(self.speed) # always start at current speed
@@ -146,6 +159,11 @@ class Plant:
     self.acceleration = self.planner.output_a_target
     if self.planner.output_should_stop:
       self.acceleration = min(-0.5, self.acceleration)
+    elif self.acceleration < 0. and self.acceleration > self.actuator_dead_band:
+      # Some cars cannot brake gently. Honda Bosch turns any accel above BOSCH_GAS_LOOKUP_BP[0] into
+      # gas with BRAKE_REQUEST cleared, so a small requested decel comes out as coasting or gas. Until
+      # a stop is actually requested, nothing in that band can take speed off the car.
+      self.acceleration = 0.
     self.speed = self.speed + self.acceleration * self.ts
     self.should_stop = self.planner.output_should_stop
     fcw = self.planner.fcw
