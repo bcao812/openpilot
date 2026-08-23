@@ -12,6 +12,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
+from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_FINISH_T, CREEP_SPEED, CREEP_STOP_T, STOP_ACCEL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -68,6 +69,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.a_cruise = init_a
     self.output_a_target = init_a
     self.output_should_stop = False
+    self.creep_t = 0.0
+    self.creep_v = 0.0
+    self.creep_stop = False
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -105,6 +109,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.v_desired_filter.x = v_ego
       self.output_a_target = np.clip(sm['carState'].aEgo, ACCEL_MIN, ACCEL_MAX)
       self.a_cruise = self.output_a_target
+      self.creep_t = 0.0
+      self.creep_stop = False
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -152,6 +158,40 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
+
+    # Anti-creep fallback. should_stop() can only latch below STOP_SPEED, but a car whose actuator
+    # has a dead band never gets there: Honda Bosch sends gas and clears BRAKE_REQUEST for any accel
+    # above -0.2, so as the plan asymptotically converges its accel crosses -0.2 while the car is
+    # still rolling and the speed floors out above STOP_SPEED. The stop can then never latch, which
+    # is self-sustaining: to stop, the car must first stop.
+    #
+    # A stop that is already happening must not be preempted, because LongCtrlState.stopping
+    # abandons the PID for an open loop ramp toward stopAccel and latching early hands that ramp a
+    # higher speed to take off. But "the car is still shedding speed" is far too weak a test for
+    # that: an MPC plan converges asymptotically, so it sheds speed the whole way down and simply
+    # never arrives, which is the creep itself. Judge the band in windows of CREEP_STOP_T and ask
+    # the question that decides it -- at the rate this window shed speed, will the stop be over
+    # within CREEP_FINISH_T? If yes it is a stop, leave it alone. If not it is a creep, however
+    # smooth. Once latched the test is over, because from then on the speed coming off is the latch
+    # doing its work and re-testing it would let go and grab again for the rest of the stop.
+    #
+    # Measuring the rate over a window rather than reading carState.aEgo is deliberate: replayed
+    # over six logged stops, aEgo in the creep band has a larger standard deviation than its mean
+    # (0.24..0.36 against -0.27 m/s^2), and the noise breaks the dwell.
+    if v_ego < CREEP_SPEED and output_a_target < STOP_ACCEL:
+      if self.creep_t == 0.0:
+        self.creep_v = v_ego
+      self.creep_t += self.dt
+      if not self.creep_stop and self.creep_t > CREEP_STOP_T:
+        if (self.creep_v - v_ego) * CREEP_FINISH_T >= v_ego * CREEP_STOP_T:
+          self.creep_t = 0.0
+        else:
+          self.creep_stop = True
+    else:
+      self.creep_t = 0.0
+      self.creep_stop = False
+    self.output_should_stop = self.output_should_stop or self.creep_stop
+
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0

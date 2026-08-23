@@ -178,6 +178,25 @@ def create_maneuvers(kwargs):
       ensure_start=True,
       **kwargs,
     ))
+    if kwargs['e2e']:
+      # An actuator that cannot brake gently, against a plan that converges asymptotically. Honda
+      # Bosch turns any accel above BOSCH_GAS_LOOKUP_BP[0] into gas with BRAKE_REQUEST cleared, so
+      # the plan's accel crosses that band while the car is still rolling, the speed floors out
+      # above STOP_SPEED and should_stop() can no longer latch. Six logged stops behind a stopped
+      # car on a 2019 Accord all ended this way, crawling 3.1 to 4.1 s to a standstill.
+      #
+      # A stopped lead does not reproduce it in this plant -- the MPC brakes hard enough to reach
+      # STOP_SPEED on its own -- so the converging plan is what pins the anti-creep latch here.
+      maneuvers.append(Maneuver(
+        "stop with a converging plan and a -0.2 m/s^2 actuator dead band",
+        duration=40.,
+        initial_speed=20.,
+        lead_relevancy=False,
+        actuator_dead_band=-0.2,
+        model_decel_gain=0.3,
+        ensure_stop=True,
+        **kwargs,
+      ))
   return maneuvers
 
 
