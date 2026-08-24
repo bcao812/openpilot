@@ -2,7 +2,7 @@ import numpy as np
 from collections import defaultdict
 
 from opendbc.can import CANDefine, CANParser
-from opendbc.car import Bus, create_button_events, structs
+from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.values import CAR, DBC, STEER_THRESHOLD, HondaFlags, CruiseButtons, CruiseSettings, \
@@ -52,6 +52,9 @@ class CarState(CarStateBase, CarStateExt):
     self.dash_speed_seen = False
     self.is_metric = False
     self.v_cruise_factor = 1.
+
+    self.initial_accFault_cleared = False
+    self.initial_accFault_cleared_timer = int(10 / DT_CTRL)  # 10 seconds after startup for initial faults to clear
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
@@ -200,6 +203,21 @@ class CarState(CarStateBase, CarStateExt):
     ret.deprecated.brake = cp.vl["VSA_STATUS"]["USER_BRAKE"]
     ret.cruiseState.enabled = cp.vl["POWERTRAIN_DATA"]["ACC_STATUS"] != 0
     ret.cruiseState.available = bool(cp.vl[self.car_state_scm_msg]["MAIN_ON"])
+
+    # Bosch cars can report a fault left over from the previous drive for the first few
+    # seconds after startup. accFaulted is not reversible until the car goes offroad, so a
+    # fault seen inside that window is suppressed and engagement is blocked via
+    # cruiseState.available instead. Once the window expires the first clean frame latches
+    # initial_accFault_cleared and normal fault reporting resumes for the rest of the drive.
+    if ret.accFaulted:
+      if (self.CP.flags & HondaFlags.BOSCH) and not self.initial_accFault_cleared:
+        ret.accFaulted = False
+        ret.cruiseState.available = False
+    elif self.initial_accFault_cleared_timer == 0:
+      self.initial_accFault_cleared = True
+
+    if self.initial_accFault_cleared_timer > 0:
+      self.initial_accFault_cleared_timer -= 1
 
     # Gets rid of Pedal Grinding noise when brake is pressed at slow speeds for some models
     if self.CP.carFingerprint in (CAR.HONDA_PILOT, CAR.HONDA_RIDGELINE):
