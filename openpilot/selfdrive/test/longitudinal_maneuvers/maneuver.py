@@ -90,7 +90,9 @@ class Maneuver:
       print('LongitudinalPlanner not stopping!')
       valid = False
 
-    if self.force_decel and log['speed'] > 1e-1 and log['acceleration'] > -0.04:
+    # force_decel is a planner input, so judge the planner's output. The actuator is a separate
+    # question: LongControl commands nothing at all while openpilot is not longitudinally active.
+    if self.force_decel and log['speed'] > 1e-1 and log['a_target'] > -0.04:
       print('Not stopping with force decel')
       valid = False
 

@@ -2,10 +2,11 @@
 import time
 import numpy as np
 
+from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
-from openpilot.common.realtime import Ratekeeper, DT_MDL
-from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+from openpilot.common.realtime import Ratekeeper, DT_MDL, DT_CTRL
+from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.drive_helpers import should_stop
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
@@ -58,6 +59,10 @@ class Plant:
     CP = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC)
     CP_SP = CarInterface.get_non_essential_params_sp(CP, CAR.HONDA_CIVIC)
     self.planner = LongitudinalPlanner(CP, CP_SP, init_v=self.speed)
+    self.long_control = LongControl(CP, CP_SP)
+    # The car-specific pid limits would drag Nidec's near-cruise anti-windup taper into a harness
+    # that is about stopping; the generic pair is also exactly what a Honda Bosch gets.
+    self.accel_limits = (ACCEL_MIN, ACCEL_MAX)
 
   @property
   def current_time(self):
@@ -135,7 +140,7 @@ class Plant:
     model.modelV2.acceleration = acceleration
     model.modelV2.meta.disengagePredictions.gasPressProbs = [float(prob_throttle) for _ in range(6)]
 
-    control.controlsState.longControlState = LongCtrlState.pid if self.enabled else LongCtrlState.off
+    control.controlsState.longControlState = self.long_control.long_control_state
     ss.selfdriveState.experimentalMode = self.e2e
     ss.selfdriveState.personality = self.personality
     control.controlsState.forceDecel = self.force_decel
@@ -156,25 +161,35 @@ class Plant:
           'liveMapDataSP': live_map_data_sp.liveMapDataSP,
           'gpsLocation': gps_data.gpsLocation}
     self.planner.update(sm)
-    self.acceleration = self.planner.output_a_target
-    if self.planner.output_should_stop:
-      self.acceleration = min(-0.5, self.acceleration)
-    elif self.acceleration < 0. and self.acceleration > self.actuator_dead_band:
-      # Some cars cannot brake gently. Honda Bosch turns any accel above BOSCH_GAS_LOOKUP_BP[0] into
-      # gas with BRAKE_REQUEST cleared, so a small requested decel comes out as coasting or gas. Until
-      # a stop is actually requested, nothing in that band can take speed off the car.
-      self.acceleration = 0.
-    self.speed = self.speed + self.acceleration * self.ts
+    a_target = self.planner.output_a_target
     self.should_stop = self.planner.output_should_stop
     fcw = self.planner.fcw
-    self.distance_lead = self.distance_lead + v_lead * self.ts
 
-    # ******** run the car ********
-    #print(self.distance, speed)
-    if self.speed <= 0:
-      self.speed = 0
-      self.acceleration = 0
-    self.distance = self.distance + self.speed * self.ts
+    # Run the real longitudinal controller, at the rate it really runs at. LongCtrlState.stopping
+    # abandons the PID and walks the command open loop toward CP.stopAccel by a fixed step per
+    # call, so calling it once per 20 Hz plant step would stretch that ramp by 5x and hide the
+    # very jolt these maneuvers exist to measure.
+    for _ in range(int(round(self.ts / DT_CTRL))):
+      car_state.carState.vEgo = float(self.speed)
+      car_state.carState.aEgo = float(self.acceleration)
+      car_state.carState.standstill = bool(self.speed < 0.01)
+      accel = float(self.long_control.update(self.enabled, car_state.carState, a_target,
+                                             self.should_stop, self.accel_limits))
+      if accel < 0. and accel > self.actuator_dead_band:
+        # Some cars cannot brake gently. Honda Bosch turns any accel above BOSCH_GAS_LOOKUP_BP[0] into
+        # gas with BRAKE_REQUEST cleared, so a small requested decel comes out as coasting or gas. Until
+        # a stop is actually requested, nothing in that band can take speed off the car.
+        accel = 0.
+      self.acceleration = accel
+
+      # ******** run the car ********
+      self.speed = self.speed + self.acceleration * DT_CTRL
+      if self.speed <= 0:
+        self.speed = 0
+        self.acceleration = 0
+      self.distance = self.distance + self.speed * DT_CTRL
+
+    self.distance_lead = self.distance_lead + v_lead * self.ts
 
     # *** radar model ***
     if self.lead_relevancy:
@@ -197,6 +212,7 @@ class Plant:
       "distance": self.distance,
       "speed": self.speed,
       "acceleration": self.acceleration,
+      "a_target": a_target,
       "should_stop": self.should_stop,
       "distance_lead": self.distance_lead,
       "fcw": fcw,
