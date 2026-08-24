@@ -176,6 +176,9 @@ class Plant:
       car_state.carState.standstill = bool(self.speed < 0.01)
       accel = float(self.long_control.update(self.enabled, car_state.carState, a_target,
                                              self.should_stop, self.accel_limits))
+      # what openpilot asked the car for, before the car's own actuator gets a say. This is what
+      # carControl.actuators.accel carries in a log, so it is what a maneuver can hold to account.
+      accel_cmd = accel
       if accel < 0. and accel > self.actuator_dead_band:
         # Some cars cannot brake gently. Honda Bosch turns any accel above BOSCH_GAS_LOOKUP_BP[0] into
         # gas with BRAKE_REQUEST cleared, so a small requested decel comes out as coasting or gas. Until
@@ -220,6 +223,7 @@ class Plant:
       "distance": self.distance,
       "speed": self.speed,
       "acceleration": self.acceleration,
+      "accel_cmd": accel_cmd,
       "a_target": a_target,
       "should_stop": self.should_stop,
       "distance_lead": self.distance_lead,

@@ -193,10 +193,40 @@ def create_maneuvers(kwargs):
         initial_speed=20.,
         lead_relevancy=False,
         actuator_dead_band=-0.2,
+        actuator_delay=0.5,
         model_decel_gain=0.3,
         ensure_stop=True,
+        # Baselines on this code: accel -1.61, jerk -0.92, crawl 1.90 s. No lead, so no gap to
+        # judge. The gates sit one step outside those, close enough that a deeper dive or a
+        # longer drag trips them; C3 and C4 tighten them onto their own numbers.
+        max_stopping_accel=-1.8,
+        max_stopping_jerk=-1.5,
+        max_crawl_t=2.5,
         **kwargs,
       ))
+    # The same stop, but with a lead to stop behind, so the gap at standstill is a real number
+    # rather than 200. The MPC's plan is steep enough here to reach STOP_SPEED on its own, so this
+    # one is about where the car ends up, not about how long the creep lasts -- and it holds in acc
+    # mode too, because the lead policy is not gated on experimental mode.
+    maneuvers.append(Maneuver(
+      "stop behind a stationary lead from 12 m/s",
+      duration=30.,
+      initial_speed=12.,
+      lead_relevancy=True,
+      initial_distance_lead=60.,
+      speed_lead_values=[0., 0.],
+      actuator_dead_band=-0.2,
+      actuator_delay=0.5,
+      ensure_stop=True,
+      # Baselines on this code: accel -1.16, jerk -0.85, gap 5.36 m, crawl 3.10 s. The gap floor
+      # is the one number taken from the road rather than from the baseline -- 2.0 m is where a
+      # stop stops feeling like a stop, and two logged stops were already under it.
+      max_stopping_accel=-1.8,
+      max_stopping_jerk=-1.5,
+      min_final_gap=2.0,
+      max_crawl_t=4.0,
+      **kwargs,
+    ))
   return maneuvers
 
 
