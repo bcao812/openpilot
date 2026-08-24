@@ -1,15 +1,21 @@
+import math
 from typing import cast
 
 from opendbc.car import structs
 from openpilot.cereal import custom, messaging
 from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_FINISH_T, CREEP_SPEED, CREEP_STOP_T, STOP_SPEED, should_stop
+from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T,
+                                                            STOP_SPEED, should_stop)
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 
 # above STOP_SPEED, so should_stop() alone can never latch here, and inside the creep band
 V_CREEP = 0.5
 FRAMES_DWELL = int(CREEP_STOP_T / DT_MDL)
+# the window test is only read once creep_t has passed CREEP_STOP_T, so a window is one frame
+# longer than that, and the cap can only be acted on at the first boundary at or past it
+WINDOW_T = CREEP_STOP_T + DT_MDL
+FRAMES_CAP = int(math.ceil(CREEP_MAX_T / WINDOW_T) * WINDOW_T / DT_MDL)
 
 
 class MockDec:
@@ -103,6 +109,15 @@ def run_decel(planner: LongitudinalPlanner, frames: int, v0: float, decel: float
   for _ in range(frames):
     planner.update(build_sm(v_ego=v_ego, **kwargs))
     v_ego = max(0.0, v_ego - decel * DT_MDL)
+  return v_ego
+
+
+def run_converging(planner: LongitudinalPlanner, frames: int, v0: float, k: float, **kwargs) -> float:
+  """A converging plan: the speed comes off in proportion to itself, so it never arrives."""
+  v_ego = v0
+  for _ in range(frames):
+    planner.update(build_sm(v_ego=v_ego, **kwargs))
+    v_ego = max(0.0, v_ego * (1.0 - k * DT_MDL))
   return v_ego
 
 
@@ -218,3 +233,41 @@ class TestAntiCreepDoesNotPreemptAStop:
       v = max(0.31, v - 0.5 * DT_MDL)  # the stop the latch is carrying out, held above STOP_SPEED
       planner.update(build_sm(v_ego=v, force_decel=True))
       assert planner.output_should_stop, "released the stop it had latched"
+
+
+class TestAntiCreepTotalTimeCap:
+  """The window test extrapolates linearly, and a converging plan settles into a_target ~ -k * v_ego,
+  which sheds the same fraction of the speed every window. So it always predicts arrival one over k
+  seconds hence, and never arrives -- the window test alone cannot end a creep, only recognise a
+  stop. CREEP_MAX_T is what ends it."""
+
+  V0 = CREEP_SPEED - 0.05
+  # A window resets when it leaves a fraction CREEP_FINISH_T / (CREEP_FINISH_T + CREEP_STOP_T) = 0.8
+  # of the speed, so any rate above -log(0.8) / WINDOW_T ~ 0.41 passes every window forever. 0.6
+  # clears that, and is still gentle enough that the speed is above STOP_SPEED at the cap, so the
+  # ordinary should_stop() cannot be what latches and the cap is what is on trial.
+  K = 0.6
+
+  def test_every_window_on_its_own_says_the_stop_is_arriving(self):
+    planner = build_planner()
+    v_end = run_converging(planner, FRAMES_CAP - 1, v0=self.V0, k=self.K, force_decel=True)
+    assert v_end > STOP_SPEED
+    assert not planner.output_should_stop, "latched early, this is not testing the cap"
+    assert planner.creep_total_t > CREEP_STOP_T, "never accumulated, the band was left"
+
+  def test_the_cap_latches_a_converging_plan(self):
+    planner = build_planner()
+    v_end = run_converging(planner, FRAMES_CAP, v0=self.V0, k=self.K, force_decel=True)
+    assert v_end > STOP_SPEED, "the run left the band, it is not testing the cap"
+    assert planner.output_should_stop, "a converging plan crept on past CREEP_MAX_T"
+
+  def test_the_cap_is_cleared_by_leaving_the_band(self):
+    # the cap counts one approach, not the car's whole life: a stop that gives up and moves off
+    # must not carry a spent budget into the next one
+    planner = build_planner()
+    run_converging(planner, FRAMES_CAP, v0=self.V0, k=self.K, force_decel=True)
+    assert planner.creep_total_t > 0.0
+
+    run(planner, int(1.0 / DT_MDL), v_ego=V_CREEP, force_decel=False)
+    assert planner.creep_total_t == 0.0
+    assert not planner.output_should_stop

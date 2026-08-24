@@ -198,10 +198,11 @@ def create_maneuvers(kwargs):
         ensure_stop=True,
         # No lead, so no gap to judge. ROLLING_STOP_ACCEL caps the ramp, and the ramp is the only
         # thing driving the command down here, so -1.55 holds that cap to account -- one ramp step
-        # of slack below -1.5. C4 tightens crawl_t onto its own number.
+        # of slack below -1.5. The window test already latches this one inside CREEP_MAX_T, so the
+        # crawl is the ramp's own length and 2.0 is what that costs.
         max_stopping_accel=-1.55,
         max_stopping_jerk=-1.5,
-        max_crawl_t=2.5,
+        max_crawl_t=2.0,
         **kwargs,
       ))
     # The same stop, but with a lead to stop behind, so the gap at standstill is a real number
@@ -220,11 +221,12 @@ def create_maneuvers(kwargs):
       ensure_stop=True,
       # Baselines on this code: accel -1.16, jerk -0.85, gap 5.36 m, crawl 3.10 s. The gap floor
       # is the one number taken from the road rather than from the baseline -- 2.0 m is where a
-      # stop stops feeling like a stop, and two logged stops were already under it.
+      # stop stops feeling like a stop, and two logged stops were already under it. The crawl is
+      # 2.60 s once the total-time cap ends the creep, so 2.8 holds that and no more.
       max_stopping_accel=-1.8,
       max_stopping_jerk=-1.5,
       min_final_gap=2.0,
-      max_crawl_t=4.0,
+      max_crawl_t=2.8,
       **kwargs,
     ))
   return maneuvers

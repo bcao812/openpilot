@@ -12,7 +12,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
-from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_FINISH_T, CREEP_SPEED, CREEP_STOP_T, STOP_ACCEL
+from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T, STOP_ACCEL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -72,6 +72,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.creep_t = 0.0
     self.creep_v = 0.0
     self.creep_stop = False
+    self.creep_total_t = 0.0
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -111,6 +112,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.a_cruise = self.output_a_target
       self.creep_t = 0.0
       self.creep_stop = False
+      self.creep_total_t = 0.0
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -178,18 +180,28 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # Measuring the rate over a window rather than reading carState.aEgo is deliberate: replayed
     # over six logged stops, aEgo in the creep band has a larger standard deviation than its mean
     # (0.24..0.36 against -0.27 m/s^2), and the noise breaks the dwell.
+    #
+    # The window test alone cannot end a creep, though. It extrapolates linearly, and a converging
+    # plan settles into a_target ~ -k * v_ego, which sheds v_ego * k * CREEP_STOP_T per window and
+    # so always predicts arrival in 1/k seconds -- and never arrives. For any k above
+    # CREEP_STOP_T / CREEP_FINISH_T = 0.4 the test passes every window forever. A logged stop
+    # measured k ~ 0.85 and spent the whole crawl re-passing it. CREEP_MAX_T is the answer to that:
+    # however convincing each window looks, a stop that has been inside a one-metre-per-second band
+    # for that long is a creep.
     if v_ego < CREEP_SPEED and output_a_target < STOP_ACCEL:
       if self.creep_t == 0.0:
         self.creep_v = v_ego
       self.creep_t += self.dt
+      self.creep_total_t += self.dt
       if not self.creep_stop and self.creep_t > CREEP_STOP_T:
-        if (self.creep_v - v_ego) * CREEP_FINISH_T >= v_ego * CREEP_STOP_T:
+        if (self.creep_v - v_ego) * CREEP_FINISH_T >= v_ego * CREEP_STOP_T and self.creep_total_t < CREEP_MAX_T:
           self.creep_t = 0.0
         else:
           self.creep_stop = True
     else:
       self.creep_t = 0.0
       self.creep_stop = False
+      self.creep_total_t = 0.0
     self.output_should_stop = self.output_should_stop or self.creep_stop
 
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
