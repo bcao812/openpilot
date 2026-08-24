@@ -18,7 +18,7 @@ class Plant:
 
   def __init__(self, lead_relevancy=False, speed=0.0, distance_lead=2.0,
                enabled=True, only_lead2=False, only_radar=False, e2e=False, personality=0, force_decel=False,
-               actuator_dead_band=0.0, model_decel_gain=0.0):
+               actuator_dead_band=0.0, model_decel_gain=0.0, actuator_delay=0.0):
     self.rate = 1. / DT_MDL
 
     if not Plant.messaging_initialized:
@@ -47,6 +47,7 @@ class Plant:
     self.force_decel = force_decel
     self.actuator_dead_band = actuator_dead_band
     self.model_decel_gain = model_decel_gain
+    self.actuator_delay = actuator_delay
 
     self.rk = Ratekeeper(self.rate, print_delay_threshold=100.0)
     self.ts = 1. / self.rate
@@ -180,7 +181,14 @@ class Plant:
         # gas with BRAKE_REQUEST cleared, so a small requested decel comes out as coasting or gas. Until
         # a stop is actually requested, nothing in that band can take speed off the car.
         accel = 0.
-      self.acceleration = accel
+      if self.actuator_delay > 0.:
+        # The command is a request, not a result. CP.longitudinalActuatorDelay is how far the car
+        # lags it -- half a second on a Honda Bosch. During the stopping ramp that lag is the whole
+        # story: the command dives open loop while the car is still carrying speed from a second
+        # ago, so it keeps rolling, and the ramp keeps going deeper for as long as it rolls.
+        self.acceleration += (accel - self.acceleration) * DT_CTRL / self.actuator_delay
+      else:
+        self.acceleration = accel
 
       # ******** run the car ********
       self.speed = self.speed + self.acceleration * DT_CTRL
