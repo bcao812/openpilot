@@ -196,10 +196,10 @@ def create_maneuvers(kwargs):
         actuator_delay=0.5,
         model_decel_gain=0.3,
         ensure_stop=True,
-        # Baselines on this code: accel -1.61, jerk -0.92, crawl 1.90 s. No lead, so no gap to
-        # judge. The gates sit one step outside those, close enough that a deeper dive or a
-        # longer drag trips them; C3 and C4 tighten them onto their own numbers.
-        max_stopping_accel=-1.8,
+        # No lead, so no gap to judge. ROLLING_STOP_ACCEL caps the ramp, and the ramp is the only
+        # thing driving the command down here, so -1.55 holds that cap to account -- one ramp step
+        # of slack below -1.5. C4 tightens crawl_t onto its own number.
+        max_stopping_accel=-1.55,
         max_stopping_jerk=-1.5,
         max_crawl_t=2.5,
         **kwargs,

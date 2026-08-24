@@ -9,6 +9,9 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 
+STOPPING_DECEL_RATE = 1.0   # m/s^2/s, how fast the open-loop stopping ramp walks down
+ROLLING_STOP_ACCEL = -1.5   # m/s^2, as deep as that ramp may go while the wheels still turn
+
 
 def long_control_state_trans(CP_SP, active, long_control_state,
                              should_stop, brake_pressed, cruise_standstill):
@@ -64,11 +67,16 @@ class LongControl:
       output_accel = 0.
 
     elif self.long_control_state == LongCtrlState.stopping:
+      # The PID is abandoned here: the command walks down open loop and stops reacting to the car
+      # at all. Every bit of it below what the car needs is felt, and the car is still rolling --
+      # arriving at stopAccel = -2.0 at 0.4 m/s is the jolt at the end of a stop. Hold the ramp at
+      # ROLLING_STOP_ACCEL until the wheels stop, then let it go on to stopAccel, where it is only
+      # holding pressure against a car that is already still.
+      stop_accel = self.CP.stopAccel if CS.standstill else max(self.CP.stopAccel, ROLLING_STOP_ACCEL)
       output_accel = self.last_output_accel
-      if output_accel > self.CP.stopAccel:
+      if output_accel > stop_accel:
         output_accel = min(output_accel, 0.0)
-        # TODO: can we just go straight to stopAccel?
-        output_accel -= 1.0 * DT_CTRL  # m/s^2/s while trying to stop
+        output_accel -= STOPPING_DECEL_RATE * DT_CTRL
       self.reset()
 
     else:  # LongCtrlState.pid
