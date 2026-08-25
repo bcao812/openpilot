@@ -11,6 +11,7 @@ LongCtrlState = car.CarControl.Actuators.LongControlState
 
 STOPPING_DECEL_RATE = 1.0   # m/s^2/s, how fast the open-loop stopping ramp walks down
 ROLLING_STOP_ACCEL = -1.5   # m/s^2, as deep as that ramp may go while the wheels still turn
+STARTING_ACCEL_RATE = 8.0   # m/s^2/s, how fast the command may climb back out of a stop
 
 
 def long_control_state_trans(CP_SP, active, long_control_state,
@@ -50,6 +51,7 @@ class LongControl:
     self.pid = PIDController(0.0, (CP.longitudinalTuning.kiBP, CP.longitudinalTuning.kiV),
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
+    self.starting = False
 
   def reset(self):
     self.pid.reset()
@@ -65,6 +67,7 @@ class LongControl:
     if self.long_control_state == LongCtrlState.off:
       self.reset()
       output_accel = 0.
+      self.starting = False
 
     elif self.long_control_state == LongCtrlState.stopping:
       # The PID is abandoned here: the command walks down open loop and stops reacting to the car
@@ -78,11 +81,26 @@ class LongControl:
         output_accel = min(output_accel, 0.0)
         output_accel -= STOPPING_DECEL_RATE * DT_CTRL
       self.reset()
+      # Whatever the ramp reached is where the next pid frame has to climb out from.
+      self.starting = True
 
     else:  # LongCtrlState.pid
+      # Leaving stopping hands the wire a step, not a ramp: last_output_accel is at the bottom of
+      # the ramp and the PID's first output is essentially a_target, because the integrator was
+      # reset on every stopping frame and k_p is zero. Measured over 52 logged launches that step
+      # is a median +2.10 m/s^2 in one 10 ms frame -- 210 m/s^3 -- and Honda Bosch rate-limits
+      # neither accel nor gas, so BRAKE_REQUEST clears and GAS_COMMAND rises in the same CAN frame.
+      # Bound the climb until the PID catches up. Only the climb: a deeper command is never held
+      # back, so this cannot delay braking.
       error = a_target - CS.aEgo
+      limit = self.last_output_accel + STARTING_ACCEL_RATE * DT_CTRL
       output_accel = self.pid.update(error, speed=CS.vEgo,
-                                     feedforward=a_target)
+                                     feedforward=a_target, freeze_integrator=self.starting)
+      if self.starting:
+        if output_accel > limit:
+          output_accel = limit
+        else:
+          self.starting = False
 
     self.last_output_accel = np.clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel
