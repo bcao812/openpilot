@@ -199,10 +199,11 @@ def create_maneuvers(kwargs):
         # No lead, so no gap to judge. ROLLING_STOP_ACCEL caps the ramp, and the ramp is the only
         # thing driving the command down here, so -1.55 holds that cap to account -- one ramp step
         # of slack below -1.5. The window test already latches this one inside CREEP_MAX_T, so the
-        # crawl is the ramp's own length and 2.0 is what that costs.
+        # crawl is the ramp's own length, and 1.8 is what that costs once the ramp descends at
+        # STOPPING_DECEL_RATE (measured 1.90 -> 1.65 s).
         max_stopping_accel=-1.55,
         max_stopping_jerk=-1.5,
-        max_crawl_t=2.0,
+        max_crawl_t=1.8,
         **kwargs,
       ))
     # The same stop, but with a lead to stop behind, so the gap at standstill is a real number
@@ -219,14 +220,27 @@ def create_maneuvers(kwargs):
       actuator_dead_band=-0.2,
       actuator_delay=0.5,
       ensure_stop=True,
-      # Baselines on this code: accel -1.16, jerk -0.85, gap 5.36 m, crawl 3.10 s. The gap floor
-      # is the one number taken from the road rather than from the baseline -- 2.0 m is where a
-      # stop stops feeling like a stop, and two logged stops were already under it. The crawl is
-      # 2.60 s once the total-time cap ends the creep, so 2.8 holds that and no more.
-      max_stopping_accel=-1.8,
+      # History on this maneuver: accel -1.16, jerk -0.85, gap 5.36 m, crawl 3.10 s before the
+      # anti-creep work; -1.19 / -0.83 / 5.53 / 2.60 with it; -1.52 / -1.29 / 5.81 / 1.85 once the
+      # ramp walks down at STOPPING_DECEL_RATE and the cap is read every frame.
+      #
+      # The gap floor is the one number taken from the road rather than from a baseline -- 2.0 m is
+      # where a stop stops feeling like a stop, and two logged stops were already under it, so it
+      # stays where it is however much headroom the sim reports.
+      #
+      # accel is held to ROLLING_STOP_ACCEL plus one ramp step: the ramp now has time to reach that
+      # cap, and reaching it is the point, but going past it while the wheels still turn is exactly
+      # what ROLLING_STOP_ACCEL exists to prevent.
+      #
+      # jerk is the one that got worse (-0.83 -> -1.29) and it is left at -1.5. That is deliberate:
+      # this plant's actuator is a clean first order lag, so its jerk column tracks the commanded
+      # ramp almost directly, while on the road the commanded peak is 2 m/s^3 against 18 delivered.
+      # The sim can say the command did not get more abrupt than the gate; it cannot say the car
+      # did not. Only the road test can, and until it runs this number is a ceiling, not a result.
+      max_stopping_accel=-1.55,
       max_stopping_jerk=-1.5,
       min_final_gap=2.0,
-      max_crawl_t=2.8,
+      max_crawl_t=2.0,
       **kwargs,
     ))
   return maneuvers
