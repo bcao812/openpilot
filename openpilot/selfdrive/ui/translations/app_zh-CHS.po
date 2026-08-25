@@ -2808,3 +2808,9 @@ msgstr[1] "到目前为止，您有 {} 段驾驶数据被用于训练数据集�
 msgid "✓ SUBSCRIBED"
 msgstr "✓ 已订阅"
 
+msgid "Avoid EPS Lockout"
+msgstr "避免EPS锁定"
+
+msgid "Scale steering torque down at low speeds to avoid EPS lockout."
+msgstr "低速时按速度降低转向扭矩，避免EPS锁定。"
+

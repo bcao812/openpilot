@@ -6,6 +6,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.volkswagen import mebcan, mlbcan, mqbcan, pqcan
 from opendbc.car.volkswagen.values import CanBus, CarControllerParams, VolkswagenFlags
+from opendbc.sunnypilot.car.volkswagen.values import VolkswagenFlagsSP
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
@@ -40,6 +41,7 @@ class CarController(CarControllerBase):
     self.CAN = CanBus(CP)
     self.packer_pt = CANPacker(dbc_names[Bus.pt])
     self.aeb_available = not CP.flags & VolkswagenFlags.PQ
+    self.dp_avoid_eps_lockout = bool(self.CP_SP.flags & VolkswagenFlagsSP.AVOID_EPS_LOCKOUT)
 
     if CP.flags & VolkswagenFlags.MEB:
       self.meb_long_state = mebcan.MebLongStateMachine(self.CP, self.CCP)
@@ -105,7 +107,13 @@ class CarController(CarControllerBase):
 
       else:
         if CC.latActive:
-          new_torque = int(round(actuators.torque * self.CCP.STEER_MAX))
+          if self.dp_avoid_eps_lockout:
+            # Scale steering torque down at low speeds to avoid EPS lockout
+            torque_scale = np.interp(CS.out.vEgo, [0.4, 3.5, 4.0], [0.8, 0.95, 1.0])
+            scaled_steer_max = self.CCP.STEER_MAX * torque_scale
+            new_torque = int(round(actuators.torque * scaled_steer_max))
+          else:
+            new_torque = int(round(actuators.torque * self.CCP.STEER_MAX))
           apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.CCP)
 
         apply_torque = self.hca_mitigation.update(apply_torque, self.apply_torque_last)
