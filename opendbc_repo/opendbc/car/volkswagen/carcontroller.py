@@ -15,18 +15,19 @@ LongCtrlState = structs.CarControl.Actuators.LongControlState
 class HCAMitigation:
   """
   Manages HCA fault mitigations for VW/Audi EPS racks:
-    * Reduces torque by 1 for a single frame after commanding the same torque value for too long
+    * Reduces torque for a single frame after commanding the same torque value for too long
   """
 
-  def __init__(self, CCP):
+  def __init__(self, CCP, torque_reduction=1):
     self._max_same_torque_frames = CCP.STEER_TIME_STUCK_TORQUE / (DT_CTRL * CCP.STEER_STEP)
     self._same_torque_frames = 0
+    self._torque_reduction = torque_reduction
 
   def update(self, apply_torque, apply_torque_last):
     if apply_torque != 0 and apply_torque_last == apply_torque:
       self._same_torque_frames += 1
       if self._same_torque_frames > self._max_same_torque_frames:
-        apply_torque -= (1, -1)[apply_torque < 0]
+        apply_torque -= (self._torque_reduction, -self._torque_reduction)[apply_torque < 0]
         self._same_torque_frames = 0
     else:
       self._same_torque_frames = 0
@@ -60,7 +61,7 @@ class CarController(CarControllerBase):
     self.lead_distance_bars_last = None
     self.distance_bar_frame = 0
     self.gra_acc_counter_last = None
-    self.hca_mitigation = HCAMitigation(self.CCP)
+    self.hca_mitigation = HCAMitigation(self.CCP, torque_reduction=3 if self.dp_avoid_eps_lockout else 1)
 
   def update(self, CC, CC_SP, CS, now_nanos):
     actuators = CC.actuators
@@ -108,8 +109,11 @@ class CarController(CarControllerBase):
       else:
         if CC.latActive:
           if self.dp_avoid_eps_lockout:
-            # Scale steering torque down at low speeds to avoid EPS lockout
-            torque_scale = np.interp(CS.out.vEgo, [0.4, 3.5, 4.0], [0.8, 0.95, 1.0])
+            # Scale steering torque down at low speeds and sharp steering angles to avoid EPS lockout.
+            # Speed range extends to 8 m/s (~29 km/h) to cover sharp 90+ degree turns taken at speed.
+            speed_scale = np.interp(CS.out.vEgo, [0.4, 3.5, 8.0], [0.6, 0.85, 1.0])
+            angle_scale = np.interp(abs(CS.out.steeringAngleDeg), [50.0, 100.0], [1.0, 0.75])
+            torque_scale = min(speed_scale, angle_scale)
             scaled_steer_max = self.CCP.STEER_MAX * torque_scale
             new_torque = int(round(actuators.torque * scaled_steer_max))
           else:
