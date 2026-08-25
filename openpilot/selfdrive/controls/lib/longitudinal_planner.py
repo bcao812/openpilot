@@ -188,16 +188,26 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # measured k ~ 0.85 and spent the whole crawl re-passing it. CREEP_MAX_T is the answer to that:
     # however convincing each window looks, a stop that has been inside a one-metre-per-second band
     # for that long is a creep.
+    #
+    # The cap is its own test, not a clause of the window test. Hung off the window it could only
+    # be read when creep_t > CREEP_STOP_T, i.e. at total dwell 0.55 / 1.10 / 1.65 s, so it could
+    # never fire before 1.65 s -- and replayed over 33 logged stops the window test had already
+    # failed by then on every one of them, which made the cap dead code. Read every frame it binds
+    # where it says it does: 17 of those 33 stops latch earlier, and the four worst road-test gaps
+    # (1.8, 1.9, 2.1, 2.6 m) are all in that set.
     if v_ego < CREEP_SPEED and output_a_target < STOP_ACCEL:
       if self.creep_t == 0.0:
         self.creep_v = v_ego
       self.creep_t += self.dt
       self.creep_total_t += self.dt
-      if not self.creep_stop and self.creep_t > CREEP_STOP_T:
-        if (self.creep_v - v_ego) * CREEP_FINISH_T >= v_ego * CREEP_STOP_T and self.creep_total_t < CREEP_MAX_T:
-          self.creep_t = 0.0
-        else:
+      if not self.creep_stop:
+        if self.creep_total_t >= CREEP_MAX_T:
           self.creep_stop = True
+        elif self.creep_t > CREEP_STOP_T:
+          if (self.creep_v - v_ego) * CREEP_FINISH_T >= v_ego * CREEP_STOP_T:
+            self.creep_t = 0.0
+          else:
+            self.creep_stop = True
     else:
       self.creep_t = 0.0
       self.creep_stop = False

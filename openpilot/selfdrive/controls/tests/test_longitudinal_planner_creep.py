@@ -1,4 +1,3 @@
-import math
 from typing import cast
 
 from opendbc.car import structs
@@ -13,9 +12,25 @@ from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimen
 V_CREEP = 0.5
 FRAMES_DWELL = int(CREEP_STOP_T / DT_MDL)
 # the window test is only read once creep_t has passed CREEP_STOP_T, so a window is one frame
-# longer than that, and the cap can only be acted on at the first boundary at or past it
+# longer than that
 WINDOW_T = CREEP_STOP_T + DT_MDL
-FRAMES_CAP = int(math.ceil(CREEP_MAX_T / WINDOW_T) * WINDOW_T / DT_MDL)
+
+
+def _frames_to_cap() -> int:
+  """The cap is read every frame, so it binds on the first frame whose accumulated dwell reaches
+  CREEP_MAX_T. Accumulated the way the planner accumulates it -- DT_MDL does not divide CREEP_MAX_T
+  exactly in binary, and a closed form would be off by one."""
+  t, n = 0.0, 0
+  while t < CREEP_MAX_T:
+    t += DT_MDL
+    n += 1
+  return n
+
+
+FRAMES_CAP = _frames_to_cap()
+# the cap has to be able to fire before the window test would have failed anyway, or it is dead
+# code: hung off the window it could only ever be read at 0.55 / 1.10 / 1.65 s of dwell
+assert FRAMES_CAP * DT_MDL < 2 * WINDOW_T, "CREEP_MAX_T is not reachable before the second window"
 
 
 class MockDec:
@@ -271,3 +286,15 @@ class TestAntiCreepTotalTimeCap:
     run(planner, int(1.0 / DT_MDL), v_ego=V_CREEP, force_decel=False)
     assert planner.creep_total_t == 0.0
     assert not planner.output_should_stop
+
+  def test_the_cap_binds_before_the_window_test_would_have(self):
+    # The point of reading it every frame. Hung off the window test the cap could only be acted on
+    # at a window boundary, and over 33 logged stops the window test had already failed by the
+    # first boundary past 1.5 s on every one of them -- so the cap never decided anything.
+    planner = build_planner()
+    v_end = run_converging(planner, FRAMES_CAP, v0=self.V0, k=self.K, force_decel=True)
+    assert planner.output_should_stop
+    assert v_end > STOP_SPEED
+    assert planner.creep_total_t < 2 * WINDOW_T, "the cap did not bind until a window boundary"
+    # and it is the cap, not the window: every window this run completed reset the dwell
+    assert planner.creep_t < WINDOW_T
