@@ -9,7 +9,7 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 
-STOPPING_DECEL_RATE = 1.0   # m/s^2/s, how fast the open-loop stopping ramp walks down
+STOPPING_DECEL_RATE = 2.0   # m/s^2/s, how fast the open-loop stopping ramp walks down
 ROLLING_STOP_ACCEL = -1.5   # m/s^2, as deep as that ramp may go while the wheels still turn
 STARTING_ACCEL_RATE = 8.0   # m/s^2/s, how fast the command may climb back out of a stop
 
@@ -75,6 +75,14 @@ class LongControl:
       # arriving at stopAccel = -2.0 at 0.4 m/s is the jolt at the end of a stop. Hold the ramp at
       # ROLLING_STOP_ACCEL until the wheels stop, then let it go on to stopAccel, where it is only
       # holding pressure against a car that is already still.
+      #
+      # The ramp inherits last_output_accel, and an MPC plan converges asymptotically, so it starts
+      # wherever the PID happened to be -- measured over 33 logged stops, a median of -0.33 m/s^2
+      # at 0.7 m/s. At 1.0 m/s^2/s that is a full second before the command carries any authority,
+      # and on 8 of 21 stops the car reached standstill before the ramp ever passed -1.4. The car
+      # spends that second under-braked below its own creep torque, which is the crawl; when the
+      # brake finally crosses that torque it does so all at once, which is the jolt. Walking down
+      # twice as fast is the same ramp arriving while it can still do something.
       stop_accel = self.CP.stopAccel if CS.standstill else max(self.CP.stopAccel, ROLLING_STOP_ACCEL)
       output_accel = self.last_output_accel
       if output_accel > stop_accel:
