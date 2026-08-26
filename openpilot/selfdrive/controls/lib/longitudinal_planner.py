@@ -13,6 +13,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import Longi
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T
+from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL, STOP_SPEED
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -69,6 +70,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.a_cruise = init_a
     self.output_a_target = init_a
     self.output_should_stop = False
+    self.stop_latched = False
     self.creep_t = 0.0
     self.creep_v = 0.0
     self.creep_stop = False
@@ -113,6 +115,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.creep_t = 0.0
       self.creep_stop = False
       self.creep_total_t = 0.0
+      self.stop_latched = False
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -159,7 +162,29 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
-    self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
+    raw_should_stop = any(should_stop for _, _, should_stop in candidates)
+
+    # Hysteresis on the release side. should_stop() is a bare threshold, `v_ego < STOP_SPEED and
+    # a_target < STOP_ACCEL`, and at launch a_target climbs across STOP_ACCEL from underneath while
+    # the car is still below STOP_SPEED -- so the state machine can flip at frame rate. Every flip
+    # re-enters LongCtrlState.stopping, which re-enters the open loop ramp, which puts the brake
+    # back on: a burst of pulses while the car is pulling away. Measured on the road it went from
+    # 33/h to 57/h across the 08-25/08-26 pair, worst 13 flips inside 1.3 s.
+    #
+    # Latching is unchanged -- a stop is still asked for at exactly the same instant -- and only
+    # letting go is made to require a plan that clearly wants to move. Re-derived over both road
+    # pairs, releasing at STOP_RELEASE_ACCEL removes 21% of the flips (75 -> 59 over 83 engaged
+    # min) for a median 0.48 s longer hold. 0.2 buys less (63) and 0.5 costs far more (1.38 s).
+    #
+    # The cost is real and is the reason this is a constant and not a hardcode: a lead that inches
+    # forward while the plan never asks for more than STOP_RELEASE_ACCEL is a stop this holds
+    # through. Every logged launch that mattered asked for 1.0+ once it was a launch; the ones that
+    # dithered at 0.26 are the ones being suppressed.
+    if self.stop_latched:
+      self.stop_latched = not (output_a_target >= STOP_RELEASE_ACCEL or v_ego >= STOP_SPEED)
+    else:
+      self.stop_latched = raw_should_stop and not reset_state
+    self.output_should_stop = raw_should_stop or self.stop_latched
 
     # Anti-creep fallback. should_stop() can only latch below STOP_SPEED, but a car whose actuator
     # has a dead band never gets there: Honda Bosch sends gas and clears BRAKE_REQUEST for any accel

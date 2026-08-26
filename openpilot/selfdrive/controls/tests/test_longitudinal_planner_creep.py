@@ -4,7 +4,8 @@ from opendbc.car import structs
 from openpilot.cereal import custom, messaging
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED,
-                                                            CREEP_STOP_T, STOP_ACCEL, STOP_SPEED, should_stop)
+                                                            CREEP_STOP_T, STOP_ACCEL, STOP_RELEASE_ACCEL, STOP_SPEED,
+                                                            should_stop)
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 
@@ -187,6 +188,65 @@ class TestAntiCreepNeedsADirection:
     run_converging(planner, FRAMES_CAP, v0=CREEP_SPEED - 0.05, k=0.6, force_decel=True)
     assert planner.output_a_target < CREEP_ACCEL
     assert planner.output_should_stop, "the gate broke the latch it was meant to narrow"
+
+
+class TestStopReleaseHysteresis:
+  """should_stop() is a bare threshold on both sides, so at launch -- a_target climbing across
+  STOP_ACCEL from underneath while the car is still below STOP_SPEED -- the state machine can flip
+  at frame rate. Each flip re-enters LongCtrlState.stopping and puts the brake back on. Latching is
+  left alone; only letting go is made to require a plan that clearly wants to move."""
+
+  V_STOPPED = 0.1               # below STOP_SPEED, so the latch owns the state
+  V_CRUISE_DITHER = 1.3         # settles the plan at +0.26: released today, held now
+  V_CRUISE_GO = 1.8             # settles at +0.40, past STOP_RELEASE_ACCEL
+
+  def _latched(self, **kwargs):
+    planner = build_planner()
+    run(planner, 3 * FRAMES_DWELL, v_ego=self.V_STOPPED, force_decel=True, **kwargs)
+    assert planner.output_should_stop, "never latched, there is nothing to release"
+    assert planner.stop_latched
+    return planner
+
+  def test_the_band_is_wider_than_the_latch_threshold(self):
+    assert STOP_RELEASE_ACCEL > STOP_ACCEL, "no hysteresis at all"
+
+  def test_latching_is_unchanged(self):
+    # the whole point: a stop is still asked for at exactly the instant should_stop() says
+    planner = build_planner()
+    run(planner, 3 * FRAMES_DWELL, v_ego=self.V_STOPPED, force_decel=True)
+    assert should_stop(self.V_STOPPED, planner.output_a_target)
+    assert planner.output_should_stop
+
+  def test_holds_through_a_plan_that_only_dithers(self):
+    planner = self._latched()
+    run(planner, 4 * FRAMES_DWELL, v_ego=self.V_STOPPED, force_decel=False,
+        v_cruise_kph=self.V_CRUISE_DITHER)
+
+    # the premise: today this plan releases the stop, because it is above STOP_ACCEL
+    assert STOP_ACCEL <= planner.output_a_target < STOP_RELEASE_ACCEL, \
+        f"the run is not in the hysteresis band (a_target {planner.output_a_target})"
+    assert planner.creep_total_t == 0.0, "the creep latch is holding this, not the hysteresis"
+    assert planner.output_should_stop, "let go for a plan that never asked to move"
+
+  def test_releases_once_the_plan_asks_to_move(self):
+    planner = self._latched()
+    run(planner, 4 * FRAMES_DWELL, v_ego=self.V_STOPPED, force_decel=False,
+        v_cruise_kph=self.V_CRUISE_GO)
+    assert planner.output_a_target >= STOP_RELEASE_ACCEL
+    assert not planner.output_should_stop, "held a stop the plan wanted to leave"
+
+  def test_rolling_releases_it_too(self):
+    # a car that is already moving is not stopped, whatever the plan is asking for
+    planner = self._latched()
+    run(planner, FRAMES_DWELL, v_ego=STOP_SPEED + 0.1, force_decel=False,
+        v_cruise_kph=self.V_CRUISE_DITHER)
+    assert not planner.stop_latched, "still latched above STOP_SPEED"
+
+  def test_disengaging_clears_it(self):
+    # a stale latch must not carry across an engagement
+    planner = self._latched()
+    run(planner, 1, v_ego=self.V_STOPPED, force_decel=True, enabled=False)
+    assert not planner.stop_latched
 
 
 class TestAntiCreepStop:
