@@ -16,6 +16,7 @@ MAX_LATERAL_ACCEL_NO_ROLL = 3.0  # m/s^2
 STOP_SPEED = 0.3        # m/s, speed below which a stop can be latched
 STOP_ACCEL = 0.1        # m/s^2, plan is considered to not be asking for speed below this
 CREEP_SPEED = 1.0       # m/s, upper bound of the creep band
+CREEP_ACCEL = 0.0       # m/s^2, plan must be asking for LESS than this for a creep to accumulate
 CREEP_STOP_T = 0.5      # s, window the creep band is judged over
 CREEP_FINISH_T = 2.0    # s, how much longer a stop in the creep band may still need
 CREEP_MAX_T = 1.0       # s, total time in the band before it is a creep whatever the window says

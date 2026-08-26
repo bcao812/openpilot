@@ -3,8 +3,8 @@ from typing import cast
 from opendbc.car import structs
 from openpilot.cereal import custom, messaging
 from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T,
-                                                            STOP_SPEED, should_stop)
+from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED,
+                                                            CREEP_STOP_T, STOP_ACCEL, STOP_SPEED, should_stop)
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 
@@ -65,7 +65,8 @@ class MockSubMaster(dict):
     return True
 
 
-def build_sm(v_ego: float, force_decel: bool, enabled: bool = True, experimental_mode: bool = False):
+def build_sm(v_ego: float, force_decel: bool, enabled: bool = True, experimental_mode: bool = False,
+             v_cruise_kph: float = 100.0):
   services = {}
   for service in ("radarState", "vehicleParameters", "carStateSP", "liveMapDataSP", "gpsLocationExternal", "gpsLocation"):
     services[service] = getattr(messaging.new_message(service), service)
@@ -76,8 +77,8 @@ def build_sm(v_ego: float, force_decel: bool, enabled: bool = True, experimental
 
   car_state = messaging.new_message('carState')
   car_state.carState.vEgo = v_ego
-  car_state.carState.vCruise = 100.0
-  car_state.carState.vCruiseCluster = 100.0
+  car_state.carState.vCruise = v_cruise_kph
+  car_state.carState.vCruiseCluster = v_cruise_kph
   services['carState'] = car_state.carState.as_reader()
 
   selfdrive_state = messaging.new_message('selfdriveState')
@@ -134,6 +135,58 @@ def run_converging(planner: LongitudinalPlanner, frames: int, v0: float, k: floa
     planner.update(build_sm(v_ego=v_ego, **kwargs))
     v_ego = max(0.0, v_ego * (1.0 - k * DT_MDL))
   return v_ego
+
+
+def run_pulling_away(planner: LongitudinalPlanner, frames: int, v0: float, accel: float, **kwargs) -> float:
+  """A launch: the speed is going UP through the creep band."""
+  v_ego = v0
+  for _ in range(frames):
+    planner.update(build_sm(v_ego=v_ego, **kwargs))
+    v_ego += accel * DT_MDL
+  return v_ego
+
+
+class TestAntiCreepNeedsADirection:
+  """The band test has no sense of direction of its own.
+
+  STOP_ACCEL is the threshold for "the plan is not asking for speed" and sits at +0.1, so a plan
+  asking to move off *gently* -- anywhere in [0.0, 0.1) -- accumulates creep dwell exactly like a
+  car that is failing to stop. On the 08-26 road pair that fired 3 times while the car was
+  accelerating away from a stop, at up to 0.68 m/s, and each one dropped the command from +0.07 to
+  -1.38 and pulled the car back to a standstill. CREEP_ACCEL is what separates the two.
+  """
+
+  # a cruise target 0.55 m/s above V_CREEP settles the plan at +0.05 m/s^2: inside the window the
+  # old gate admitted, outside the one it should have been using
+  V_CRUISE_GENTLE = 1.98
+
+  def test_the_gate_is_below_the_no_speed_threshold(self):
+    assert CREEP_ACCEL < STOP_ACCEL, "the gate is not narrower than should_stop()'s"
+
+  def test_no_latch_while_the_plan_asks_to_move_off_gently(self):
+    planner = build_planner()
+    run(planner, 4 * FRAMES_CAP, v_ego=V_CREEP, force_decel=False, v_cruise_kph=self.V_CRUISE_GENTLE)
+
+    # the premise: this plan is exactly what the old gate could not tell from a creep
+    assert CREEP_ACCEL <= planner.output_a_target < STOP_ACCEL, \
+        f"the run is not in the gap the fix closes (a_target {planner.output_a_target})"
+    assert planner.creep_total_t == 0.0, "accumulated dwell against a plan that wants to move"
+    assert not planner.output_should_stop, "latched a launch"
+
+  def test_no_latch_while_the_car_is_pulling_away(self):
+    # the road case: already rolling, speed rising, plan asking for a little accel
+    planner = build_planner()
+    v_end = run_pulling_away(planner, 4 * FRAMES_CAP, v0=0.35, accel=0.05,
+                             force_decel=False, v_cruise_kph=self.V_CRUISE_GENTLE)
+    assert STOP_SPEED < v_end < CREEP_SPEED, "the run left the band, it is not testing the gate"
+    assert not planner.output_should_stop, "pulled a launch back to a standstill"
+
+  def test_a_real_creep_still_latches(self):
+    # the gate must not cost the latch its job: a creep asks for negative accel throughout
+    planner = build_planner()
+    run_converging(planner, FRAMES_CAP, v0=CREEP_SPEED - 0.05, k=0.6, force_decel=True)
+    assert planner.output_a_target < CREEP_ACCEL
+    assert planner.output_should_stop, "the gate broke the latch it was meant to narrow"
 
 
 class TestAntiCreepStop:

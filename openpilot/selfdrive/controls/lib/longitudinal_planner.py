@@ -12,7 +12,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
-from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T, STOP_ACCEL
+from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -195,7 +195,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # failed by then on every one of them, which made the cap dead code. Read every frame it binds
     # where it says it does: 17 of those 33 stops latch earlier, and the four worst road-test gaps
     # (1.8, 1.9, 2.1, 2.6 m) are all in that set.
-    if v_ego < CREEP_SPEED and output_a_target < STOP_ACCEL:
+    #
+    # The band is entered on CREEP_ACCEL, not STOP_ACCEL, because this test has no other sense of
+    # direction. STOP_ACCEL is the threshold for "not asking for speed" and sits at +0.1, so the
+    # window [0.0, 0.1) -- a plan asking to move off, gently -- accumulates dwell exactly like a
+    # creep does. That is not hypothetical: on the 08-26 road pair the latch fired 3 times while
+    # the car was ACCELERATING away from a stop, at up to 0.68 m/s, and each one dropped the
+    # command from +0.07 to -1.38 and pulled the car back to a standstill. A real creep asks for
+    # negative accel throughout -- aTarget below CREEP_SPEED has median -0.07 and p90 +0.12 -- so
+    # requiring it to be negative costs no latch (31 -> 30 over 83 engaged min, median latch speed
+    # 0.68 -> 0.72 m/s) and removes the launches.
+    if v_ego < CREEP_SPEED and output_a_target < CREEP_ACCEL:
       if self.creep_t == 0.0:
         self.creep_v = v_ego
       self.creep_t += self.dt
