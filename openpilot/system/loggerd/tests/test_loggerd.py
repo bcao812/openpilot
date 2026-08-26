@@ -327,6 +327,21 @@ class TestLoggerd(OpenpilotTestCase):
     assert cabin_hevc_exists == record_front
 
   @parameterized.expand([True, False])
+  def test_record_road_cameras(self, record_road_cameras):
+    params = Params()
+    params.put_bool("RecordRoadCameras", record_road_cameras, block=True)
+
+    self._publish_camera_and_audio_messages()
+
+    segment_dir = self._get_latest_log_dir()
+    for f in ('fcamera.hevc', 'ecamera.hevc'):
+      assert os.path.exists(os.path.join(segment_dir, f)) == record_road_cameras, f
+
+    # qcamera and the logs are never gated on it, so the segment stays usable either way
+    for f in ('qcamera.ts', 'rlog.zst', 'qlog.zst'):
+      assert os.path.exists(os.path.join(segment_dir, f)), f
+
+  @parameterized.expand([True, False])
   def test_record_audio(self, record_audio):
     params = Params()
     params.put_bool("RecordAudio", record_audio, block=True)
