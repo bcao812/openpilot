@@ -197,6 +197,7 @@ class TestLoggerd(OpenpilotTestCase):
 
   def test_rotation(self):
     Params().put("RecordFront", True, block=True)
+    Params().put_bool("RecordRoadCameras", True, block=True)
 
     expected_files = {"rlog.zst", "qlog.zst", "qcamera.ts", "fcamera.hevc", "dcamera.hevc", "ecamera.hevc"}
 

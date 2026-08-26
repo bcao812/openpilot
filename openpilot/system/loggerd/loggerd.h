@@ -95,10 +95,18 @@ public:
   std::vector<EncoderInfo> encoder_infos;
 };
 
+// Recording the road and wide-road cameras costs ~20 Mbps of the device's storage budget, against
+// ~0.256 Mbps for qcamera.ts. Analysis on this fork reads rlog; the full-resolution hevc files are
+// only ever wanted for occasional visual confirmation, which qcamera covers. So unlike upstream
+// they are opt-in here: set the RecordRoadCameras param to restore upstream behaviour.
+// Note this only stops loggerd writing the files — encoderd still encodes and publishes the frames.
+inline bool record_road_cameras() { return Params().getBool("RecordRoadCameras"); }
+
 const EncoderInfo main_road_encoder_info = {
   .publish_name = "narrowRoadEncodeData",
   .thumbnail_name = "thumbnail",
   .filename = "fcamera.hevc",
+  .record = record_road_cameras(),
   .get_settings = [](int in_width){return EncoderSettings::MainEncoderSettings(in_width);},
   INIT_ENCODE_FUNCTIONS(NarrowRoadEncode),
 };
@@ -106,6 +114,7 @@ const EncoderInfo main_road_encoder_info = {
 const EncoderInfo main_wide_road_encoder_info = {
   .publish_name = "wideRoadEncodeData",
   .filename = "ecamera.hevc",
+  .record = record_road_cameras(),
   .get_settings = [](int in_width){return EncoderSettings::MainEncoderSettings(in_width);},
   INIT_ENCODE_FUNCTIONS(WideRoadEncode),
 };

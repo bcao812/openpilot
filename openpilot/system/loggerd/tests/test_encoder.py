@@ -54,6 +54,7 @@ class TestEncoder(OpenpilotTestCase):
   # TODO: this should run faster than real time
   def test_log_rotation(self):
     Params().put_bool("RecordFront", True, block=True)
+    Params().put_bool("RecordRoadCameras", True, block=True)
 
     managed_processes['sensord'].start()
     managed_processes['loggerd'].start()
