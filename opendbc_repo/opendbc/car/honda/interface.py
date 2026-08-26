@@ -116,7 +116,13 @@ class CarInterface(CarInterfaceBase):
 
     elif candidate == CAR.HONDA_ACCORD:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
-      ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.6], [0.18]]
+      # Taper the gain in below 10 m/s, same shape as HONDA_CIVIC_2022 above. The model's desired
+      # curvature carries a ~0.7 Hz limit cycle down there: curv_from_psis divides by v, so the
+      # same heading wobble asks for v times more curvature, and a flat 0.6 answers that with a
+      # full-scale bang-bang -- ~10 deg peak-to-peak at the wheel to chase 0.017 m/s^2 of lateral
+      # acceleration. At and above 10 m/s this is the 0.6/0.18 it has always been.
+      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0, 10], [0.06, 0.6]]
+      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0, 10], [0.018, 0.18]]
 
     elif candidate == CAR.ACURA_ILX:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 3840], [0, 3840]]  # TODO: determine if there is a dead zone at the top end
