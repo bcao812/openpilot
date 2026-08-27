@@ -2814,3 +2814,72 @@ msgstr "避免EPS锁定"
 msgid "Scale steering torque down at low speeds to avoid EPS lockout."
 msgstr "低速时按速度降低转向扭矩，避免EPS锁定。"
 
+msgid "Small Model"
+msgstr "小模型"
+
+msgid "Big Model"
+msgstr "大模型"
+
+msgid "Model Status"
+msgstr "模型状态"
+
+msgid "Cancel Verification"
+msgstr "取消校验"
+
+msgid "cancel verification"
+msgstr "取消校验"
+
+msgid "No models available"
+msgstr "暂无可用模型"
+
+msgid "No models are available for this hardware yet. Connect to the internet and refresh the model list."
+msgstr "当前硬件暂无可用模型。请连接网络后刷新模型列表。"
+
+msgid "Big model unavailable until the next drive."
+msgstr "大模型不可用，下次行程恢复。"
+
+msgid "Big model unavailable, {} is driving until the next drive."
+msgstr "大模型不可用，{} 将继续驱动直到下次行程。"
+
+msgid "Getting the big model ready."
+msgstr "正在准备大模型。"
+
+msgid "{} drives until the big model is ready."
+msgstr "大模型就绪前由 {} 驱动。"
+
+msgid "{} will drive when the eGPU is ready."
+msgstr "eGPU 就绪后由 {} 驱动。"
+
+msgid "{} will drive. If it fails during a drive, {} takes over until the next drive."
+msgstr "由 {} 驱动。若行程中失败，{} 将接管直到下次行程。"
+
+msgid "small"
+msgstr "小"
+
+msgid "big"
+msgstr "大"
+
+msgid "small model"
+msgstr "小模型"
+
+msgid "big model"
+msgstr "大模型"
+
+msgid "small models"
+msgstr "小模型"
+
+msgid "big models"
+msgstr "大模型"
+
+msgid "downloaded"
+msgstr "已下载"
+
+msgid "verifying"
+msgstr "校验中"
+
+msgid "getting ready"
+msgstr "准备中"
+
+msgid "unavailable"
+msgstr "不可用"
+
