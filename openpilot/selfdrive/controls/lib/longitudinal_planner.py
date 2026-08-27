@@ -37,6 +37,54 @@ def get_max_accel(v_ego):
 def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
 
+
+# Long enough that no single hill is mistaken for the mount, short enough to settle inside one
+# drive. With initialized=False the filter takes its first sample whole, so this is not a warmup
+# cost -- it is how hard a sustained grade has to work to drag the estimate.
+PITCH_BIAS_TAU = 300.0
+# The only guard against learning a hill as bias. Measured residual on the device this was written
+# for is +2.2 deg, so 3 deg leaves headroom without letting a long climb be cancelled outright.
+MAX_PITCH_BIAS = math.radians(3.0)
+
+
+class PitchBiasEstimator:
+  """Learn the static offset in orientationNED[1] so get_coast_accel is given road grade.
+
+  The field is a calibrated pose, but calibration does not remove a mounting/extrinsics residual:
+  on the 2019 Accord the raw median runs +2.0 to +2.4 deg across four routes while
+  extrinsicsCalibration reports calibrated. Fed to get_coast_accel that is a coast limit of about
+  -0.50 m/s^2 on flat road where the true value is -0.30 -- a hill that is not there.
+
+  What makes the offset separable at all is that mean road grade over a drive is ~0. Measured over
+  those same four routes the GPS-altitude grade median sits within 0.001 of zero on every one, so
+  the slow component of pitch IS the residual and a long low-pass recovers it.
+
+  Replayed over the four routes this settles at +1.74 to +1.94 deg -- a spread of 0.20 deg across
+  two days and four drives, which is what a mount residual should look like. The evidence that it
+  recovers something real is not that the number shrank: it is that sign agreement against the
+  GPS-derived grade goes from 45-60 % raw, which is a coin flip, to 71-83 % debiased.
+
+  That premise fails on a drive which really is uphill throughout, which is what the clamp is for.
+  It is deliberately not a correctness guarantee -- in hilly terrain on an unbiased device this
+  subtracts that drive's mean grade. The consequence is bounded because get_coast_accel only sets
+  an upper limit on cruise acceleration; it is not a feedforward on the command.
+
+  A device with no residual learns ~0 and nothing changes, which is why this is estimated rather
+  than written down as a per-platform constant.
+  """
+
+  def __init__(self, dt, min_learn_speed=MIN_ALLOW_THROTTLE_SPEED):
+    # initialized=False: the first sample is taken whole rather than dragged up from zero
+    self.filter = FirstOrderFilter(0.0, PITCH_BIAS_TAU, dt, initialized=False)
+    self.min_learn_speed = min_learn_speed
+
+  def update(self, pitch, v_ego):
+    # Standstill is excluded on purpose: parking on a slope is a real pitch reading and a wrong
+    # bias sample, and it is exactly the reading a car dwells on.
+    if v_ego > self.min_learn_speed and math.isfinite(pitch):
+      self.filter.update(pitch)
+    return float(np.clip(self.filter.x, -MAX_PITCH_BIAS, MAX_PITCH_BIAS))
+
 def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle):
   max_accel = ACCEL_MAX if e2e else get_max_accel(v_ego)
 
@@ -67,6 +115,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.allow_throttle = True
 
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
+    self.pitch_bias = PitchBiasEstimator(self.dt)
     self.a_cruise = init_a
     self.output_a_target = init_a
     self.output_should_stop = False
@@ -83,12 +132,16 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
   def update(self, sm):
     LongitudinalPlannerSP.update(self, sm)
 
+    v_ego = sm['carState'].vEgo
+
     if len(sm['carControl'].orientationNED) == 3:
-      accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
+      # Road grade, not raw pitch: the field carries a static mount residual that would otherwise
+      # read as a permanent hill. See PitchBiasEstimator.
+      pitch = sm['carControl'].orientationNED[1]
+      accel_coast = get_coast_accel(pitch - self.pitch_bias.update(pitch, v_ego))
     else:
       accel_coast = ACCEL_MAX
 
-    v_ego = sm['carState'].vEgo
     v_cruise_kph = min(sm['carState'].vCruise, V_CRUISE_MAX)
     v_cruise = v_cruise_kph * CV.KPH_TO_MS
     if sm['controlsState'].forceDecel:
