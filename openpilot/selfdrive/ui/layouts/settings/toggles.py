@@ -46,22 +46,48 @@ class TogglesLayout(Widget):
 
     # param, title, desc, icon, needs_restart
     self._toggle_defs = {
+      "OpenpilotEnabledToggle": (
+        lambda: tr("Enable sunnypilot"),
+        DESCRIPTIONS["OpenpilotEnabledToggle"],
+        "chffr_wheel.png",
+        True,
+      ),
       "ExperimentalMode": (
         lambda: tr("Experimental Mode"),
         "",
         "experimental_white.png",
         False,
       ),
-
+      "DisengageOnAccelerator": (
+        lambda: tr("Disengage on Accelerator Pedal"),
+        DESCRIPTIONS["DisengageOnAccelerator"],
+        "disengage_on_accelerator.png",
+        False,
+      ),
       "IsLdwEnabled": (
         lambda: tr("Enable Lane Departure Warnings"),
         DESCRIPTIONS["IsLdwEnabled"],
         "warning.png",
         False,
       ),
-
-
-
+      "AlwaysOnDM": (
+        lambda: tr("Always-On Driver Monitoring"),
+        DESCRIPTIONS["AlwaysOnDM"],
+        "monitoring.png",
+        False,
+      ),
+      "RecordFront": (
+        lambda: tr("Record and Upload Driver Camera"),
+        DESCRIPTIONS["RecordFront"],
+        "monitoring.png",
+        True,
+      ),
+      "RecordAudio": (
+        lambda: tr("Record and Upload Microphone Audio"),
+        DESCRIPTIONS["RecordAudio"],
+        "microphone.png",
+        True,
+      ),
       "IsMetric": (
         lambda: tr("Use Metric System"),
         DESCRIPTIONS["IsMetric"],
@@ -110,7 +136,7 @@ class TogglesLayout(Widget):
       self._toggles[param] = toggle
 
       # insert longitudinal personality after NDOG toggle
-      if param == "ExperimentalMode":
+      if param == "DisengageOnAccelerator":
         self._toggles["LongitudinalPersonality"] = self._long_personality_setting
 
     self._update_experimental_mode_icon()

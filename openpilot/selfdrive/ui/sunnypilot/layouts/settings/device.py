@@ -113,18 +113,23 @@ class DeviceLayoutSP(DeviceLayout):
       LineSeparator(),
       text_item(lambda: tr("Serial"), self._params.get("HardwareSerial") or (lambda: tr("N/A"))),
       LineSeparator(),
+      self._pair_device_btn,
+      LineSeparator(),
       self._reset_calib_btn,
       LineSeparator(),
       button_item_sp(lambda: tr("Change Language"), lambda: tr("CHANGE"), callback=self._show_language_dialog),
       LineSeparator(),
+      self._device_wake_mode,
+      LineSeparator(),
+      self._max_time_offroad,
+      LineSeparator(height=10),
+      self._quiet_mode_and_dcam,
+      self._reg_and_training,
       self._onroad_uploads_and_reset_settings,
       Spacer(10),
       LineSeparator(height=10),
       self._power_buttons,
     ]
-
-    # Hide the left (Onroad Uploads) button, keep right (Reset Settings)
-    self._onroad_uploads_and_reset_settings.action_item.left_button.set_visible(False)
 
     return items
 

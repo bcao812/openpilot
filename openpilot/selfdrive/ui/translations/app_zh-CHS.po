@@ -1,9 +1,3 @@
-msgid "Enable if your vehicle uses an aftermarket blind spot monitoring (BSM) system. Factory BSM enablement will be disabled."
-msgstr "如果您的车辆使用副厂盲区监测（BSM）系统，请开启此开关。开启后将禁用原厂 BSM 功能。"
-
-msgid "Aftermarket BSM"
-msgstr "是否副厂BSM"
-
 msgid ""
 msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -133,6 +127,10 @@ msgstr "当实时学习转向延迟关闭时调整软件延迟。默认软件延
 #: openpilot/system/ui/widgets/network.py
 msgid "Advanced"
 msgstr "高级"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/toyota.py
+msgid "Aftermarket BSM"
+msgstr "是否副厂BSM"
 
 #: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Aggressive"
@@ -712,6 +710,7 @@ msgid "Door Open"
 msgstr "车门未关"
 
 #: openpilot/selfdrive/ui/layouts/settings/software.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Download"
 msgstr "下载"
 
@@ -742,10 +741,6 @@ msgstr "驾驶员摄像头预览"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/trips.py
 msgid "Drives"
 msgstr "行程"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
-msgid "Driving Model"
-msgstr "驾驶模型"
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Driving Model Lagging"
@@ -851,6 +846,10 @@ msgstr "为巡航速度增减启用自定义短按和长按增量。"
 #: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Enable driver monitoring even when sunnypilot is not engaged."
 msgstr "即使 sunnypilot 未启用也开启驾驶员监控。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/toyota.py
+msgid "Enable if your vehicle uses an aftermarket blind spot monitoring (BSM) system. Factory BSM enablement will be disabled."
+msgstr "如果您的车辆使用副厂盲区监测（BSM）系统，请开启此开关。开启后将禁用原厂 BSM 功能。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
 msgid "Enable sunnylink"
@@ -989,6 +988,7 @@ msgid "Finish Setup"
 msgstr "完成设置"
 
 #: openpilot/selfdrive/ui/layouts/settings/settings.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
 msgid "Firehose"
 msgstr "数据洪流"
 
@@ -1259,6 +1259,10 @@ msgid "Minimum Speed to Pause Lateral Control"
 msgstr "暂停横向控制的最低速度"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Model Status"
+msgstr "模型状态"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Model download has started in the background. We suggest resetting calibration. Would you like to do that now?"
 msgstr "模型下载已在后台开始。我们建议重置标定。是否现在重置？"
 
@@ -1377,6 +1381,10 @@ msgstr "确定"
 msgid "ONLINE"
 msgstr "在线"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
+msgid "OSM"
+msgstr "OSM 地图"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/hyundai.py
@@ -1384,10 +1392,6 @@ msgstr "在线"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
 msgid "Off"
 msgstr "关闭"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
-msgid "Off-Policy Model"
-msgstr "离策略模型"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 msgid "Off: Disables the Speed Limit functions."
@@ -1404,13 +1408,6 @@ msgstr "停车"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "Offroad: Device will be in Always Offroad mode after boot/wake-up."
 msgstr "停车：设备开机/唤醒后将处于停车设置模式。"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
-msgid "Chunked Model"
-msgstr "分块模型"
-
-msgid "On-Policy Model"
-msgstr "在策略模型"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Only available when vehicle is off, or always offroad mode is on"
@@ -1544,10 +1541,6 @@ msgstr "请启用\"停车设置模式\"或关闭车辆电源以调整这些开�
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
 msgid "Please reboot and try again."
 msgstr "请重启后重试。"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
-msgid "Policy Model"
-msgstr "策略模型"
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Posenet Speed Invalid"
@@ -1761,6 +1754,8 @@ msgid ""
 "Reverse\n"
 "Gear"
 msgstr ""
+"倒车\n"
+"挡位"
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Reverse Gear"
@@ -2244,6 +2239,10 @@ msgstr "请握住方向盘：未检测到人脸"
 msgid "Training Guide"
 msgstr "使用指南"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
+msgid "Trips"
+msgstr "行程"
+
 #: openpilot/selfdrive/ui/layouts/settings/developer.py
 msgid "UI Debug Mode"
 msgstr "界面调试模式"
@@ -2346,10 +2345,6 @@ msgstr "查看 sunnypilot 崩溃的错误日志。"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Virtually shift camera's perspective to move model's center to Left(+ values) or Right (- values)"
 msgstr "虚拟移动摄像头视角，将模型中心向左（+值）或向右（-值）移动"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
-msgid "Vision Model"
-msgstr "视觉模型"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
 msgid "Visuals"
@@ -2513,6 +2508,7 @@ msgstr "脱离以启用停车设置模式"
 msgid "down"
 msgstr "下"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
 msgid "download failed"
 msgstr "下载失败"
@@ -2646,10 +2642,6 @@ msgstr "请重启并重试"
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
 msgid "progress"
 msgstr "进度"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
-msgid "ready"
-msgstr "就绪"
 
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/sunnylink.py
 msgid "restore"

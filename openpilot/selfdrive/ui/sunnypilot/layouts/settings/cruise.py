@@ -7,10 +7,9 @@ See the LICENSE.md file in the root directory for more details.
 from enum import IntEnum
 
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.cruise_sub_layouts.speed_limit_settings import SpeedLimitSettingsLayout
-from openpilot.selfdrive.ui.layouts.settings.toggles import TogglesLayout
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.multilang import tr, tr_noop
-from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp, option_item_sp, simple_button_item_sp, LineSeparatorSP
+from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp, option_item_sp, simple_button_item_sp
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.scroller_tici import Scroller
 
@@ -37,7 +36,6 @@ class CruiseLayout(Widget):
     super().__init__()
     self._current_panel = PanelType.CRUISE
     self._speed_limit_layout = SpeedLimitSettingsLayout(lambda: self._set_current_panel(PanelType.CRUISE))
-    self._toggles_layout = TogglesLayout()
 
     items = self._initialize_items()
     self._scroller = Scroller(items, line_separator=True, spacing=0)
@@ -90,14 +88,14 @@ class CruiseLayout(Widget):
       param="DynamicExperimentalControl")
 
     items = [
-      self._toggles_layout._toggles["ExperimentalMode"],
-      self._toggles_layout._toggles["LongitudinalPersonality"],
-      self._toggles_layout._toggles["IsMetric"],
+      self.icbm_toggle,
       self.dec_toggle,
       self.scc_v_toggle,
+      self.scc_m_toggle,
       self.custom_acc_toggle,
       self.custom_acc_short_increment,
       self.custom_acc_long_increment,
+      self.sla_settings_button,
     ]
     return items
 
@@ -110,7 +108,6 @@ class CruiseLayout(Widget):
   def show_event(self):
     self._set_current_panel(PanelType.CRUISE)
     self._scroller.show_event()
-    self._toggles_layout._update_toggles()
     self.icbm_toggle.show_description(True)
     self.custom_acc_toggle.show_description(True)
 
@@ -121,8 +118,6 @@ class CruiseLayout(Widget):
 
   def _update_state(self):
     super()._update_state()
-    self._toggles_layout._update_state()
-    self._toggles_layout._update_toggles()
 
     if ui_state.CP is not None and ui_state.CP_SP is not None:
       has_icbm = ui_state.has_icbm

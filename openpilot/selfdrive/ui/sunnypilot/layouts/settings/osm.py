@@ -46,12 +46,15 @@ class OSMLayout(Widget):
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
 
   def _initialize_items(self):
-    self._mapd_version = text_item(tr("Mapd Version"), lambda: ui_state.params.get("MapdVersion") or "Loading...")
-    self._delete_maps_btn = ListItemSP(tr("Downloaded Maps"), action_item=NoElideButtonAction(tr("DELETE"), enabled=True), callback=self._delete_maps)
-    self._progress = progress_item(tr("Downloading Map"))
-    self._update_btn = ListItemSP(tr("Database Update"), action_item=NoElideButtonAction(tr("CHECK"), enabled=True), callback=self._update_db)
-    self._country_btn = ListItemSP(tr("Country"), action_item=NoElideButtonAction(tr("SELECT"), enabled=True), callback=lambda: self._select_region("Country"))
-    self._state_btn = ListItemSP(tr("State"), action_item=NoElideButtonAction(tr("SELECT"), enabled=True), callback=lambda: self._select_region("State"))
+    self._mapd_version = text_item(lambda: tr("Mapd Version"), lambda: ui_state.params.get("MapdVersion") or "Loading...")
+    self._delete_maps_btn = ListItemSP(lambda: tr("Downloaded Maps"), action_item=NoElideButtonAction(lambda: tr("DELETE"), enabled=True),
+                                       callback=self._delete_maps)
+    self._progress = progress_item(lambda: tr("Downloading Map"))
+    self._update_btn = ListItemSP(lambda: tr("Database Update"), action_item=NoElideButtonAction(lambda: tr("CHECK"), enabled=True), callback=self._update_db)
+    self._country_btn = ListItemSP(lambda: tr("Country"), action_item=NoElideButtonAction(lambda: tr("SELECT"), enabled=True),
+                                   callback=lambda: self._select_region("Country"))
+    self._state_btn = ListItemSP(lambda: tr("State"), action_item=NoElideButtonAction(lambda: tr("SELECT"), enabled=True),
+                                 callback=lambda: self._select_region("State"))
 
     self.items = [self._mapd_version, self._delete_maps_btn, self._progress, self._update_btn, self._country_btn, self._state_btn]
 

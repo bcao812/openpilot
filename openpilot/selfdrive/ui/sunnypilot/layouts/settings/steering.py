@@ -15,7 +15,6 @@ from openpilot.system.ui.widgets import Widget
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.steering_sub_layouts.lane_change_settings import LaneChangeSettingsLayout
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.steering_sub_layouts.mads_settings import MadsSettingsLayout
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.steering_sub_layouts.torque_settings import TorqueSettingsLayout
-from openpilot.sunnypilot.selfdrive.controls.lib.auto_lane_change import AutoLaneChangeMode
 
 
 class PanelType(IntEnum):
@@ -98,19 +97,18 @@ class SteeringLayout(Widget):
       description=""
     )
 
-    lc = self._lane_change_settings_layout
     items = [
       self._mads_toggle,
+      self._mads_settings_button,
       LineSeparatorSP(40),
-      lc._lane_change_timer,
-      LineSeparatorSP(40),
-      lc._bsm_delay,
-      LineSeparatorSP(40),
-      lc._road_edge_block,
+      self._lane_change_settings_button,
       LineSeparatorSP(40),
       self._blinker_control_toggle,
       self._blinker_control_options,
       self._blinker_reengage_delay,
+      LineSeparatorSP(40),
+      self._torque_control_toggle,
+      self._torque_customization_button,
       LineSeparatorSP(40),
       self._nnlc_toggle,
     ]
@@ -133,13 +131,6 @@ class SteeringLayout(Widget):
     self._mads_settings_button.action_item.set_enabled(ui_state.is_offroad() and self._mads_toggle.action_item.get_state())
     self._blinker_control_options.set_visible(self._blinker_control_toggle.action_item.get_state())
     self._blinker_reengage_delay.set_visible(self._blinker_control_toggle.action_item.get_state())
-
-    # inline lane-change toggles (flattened from Customize Lane Change submenu)
-    lc = self._lane_change_settings_layout
-    enable_bsm = ui_state.CP is not None and ui_state.CP.enableBsm
-    if not enable_bsm and ui_state.params.get_bool("AutoLaneChangeBsmDelay"):
-      ui_state.params.remove("AutoLaneChangeBsmDelay")
-    lc._bsm_delay.action_item.set_enabled(enable_bsm and ui_state.params.get("AutoLaneChangeTimer", return_default=True) > AutoLaneChangeMode.NUDGE)
 
     enforce_torque_enabled = self._torque_control_toggle.action_item.get_state()
     nnlc_enabled = self._nnlc_toggle.action_item.get_state()

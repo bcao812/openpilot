@@ -98,7 +98,11 @@ class DeveloperLayout(Widget):
       self._adb_toggle,
       self._ssh_toggle,
       self._ssh_keys,
+      self._joystick_toggle,
+      self._long_maneuver_toggle,
+      self._lat_maneuver_toggle,
       self._alpha_long_toggle,
+      self._ui_debug_toggle,
     ], line_separator=True, spacing=0)
 
     # Toggles should be not available to change in onroad state
