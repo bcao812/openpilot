@@ -1,37 +1,44 @@
-sunnypilot Version MR.ONE-2026 (2026-08-15) 
+sunnypilot Version MR.ONE-2026 (2026-08-28)
 ========================
-* MR.ONE Custom Features / MR.ONE 个性化功能
-  * Complete Simplified Chinese UI (575 strings) / 完整简体中文界面（575 条翻译）
-  * Full Noto Sans SC font with 1.3x larger Chinese text / 完整 Noto Sans SC 字体，中文字体放大 1.3 倍
-  * Home sidebar: CPU temperature value + IP address / 首页侧边栏：显示 CPU 温度数值 + IP 地址
-  * Home page: "Welcome to MR.ONE" with logo & banner / 首页：Welcome to MR.ONE + logo + banner 样式
-  * Sidebar labels: VI / RA abbreviations with Chinese (车辆接口 / 远程协助) / 侧边栏 VI/RA 简写 + 中文（车辆接口 / 远程协助）
-  * Hide OSM / Trips / Firehose settings menus / 设置隐藏 OSM / 行程 / 数据洪流菜单
-  * Fix developer UI crash (liveValid → valid) / 修复开发者界面崩溃（liveValid → valid）
-  * dashcam: LAN dashcam viewer (single-file, stdlib only) on port 5088 / dashcam：局域网行车记录查看（单文件纯标准库，端口 5088）
-  * Force timezone Asia/Shanghai (Beijing) / 强制北京时间（Asia/Shanghai）
-  * Re-enable loggerd dashcam recordings / 恢复 loggerd 行车记录
-* What's Changed (sunnypilot/sunnypilot) / 变更内容（sunnypilot/sunnypilot）
-  * ui: update gates for certain toggles by @sunnyhaibin in PR #1830 / 界面：更新部分开关的启用条件（@sunnyhaibin，PR #1830）
-  * release: ignore upstream IsReleaseBranch by @sunnyhaibin in PR #1831 / 发布：忽略上游 IsReleaseBranch 分支判断（@sunnyhaibin，PR #1831）
-  * manager: disable DEVELOPMENT_ONLY reset by @sunnyhaibin in PR #1833 / 管理器：禁用 DEVELOPMENT_ONLY 参数重置（@sunnyhaibin，PR #1833）
-  * sunnylink: fix max time offroad values by @nayan8teen in PR #1835 / Sunnylink：修复最长非行车时间数值（@nayan8teen，PR #1835）
-  * ui: show default model name by @nayan8teen in PR #1837 / 界面：显示默认模型名称（@nayan8teen，PR #1837）
-  * sunnylink: add CarParams fallback for brand-specific capabilities by @sunnyhaibin in PR #1839 / Sunnylink：为品牌专属能力增加 CarParams 回退（@sunnyhaibin，PR #1839）
-  * sunnylink SDUI: tweak DisableUpdate param for clarity by @sunnyhaibin in PR #1842 / Sunnylink SDUI：优化 DisableUpdate 参数表述（@sunnyhaibin，PR #1842）
-  * Revert "DM: Lancia Delta HF Integrale model" by @sunnyhaibin in PR #1849 / 回退“DM：Lancia Delta HF Integrale 模型”（@sunnyhaibin，PR #1849）
-  * modeld_v2: safe model validation by @Discountchubbs in PR #1855 / modeld_v2：安全的模型校验（@Discountchubbs，PR #1855）
-  * Revert "deprecate carState.brake" for Honda Gas Interceptor by @mvl-boston in PR #1860 / 回退“弃用 carState.brake”（Honda 燃气截断器）（@mvl-boston，PR #1860）
-  * sunnylink: deprecate legacy params metadata by @sunnyhaibin in PR #1862 / Sunnylink：弃用旧版参数元数据（@sunnyhaibin，PR #1862）
-  * ui: reset Enforce Torque Control and NNLC if both are enabled by @sunnyhaibin in PR #1863 / 界面：强制扭矩控制与 NNLC 同时开启时自动重置（@sunnyhaibin，PR #1863）
-* What's Changed (sunnypilot/opendbc) / 变更内容（sunnypilot/opendbc）
-  * Rivian: suppress ACM hold-the-wheel warning during MADS-only lateral by @lukasloetkolben in PR #465 / Rivian：仅 MADS 横向控制时抑制 ACM 握方向盘提示（@lukasloetkolben，PR #465）
-  * Sync: commaai/opendbc:master → sunnypilot/opendbc:master by @sunnyhaibin in PR #479 / 同步：commaai/opendbc → sunnypilot/opendbc（@sunnyhaibin，PR #479）
-  * safety: add option to ignore frequency check for RX checks by @sunnyhaibin in PR #480 / 安全：为 RX 校验增加忽略频率检查选项（@sunnyhaibin，PR #480）
-  * Revert "deprecate carState.brake" for Honda Gas Interceptor by @mvl-boston in PR #481 / 回退“弃用 carState.brake”（Honda 燃气截断器）（@mvl-boston，PR #481）
-* New Contributors (sunnypilot/sunnypilot) / 新贡献者（sunnypilot/sunnypilot）
-  * @mvl-boston made their first contribution in PR #1860 / @mvl-boston 完成了首次贡献（PR #1860）
-* Full Changelog: https://github.com/sunnypilot/sunnypilot/compare/v2026.001.007...v2026.002.000 / 完整变更日志：https://github.com/
+* MR.ONE Custom Features
+  * panda: GM ignition-over-CAN detection (SystemPowerMode 0x1F1 on bus 0 and bus 2) for automatic device power-on on GM vehicles
+  * panda: rebuilt firmware for the custom SPI panda (STM32H725), version DEV-22191a15
+  * volkswagen: Avoid EPS Lockout toggle (ported from dragonpilot) - scales steering torque at low speeds and sharp turns to prevent EPS lockout
+  * volkswagen: tuned Avoid EPS Lockout for sharp 90+ degree turns (speed scaling up to 8 m/s plus steering-angle scaling)
+  * models: merged sunnypilot master-dev updates - dual-slot model backend (#1966), Model Selector upgrades (#1953), model selection and cache fixes (#1958-#1960), eGPU/sidebar UI (#1967-#1969), OSM map deletion via sunnylink (#1971)
+  * ui: Simplified Chinese translations for the model selector and all recent UI changes
+  * ui: complete Simplified Chinese UI (575 strings)
+  * ui: full Noto Sans SC font with 1.3x larger Chinese text
+  * ui: home sidebar shows CPU temperature value and IP address
+  * ui: home page "Welcome to MR.ONE" with logo and banner
+  * ui: sidebar status abbreviations VI (vehicle interface) and RA (remote assist)
+  * ui: hide OSM / Trips / Firehose settings menus
+  * ui: fix developer UI crash (liveValid -> valid)
+  * dashcam: LAN dashcam viewer (single-file, stdlib only) on port 5088
+  * system: force timezone Asia/Shanghai (Beijing)
+  * system: re-enable loggerd dashcam recordings
+* What's Changed (sunnypilot/sunnypilot)
+  * Merged upstream PRs: #1953 (Model Selector upgrades), #1958 (model cache size handling), #1959 (fix current model not updating), #1960 (persist model selection per catalog), #1966 (dual-slot model backend with ref-based downloads), #1967 (scrolling label speed fix), #1968 (sidebar eGPU icon), #1969 (big model failure detection), #1971 (OSM map deletion via sunnylink)
+  * ui: update gates for certain toggles by @sunnyhaibin in PR #1830
+  * release: ignore upstream IsReleaseBranch by @sunnyhaibin in PR #1831
+  * manager: disable DEVELOPMENT_ONLY reset by @sunnyhaibin in PR #1833
+  * sunnylink: fix max time offroad values by @nayan8teen in PR #1835
+  * ui: show default model name by @nayan8teen in PR #1837
+  * sunnylink: add CarParams fallback for brand-specific capabilities by @sunnyhaibin in PR #1839
+  * sunnylink SDUI: tweak DisableUpdate param for clarity by @sunnyhaibin in PR #1842
+  * Revert "DM: Lancia Delta HF Integrale model" by @sunnyhaibin in PR #1849
+  * modeld_v2: safe model validation by @Discountchubbs in PR #1855
+  * Revert "deprecate carState.brake" for Honda Gas Interceptor by @mvl-boston in PR #1860
+  * sunnylink: deprecate legacy params metadata by @sunnyhaibin in PR #1862
+  * ui: reset Enforce Torque Control and NNLC if both are enabled by @sunnyhaibin in PR #1863
+* What's Changed (sunnypilot/opendbc)
+  * Rivian: suppress ACM hold-the-wheel warning during MADS-only lateral by @lukasloetkolben in PR #465
+  * Sync: commaai/opendbc:master -> sunnypilot/opendbc:master by @sunnyhaibin in PR #479
+  * safety: add option to ignore frequency check for RX checks by @sunnyhaibin in PR #480
+  * Revert "deprecate carState.brake" for Honda Gas Interceptor by @mvl-boston in PR #481
+* New Contributors (sunnypilot/sunnypilot)
+  * @mvl-boston made their first contribution in PR #1860
+* Full Changelog: https://github.com/sunnypilot/sunnypilot/compare/v2026.001.007...v2026.002.000
 
 sunnypilot Version 2026.001.000 (2026-05-06)
 ========================
