@@ -3,7 +3,7 @@ import os
 from typing import NoReturn, TypedDict
 
 from openpilot.cereal import messaging
-from openpilot.common.realtime import Ratekeeper
+from openpilot.common.realtime import Ratekeeper, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 
 JIFFY = os.sysconf(os.sysconf_names['SC_CLK_TCK'])
@@ -273,6 +273,15 @@ def build_proc_log_message(msg) -> None:
 
 
 def main() -> NoReturn:
+  # Keep the telemetry off the two contended big cores. proclogd is the only long-lived
+  # background daemon that declares no affinity at all, so the scheduler places it wherever
+  # there is idle time -- which is the BIG cluster. Measured with _logs/procs.py --affinity
+  # over the route corpus: 5.2% of a core, sampled on core 5 in 61% of procLog frames and core
+  # 4 in 29%, i.e. exactly the two cores already at 74.0% and 81.2%. Every comparable daemon
+  # (paramsd, lagd, torqued, calibrationd, dmonitoringd, mapd_manager) pins [0, 1, 2, 3] at
+  # priority 5; this just joins them. Scanning /proc at 0.5 Hz has no deadline.
+  config_realtime_process([0, 1, 2, 3], 5)
+
   pm = messaging.PubMaster(['procLog'])
   rk = Ratekeeper(0.5)
   while True:
