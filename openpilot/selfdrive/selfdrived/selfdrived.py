@@ -121,7 +121,7 @@ class SelfdriveD(CruiseHelper):
     self.big_model_ready_t = 0.
 
     # Cached by params_thread at 10 Hz; read by update_events. usbgpu_active MUST start None,
-    # not False: modeld does params.remove("UsbGpuActive") at startup so "undecided" is None,
+    # not False: modeld does params.remove("ChestnutActive") at startup so "undecided" is None,
     # and update_events tests `big_active is False` to mean failed. Seeding it False would
     # declare a failure on the frames before params_thread's first pass and raise
     # bigModelFailed, which carries ET.PERMANENT -- a 20 s alert on every boot.
@@ -276,9 +276,9 @@ class SelfdriveD(CruiseHelper):
       self.events.add(EventName.bigModelLoading)
 
     big_active = self.usbgpu_active
-    usbgpu_present = self.sm['deviceState'].chestnutPresent
+    chestnut_present = self.sm['deviceState'].chestnutPresent
     model_unavailable = big_active is True and self.sm.seen['modelV2'] and not self.sm.alive['modelV2']
-    big_failed = big_active is False or model_unavailable or (self.big_model_active and not usbgpu_present)
+    big_failed = big_active is False or model_unavailable or (self.big_model_active and not chestnut_present)
     if big_failed and not self.big_model_failed:
       self.events.add(EventName.bigModelFailed)
     self.big_model_failed = big_failed
@@ -803,8 +803,8 @@ class SelfdriveD(CruiseHelper):
       # Read here rather than in update_events, which runs at 100 Hz. Both keys are written by
       # modeld around a model load (sunnypilot/modeld_v2/modeld.py:334-379) -- a seconds-long
       # event -- so 10 Hz resolves every transition they can actually make.
-      self.usbgpu_loading = self.params.get_bool("UsbGpuLoading")
-      self.usbgpu_active = self.params.get("UsbGpuActive")
+      self.usbgpu_loading = self.params.get_bool("ChestnutLoading")
+      self.usbgpu_active = self.params.get("ChestnutActive")
 
       self.mads.read_params()
       time.sleep(0.1)
