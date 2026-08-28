@@ -197,7 +197,11 @@ class TestStopReleaseHysteresis:
   left alone; only letting go is made to require a plan that clearly wants to move."""
 
   V_STOPPED = 0.1               # below STOP_SPEED, so the latch owns the state
-  V_CRUISE_DITHER = 1.3         # settles the plan at +0.26: released today, held now
+  # Settles the plan inside the hysteresis band: above STOP_ACCEL, so today's bare threshold would
+  # release, but below STOP_RELEASE_ACCEL, so this one holds. Picked by measuring where the plan
+  # actually settles rather than by scaling the old value -- 0.9 kph -> +0.150, mid-band with 0.05
+  # either side. It moved with the band: at STOP_RELEASE_ACCEL 0.3 this was 1.3 kph (+0.261).
+  V_CRUISE_DITHER = 0.9
   V_CRUISE_GO = 1.8             # settles at +0.40, past STOP_RELEASE_ACCEL
 
   def _latched(self, **kwargs):
@@ -247,6 +251,59 @@ class TestStopReleaseHysteresis:
     planner = self._latched()
     run(planner, 1, v_ego=self.V_STOPPED, force_decel=True, enabled=False)
     assert not planner.stop_latched
+
+  # The counterexample the band was retuned against: 08-28 route 21 t=2837.8. Latched at v_ego
+  # 0.23 while the lead pulled away at 1.23 m/s; a_target climbed to this peak and fell back. At
+  # STOP_RELEASE_ACCEL 0.3 the latch never released, the open-loop ramp walked the command to
+  # -2.00 and held the car still for 1.31 s while the gap went 5.9 -> 8.5 m.
+  A_TARGET_DEPARTING_LEAD_PEAK = 0.27
+
+  def test_the_band_clears_the_logged_departing_lead(self):
+    """Pins the VALUE, which the sweep below deliberately does not.
+
+    A release threshold is only defensible against the distribution of a_target it has to sit
+    clear of. Over the 08-27/08-28 pair a_target sits in [0.0, 0.3) on 8-10% of stopped frames
+    with p90 +0.11..+0.30, so 0.3 was on the shoulder of that distribution rather than clear of
+    it, and the logged stop above is what that costs. Anything above the recorded peak would have
+    held that stop through.
+
+    This is the assertion a silent retune upward has to argue with. It is a road-evidence bound,
+    not a magic number: narrowing the band further keeps it passing, widening it past what the
+    road already refuted does not.
+    """
+    assert STOP_ACCEL < STOP_RELEASE_ACCEL <= self.A_TARGET_DEPARTING_LEAD_PEAK, \
+        (f"STOP_RELEASE_ACCEL {STOP_RELEASE_ACCEL} does not clear the logged departing-lead peak "
+         f"{self.A_TARGET_DEPARTING_LEAD_PEAK}; re-derive it against the release ladder in "
+         f"_logs/stopshape.py before moving it")
+
+  def test_the_release_boundary_is_where_the_constant_says(self):
+    """The comparison, not the value -- the test above owns the value.
+
+    Both tests further up pass for any STOP_RELEASE_ACCEL between the two speeds they use, so
+    neither says the planner compares against that constant at all rather than against, say,
+    STOP_ACCEL. This sweeps the plan across the band and asserts the release flips exactly where
+    STOP_RELEASE_ACCEL falls, wherever that is.
+
+    Deliberately self-referential, and it does NOT detect the constant drifting: it partitions
+    its own results with the same value the planner uses, so retuning moves both sides together
+    and it still passes. Breaking the comparison is what it catches.
+    """
+    below, at_or_above = [], []
+    for v_cruise in [0.6 + 0.1 * i for i in range(15)]:
+      planner = self._latched()
+      run(planner, 4 * FRAMES_DWELL, v_ego=self.V_STOPPED, force_decel=False,
+          v_cruise_kph=v_cruise)
+      a = planner.output_a_target
+      if a < STOP_ACCEL:
+        continue                      # the latch would never have been challenged
+      (at_or_above if a >= STOP_RELEASE_ACCEL else below).append((a, planner.output_should_stop))
+
+    assert below and at_or_above, \
+        f"sweep never crossed STOP_RELEASE_ACCEL={STOP_RELEASE_ACCEL}; it cannot test the boundary"
+    for a, stopping in below:
+      assert stopping, f"released at a_target {a:+.3f}, below STOP_RELEASE_ACCEL"
+    for a, stopping in at_or_above:
+      assert not stopping, f"held at a_target {a:+.3f}, at or above STOP_RELEASE_ACCEL"
 
 
 class TestAntiCreepStop:

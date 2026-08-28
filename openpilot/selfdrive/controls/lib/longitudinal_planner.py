@@ -226,13 +226,28 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     #
     # Latching is unchanged -- a stop is still asked for at exactly the same instant -- and only
     # letting go is made to require a plan that clearly wants to move. Re-derived over both road
-    # pairs, releasing at STOP_RELEASE_ACCEL removes 21% of the flips (75 -> 59 over 83 engaged
-    # min) for a median 0.48 s longer hold. 0.2 buys less (63) and 0.5 costs far more (1.38 s).
+    # pairs, releasing at 0.3 removed 21% of the flips (75 -> 59 over 83 engaged min) for a median
+    # 0.48 s longer hold, and 0.5 cost far more (1.38 s).
     #
-    # The cost is real and is the reason this is a constant and not a hardcode: a lead that inches
+    # 0.3 was too high, and the road said so. The cost this comment predicted -- "a lead that inches
     # forward while the plan never asks for more than STOP_RELEASE_ACCEL is a stop this holds
-    # through. Every logged launch that mattered asked for 1.0+ once it was a launch; the ones that
-    # dithered at 0.26 are the ones being suppressed.
+    # through" -- was recorded on 08-28 route 21 t=2837.8: latched at v_ego 0.23 while the lead was
+    # pulling away at 1.23 m/s, a_target climbed to a peak of +0.27 and fell back, the latch never
+    # released, and the open-loop ramp walked the command from -0.14 to -2.00 and held the car
+    # still for 1.31 s while the gap went 5.9 -> 8.5 m. It missed the threshold by 0.03.
+    #
+    # That is not a tail case: over the 08-27/08-28 pair a_target sits in [0.0, 0.3) on 8-10% of
+    # stopped frames with p90 +0.11..+0.30, so 0.3 was sitting on the shoulder of the distribution
+    # it is supposed to be clear of. 0.2 is the first rung that is not.
+    #
+    # Measured on the release ladder over both arms: 08-27 pays nothing at all (58 flips either
+    # way, 35.9/h) and buys p90 launch delay 2.07 -> 0.71 s; 08-28 pays 7% more flips (43.9 ->
+    # 46.9/h) and buys p90 1.27 -> 0.45 s.
+    #
+    # What this spends is hysteresis width: the band is now [STOP_ACCEL, 0.2), half of what it was.
+    # The chatter it was introduced to stop is bounded by the flip numbers above and by the launch
+    # burst count, which is the metric that actually names the complaint -- 0 bursts of >=4 flips
+    # within 0.6 s on 08-28, and that is what must not come back.
     if self.stop_latched:
       self.stop_latched = not (output_a_target >= STOP_RELEASE_ACCEL or v_ego >= STOP_SPEED)
     else:
