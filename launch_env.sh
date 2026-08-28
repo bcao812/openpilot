@@ -30,3 +30,27 @@ export STAGING_ROOT="/data/safe_staging"
 # through the 40-frame timeout, discarding the opening frames of BOTH road cameras.
 # Also gates dmonitoringmodeld / dmonitoringd off in system/manager/process_config.py.
 export DISABLE_DRIVER=1
+
+# Name the tinygrad backend instead of letting it hunt for one.
+#
+# tinygrad's Device.DEFAULT is `DEV.device or self._select_device` (tinygrad/device.py), and
+# _select_device walks ALL_DEVICES calling Device[d] on each until one constructs -- which
+# means importlib.import_module("tinygrad.runtime.ops_<x>") for CUDA, NV, AMD, MLX and the rest
+# before it reaches QCOM on this Adreno board. modeld_v2/compile_modeld.py forces that walk at
+# IMPORT time, because it uses `device: str = Device.DEFAULT` as a default argument value
+# (lines 81, 130, 135, 143, 154) and Python evaluates default arguments when the def executes.
+#
+# Measured on this device, 3 runs each:
+#   import openpilot.sunnypilot.modeld_v2.modeld     7.9 s   without DEV
+#                                                    3.9 s   with DEV=QCOM
+# That ~4 s sits on the boot critical path: modeld logs "modeld init" as the first line of
+# main(), and the boot ladder puts ~9.4 s between camerad coming up and that line.
+#
+# QCOM is what Device.DEFAULT resolves to here anyway -- this pins the answer, it does not
+# change it. tinygrad itself does the same thing for child processes (`os.environ["DEV"] =
+# device` in _select_device), so this is the sanctioned knob, not a workaround.
+#
+# ⚠ Remove this if a chestnut/USB eGPU is ever attached: the big-model path wants that device,
+# and this would pin it to the internal GPU. Checked absent here -- deviceState.chestnutPresent
+# is False across the corpus, UsbGpuActive is unset, and no USB devices are enumerated.
+export DEV=QCOM

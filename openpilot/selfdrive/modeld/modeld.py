@@ -15,7 +15,6 @@ from openpilot.cereal.messaging import PubMaster, SubMaster
 from openpilot.cereal.services import SERVICE_LIST
 from openpilot.cereal.visionipc import VisionStreamType
 from msgq.visionipc import VisionIpcClient, VisionBuf
-from opendbc.car.car_helpers import get_demo_car_params
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -299,6 +298,10 @@ def main(demo=False):
   meta_extra = FrameMeta()
 
   if demo:
+    # Imported here, not at module scope: this pulls in opendbc.car.car_helpers and with it the
+    # whole fingerprint database, which costs ~1.3 s of process start measured on this device --
+    # paid on every boot, for a function only the demo path ever calls.
+    from opendbc.car.car_helpers import get_demo_car_params
     CP = get_demo_car_params()
   else:
     CP = messaging.log_from_bytes(params.get("CarParams", block=True), car.CarParams)
