@@ -476,7 +476,7 @@ class SelfdriveD(CruiseHelper):
 
     # conservative HW alert. if the data or frequency are off, locationd will throw an error
     if any((self.sm.frame - self.sm.recv_frame[s])*DT_CTRL > 10. for s in self.sensor_packets):
-      pass#self.events.add(EventName.sensorDataInvalid)
+      self.events.add(EventName.sensorDataInvalid)
 
     if not REPLAY:
       # Check for mismatch between openpilot and car's PCM
@@ -511,7 +511,7 @@ class SelfdriveD(CruiseHelper):
     # GPS checks
     gps_ok = self.sm.recv_frame[self.gps_location_service] > 0 and (self.sm.frame - self.sm.recv_frame[self.gps_location_service]) * DT_CTRL < 2.0
     if not gps_ok and self.sm['deviceMotion'].inputsOK and (self.distance_traveled > 1500):
-      pass#self.events.add(EventName.noGps)
+      self.events.add(EventName.noGps)
     if gps_ok:
       self.distance_traveled = 0
     self.distance_traveled += abs(CS.vEgo) * DT_CTRL
