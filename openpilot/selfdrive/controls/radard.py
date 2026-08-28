@@ -273,7 +273,11 @@ class RadarD:
 
 # fuses camera and radar data for best lead detection
 def main() -> None:
-  config_realtime_process(5, Priority.CTRL_LOW)
+  # Core 7, with modeld -- same reasoning as plannerd.py, which carries the full note.
+  # radard also polls modelV2, so it moves for the same reason and must not be left behind on
+  # core 5: radarState showed the same p95 overrun of its 50 ms period (61.98-69.57 ms p99)
+  # from the same UI preemption.
+  config_realtime_process(7, Priority.CTRL_LOW)
 
   # wait for stats about the car to come in from controls
   cloudlog.info("radard is waiting for CarParams")

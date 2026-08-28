@@ -11,7 +11,24 @@ import openpilot.cereal.messaging as messaging
 
 
 def main():
-  config_realtime_process(5, Priority.CTRL_LOW)
+  # Core 7, with modeld, not core 5 with the UI.
+  #
+  # plannerd polls modelV2 (below), which modeld publishes from core 7, so this puts the wake on
+  # the core that already holds the message -- no cross-core IPI and no cold cache per frame.
+  # modeld runs FIFO 54 against CTRL_LOW's 51, so it still cannot be delayed by this, and it
+  # leaves the core free while it waits on the GPU: measured 19.8% CPU for a 35-42 ms inference.
+  #
+  # What this moves AWAY from matters more. On core 5 the UI sits at CTRL_HIGH (ui.py), above
+  # CTRL_LOW, so every UI frame preempted the longitudinal planner. Measured over 11 routes,
+  # longitudinalPlan missed its 50 ms period at p95 (61.7-67.0 ms p99) while modelV2 did not
+  # (56.9 ms p99) -- the delay was scheduling, not the model.
+  #
+  # Upstream comma puts the UI above plannerd on purpose (`# above plannerd and radard` in
+  # ui.py). This fork takes the other side of that trade. Lowering the UI instead was the
+  # obvious alternative and is NOT safe here: the UI has ~4 ms of margin against a 16.67 ms
+  # vblank and falls to a latched 30 FPS when it misses, so starving it has a visible cliff.
+  # Moving the planner costs the UI nothing.
+  config_realtime_process(7, Priority.CTRL_LOW)
 
   cloudlog.info("plannerd is waiting for CarParams")
   params = Params()

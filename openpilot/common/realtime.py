@@ -18,13 +18,22 @@ DT_DMON = 0.05  # driver monitoring
 
 
 class Priority:
-  # CORE 2
-  # - modeld = 55
-  # - camerad = 54
+  # The layout these numbers exist to express, as it actually is on this device. Cores 0-3 are
+  # Kryo 385 Silver and 4-7 are Gold, so "which core" is not interchangeable with "how busy".
+  # Derive the live picture with _logs/procs.py --affinity rather than trusting this comment.
+  #
+  #   core 3  pandad 54            + spi_geni IRQ
+  #   core 4  card / controlsd / selfdrived, all CTRL_HIGH -- one serial 100 Hz chain,
+  #           equal priority on one core so the stages run to completion in order
+  #   core 5  ui CTRL_HIGH         + fts_ts (touch) and msm_drm (display) IRQs
+  #   core 6  camerad, no RT       + the camera IRQ group
+  #   core 7  modeld 54, plannerd and radard CTRL_LOW   + kgsl-3d0 (GPU) IRQ
+  #
+  # plannerd and radard sit with modeld because both poll modelV2, which modeld publishes:
+  # same core means the wake is cache-local. They were on core 5 until 2026-08-28, where the
+  # UI at CTRL_HIGH preempted them every frame.
   CTRL_LOW = 51 # plannerd & radard
 
-  # CORE 3
-  # - pandad = 55
   CTRL_HIGH = 53
 
 
