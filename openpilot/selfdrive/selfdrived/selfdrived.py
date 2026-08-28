@@ -37,6 +37,9 @@ from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
 TESTING_CLOSET = "TESTING_CLOSET" in os.environ
+# Same switch camerad and the manager read; set in launch_env.sh because this device's cabin
+# camera is damaged. See system/camerad/cameras/hw.h and system/manager/process_config.py.
+DM_DISABLED = "DISABLE_DRIVER" in os.environ
 
 LONGITUDINAL_PERSONALITY_MAP = {v: k for k, v in log.LongitudinalPersonality.schema.enumerants.items()}
 
@@ -94,11 +97,21 @@ class SelfdriveD(CruiseHelper):
     self.gps_packets = [self.gps_location_service]
     self.sensor_packets = ["accelerometer", "gyroscope"]
     self.camera_packets = ["narrowRoadCameraState", "cabinCameraState", "wideRoadCameraState"]
+    if DM_DISABLED:
+      # Nothing publishes cabinCameraState when the cabin camera is disabled, so leaving it in
+      # camera_packets would make all_alive(camera_packets) permanently false -- i.e. a standing
+      # cameraMalfunction that would mask a real failure of either road camera.
+      self.camera_packets.remove("cabinCameraState")
 
     # TODO: de-couple selfdrived with card/conflate on carState without introducing controls mismatches
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug', 'lateralManeuverPlan'] + ['modelDataV2SP', 'longitudinalPlanSP']
+    if DM_DISABLED:
+      # driverMonitoringState is still SUBSCRIBED -- self.sm['driverMonitoringState'] is read
+      # unconditionally below and would raise on an absent key. It is subscribed and ignored,
+      # so it reads as the default (all-zero) struct: alertLevel none, no lockout.
+      ignore += ['driverMonitoringState', 'cabinCameraState']
     if SIMULATION:
       ignore += ['cabinCameraState', 'managerState']
     if REPLAY:
@@ -407,11 +420,11 @@ class SelfdriveD(CruiseHelper):
         cloudlog.event("process_not_running", not_running=not_running, error=True)
       self.not_running_prev = not_running
     if self.sm.recv_frame['managerState'] and (not_running - self.ignored_processes):
-      pass#self.events.add(EventName.processNotRunning)
+      self.events.add(EventName.processNotRunning)
     else:
       if not SIMULATION and not self.rk.lagging:
         if not self.sm.all_alive(self.camera_packets):
-          pass#self.events.add(EventName.cameraMalfunction)
+          self.events.add(EventName.cameraMalfunction)
         elif not self.sm.all_freq_ok(self.camera_packets):
           self.events.add(EventName.cameraFrameRate)
     if not REPLAY and self.rk.lagging:
@@ -435,11 +448,11 @@ class SelfdriveD(CruiseHelper):
     big_model_settling = self.big_model_loading or time.monotonic() < self.big_model_ready_t + warmup_sec
     if not self.sm.all_checks() and no_system_errors and not big_model_settling:  # the load holds modelV2 and friends back on purpose
       if not self.sm.all_alive():
-        pass#self.events.add(EventName.commIssue)
+        self.events.add(EventName.commIssue)
       elif not self.sm.all_freq_ok():
-        pass#self.events.add(EventName.commIssueAvgFreq)
+        self.events.add(EventName.commIssueAvgFreq)
       else:
-        pass#self.events.add(EventName.commIssue)
+        self.events.add(EventName.commIssue)
 
       logs = {
         'invalid': [s for s, valid in self.sm.valid.items() if not valid],

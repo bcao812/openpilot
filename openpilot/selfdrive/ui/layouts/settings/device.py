@@ -21,6 +21,10 @@ from openpilot.system.ui.widgets.scroller_tici import Scroller
 if gui_app.sunnypilot_ui():
   from openpilot.system.ui.sunnypilot.widgets.list_view import button_item_sp as button_item
 
+# Same switch camerad, the manager and selfdrived read; set in launch_env.sh because this
+# device's cabin camera is damaged. See system/manager/process_config.py.
+DM_DISABLED = "DISABLE_DRIVER" in os.environ
+
 # Description constants
 DESCRIPTIONS = {
   'pair_device': tr_noop("Pair your device with comma connect (connect.comma.ai) and claim your comma prime offer."),
@@ -60,8 +64,12 @@ class DeviceLayout(Widget):
       text_item(lambda: tr("Dongle ID"), self._params.get("DongleId") or (lambda: tr("N/A"))),
       text_item(lambda: tr("Serial"), self._params.get("HardwareSerial") or (lambda: tr("N/A"))),
       self._pair_device_btn,
-      button_item(lambda: tr("Driver Camera"), lambda: tr("PREVIEW"), lambda: tr(DESCRIPTIONS['driver_camera']),
-                  callback=lambda: gui_app.push_widget(CabinCameraDialog()), enabled=ui_state.is_offroad),
+      # The cabin camera preview opens a VisionIPC stream that camerad never serves while
+      # DISABLE_DRIVER is set, so the button would sit there doing nothing. Hidden, not deleted --
+      # it comes back on its own if the camera is ever repaired and the switch removed.
+      *([] if DM_DISABLED else
+        [button_item(lambda: tr("Driver Camera"), lambda: tr("PREVIEW"), lambda: tr(DESCRIPTIONS['driver_camera']),
+                     callback=lambda: gui_app.push_widget(CabinCameraDialog()), enabled=ui_state.is_offroad)]),
       self._reset_calib_btn,
       button_item(lambda: tr("Review Training Guide"), lambda: tr("REVIEW"), lambda: tr(DESCRIPTIONS['review_guide']),
                   self._on_review_training_guide, enabled=ui_state.is_offroad),
