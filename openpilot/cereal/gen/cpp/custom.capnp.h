@@ -93,6 +93,7 @@ enum class DownloadStatus_da834d53e62048b9: uint16_t {
   DOWNLOADED,
   CACHED,
   FAILED,
+  VERIFYING,
 };
 CAPNP_DECLARE_ENUM(DownloadStatus, da834d53e62048b9);
 CAPNP_DECLARE_SCHEMA(a677b25114d64c73);
