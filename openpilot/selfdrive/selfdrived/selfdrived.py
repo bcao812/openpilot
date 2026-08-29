@@ -301,14 +301,24 @@ class PhaseTimer:
         "mean": round(acc / total / 1000.0, 1),
       }
 
-    # No yields between phases any more. Each of these is an interpreter-bound scan of 1024
-    # slots -- tens of microseconds, not the ~5.3 ms a sort of 3000 PyLongs cost on the car --
-    # so there is no long GIL hold left to break up.
+    # Yield between phases. This was removed when the sorts went, on the grounds that no single
+    # call held the GIL long any more -- and the car disagreed: 7 of 20 windows showed
+    # sm_update suspended, worst 8.89 ms, WORSE in count than the version with sorts.
+    #
+    # The bound that matters is not how long one call runs, it is sys.getswitchinterval(),
+    # 5 ms by default. Pure Python does release the GIL, but only once a waiting thread has
+    # asked and that interval has elapsed. A ~7 ms emit of uninterrupted bytecode therefore
+    # makes the control thread wait most of an interval no matter how short each operation is.
+    # An explicit sleep offers the GIL up immediately, so the wait becomes one phase's scan.
+    #
+    # 200 us x 18 adds 3.6 ms to a writer that has 30 s. It is the cheapest thing here.
     cpu = {}
     wall = {}
     for p in self.PHASES:
       cpu[p] = stats(buf['cpu'][p])
+      time.sleep(0.0002)
       wall[p] = stats(buf['wall'][p])
+      time.sleep(0.0002)
     if any(v is None for v in cpu.values()):
       return
 
