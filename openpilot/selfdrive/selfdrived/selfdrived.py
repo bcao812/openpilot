@@ -58,6 +58,123 @@ TurnDirection = custom.ModelDataV2SP.TurnDirection
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
 
+class PhaseTimer:
+  """Per-phase wall and CPU timing for step(), written to the log every 30 s. Off by default.
+
+  Why this exists. procs.py measures selfdrived at 26.1% of one core, but that is a whole-process
+  number read from /proc, and it cannot say which part of step() spends it. Nothing else here can
+  answer that either: this process is paced by a BLOCKING recv_one(carState), so any wall-clock
+  profiler charges the wait as work, and cProfile's ~1 us per call would add milliseconds per
+  frame to a SCHED_FIFO 53 process sitting in the card -> selfdrived -> controlsd chain.
+
+  Why two clocks and not one. perf_counter_ns is wall, thread_time_ns is this thread's CPU. The
+  first phase blocks; there wall is large and CPU is ~0, and that difference is the whole point
+  -- it separates "waiting for carState" from "computing". A single clock cannot make that call,
+  and reading only CPU would hide the pacing.
+
+  Cost, measured rather than estimated. A full frame of instrumentation -- start(), nine mark()s
+  and end_frame() -- costs 6.8 us of CPU on an x86 host (_logs/sm_cost.py's host, 2026-08-29).
+  Not the ~1 us a count of clock reads suggests: perf_counter_ns is 86 ns from the vDSO, but
+  thread_time_ns is 291 ns because CLOCK_THREAD_CPUTIME_ID is a real syscall, and there are ten
+  of each. On the device, at an unmeasured 2-5x, that is 14-34 us per frame: 0.14-0.34% of the
+  10 ms period, or 0.5-1.3% of the 2.61 ms of CPU selfdrived actually burns per frame. So the
+  instrument perturbs its own subject by about one percent -- an order of magnitude below the
+  26.1% it exists to attribute, and therefore usable, but NOT the free measurement a naive count
+  of clock reads would predict. Cost is still not the reason it defaults to off; see below.
+
+  Why a marker file and not a Param or an env var. A Param would have to be added to
+  common/params_keys.h, which is compiled into libparams_c.so -- so a new key stops being a pure
+  Python change and pulls in a host build, a committed aarch64 .so and a sync. An env var in
+  launch_env.sh would either need syncing to flip, or an in-place ssh edit that leaves the device
+  tree dirty and breaks c3-sync's only verification (an empty git status). /data is not in git,
+  so a marker file flips the switch without touching either.
+
+    on:   ssh comma@<device> touch /data/selfdrived_profile   (takes effect at next process start)
+    off:  ssh comma@<device> rm /data/selfdrived_profile
+
+  Why it defaults to off, given the cost is negligible. Two reasons, neither of them CPU:
+  a permanent debug path on a 100 Hz actuation chain is one more thing every future reader of
+  this file has to classify as instrument-or-function; and an event every 30 s for the life of
+  the device is long-term noise in a log that boot.py and procs.py have to read.
+  """
+  MARKER = "/data/selfdrived_profile"
+
+  # 30 s at 100 Hz. Buffers are preallocated because config_realtime_process() calls gc.disable():
+  # per-frame appends would grow the arena for the whole drive with nothing to reclaim it.
+  PERIOD_FRAMES = 3000
+
+  PHASES = ("recv_carState", "sm_update", "data_sample_rest", "update_events", "state_machine",
+            "mads", "update_alerts", "button_tracker", "publish")
+
+  @classmethod
+  def create(cls):
+    """A PhaseTimer if the marker is present, else None. Checked once at construction, never on
+    the hot path -- flipping the marker takes effect at the next process start, which on this
+    device means the next ignition cycle."""
+    try:
+      return cls() if os.path.exists(cls.MARKER) else None
+    except OSError:
+      return None
+
+  def __init__(self):
+    n = self.PERIOD_FRAMES
+    self.wall = {p: [0] * n for p in self.PHASES}
+    self.cpu = {p: [0] * n for p in self.PHASES}
+    self.i = 0
+    self.periods = 0
+    self._w = 0
+    self._c = 0
+
+  def start(self):
+    self._w = time.perf_counter_ns()
+    self._c = time.thread_time_ns()
+
+  def mark(self, phase):
+    w = time.perf_counter_ns()
+    c = time.thread_time_ns()
+    i = self.i
+    self.wall[phase][i] = w - self._w
+    self.cpu[phase][i] = c - self._c
+    self._w = w
+    self._c = c
+
+  def end_frame(self):
+    self.i += 1
+    if self.i >= self.PERIOD_FRAMES:
+      self.flush()
+
+  def flush(self):
+    n = self.i
+    self.i = 0
+    if n < 2:
+      return
+    self.periods += 1
+
+    def stats(xs):
+      s = sorted(xs[:n])
+      return {
+        "p50": round(s[n // 2] / 1000.0, 1),
+        "p95": round(s[min(n - 1, int(n * 0.95))] / 1000.0, 1),
+        "p99": round(s[min(n - 1, int(n * 0.99))] / 1000.0, 1),
+        "max": round(s[-1] / 1000.0, 1),
+        "mean": round(sum(s) / n / 1000.0, 1),
+      }
+
+    # Microseconds. cpu_total is what should be compared against procs.py's 26.1%; wall_total is
+    # dominated by the blocking recv and is NOT a cost.
+    cpu = {p: stats(self.cpu[p]) for p in self.PHASES}
+    wall = {p: stats(self.wall[p]) for p in self.PHASES}
+    cloudlog.event(
+      "selfdrived.phase_timing",
+      frames=n,
+      period=self.periods,
+      cpu_us=cpu,
+      wall_us=wall,
+      cpu_total_us=round(sum(c["mean"] for c in cpu.values()), 1),
+      wall_total_us=round(sum(w["mean"] for w in wall.values()), 1),
+    )
+
+
 class SelfdriveD(CruiseHelper):
   def __init__(self, CP=None, CP_SP=None):
     self.params = Params()
@@ -166,6 +283,13 @@ class SelfdriveD(CruiseHelper):
     self.dm_uncertain_alerted = False
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
+
+    # None unless /data/selfdrived_profile exists at start. Every timing call below is guarded by
+    # `if self.prof:`, so with it absent the cost on the 100 Hz path is one attribute test per
+    # phase boundary and nothing else.
+    self.prof = PhaseTimer.create()
+    if self.prof is not None:
+      cloudlog.warning("selfdrived: phase timing ENABLED by %s", PhaseTimer.MARKER)
 
     self.ignored_processes = {'mapd', }
 
@@ -539,10 +663,17 @@ class SelfdriveD(CruiseHelper):
     self.icbm.run(CS, self.sm['carControl'], self.sm['longitudinalPlanSP'], self.is_metric)
 
   def data_sample(self):
+    # This recv BLOCKS -- it is what paces the process at 100 Hz, not the Ratekeeper, which only
+    # calls monitor_time(). Timed separately from everything after it so the wait is never read
+    # as work: here wall is ~10 ms and CPU is ~0.
     _car_state = messaging.recv_one(self.car_state_sock)
+    if self.prof:
+      self.prof.mark("recv_carState")
     CS = _car_state.carState if _car_state else self.CS_prev
 
     self.sm.update(0)
+    if self.prof:
+      self.prof.mark("sm_update")
 
     if not self.initialized:
       all_valid = CS.canValid and self.sm.all_checks()
@@ -660,16 +791,33 @@ class SelfdriveD(CruiseHelper):
     self.events_sp_prev = self.events_sp.names.copy()
 
   def step(self):
+    if self.prof:
+      self.prof.start()
     CS = self.data_sample()
+    if self.prof:
+      self.prof.mark("data_sample_rest")
     self.update_events(CS)
+    if self.prof:
+      self.prof.mark("update_events")
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
+    if self.prof:
+      self.prof.mark("state_machine")
     if not self.CP.notCar:
       self.mads.update(CS)
+    if self.prof:
+      self.prof.mark("mads")
     self.update_alerts(CS)
+    if self.prof:
+      self.prof.mark("update_alerts")
 
     self.button_state_tracker.update(CS)
+    if self.prof:
+      self.prof.mark("button_tracker")
     self.publish_selfdriveState(CS)
+    if self.prof:
+      self.prof.mark("publish")
+      self.prof.end_frame()
 
     self.CS_prev = CS
 
