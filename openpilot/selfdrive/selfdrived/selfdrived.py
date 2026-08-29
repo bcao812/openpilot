@@ -100,12 +100,29 @@ class PhaseTimer:
   """
   MARKER = "/data/selfdrived_profile"
 
-  # 30 s at 100 Hz. Buffers are preallocated because config_realtime_process() calls gc.disable():
-  # per-frame appends would grow the arena for the whole drive with nothing to reclaim it.
+  # 30 s at 100 Hz.
   PERIOD_FRAMES = 3000
 
   PHASES = ("recv_carState", "sm_update", "data_sample_rest", "update_events", "state_machine",
             "mads", "update_alerts", "button_tracker", "publish")
+
+  # Log-scale histogram, HdrHistogram-style: SUB_BITS sub-buckets per octave, so the relative
+  # resolution is constant at ~1/32 = 3% across the whole range instead of being fixed in
+  # absolute terms. That matters because these phases span three orders of magnitude in one
+  # frame -- data_sample_rest is ~20 us and recv_carState's wall is ~8 ms.
+  #
+  # Replaces per-frame sample buffers, and the reason is measured, not aesthetic. Storing raw
+  # samples meant the writer had to sort 3000 of them per phase per clock, and `sorted()` is one
+  # C call that holds the GIL until it returns. On the car that was ~5.3 ms per call, 18 calls
+  # per window, and the control thread -- which releases the GIL at the poll() inside
+  # SubMaster.update and must then reacquire it -- was suspended for 5 to 14 ms waiting. Route
+  # 0000002c: sm_update wall max 14081 us against a cpu max of 808 us, on 5 of 20 windows.
+  # Reading buckets is an interpreter-bound loop instead, ~26 us on a host.
+  #
+  # NB_BUCKETS covers 1 ns to well past 1 s: the largest index for 1e9 ns is 831.
+  SUB_BITS = 5
+  SUB_MASK = (1 << SUB_BITS) - 1
+  NB_BUCKETS = 1024
 
   @classmethod
   def create(cls):
@@ -117,17 +134,28 @@ class PhaseTimer:
     except OSError:
       return None
 
+  @classmethod
+  def bucket_mid(cls, idx):
+    """Midpoint of a bucket, in ns. The inverse of the index arithmetic in mark()."""
+    sh = (idx >> cls.SUB_BITS) - 1
+    if sh < 0:
+      return idx
+    lo = ((1 << cls.SUB_BITS) | (idx & cls.SUB_MASK)) << sh
+    return lo + (1 << sh) // 2
+
+  def _new_set(self):
+    return {'wall': {p: [0] * self.NB_BUCKETS for p in self.PHASES},
+            'cpu': {p: [0] * self.NB_BUCKETS for p in self.PHASES}}
+
   def __init__(self):
-    n = self.PERIOD_FRAMES
-    # A buffer set is always in exactly one of four places: written by the hot thread, sitting
-    # in _full, held by the writer inside _emit, or sitting in _free. Two queues rather than
-    # one because a set that has been get() off a single queue is in NEITHER the queue nor the
-    # hot thread's hands, and an earlier revision of this class lost track of exactly that:
-    # with one queue and two sets, the second rotate found the queue empty (the writer had
-    # already taken the item), succeeded, and handed the hot thread back the set the writer was
-    # still reading. _free is what makes the writer say when it is finished.
-    self._sets = [{'wall': {p: [0] * n for p in self.PHASES},
-                   'cpu': {p: [0] * n for p in self.PHASES}} for _ in range(2)]
+    # A set is always in exactly one of four places: written by the hot thread, sitting in
+    # _full, held by the writer inside _emit, or sitting in _free. Two queues rather than one
+    # because a set that has been get() off a single queue is in NEITHER the queue nor the hot
+    # thread's hands, and an earlier revision lost track of exactly that: with one queue and two
+    # sets, the second rotate found the queue empty (the writer had already taken the item),
+    # succeeded, and handed the hot thread back the set the writer was still reading. _free is
+    # what makes the writer say when it is finished.
+    self._sets = [self._new_set() for _ in range(2)]
     self.wall = self._sets[0]['wall']
     self.cpu = self._sets[0]['cpu']
     self.i = 0
@@ -146,9 +174,19 @@ class PhaseTimer:
   def mark(self, phase):
     w = time.perf_counter_ns()
     c = time.thread_time_ns()
-    i = self.i
-    self.wall[phase][i] = w - self._w
-    self.cpu[phase][i] = c - self._c
+    dw = w - self._w
+    dc = c - self._c
+    # Branchless bucket index -- the branch cost 22 ns per call and every real delta is far
+    # above the linear region it protected. A delta under 64 ns mis-files by one bucket; the
+    # smallest phase on the car is ~10 us, so nothing real lands there.
+    sh = dw.bit_length() - 6
+    if sh < 0:
+      sh = 0
+    self.wall[phase][((sh + 1) << 5) | ((dw >> sh) & 31)] += 1
+    sh = dc.bit_length() - 6
+    if sh < 0:
+      sh = 0
+    self.cpu[phase][((sh + 1) << 5) | ((dc >> sh) & 31)] += 1
     self._w = w
     self._c = c
 
@@ -212,7 +250,12 @@ class PhaseTimer:
       finally:
         # ALWAYS hand the set back, including after a failed emit. Skipping this on the error
         # path would strand the set, leave _free empty, and turn every later window into a
-        # silent drop.
+        # silent drop. Cleared HERE, on the writer, because zeroing 18432 counters is far too
+        # much work for the 100 Hz thread to do at a window boundary.
+        try:
+          self._clear(buf)
+        except Exception:
+          cloudlog.exception("selfdrived.phase_timing clear failed")
         try:
           self._free.put_nowait(buf)
         except queue.Full:
@@ -221,26 +264,53 @@ class PhaseTimer:
   def _emit(self, buf, n):
     self.periods += 1
 
-    def stats(xs):
-      s = sorted(xs[:n])
+    def stats(h):
+      """Percentiles straight out of the buckets. No sort, no slice, no sum over samples --
+      the whole point of the histogram. Values are bucket midpoints, so everything here
+      carries ~3% relative error; that is stated in the event rather than hidden behind a
+      spurious decimal place."""
+      total = 0
+      for c in h:
+        total += c
+      if total == 0:
+        return None
+      want = (int(total * 0.5), int(total * 0.95), int(total * 0.99))
+      out = [0.0, 0.0, 0.0]
+      seen = 0
+      acc = 0.0
+      last = 0
+      k = 0
+      for idx, c in enumerate(h):
+        if not c:
+          continue
+        last = idx
+        mid = PhaseTimer.bucket_mid(idx)
+        acc += mid * c
+        seen += c
+        while k < 3 and seen > want[k]:
+          out[k] = mid
+          k += 1
+      while k < 3:
+        out[k] = PhaseTimer.bucket_mid(last)
+        k += 1
       return {
-        "p50": round(s[n // 2] / 1000.0, 1),
-        "p95": round(s[min(n - 1, int(n * 0.95))] / 1000.0, 1),
-        "p99": round(s[min(n - 1, int(n * 0.99))] / 1000.0, 1),
-        "max": round(s[-1] / 1000.0, 1),
-        "mean": round(sum(s) / n / 1000.0, 1),
+        "p50": round(out[0] / 1000.0, 1),
+        "p95": round(out[1] / 1000.0, 1),
+        "p99": round(out[2] / 1000.0, 1),
+        "max": round(PhaseTimer.bucket_mid(last) / 1000.0, 1),
+        "mean": round(acc / total / 1000.0, 1),
       }
 
-    # Yield between phases. Being on another thread does NOT release the GIL: list.sort() is one
-    # C call and holds it until it returns. Sleeping between phases drops the GIL at a known
-    # point, so the worst the 100 Hz thread can wait on is a single phase's sort rather than all
-    # eighteen back to back. This thread has 30 s to finish; it can afford to be slow.
-    cpu, wall = {}, {}
+    # No yields between phases any more. Each of these is an interpreter-bound scan of 1024
+    # slots -- tens of microseconds, not the ~5.3 ms a sort of 3000 PyLongs cost on the car --
+    # so there is no long GIL hold left to break up.
+    cpu = {}
+    wall = {}
     for p in self.PHASES:
       cpu[p] = stats(buf['cpu'][p])
-      time.sleep(0.001)
       wall[p] = stats(buf['wall'][p])
-      time.sleep(0.001)
+    if any(v is None for v in cpu.values()):
+      return
 
     cloudlog.event(
       "selfdrived.phase_timing",
@@ -251,7 +321,16 @@ class PhaseTimer:
       cpu_total_us=round(sum(c["mean"] for c in cpu.values()), 1),
       wall_total_us=round(sum(w["mean"] for w in wall.values()), 1),
       dropped=self.dropped,
+      bucket_pct=round(100.0 / (1 << self.SUB_BITS), 1),
     )
+
+  def _clear(self, buf):
+    """Fresh lists rather than an in-place loop: 18 C-level allocations beat 18432 Python
+    stores, and refcounting reclaims the old ones immediately -- gc.disable() only stops cycle
+    collection, and there are no cycles here."""
+    for p in self.PHASES:
+      buf['wall'][p] = [0] * self.NB_BUCKETS
+      buf['cpu'][p] = [0] * self.NB_BUCKETS
 
 
 class SelfdriveD(CruiseHelper):
