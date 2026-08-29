@@ -279,11 +279,15 @@ class SelfdriveD(CruiseHelper):
     self.events_prev = []
     self.logged_comm_issue = None
     self.not_running_prev = None
-    # Recomputed only when their 2 Hz / 20 Hz source message arrives; see update_events.
-    # Both start at the value the default (all-zero) capnp struct would have produced, so the
-    # frames before the first message behave exactly as they did before.
+    # Recomputed only when their 2 Hz / 20 Hz source message arrives; see update_events. The
+    # companion *_frame fields hold the sm.recv_frame value the cache was built from, which is
+    # what makes the cache immune to update_events' early return. recv_frame starts at 0, so
+    # before the first message nothing is recomputed and both hold the value the default
+    # all-zero capnp struct would have produced -- identical to the pre-cache behaviour.
     self.not_running = set()
+    self.not_running_frame = 0
     self.radar_any_error = False
+    self.radar_any_error_frame = 0
     self.experimental_mode = False
     self.personality = get_sanitize_int_param(
       "LongitudinalPersonality",
@@ -552,14 +556,23 @@ class SelfdriveD(CruiseHelper):
       self.events.add(EventName.bigModelFailed)
 
     # managerState publishes at 2 Hz (cereal/services.py), so this set was being rebuilt on all
-    # 100 frames per second -- 50 identical recomputations between two updates. Between updates
-    # sm['managerState'] returns the same message, so the recomputed answer was bitwise the
-    # same every time; caching it changes nothing observable.
+    # 100 frames per second -- 50 identical recomputations between two updates.
+    #
+    # Keyed on recv_frame, NOT on sm.updated[]. updated[] is true only on the frame the message
+    # arrived, and this line is BELOW the `if not self.initialized: return` at the top of
+    # update_events -- so during initialisation the arrivals happen (sm.update runs in
+    # data_sample, which step() calls first) while this line is never reached. A cache keyed on
+    # updated[] would therefore still hold its seed at the frame `initialized` flips, and would
+    # stay stale until the next arrival up to 500 ms later, suppressing processNotRunning
+    # (ET.NO_ENTRY) in exactly the window where engagement first becomes possible.
+    # recv_frame is monotonic and survives skipped frames, so it cannot miss an update.
     #
     # Only the comprehension moves. The control flow below is deliberately untouched: the
     # `else` on the processNotRunning check feeds the camera-malfunction branch, which is a
     # 100 Hz concern and must keep being evaluated on every frame.
-    if self.sm.updated['managerState']:
+    if self.sm.recv_frame['managerState'] != self.not_running_frame:
+      self.not_running_frame = self.sm.recv_frame['managerState']
+      # Rebind, never mutate: not_running_prev below aliases this set.
       self.not_running = {p.name for p in self.sm['managerState'].processes
                           if not p.running and p.shouldBeRunning}
     not_running = self.not_running
@@ -580,10 +593,12 @@ class SelfdriveD(CruiseHelper):
     if self.CP.openpilotLongitudinalControl:
       # radarState publishes at 20 Hz, so to_dict() -- which builds a fresh dict out of the
       # capnp struct -- was running 5 times per message. The two direct field reads below are
-      # cheap attribute access and stay live; only the dict build is cached. As with
-      # managerState, sm['radarState'] returns the same message between updates, so the cached
-      # value is the one the live call would have produced.
-      if self.sm.updated['radarState']:
+      # cheap attribute access and stay live; only the dict build is cached. Keyed on
+      # recv_frame rather than sm.updated[] for the same reason as managerState above: this
+      # line sits below update_events' early return, so updated[] would miss every arrival
+      # that lands before initialisation completes.
+      if self.sm.recv_frame['radarState'] != self.radar_any_error_frame:
+        self.radar_any_error_frame = self.sm.recv_frame['radarState']
         self.radar_any_error = any(self.sm['radarState'].radarErrors.to_dict().values())
       if self.sm['radarState'].radarErrors.canError:
         self.events.add(EventName.canError)
