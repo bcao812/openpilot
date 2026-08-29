@@ -13,7 +13,7 @@ from msgq.visionipc import VisionIpcClient
 
 
 from openpilot.common.params import Params
-from openpilot.common.realtime import config_realtime_process, set_core_affinity, Priority, Ratekeeper, DT_CTRL
+from openpilot.common.realtime import config_realtime_process, drop_realtime, set_core_affinity, Priority, Ratekeeper, DT_CTRL
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
 
@@ -119,21 +119,23 @@ class PhaseTimer:
 
   def __init__(self):
     n = self.PERIOD_FRAMES
-    # TWO complete buffer sets. step() only ever writes to the active one; the filled one is
-    # handed to the writer thread, which never touches the active one. The swap is three
-    # attribute stores, so the 100 Hz thread pays O(1) at the window boundary instead of a
-    # sort of every sample it just collected.
+    # A buffer set is always in exactly one of four places: written by the hot thread, sitting
+    # in _full, held by the writer inside _emit, or sitting in _free. Two queues rather than
+    # one because a set that has been get() off a single queue is in NEITHER the queue nor the
+    # hot thread's hands, and an earlier revision of this class lost track of exactly that:
+    # with one queue and two sets, the second rotate found the queue empty (the writer had
+    # already taken the item), succeeded, and handed the hot thread back the set the writer was
+    # still reading. _free is what makes the writer say when it is finished.
     self._sets = [{'wall': {p: [0] * n for p in self.PHASES},
                    'cpu': {p: [0] * n for p in self.PHASES}} for _ in range(2)]
-    self._active = 0
     self.wall = self._sets[0]['wall']
     self.cpu = self._sets[0]['cpu']
     self.i = 0
     self.periods = 0
     self.dropped = 0
-    # maxsize 1: if the writer is somehow still busy 30 s later, the hot thread DROPS the
-    # window and says so in the next event. It must never block on a queue.
-    self._q = queue.Queue(maxsize=1)
+    self._full = queue.Queue(maxsize=1)
+    self._free = queue.Queue(maxsize=2)
+    self._free.put_nowait(self._sets[1])
     self._w = 0
     self._c = 0
 
@@ -156,22 +158,24 @@ class PhaseTimer:
       self._rotate()
 
   def _rotate(self):
-    """Hand the filled buffers off and switch to the spare. Runs on the 100 Hz thread, so it
-    does no work beyond a queue put and three stores."""
+    """Hand the filled buffers off and take a free set. Runs on the 100 Hz thread, so it does
+    no work beyond two queue operations and three stores, and never blocks."""
     n = self.i
     self.i = 0
     if n < 2:
       return
     try:
-      self._q.put_nowait((self._sets[self._active], n))
-    except queue.Full:
-      # Writer is behind. Keep the active buffer and overwrite it; the queued set is the OTHER
-      # one, so nothing in flight is corrupted. Losing a window beats stalling the chain.
+      spare = self._free.get_nowait()
+    except queue.Empty:
+      # The writer still owns the other set. Overwrite the active one rather than wait: losing
+      # a window of diagnostics beats stalling the actuation chain, and the count rides along
+      # in the next event so the loss is visible rather than silent.
       self.dropped += 1
       return
-    self._active = 1 - self._active
-    self.wall = self._sets[self._active]['wall']
-    self.cpu = self._sets[self._active]['cpu']
+    filled = self.wall, self.cpu
+    self.wall = spare['wall']
+    self.cpu = spare['cpu']
+    self._full.put_nowait(({'wall': filled[0], 'cpu': filled[1]}, n))
 
   def writer(self, evt):
     """Sorts and emits, off the control thread. Started by SelfdriveD.run().
@@ -181,21 +185,38 @@ class PhaseTimer:
     file) -- inheriting that would put a periodic sort at real-time priority on the actuation
     core, which is the whole problem this thread exists to remove.
     """
+    # Two separate try blocks, and both failures are logged. Sharing one block meant a raise
+    # from the first call skipped the second, leaving the thread at FIFO 53 pinned to core 4 --
+    # silently restoring the defect. drop_realtime() rather than an inline sched_setscheduler
+    # because it carries the not-PC guard this file has no business duplicating.
     try:
-      if hasattr(os, 'sched_setscheduler'):
-        os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
-      set_core_affinity([0, 1, 2, 3])
+      drop_realtime()
     except OSError:
-      pass
+      cloudlog.exception("phase_timing writer: could not drop to SCHED_OTHER")
+    try:
+      # NOT core 3: that is pandad at FIFO 54 plus the spi_geni IRQ (common/realtime.py
+      # Priority). A thread that can be preempted by pandad while holding the GIL would block
+      # selfdrived on core 4 through the very lock this thread exists to avoid holding.
+      set_core_affinity([0, 1, 2])
+    except OSError:
+      cloudlog.exception("phase_timing writer: could not set affinity")
     while not evt.is_set():
       try:
-        buf, n = self._q.get(timeout=0.5)
+        buf, n = self._full.get(timeout=0.5)
       except queue.Empty:
         continue
       try:
         self._emit(buf, n)
       except Exception:
         cloudlog.exception("selfdrived.phase_timing writer failed")
+      finally:
+        # ALWAYS hand the set back, including after a failed emit. Skipping this on the error
+        # path would strand the set, leave _free empty, and turn every later window into a
+        # silent drop.
+        try:
+          self._free.put_nowait(buf)
+        except queue.Full:
+          pass
 
   def _emit(self, buf, n):
     self.periods += 1
@@ -343,9 +364,14 @@ class SelfdriveD(CruiseHelper):
     # before the first message nothing is recomputed and both hold the value the default
     # all-zero capnp struct would have produced -- identical to the pre-cache behaviour.
     self.not_running = set()
-    self.not_running_frame = 0
     self.radar_any_error = False
-    self.radar_any_error_frame = 0
+    # -1, not 0. SubMaster seeds frame to -1 and increments BEFORE stamping arrivals
+    # (cereal/messaging/__init__.py:185,246), so the first update runs at frame 0 and a message
+    # arriving on it is stamped recv_frame == 0. A seed of 0 would compare equal and make that
+    # first arrival invisible to the cache. Masked at the managerState site by the falsy
+    # `if self.sm.recv_frame[...]` gates below, but nothing gates the radarState one.
+    self.not_running_frame = -1
+    self.radar_any_error_frame = -1
     self.experimental_mode = False
     self.personality = get_sanitize_int_param(
       "LongitudinalPersonality",
@@ -959,7 +985,9 @@ class SelfdriveD(CruiseHelper):
     finally:
       e.set()
       t.join()
-      if pt is not None:
+      # is_alive(), not just `is not None`: if pt.start() raised inside the try above, joining
+      # a never-started thread raises RuntimeError and replaces the original traceback.
+      if pt is not None and pt.is_alive():
         pt.join()
 
 
