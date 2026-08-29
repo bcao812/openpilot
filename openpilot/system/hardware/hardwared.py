@@ -15,7 +15,7 @@ from openpilot.cereal.services import SERVICE_LIST
 from openpilot.common.utils import strip_deprecated_keys
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
-from openpilot.common.realtime import DT_HW
+from openpilot.common.realtime import DT_HW, set_core_affinity
 from openpilot.selfdrive.modeld.helpers import MODELS_DIR, usbgpu_compiled
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from openpilot.common.hardware import HARDWARE, COMMA_HARDWARE
@@ -508,6 +508,11 @@ def hardware_thread(end_event, hw_queue) -> None:
 
 
 def main():
+  # Placement only -- see the note in ubloxd.py. Not config_realtime_process(): this process
+  # runs three threads, a queue and subprocess calls, and gc.disable() over a whole drive is a
+  # risk it was never designed to carry.
+  set_core_affinity([0, 1, 2, 3])
+
   hw_queue = queue.Queue(maxsize=1)
   end_event = threading.Event()
 

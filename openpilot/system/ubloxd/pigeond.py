@@ -12,6 +12,7 @@ from openpilot.cereal import log, messaging
 from openpilot.common.api import Api
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.common.params import Params
+from openpilot.common.realtime import set_core_affinity
 from openpilot.common.serial import Serial
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.hardware import COMMA_HARDWARE
@@ -329,6 +330,10 @@ def run_receiving(duration: int = 0):
 
 def main():
   assert COMMA_HARDWARE, "unsupported hardware for pigeond"
+  # Placement only -- see the note in ubloxd.py. This one polls a serial port and sleeps 1 ms
+  # when it is empty, so it must NOT be promoted to SCHED_FIFO: a spinning reader at real-time
+  # priority would preempt everything else on the cluster.
+  set_core_affinity([0, 1, 2, 3])
   run_receiving()
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from openpilot.cereal import log
 from openpilot.cereal import messaging
+from openpilot.common.realtime import set_core_affinity
 from openpilot.system.ubloxd.ubx import Ubx
 from openpilot.system.ubloxd.gps import Gps
 from openpilot.system.ubloxd.glonass import Glonass
@@ -507,6 +508,14 @@ class UbloxMsgParser:
 
 
 def main():
+  # Placement only. This process declared no affinity, so it inherited manager's mask and the
+  # scheduler put it on whichever core looked idlest -- 72% of its samples landed on the big
+  # cluster, mostly core 5 alongside the UI. It is a background parser: the little cluster is
+  # where it belongs, next to locationd, paramsd and torqued.
+  # Deliberately NOT config_realtime_process(): that also does gc.disable(), and this parser
+  # allocates per frame and was never written to run without the cycle collector.
+  set_core_affinity([0, 1, 2, 3])
+
   parser = UbloxMsgParser()
   pm = messaging.PubMaster(['ubloxGnss', 'gpsLocationExternal'])
   sock = messaging.sub_sock('ubloxRaw', timeout=100, conflate=False)
