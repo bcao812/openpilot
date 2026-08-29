@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import queue
 import time
 import threading
 
@@ -12,7 +13,7 @@ from msgq.visionipc import VisionIpcClient
 
 
 from openpilot.common.params import Params
-from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper, DT_CTRL
+from openpilot.common.realtime import config_realtime_process, set_core_affinity, Priority, Ratekeeper, DT_CTRL
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
 
@@ -118,10 +119,21 @@ class PhaseTimer:
 
   def __init__(self):
     n = self.PERIOD_FRAMES
-    self.wall = {p: [0] * n for p in self.PHASES}
-    self.cpu = {p: [0] * n for p in self.PHASES}
+    # TWO complete buffer sets. step() only ever writes to the active one; the filled one is
+    # handed to the writer thread, which never touches the active one. The swap is three
+    # attribute stores, so the 100 Hz thread pays O(1) at the window boundary instead of a
+    # sort of every sample it just collected.
+    self._sets = [{'wall': {p: [0] * n for p in self.PHASES},
+                   'cpu': {p: [0] * n for p in self.PHASES}} for _ in range(2)]
+    self._active = 0
+    self.wall = self._sets[0]['wall']
+    self.cpu = self._sets[0]['cpu']
     self.i = 0
     self.periods = 0
+    self.dropped = 0
+    # maxsize 1: if the writer is somehow still busy 30 s later, the hot thread DROPS the
+    # window and says so in the next event. It must never block on a queue.
+    self._q = queue.Queue(maxsize=1)
     self._w = 0
     self._c = 0
 
@@ -141,13 +153,51 @@ class PhaseTimer:
   def end_frame(self):
     self.i += 1
     if self.i >= self.PERIOD_FRAMES:
-      self.flush()
+      self._rotate()
 
-  def flush(self):
+  def _rotate(self):
+    """Hand the filled buffers off and switch to the spare. Runs on the 100 Hz thread, so it
+    does no work beyond a queue put and three stores."""
     n = self.i
     self.i = 0
     if n < 2:
       return
+    try:
+      self._q.put_nowait((self._sets[self._active], n))
+    except queue.Full:
+      # Writer is behind. Keep the active buffer and overwrite it; the queued set is the OTHER
+      # one, so nothing in flight is corrupted. Losing a window beats stalling the chain.
+      self.dropped += 1
+      return
+    self._active = 1 - self._active
+    self.wall = self._sets[self._active]['wall']
+    self.cpu = self._sets[self._active]['cpu']
+
+  def writer(self, evt):
+    """Sorts and emits, off the control thread. Started by SelfdriveD.run().
+
+    Demotes itself first. A thread inherits the creator's scheduling policy, and selfdrived's
+    main thread is SCHED_FIFO 53 on core 4 (config_realtime_process at the bottom of this
+    file) -- inheriting that would put a periodic sort at real-time priority on the actuation
+    core, which is the whole problem this thread exists to remove.
+    """
+    try:
+      if hasattr(os, 'sched_setscheduler'):
+        os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
+      set_core_affinity([0, 1, 2, 3])
+    except OSError:
+      pass
+    while not evt.is_set():
+      try:
+        buf, n = self._q.get(timeout=0.5)
+      except queue.Empty:
+        continue
+      try:
+        self._emit(buf, n)
+      except Exception:
+        cloudlog.exception("selfdrived.phase_timing writer failed")
+
+  def _emit(self, buf, n):
     self.periods += 1
 
     def stats(xs):
@@ -160,10 +210,17 @@ class PhaseTimer:
         "mean": round(sum(s) / n / 1000.0, 1),
       }
 
-    # Microseconds. cpu_total is what should be compared against procs.py's 26.1%; wall_total is
-    # dominated by the blocking recv and is NOT a cost.
-    cpu = {p: stats(self.cpu[p]) for p in self.PHASES}
-    wall = {p: stats(self.wall[p]) for p in self.PHASES}
+    # Yield between phases. Being on another thread does NOT release the GIL: list.sort() is one
+    # C call and holds it until it returns. Sleeping between phases drops the GIL at a known
+    # point, so the worst the 100 Hz thread can wait on is a single phase's sort rather than all
+    # eighteen back to back. This thread has 30 s to finish; it can afford to be slow.
+    cpu, wall = {}, {}
+    for p in self.PHASES:
+      cpu[p] = stats(buf['cpu'][p])
+      time.sleep(0.001)
+      wall[p] = stats(buf['wall'][p])
+      time.sleep(0.001)
+
     cloudlog.event(
       "selfdrived.phase_timing",
       frames=n,
@@ -172,6 +229,7 @@ class PhaseTimer:
       wall_us=wall,
       cpu_total_us=round(sum(c["mean"] for c in cpu.values()), 1),
       wall_total_us=round(sum(w["mean"] for w in wall.values()), 1),
+      dropped=self.dropped,
     )
 
 
@@ -887,14 +945,22 @@ class SelfdriveD(CruiseHelper):
   def run(self):
     e = threading.Event()
     t = threading.Thread(target=self.params_thread, args=(e, ))
+    # Started here, not in PhaseTimer.__init__, so its lifetime is tied to run()'s try/finally
+    # exactly as params_thread's is. None when the marker is absent, so a device that is not
+    # profiling carries no extra thread at all.
+    pt = threading.Thread(target=self.prof.writer, args=(e, )) if self.prof else None
     try:
       t.start()
+      if pt is not None:
+        pt.start()
       while True:
         self.step()
         self.rk.monitor_time()
     finally:
       e.set()
       t.join()
+      if pt is not None:
+        pt.join()
 
 
 def main():
