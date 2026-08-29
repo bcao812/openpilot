@@ -366,6 +366,23 @@ class SelfdriveD(CruiseHelper):
 
     self.car_events = CarEvents(self.CP)
 
+    # CarParams fields that update_events reads on every frame, lifted to plain Python here.
+    # self.CP is assigned once, above, and never rebound -- other objects take a reference to it
+    # but none of them replaces selfdrived's -- so these cannot go stale.
+    #
+    # The reason is that a capnp field read is not an attribute lookup. Measured on an x86 host:
+    # 399 ns for CP.notCar against 28 ns for a Python bool, because every read crosses into the
+    # C++ reader. update_events did 16 of them per frame for values that were fixed before the
+    # car moved.
+    self.cp_not_car = self.CP.notCar
+    self.cp_olc = self.CP.openpilotLongitudinalControl
+    self.cp_pcm_cruise = self.CP.pcmCruise
+    self.cp_passive = self.CP.passive
+    self.cp_alt_experience = self.CP.alternativeExperience
+    # (safetyModel, safetyParam) per configured panda. Flattened rather than kept as a capnp
+    # list so the per-panda loop below indexes a tuple instead of re-entering the reader twice.
+    self.cp_safety_configs = [(sc.safetyModel, sc.safetyParam) for sc in self.CP.safetyConfigs]
+
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
     self.excessive_actuation_check = ExcessiveActuationCheck()
@@ -566,36 +583,42 @@ class SelfdriveD(CruiseHelper):
       self.events.add(EventName.userBookmark)
 
     # Don't add any more events while in dashcam mode
-    if self.CP.passive:
+    if self.cp_passive:
       return
 
     # Block resume if cruise never previously enabled
     resume_pressed = any(be.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for be in CS.buttonEvents)
-    if not self.CP.pcmCruise and CS.vCruise > 250 and resume_pressed:
+    if not self.cp_pcm_cruise and CS.vCruise > 250 and resume_pressed:
       self.events.add(EventName.resumeBlocked)
 
     # Handle DM
-    if not self.CP.notCar:
+    if not self.cp_not_car:
       # Block engaging until lockout times out or ignition reset
-      if self.sm['driverMonitoringState'].lockout and not self.dm_lockout_set:
+      # One reader, nine uses. sm.update() only runs in data_sample(), so sm['x'] cannot change
+      # inside a single update_events call and hoisting is exact. `lockout` and `alertLevel`
+      # were each read three times.
+      dms = self.sm['driverMonitoringState']
+      dms_lockout = dms.lockout
+      dms_alert_level = dms.alertLevel
+      if dms_lockout and not self.dm_lockout_set:
         self.params.put_bool("DriverTooDistracted", True)
         self.dm_lockout_set = True
-      elif not self.sm['driverMonitoringState'].lockout and self.dm_lockout_set:
+      elif not dms_lockout and self.dm_lockout_set:
         self.params.remove("DriverTooDistracted")
         self.dm_lockout_set = False
       # No entry conditions
-      if self.sm['driverMonitoringState'].lockout or self.sm['driverMonitoringState'].alwaysOnLockout:
+      if dms_lockout or dms.alwaysOnLockout:
         self.events.add(EventName.tooDistracted)
       # Alerts
-      vision_dm = self.sm['driverMonitoringState'].activePolicy == MonitoringPolicy.vision
-      if self.sm['driverMonitoringState'].alertLevel == AlertLevel.one:
+      vision_dm = dms.activePolicy == MonitoringPolicy.vision
+      if dms_alert_level == AlertLevel.one:
         self.events.add(EventName.driverDistracted1 if vision_dm else EventName.driverUnresponsive1)
-      elif self.sm['driverMonitoringState'].alertLevel == AlertLevel.two:
+      elif dms_alert_level == AlertLevel.two:
         self.events.add(EventName.driverDistracted2 if vision_dm else EventName.driverUnresponsive2)
-      elif self.sm['driverMonitoringState'].alertLevel == AlertLevel.three:
+      elif dms_alert_level == AlertLevel.three:
         self.events.add(EventName.driverDistracted3 if vision_dm else EventName.driverUnresponsive3)
       # Warn consistent DM uncertainty
-      if self.sm['driverMonitoringState'].visionPolicyState.uncertainOffroadAlertPercent >= 100 and not self.dm_uncertain_alerted:
+      if dms.visionPolicyState.uncertainOffroadAlertPercent >= 100 and not self.dm_uncertain_alerted:
         set_offroad_alert("Offroad_DriverMonitoringUncertain", True)
         self.dm_uncertain_alerted = True
       self.events_sp.add_from_msg(self.sm['longitudinalPlanSP'].events)
@@ -608,7 +631,7 @@ class SelfdriveD(CruiseHelper):
       car_events_sp = self.car_events_sp.update(CS, self.events).to_msg()
       self.events_sp.add_from_msg(car_events_sp)
 
-      if self.CP.notCar:
+      if self.cp_not_car:
         # wait for everything to init first
         if self.sm.frame > int(2. / DT_CTRL) and self.initialized:
           # body always wants to enable
@@ -665,7 +688,7 @@ class SelfdriveD(CruiseHelper):
       device_motion = Pose.from_device_motion(self.sm['deviceMotion'])
       self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_motion)
 
-    if self.calibrated_pose is not None and not self.CP.notCar:
+    if self.calibrated_pose is not None and not self.cp_not_car:
       excessive_actuation = self.excessive_actuation_check.update(self.sm, CS, self.calibrated_pose)
       if not self.excessive_actuation and excessive_actuation is not None:
         set_offroad_alert("Offroad_ExcessiveActuation", True, extra_text=str(excessive_actuation))
@@ -706,10 +729,11 @@ class SelfdriveD(CruiseHelper):
 
     for i, pandaState in enumerate(self.sm['pandaStates']):
       # All pandas must match the list of safetyConfigs, and if outside this list, must be silent or noOutput
-      if i < len(self.CP.safetyConfigs):
-        safety_mismatch = pandaState.safetyModel != self.CP.safetyConfigs[i].safetyModel or \
-                          pandaState.safetyParam != self.CP.safetyConfigs[i].safetyParam or \
-                          pandaState.alternativeExperience != self.CP.alternativeExperience
+      if i < len(self.cp_safety_configs):
+        want_model, want_param = self.cp_safety_configs[i]
+        safety_mismatch = pandaState.safetyModel != want_model or \
+                          pandaState.safetyParam != want_param or \
+                          pandaState.alternativeExperience != self.cp_alt_experience
       else:
         safety_mismatch = pandaState.safetyModel not in IGNORED_SAFETY_MODES
 
@@ -763,7 +787,7 @@ class SelfdriveD(CruiseHelper):
           self.events.add(EventName.cameraFrameRate)
     if not REPLAY and self.rk.lagging:
       self.events.add(EventName.selfdrivedLagging)
-    if self.CP.openpilotLongitudinalControl:
+    if self.cp_olc:
       # radarState publishes at 20 Hz, so to_dict() -- which builds a fresh dict out of the
       # capnp struct -- was running 5 times per message. The two direct field reads below are
       # cheap attribute access and stay live; only the dict build is cached. Keyed on
@@ -808,7 +832,7 @@ class SelfdriveD(CruiseHelper):
     else:
       self.logged_comm_issue = None
 
-    if not self.CP.notCar and not big_model_settling:  # localization has nothing to work with during the load
+    if not self.cp_not_car and not big_model_settling:  # localization has nothing to work with during the load
       if not self.sm['deviceMotion'].posenetOK:
         self.events.add(EventName.posenetInvalid)
       if not self.sm['deviceMotion'].inputsOK:
@@ -823,7 +847,7 @@ class SelfdriveD(CruiseHelper):
 
     if not REPLAY:
       # Check for mismatch between openpilot and car's PCM
-      cruise_mismatch = CS.cruiseState.enabled and (not self.enabled or not self.CP.pcmCruise)
+      cruise_mismatch = CS.cruiseState.enabled and (not self.enabled or not self.cp_pcm_cruise)
       self.cruise_mismatch_counter = self.cruise_mismatch_counter + 1 if cruise_mismatch else 0
       if self.cruise_mismatch_counter > int(6. / DT_CTRL):
         self.events.add(EventName.cruiseMismatch)
@@ -834,7 +858,7 @@ class SelfdriveD(CruiseHelper):
     recent_steer_pressed = (self.sm.frame - self.last_steering_pressed_frame)*DT_CTRL < 2.0
     controlstate = self.sm['controlsState']
     lac = getattr(controlstate.lateralControlState, controlstate.lateralControlState.which())
-    if lac.active and not recent_steer_pressed and not self.CP.notCar:
+    if lac.active and not recent_steer_pressed and not self.cp_not_car:
       clipped_speed = max(CS.vEgo, 0.3)
       actual_lateral_accel = controlstate.curvature * (clipped_speed**2)
       desired_lateral_accel = self.sm['modelV2'].action.desiredCurvature * (clipped_speed**2)
@@ -845,10 +869,10 @@ class SelfdriveD(CruiseHelper):
         self.events.add(EventName.steerSaturated)
 
     # Check for FCW
-    stock_long_is_braking = self.enabled and not self.CP.openpilotLongitudinalControl and CS.aEgo < -1.25
+    stock_long_is_braking = self.enabled and not self.cp_olc and CS.aEgo < -1.25
     model_fcw = self.sm['modelV2'].meta.hardBrakePredicted and not CS.brakePressed and not stock_long_is_braking
     planner_fcw = self.sm['longitudinalPlan'].fcw and self.enabled
-    if (planner_fcw or model_fcw) and not self.CP.notCar:
+    if (planner_fcw or model_fcw) and not self.cp_not_car:
       self.events.add(EventName.fcw)
 
     # GPS checks
@@ -871,7 +895,7 @@ class SelfdriveD(CruiseHelper):
     CruiseHelper.update(self, CS, self.events_sp, self.experimental_mode)
 
     # decrement personality on distance button press
-    if self.CP.openpilotLongitudinalControl:
+    if self.cp_olc:
       if any(not be.pressed and be.type == ButtonType.gapAdjustCruise for be in CS.buttonEvents):
         if not self.experimental_mode_switched:
           self.personality = (self.personality - 1) % 3
