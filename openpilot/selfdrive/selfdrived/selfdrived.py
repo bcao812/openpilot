@@ -207,6 +207,14 @@ class SelfdriveD(CruiseHelper):
     self.big_model_failed = False
     self.big_model_ready_t = 0.
 
+    # Cached by params_thread at 10 Hz; read by update_events. usbgpu_active MUST start None,
+    # not False: modeld does params.remove("UsbGpuActive") at startup so "undecided" is None,
+    # and update_events tests `big_active is False` to mean failed. Seeding it False would
+    # declare a failure on the frames before params_thread's first pass and raise
+    # bigModelFailed, which carries ET.PERMANENT -- a 20 s alert on every boot.
+    self.usbgpu_loading = False
+    self.usbgpu_active = None
+
     # Setup sockets
     self.pm = messaging.PubMaster(['selfdriveState', 'onroadEvents'] + ['selfdriveStateSP', 'onroadEventsSP'])
 
@@ -271,6 +279,11 @@ class SelfdriveD(CruiseHelper):
     self.events_prev = []
     self.logged_comm_issue = None
     self.not_running_prev = None
+    # Recomputed only when their 2 Hz / 20 Hz source message arrives; see update_events.
+    # Both start at the value the default (all-zero) capnp struct would have produced, so the
+    # frames before the first message behave exactly as they did before.
+    self.not_running = set()
+    self.radar_any_error = False
     self.experimental_mode = False
     self.personality = get_sanitize_int_param(
       "LongitudinalPersonality",
@@ -333,14 +346,14 @@ class SelfdriveD(CruiseHelper):
       self.events.add(EventName.joystickDebug)
       self.startup_event = None
 
-    loading = self.params.get_bool("UsbGpuLoading")
+    loading = self.usbgpu_loading
     if self.big_model_loading and not loading:
       self.big_model_ready_t = time.monotonic()
     self.big_model_loading = loading
     if self.big_model_loading:
       self.events.add(EventName.bigModelLoading)
 
-    big_active = self.params.get("UsbGpuActive")
+    big_active = self.usbgpu_active
     usbgpu_present = self.sm['deviceState'].chestnutPresent
     model_unavailable = big_active is True and self.sm.seen['modelV2'] and not self.sm.alive['modelV2']
     big_failed = big_active is False or model_unavailable or (self.big_model_active and not usbgpu_present)
@@ -538,7 +551,18 @@ class SelfdriveD(CruiseHelper):
     if self.big_model_active and big_failed:
       self.events.add(EventName.bigModelFailed)
 
-    not_running = {p.name for p in self.sm['managerState'].processes if not p.running and p.shouldBeRunning}
+    # managerState publishes at 2 Hz (cereal/services.py), so this set was being rebuilt on all
+    # 100 frames per second -- 50 identical recomputations between two updates. Between updates
+    # sm['managerState'] returns the same message, so the recomputed answer was bitwise the
+    # same every time; caching it changes nothing observable.
+    #
+    # Only the comprehension moves. The control flow below is deliberately untouched: the
+    # `else` on the processNotRunning check feeds the camera-malfunction branch, which is a
+    # 100 Hz concern and must keep being evaluated on every frame.
+    if self.sm.updated['managerState']:
+      self.not_running = {p.name for p in self.sm['managerState'].processes
+                          if not p.running and p.shouldBeRunning}
+    not_running = self.not_running
     if self.sm.recv_frame['managerState'] and len(not_running):
       if not_running != self.not_running_prev:
         cloudlog.event("process_not_running", not_running=not_running, error=True)
@@ -554,11 +578,18 @@ class SelfdriveD(CruiseHelper):
     if not REPLAY and self.rk.lagging:
       self.events.add(EventName.selfdrivedLagging)
     if self.CP.openpilotLongitudinalControl:
+      # radarState publishes at 20 Hz, so to_dict() -- which builds a fresh dict out of the
+      # capnp struct -- was running 5 times per message. The two direct field reads below are
+      # cheap attribute access and stay live; only the dict build is cached. As with
+      # managerState, sm['radarState'] returns the same message between updates, so the cached
+      # value is the one the live call would have produced.
+      if self.sm.updated['radarState']:
+        self.radar_any_error = any(self.sm['radarState'].radarErrors.to_dict().values())
       if self.sm['radarState'].radarErrors.canError:
         self.events.add(EventName.canError)
       elif self.sm['radarState'].radarErrors.radarUnavailableTemporary:
         self.events.add(EventName.radarTempUnavailable)
-      elif any(self.sm['radarState'].radarErrors.to_dict().values()):
+      elif self.radar_any_error:
         self.events.add(EventName.radarFault)
     if CS.canTimeout:
       self.events.add(EventName.canBusMissing)
@@ -828,6 +859,12 @@ class SelfdriveD(CruiseHelper):
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
+
+      # Read here rather than in update_events, which runs at 100 Hz. Both keys are written by
+      # modeld around a model load (sunnypilot/modeld_v2/modeld.py:334-379) -- a seconds-long
+      # event -- so 10 Hz resolves every transition they can actually make.
+      self.usbgpu_loading = self.params.get_bool("UsbGpuLoading")
+      self.usbgpu_active = self.params.get("UsbGpuActive")
 
       self.mads.read_params()
       time.sleep(0.1)
