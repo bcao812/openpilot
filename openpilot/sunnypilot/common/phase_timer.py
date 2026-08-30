@@ -224,8 +224,14 @@ class PhaseTimer:
     try:
       # Little cluster by default, and NOT core 3: that is pandad at FIFO 54 plus the spi_geni
       # IRQ, and a thread preempted by pandad while holding the GIL would block the very loop
-      # this thread exists to keep clear. Callers pinned to the little cluster themselves should
-      # pass something that does not include their own core.
+      # this thread exists to keep clear.
+      #
+      # An earlier version of this comment told little-cluster callers to exclude their own core.
+      # That was wrong about the mechanism and a safety review caught it. After drop_realtime()
+      # this thread is SCHED_OTHER, which cannot preempt ANY SCHED_FIFO thread whatever core
+      # they share -- so locationd, at FIFO 5 on [0,1,2,3], is safe with the default overlap.
+      # What actually contends is the GIL, and affinity does not touch that: the mitigation for
+      # it is the explicit yields in _emit, not where this thread runs.
       set_core_affinity(self.affinity)
     except OSError:
       cloudlog.exception(f"{self.event} writer: could not set affinity")
