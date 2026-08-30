@@ -117,28 +117,44 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     lead_one = radar_state.leadOne if radar_state else None
     render_lead_indicator = self._longitudinal_control and radar_state is not None
 
+    # FrameTimer sub-phases, off unless /data/ui_profile exists. Route 00000034 put this whole
+    # method at 3643.7 us -- 37.6% of the UI's frame and the ONLY phase that responds to driving
+    # (x1.84 parked to driven). These split it.
+    #
+    # The update half and the draw half run at DIFFERENT RATES and that is the point of splitting
+    # here rather than around the method: model_* update phases are gated on modelV2, which is
+    # 20 Hz, while the draw phases run every frame at 60. A single number averages a 20 Hz cost
+    # into a 60 Hz budget and hides which half is which.
+    gui_app.mark_phase('model_pre')
+
     # Update model data when needed
     model_updated = sm.updated['modelV2']
     if model_updated or sm.updated['radarState'] or self._transform_dirty:
       if model_updated:
         self._update_raw_points(model)
+      gui_app.mark_phase('model_raw')
 
       path_x_array = self._path.raw_points[:, 0]
       if path_x_array.size == 0:
         return
 
       self._update_model(lead_one, path_x_array)
+      gui_app.mark_phase('model_project')
       if render_lead_indicator:
         self._update_leads(radar_state, path_x_array)
       self._transform_dirty = False
+      gui_app.mark_phase('model_leads')
 
     # Draw elements
     self._draw_lane_lines()
+    gui_app.mark_phase('model_lanes')
     self._draw_path(sm)
+    gui_app.mark_phase('model_path')
 
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
       self.chevron_metrics.draw_lead_status(sm, radar_state, self._rect, self._lead_vehicles)
+    gui_app.mark_phase('model_chevron')
 
   def _update_raw_points(self, model):
     """Update raw 3D points from model data"""

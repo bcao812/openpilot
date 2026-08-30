@@ -8,6 +8,7 @@ import openpilot.cereal.messaging as messaging
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
+from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
@@ -249,13 +250,41 @@ class Controls(ControlsExt):
 
   def run(self):
     rk = Ratekeeper(100, print_delay_threshold=None)
+    # None unless /data/controlsd_profile exists at process start. controlsd is FIFO 53 on core 4
+    # with card and selfdrived -- one serial 100 Hz chain -- so the writer drops to SCHED_OTHER
+    # and pins to [0, 1, 2]. update() is the pacer: sm.update(15) blocks up to 15 ms.
+    prof = PhaseTimer.create(PHASE_TIMER_MARKER, PHASE_TIMER_EVENT, PHASES, PHASE_TIMER_PERIOD)
+    if prof:
+      prof.start()
+      cloudlog.warning("controlsd: phase timing ENABLED by %s", PHASE_TIMER_MARKER)
     while True:
+      if prof:
+        prof.begin()
       self.update()
+      if prof:
+        prof.mark("update")
       CC, lac_log = self.state_control()
+      if prof:
+        prof.mark("state_control")
       self.publish(CC, lac_log)
+      if prof:
+        prof.mark("publish")
       self.get_params_sp(self.sm)
+      if prof:
+        prof.mark("params_sp")
       self.run_ext(self.sm, self.pm)
+      if prof:
+        prof.mark("run_ext")
+        prof.end_frame()
       rk.monitor_time()
+
+
+# controlsd's run() loop. update() is the pacer -- sm.update(15) blocks up to 15 ms waiting on
+# selfdriveState, which selfdrived publishes, so wall there is the chain's cadence not work.
+PHASE_TIMER_MARKER = "/data/controlsd_profile"
+PHASE_TIMER_EVENT = "controlsd.phase_timing"
+PHASE_TIMER_PERIOD = 3000        # 30 s at 100 Hz
+PHASES = ("update", "state_control", "publish", "params_sp", "run_ext")
 
 
 def main():

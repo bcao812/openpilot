@@ -275,7 +275,14 @@ def sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, senso
 PHASE_TIMER_MARKER = "/data/locationd_profile"
 PHASE_TIMER_EVENT = "locationd.phase_timing"
 PHASE_TIMER_PERIOD = 600         # 30 s at 20 Hz -- NOT 3000, which is a 100 Hz number
-PHASES = ("sm_update", "sensor_drain", "msg_sort", "handle_log", "publish")
+# handle_log is split BY OBSERVATION KIND, not by call. Route 00000034 put it at 15527.7 us --
+# 85.7% of this loop and the largest single unexplained block on the device. Each iteration
+# handles ~10 accelerometer, ~10 gyroscope and ~1 cameraOdometry observation, and the three call
+# different predict_and_observe paths with different measurement dimensions. One number cannot
+# say which. mark() measures since the PREVIOUS mark, so per-call marks in an interleaved loop
+# each carry exactly one handle_log call, which is what is wanted.
+PHASES = ("sm_update", "sensor_drain", "msg_sort",
+          "hl_accel", "hl_gyro", "hl_camodo", "hl_rest", "publish")
 
 
 def main():
@@ -346,6 +353,19 @@ def main():
         if valid:
           t = log_mono_time * 1e-9
           res = estimator.handle_log(t, which, msg)
+          # Literals, not a dict lookup. Two reasons: ui_frame_timer_check's check 7 asserts
+          # every mark() argument is a declared literal and cannot see a computed one, and the
+          # dict version rebuilt the mapping on every call -- an instrument doing allocation
+          # inside the loop it measures.
+          if prof:
+            if which == "accelerometer":
+              prof.mark("hl_accel")
+            elif which == "gyroscope":
+              prof.mark("hl_gyro")
+            elif which == "cameraOdometry":
+              prof.mark("hl_camodo")
+            else:
+              prof.mark("hl_rest")
           if which not in critcal_services:
             continue
 
@@ -363,7 +383,7 @@ def main():
     # those windows rather than dropping the window -- the same conditional-phase path the UI's
     # onroad sub-phases needed.
     if prof:
-      prof.mark("handle_log")
+      prof.mark("hl_rest")
 
     if sm.updated["cameraOdometry"]:
       critical_service_inputs_valid = all(observation_input_invalid[s] < input_invalid_threshold[s] for s in critcal_services)

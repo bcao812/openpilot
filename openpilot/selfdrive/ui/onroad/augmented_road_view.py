@@ -95,7 +95,9 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
 
     # Draw all UI overlays
     self.model_renderer.render(self._content_rect)
-    gui_app.mark_phase('model')
+    # ModelRenderer marks its own seven sub-phases from inside; this catches what they miss --
+    # Widget.render's preamble, and the early return when the model has no path yet.
+    gui_app.mark_phase('model_rest')
     # The SP fade-out overlay is charged to 'hud' rather than given a phase of its own: it is a
     # single draw call, well under the ~4.8 us the instrument can resolve on this device.
     AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, self._content_rect)

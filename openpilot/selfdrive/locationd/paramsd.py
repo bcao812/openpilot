@@ -12,6 +12,7 @@ from openpilot.selfdrive.locationd.models.car_kf import CarKalman, ObservationKi
 from openpilot.selfdrive.locationd.models.constants import GENERATED_DIR
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.common.swaglog import cloudlog
+from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 
 MAX_ANGLE_OFFSET_DELTA = 20 * DT_MDL  # Max 20 deg/s
 ROLL_MAX_DELTA = np.radians(20.0) * DT_MDL  # 20deg in 1 second is well within curvature limits
@@ -242,6 +243,14 @@ def retrieve_initial_vehicle_params(params: Params, CP: car.CarParams, replay: b
   return steer_ratio, stiffness_factor, angle_offset_deg, p_initial
 
 
+# paramsd's loop. sm.update() is the pacer. handle_log is the estimator absorbing observations;
+# publish covers the message build and send, which several of these do only every Nth frame.
+PHASE_TIMER_MARKER = "/data/paramsd_profile"
+PHASE_TIMER_EVENT = "paramsd.phase_timing"
+PHASE_TIMER_PERIOD = 600         # 30 s at 20 Hz
+PHASES = ("sm_update", "handle_log", "publish")
+
+
 def main():
   config_realtime_process([0, 1, 2, 3], 5)
 
@@ -257,13 +266,26 @@ def main():
   steer_ratio, stiffness_factor, angle_offset_deg, pInitial = retrieve_initial_vehicle_params(params, CP, REPLAY, DEBUG)
   learner = VehicleParamsLearner(CP, steer_ratio, stiffness_factor, np.radians(angle_offset_deg), pInitial)
 
+  # None unless /data/paramsd_profile exists at process start. FIFO 5 on the little cluster, so
+  # the writer at SCHED_OTHER cannot preempt it whatever core they share.
+  prof = PhaseTimer.create(PHASE_TIMER_MARKER, PHASE_TIMER_EVENT, PHASES, PHASE_TIMER_PERIOD)
+  if prof:
+    prof.start()
+    cloudlog.warning("paramsd: phase timing ENABLED by %s", PHASE_TIMER_MARKER)
+
   while True:
+    if prof:
+      prof.begin()
     sm.update()
+    if prof:
+      prof.mark("sm_update")
     if sm.all_checks():
       for which in sorted(sm.updated.keys(), key=lambda x: sm.logMonoTime[x]):
         if sm.updated[which]:
           t = sm.logMonoTime[which] * 1e-9
           learner.handle_log(t, which, sm[which])
+    if prof:
+      prof.mark("handle_log")
 
     if sm.updated['deviceMotion']:
       msg = learner.get_msg(sm.all_checks(), debug=DEBUG)
@@ -273,6 +295,9 @@ def main():
         params.put("LiveParametersV2", msg_dat)
 
       pm.send('vehicleParameters', msg_dat)
+    if prof:
+      prof.mark("publish")
+      prof.end_frame()
 
 
 if __name__ == "__main__":

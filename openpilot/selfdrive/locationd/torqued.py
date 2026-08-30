@@ -11,6 +11,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, DT_MDL
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.swaglog import cloudlog
+from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.selfdrive.locationd.helpers import PointBuckets, ParameterEstimator, PoseCalibrator, Pose
 from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.selfdrive.locationd.torqued_ext import TorqueEstimatorExt
@@ -252,6 +253,14 @@ class TorqueEstimator(ParameterEstimator, TorqueEstimatorExt):
     return msg
 
 
+# torqued's loop. sm.update() is the pacer. handle_log is the estimator absorbing observations;
+# publish covers the message build and send, which several of these do only every Nth frame.
+PHASE_TIMER_MARKER = "/data/torqued_profile"
+PHASE_TIMER_EVENT = "torqued.phase_timing"
+PHASE_TIMER_PERIOD = 600         # 30 s at 20 Hz
+PHASES = ("sm_update", "handle_log", "publish")
+
+
 def main(demo=False):
   config_realtime_process([0, 1, 2, 3], 5)
 
@@ -263,13 +272,26 @@ def main(demo=False):
   params = Params()
   estimator = TorqueEstimator(messaging.log_from_bytes(params.get("CarParams", block=True), car.CarParams))
 
+  # None unless /data/torqued_profile exists at process start. FIFO 5 on the little cluster, so
+  # the writer at SCHED_OTHER cannot preempt it whatever core they share.
+  prof = PhaseTimer.create(PHASE_TIMER_MARKER, PHASE_TIMER_EVENT, PHASES, PHASE_TIMER_PERIOD)
+  if prof:
+    prof.start()
+    cloudlog.warning("torqued: phase timing ENABLED by %s", PHASE_TIMER_MARKER)
+
   while True:
+    if prof:
+      prof.begin()
     sm.update()
+    if prof:
+      prof.mark("sm_update")
     if sm.all_checks():
       for which in sm.updated.keys():
         if sm.updated[which]:
           t = sm.logMonoTime[which] * 1e-9
           estimator.handle_log(t, which, sm[which])
+    if prof:
+      prof.mark("handle_log")
 
     TorqueEstimatorExt.update_use_params(estimator)
 
@@ -281,6 +303,9 @@ def main(demo=False):
     if sm.frame % 240 == 0:
       msg = estimator.get_msg(valid=sm.all_checks(), with_points=True)
       params.put("LiveTorqueParameters", msg.to_bytes())
+    if prof:
+      prof.mark("publish")
+      prof.end_frame()
 
 
 if __name__ == "__main__":
