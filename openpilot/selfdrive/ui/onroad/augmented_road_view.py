@@ -83,16 +83,28 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
       int(self._content_rect.width),
       int(self._content_rect.height)
     )
+    # FrameTimer sub-phases, off unless /data/ui_profile exists. Route 00000030 put this whole
+    # tree at 72.9% of the UI's frame CPU and 96% of everything driving adds, as a single
+    # number; these six marks are what split it. gui_app.mark_phase is a None test when the
+    # timer is off.
+    gui_app.mark_phase('onroad_pre')
 
     # Render the base camera view
     super()._render(self._content_rect)
+    gui_app.mark_phase('camera')
 
     # Draw all UI overlays
     self.model_renderer.render(self._content_rect)
+    gui_app.mark_phase('model')
+    # The SP fade-out overlay is charged to 'hud' rather than given a phase of its own: it is a
+    # single draw call, well under the ~4.8 us the instrument can resolve on this device.
     AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, self._content_rect)
     self._hud_renderer.render(self._content_rect)
+    gui_app.mark_phase('hud')
     self.alert_renderer.render(self._content_rect)
+    gui_app.mark_phase('alert')
     self.driver_state_renderer.render(self._content_rect)
+    gui_app.mark_phase('driver_state')
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds

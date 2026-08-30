@@ -196,7 +196,18 @@ class FrameTimer:
   # The frame, in the order the render loop executes it. end_drawing is last and is the pacing
   # phase; yielded_work is whatever the caller does between the yield and the resume, which for
   # ui.py is ui_state.update() -- a 27-service SubMaster -- plus the uiDebug build and send.
-  PHASES = ("mouse_drain", "nav_ticks", "begin_drawing", "widget_render",
+  #
+  # The six onroad_pre..widget_rest phases are the inside of the widget tree, marked from
+  # augmented_road_view.py via gui_app.mark_phase(). Route 00000030 measured the whole tree at
+  # 72.9% of the frame's CPU and 96% of everything driving adds, as ONE number; these split it.
+  #
+  # THEY ARE CONDITIONAL, and _emit accounts for that. AugmentedRoadView._render returns before
+  # any of them when ui_state.started is false, so an offroad window has no samples for the five
+  # onroad phases at all -- and widget_rest correctly absorbs the home screen or settings
+  # instead. selfdrived's PhaseTimer has no such path, which is why only this class needs the
+  # partial-window handling.
+  PHASES = ("mouse_drain", "begin_drawing", "nav_ticks",
+            "onroad_pre", "camera", "model", "hud", "alert", "driver_state", "widget_rest",
             "yielded_work", "overlays", "end_drawing", "monitor_fps")
 
   SUB_BITS = 5
@@ -251,21 +262,33 @@ class FrameTimer:
     self._w = time.perf_counter_ns()
     self._c = time.thread_time_ns()
 
+  # Largest index NB_BUCKETS allows. Anything past it saturates into the top bucket, which is
+  # what a histogram is supposed to do -- and is NOT what this did before.
+  #
+  # It raised IndexError. mark() computes a bucket from the delta since the previous mark, and
+  # 1024 buckets run out at about 137 s; a mark reached with a stale cursor produces a delta of
+  # "nanoseconds since boot", indexes past the end, and takes the process down. The host wiring
+  # check hit exactly that the first time mark_phase() was called from the widget tree. On a
+  # 100 Hz control loop an instrument that can raise is bad; in the process that draws the
+  # screen it is worse, and no diagnostic is worth a black display. Saturating costs one
+  # comparison per clock -- pay it.
+  MAX_BUCKET = NB_BUCKETS - 1
+
   def mark(self, phase):
     w = time.perf_counter_ns()
     c = time.thread_time_ns()
     dw = w - self._w
     dc = c - self._c
-    # Branchless bucket index, as in PhaseTimer: the guard branch cost 22 ns per call and every
-    # real phase here is microseconds, far above the linear region it protected.
     sh = dw.bit_length() - 6
     if sh < 0:
       sh = 0
-    self.wall[phase][((sh + 1) << 5) | ((dw >> sh) & 31)] += 1
+    i = ((sh + 1) << 5) | ((dw >> sh) & 31)
+    self.wall[phase][i if i <= self.MAX_BUCKET else self.MAX_BUCKET] += 1
     sh = dc.bit_length() - 6
     if sh < 0:
       sh = 0
-    self.cpu[phase][((sh + 1) << 5) | ((dc >> sh) & 31)] += 1
+    i = ((sh + 1) << 5) | ((dc >> sh) & 31)
+    self.cpu[phase][i if i <= self.MAX_BUCKET else self.MAX_BUCKET] += 1
     self._w = w
     self._c = c
 
@@ -381,7 +404,13 @@ class FrameTimer:
       time.sleep(0.0002)
       wall[p] = stats(buf['wall'][p])
       time.sleep(0.0002)
-    if any(v is None for v in cpu.values()):
+    # Drop the window only when NOTHING ran. An earlier version dropped it if ANY phase was
+    # empty, which was right while every phase was unconditional and became a silent hole the
+    # moment the onroad sub-phases arrived: a window with the car offroad would have had five
+    # empty phases and been thrown away whole, so the UI would have gone dark in the log exactly
+    # when it was showing the home screen. Empty phases now emit as null and the reader skips
+    # them; a phase that never ran is data, not a fault.
+    if all(v is None for v in cpu.values()):
       return
 
     cloudlog.event(
@@ -390,8 +419,8 @@ class FrameTimer:
       period=self.periods,
       cpu_us=cpu,
       wall_us=wall,
-      cpu_total_us=round(sum(c["mean"] for c in cpu.values()), 1),
-      wall_total_us=round(sum(w["mean"] for w in wall.values()), 1),
+      cpu_total_us=round(sum(c["mean"] for c in cpu.values() if c), 1),
+      wall_total_us=round(sum(w["mean"] for w in wall.values() if w), 1),
       dropped=self.dropped,
       bucket_pct=round(100.0 / (1 << self.SUB_BITS), 1),
     )
@@ -865,6 +894,17 @@ class GuiApplication(GuiApplicationExt):
 
     rl.close_window()
 
+  def mark_phase(self, phase: str):
+    """A FrameTimer boundary callable from inside the widget tree.
+
+    Public because augmented_road_view.py needs it and reaching into _frame_timer from another
+    module would make the instrument part of that file's contract. A no-op when the marker is
+    absent: one attribute load and a None test, ~60 ns, six times per frame.
+    """
+    ft = self._frame_timer
+    if ft is not None:
+      ft.mark(phase)
+
   @property
   def mouse_events(self) -> list[MouseEvent]:
     return self._mouse_events
@@ -890,6 +930,11 @@ class GuiApplication(GuiApplicationExt):
                          + f"marker {FrameTimer.MARKER}")
 
       while not (self._window_close_requested or rl.window_should_close()):
+        # Re-read per frame rather than trusting the local captured above. mark_phase() reads it
+        # fresh on every call, so caching it here let the two disagree: a timer installed after
+        # the generator started got marks from the widget tree with a cursor the loop had never
+        # begun(), and the delta was "since epoch". One attribute load per frame.
+        ft = self._frame_timer
         frame_start = time.monotonic()
         if ft is not None:
           ft.begin()
@@ -932,11 +977,14 @@ class GuiApplication(GuiApplicationExt):
         if ft is not None:
           ft.mark('nav_ticks')
 
-        # Only render top widgets
+        # Only render top widgets. The onroad view marks its own sub-phases from inside via
+        # mark_phase(), so what lands in widget_rest is everything they do not cover: the
+        # MainLayout dispatch, the sidebar, the scissor teardown and the border -- and, when
+        # the car is offroad, the whole home or settings tree.
         for widget in self._nav_stack[-self._nav_stack_widgets_to_render:]:
           widget.render(rl.Rectangle(0, 0, self.width, self.height))
         if ft is not None:
-          ft.mark('widget_render')
+          ft.mark('widget_rest')
 
         frame_time = rl.get_frame_time()
         cpu_time = time.monotonic() - frame_start
