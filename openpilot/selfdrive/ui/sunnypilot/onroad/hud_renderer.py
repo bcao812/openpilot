@@ -129,18 +129,37 @@ class HudRendererSP(HudRenderer):
     self.speed_renderer.render(rect)
 
   def _render(self, rect: rl.Rectangle) -> None:
+    # FrameTimer sub-phases, off unless /data/ui_profile exists. Route 00000031 put this method
+    # at 2377 us -- 30.8% of the UI's whole frame and MORE than model_renderer, which is not
+    # what the host profile predicted. The host had it at 336 us and third place. The ratio is
+    # 7.1x, which is the measured host->A75 factor for PYTHON work almost exactly, while
+    # model_renderer scaled at only 2.2x because it is numpy. So the host's ORDERING did not
+    # transfer, and these nine marks are what say which of the eight renderers below is paying.
+    #
+    # They cost: ~0.8 us per boundary on x86, ~4.8 us on this device, so nine of them are ~1.7%
+    # of a 7728 us frame. That is a real perturbation and it is why they are diagnostic rather
+    # than permanent -- take them out once the answer is known.
     super()._render(rect)
+    gui_app.mark_phase('hud_base')
 
     if ui_state.torque_bar:
       torque_rect = rect
       if ui_state.developer_ui in (DeveloperUiState.BOTTOM, DeveloperUiState.BOTH):
         torque_rect = rl.Rectangle(rect.x, rect.y, rect.width, rect.height - get_bottom_dev_ui_offset())
       self._torque_bar.render(torque_rect)
+    gui_app.mark_phase('hud_torque')
 
     self.developer_ui.render(rect)
+    gui_app.mark_phase('hud_devui')
     self.road_name_renderer.render(rect)
+    gui_app.mark_phase('hud_roadname')
     self.speed_limit_renderer.render(rect)
+    gui_app.mark_phase('hud_speedlimit')
     self.smart_cruise_control_renderer.render(rect)
+    gui_app.mark_phase('hud_scc')
     self.turn_signal_controller.render(rect)
+    gui_app.mark_phase('hud_turnsig')
     self.circular_alerts_renderer.render(rect)
+    gui_app.mark_phase('hud_alerts')
     self.rocket_fuel.render(rect, ui_state.sm)
+    gui_app.mark_phase('hud_rocketfuel')

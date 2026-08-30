@@ -100,7 +100,10 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     # single draw call, well under the ~4.8 us the instrument can resolve on this device.
     AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, self._content_rect)
     self._hud_renderer.render(self._content_rect)
-    gui_app.mark_phase('hud')
+    # The SP HudRenderer marks its own nine sub-phases from inside, so this catches only what
+    # they miss: Widget.render's preamble and the SP overlay above. Route 00000031 measured the
+    # whole of it at 2377 us -- more than model_renderer.
+    gui_app.mark_phase('hud_rest')
     self.alert_renderer.render(self._content_rect)
     gui_app.mark_phase('alert')
     self.driver_state_renderer.render(self._content_rect)

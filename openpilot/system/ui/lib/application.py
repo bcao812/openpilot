@@ -207,7 +207,10 @@ class FrameTimer:
   # instead. selfdrived's PhaseTimer has no such path, which is why only this class needs the
   # partial-window handling.
   PHASES = ("mouse_drain", "begin_drawing", "nav_ticks",
-            "onroad_pre", "camera", "model", "hud", "alert", "driver_state", "widget_rest",
+            "onroad_pre", "camera", "model",
+            "hud_base", "hud_torque", "hud_devui", "hud_roadname", "hud_speedlimit",
+            "hud_scc", "hud_turnsig", "hud_alerts", "hud_rocketfuel", "hud_rest",
+            "alert", "driver_state", "widget_rest",
             "yielded_work", "overlays", "end_drawing", "monitor_fps")
 
   SUB_BITS = 5
