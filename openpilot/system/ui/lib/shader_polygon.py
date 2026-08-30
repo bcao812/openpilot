@@ -187,20 +187,49 @@ def _configure_shader_color(state: ShaderState, color: Optional[rl.Color],  # no
 
 
 def triangulate(pts: np.ndarray) -> list[tuple[float, float]]:
-  """Only supports simple polygons with two chains (ribbon)."""
+  """Only supports simple polygons with two chains (ribbon).
 
+  Interleaves the two chains into a triangle strip: [L0, R0, L1, R1, ...] where L is the first
+  half and R is the second half reversed. Two slice assignments, not a Python loop.
+
+  WHY THIS IS NOT THE OBVIOUS LOOP ANY MORE, WITH THE NUMBERS
+
+  It was `for i in range(n): append(pts[i]); append(pts[-i-1])` followed by
+  `np.array(list).tolist()`. That is three expensive things stacked:
+
+    * n indexings into a numpy array, each allocating a (2,) ndarray object
+    * np.array() over a list of 2n tiny ndarrays -- the slowest way to build an array, since
+      numpy has to inspect every element to find a common dtype and shape
+    * .tolist() on the result
+
+  Measured on an x86 host with _logs/torque_bar_cost.py's sizes:
+
+      N=66  (a modelV2 lane line or path)   19.68 us -> 3.84 us
+      N=226 (a torque bar arc)              67.91 us -> 12.76 us
+
+  The big onroad UI calls draw_polygon about nine times a frame -- four lane lines, two road
+  edges, one or two path fills, two torque bar arcs -- so this is 273.6 us -> 52.4 us per frame
+  on the host. At the 7.0x host->A75 factor measured in
+  _arch/c3xl-dev/01-runtime-resource-map.md §4, that is roughly 1.5 ms per frame on the device,
+  against a measured UI frame of 9.7 ms while driving.
+
+  The output is byte-identical -- torque_bar_cost.py asserts equality against the old
+  implementation at every size before reporting a timing.
+
+  .tolist() stays, and that was checked rather than assumed: rl.draw_triangle_strip needs a
+  Python sequence, and handing it the ndarray raises "initializer for ctype 'struct Vector2 *'
+  must be a cdata pointer".
+  """
   # TODO: consider deduping close screenspace points
-  # interleave points to produce a triangle strip
-  # assert len(pts) % 2 == 0, "Interleaving expects even number of points"
   if len(pts) % 2 != 0:
     pts = pts[:-1]
 
-  tri_strip = []
-  for i in range(len(pts) // 2):
-    tri_strip.append(pts[i])
-    tri_strip.append(pts[-i - 1])
+  n = len(pts) // 2
+  tri_strip = np.empty((2 * n, 2), dtype=pts.dtype)
+  tri_strip[0::2] = pts[:n]
+  tri_strip[1::2] = pts[n:][::-1]
 
-  return cast(list, np.array(tri_strip).tolist())
+  return cast(list, tri_strip.tolist())
 
 
 def draw_polygon(origin_rect: rl.Rectangle, points: np.ndarray,
