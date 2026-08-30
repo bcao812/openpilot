@@ -4,12 +4,12 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
-import numpy as np
 
 import pyray as rl
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app, FontWeight
+from openpilot.system.ui.lib.fastmath import clamp
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 
 
@@ -50,7 +50,7 @@ class ChevronMetrics:
 
     chevron_x = lead_vehicle.chevron[1][0]
     chevron_y = lead_vehicle.chevron[1][1]
-    sz = np.clip((25 * 30) / (d_rel / 3 + 30), 15.0, 30.0) * 2.35
+    sz = clamp((25 * 30) / (d_rel / 3 + 30), 15.0, 30.0) * 2.35
 
     text_lines = self._build_text_lines(d_rel, v_rel, v_ego)
     if not text_lines:
@@ -117,7 +117,7 @@ class ChevronMetrics:
 
       # Center the text horizontally on the chevron
       x = int(chevron_x - text_width / 2)
-      x = int(np.clip(x, margin, rect.width - text_width - margin))
+      x = int(clamp(x, margin, rect.width - text_width - margin))
 
       # Draw shadow
       rl.draw_text_ex(self._font, line, rl.Vector2(x + 2, y + 2), font_size, 0, shadow_color)

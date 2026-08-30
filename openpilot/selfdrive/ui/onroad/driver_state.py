@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from openpilot.selfdrive.ui import UI_BORDER_SIZE
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.fastmath import clamp
 from openpilot.system.ui.widgets import Widget
 
 AlertSize = log.SelfdriveState.AlertSize
@@ -119,7 +120,7 @@ class DriverStateRenderer(Widget):
 
     # Update fade state (smoother transition between active/inactive)
     fade_target = 0.0 if self.is_active else 0.5
-    self.dm_fade_state = np.clip(self.dm_fade_state + 0.2 * (fade_target - self.dm_fade_state), 0.0, 1.0)
+    self.dm_fade_state = clamp(self.dm_fade_state + 0.2 * (fade_target - self.dm_fade_state), 0.0, 1.0)
 
     # Get driver orientation data from appropriate camera
     driverstate = sm["driverStateV2"]

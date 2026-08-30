@@ -10,6 +10,7 @@ from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.fastmath import clamp
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
 
@@ -213,8 +214,8 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     # Calculate and clamp offsets to prevent out-of-bounds issues
     try:
       if abs(kep[2]) > 1e-6:
-        x_offset = np.clip((kep[0] / kep[2] - cx) * zoom, -max_x_offset, max_x_offset)
-        y_offset = np.clip((kep[1] / kep[2] - cy) * zoom, -max_y_offset, max_y_offset)
+        x_offset = clamp((kep[0] / kep[2] - cx) * zoom, -max_x_offset, max_x_offset)
+        y_offset = clamp((kep[1] / kep[2] - cy) * zoom, -max_y_offset, max_y_offset)
       else:
         x_offset, y_offset = 0, 0
     except (ZeroDivisionError, OverflowError):
