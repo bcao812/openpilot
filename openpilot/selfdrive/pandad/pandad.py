@@ -101,17 +101,16 @@ def main() -> None:
     cloudlog.exception("pandad.uncaught_exception")
 
   count = 0
+  recover_attempts = 0
   while not do_exit:
     try:
       cloudlog.event("pandad.flash_and_connect", count=count)
       HARDWARE.reset_internal_panda()
       count += 1
-      # The internal SPI panda takes ~10s to boot its app after a reset.
-      # Wait for it to come back in normal (non-bootstub) mode before
-      # deciding whether to flash. Only fall back to the bootloader
-      # (recover) path if it never appears.
+      # The internal SPI panda can take a while (up to ~60s on occasion) to
+      # boot its app after a reset, so wait generously.
       panda_serials: list[str] = []
-      for _ in range(40):
+      for _ in range(120):
         panda_serials = Panda.list()
         if panda_serials:
           try:
@@ -122,9 +121,17 @@ def main() -> None:
             pass
         time.sleep(0.5)
       if not panda_serials:
-        cloudlog.info("Panda did not appear after reset, trying recover...")
+        # Never force a board that already has firmware into the ROM bootloader
+        # right away: recover erases the app sector before reflashing. Only a
+        # truly blank board needs it, and that is detected after several normal
+        # resets fail to produce a panda at all.
+        if not PandaDFU.list() and recover_attempts < 3:
+          recover_attempts += 1
+          cloudlog.warning(f"Panda did not appear after reset ({recover_attempts}/3), retrying normal reset...")
+          continue
+        cloudlog.info("Panda missing after normal resets, entering ROM bootloader (recover)...")
         HARDWARE.recover_internal_panda()
-        time.sleep(5)
+        time.sleep(2)
 
       # Flash all Pandas in DFU mode
       for serial in PandaDFU.list():

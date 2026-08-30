@@ -410,10 +410,11 @@ class HardwareComma(HardwareBase):
 
     gpio_set(GPIO.STM_RST_N, True)
     gpio_set(GPIO.STM_BOOT0, True)
-    time.sleep(0.01)
+    time.sleep(0.2)
     gpio_set(GPIO.STM_RST_N, False)
-    time.sleep(0.01)
-    gpio_set(GPIO.STM_BOOT0, False)
+    time.sleep(1)
+    # Keep BOOT0 high while the SPI ROM bootloader session runs; the custom
+    # SPI panda needs it held (matches the manual flash scripts).
 
   def booted(self):
     # this normally boots within 8s, but on rare occasions takes 30+s
