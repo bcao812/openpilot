@@ -20,7 +20,8 @@ from importlib.resources import as_file, files
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.hardware import HARDWARE, PC
 from openpilot.system.ui.lib.multilang import FONT_FALLBACK_LANGUAGES, TRANSLATIONS_DIR, multilang
-from openpilot.common.realtime import Ratekeeper, drop_realtime, set_core_affinity
+from openpilot.common.realtime import Ratekeeper
+from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 
 from openpilot.system.ui.sunnypilot.lib.application import GuiApplicationExt
 
@@ -130,311 +131,25 @@ class MousePos(NamedTuple):
   y: float
 
 
-class FrameTimer:
-  """Per-phase wall and CPU timing for one render frame, written to the log every 30 s. Off by
-  default. The UI's half of selfdrived.py's PhaseTimer, and deliberately the same shape.
+# The render frame, in the order the loop executes it. end_drawing is the pacing phase --
+# set_target_fps parks there until vblank, so its wall is large and its CPU is the GL submit.
+#
+# onroad_pre..widget_rest are the inside of the widget tree, marked from augmented_road_view.py
+# and sunnypilot/onroad/hud_renderer.py via gui_app.mark_phase(). THEY ARE CONDITIONAL:
+# AugmentedRoadView._render returns before all of them when ui_state.started is false, so an
+# offroad window has no samples for them and widget_rest absorbs the home screen instead.
+# PhaseTimer._emit handles that by emitting nulls rather than dropping the window.
+FRAME_TIMER_MARKER = "/data/ui_profile"
+FRAME_TIMER_EVENT = "ui.frame_timing"
+FRAME_TIMER_PERIOD = 1800        # 30 s at 60 Hz -- NOT selfdrived's 3000, which is its 100 Hz
+FRAME_PHASES = ("mouse_drain", "begin_drawing", "nav_ticks",
+                "onroad_pre", "camera", "model",
+                "hud_base", "hud_torque", "hud_devui", "hud_roadname", "hud_speedlimit",
+                "hud_scc", "hud_turnsig", "hud_alerts", "hud_rocketfuel", "hud_rest",
+                "alert", "driver_state", "widget_rest",
+                "yielded_work", "overlays", "end_drawing", "monitor_fps")
 
-  Why this exists. procs.py measures ui.ui at 60.8% of one core -- the largest process on the
-  device -- and cannot say which part of the frame spends it. Nothing else here could either:
 
-    * PROFILE_RENDER exists and, until this commit, ended in sys.exit(0) and wrote with print().
-      On the car that kills the UI after N frames and puts the report on a stdout manager does
-      not capture. That is why _arch/c3xl-dev/01-runtime-resource-map.md could say it had "still
-      not been run" -- it could not usefully be run.
-    * uiDebug.cpuTimeMillis is a WALL measurement despite its name -- ui.py computes
-      `time.monotonic() - frame_start` -- and it stops at the yield, so it excludes end_drawing,
-      the overlays and _monitor_fps. A GIL wait or a preemption lands inside it, so it cannot
-      separate "the UI got slower" from "the UI got starved". That field is left alone; this
-      class is what answers the question.
-
-  Why two clocks. perf_counter_ns is wall, thread_time_ns is this thread's CPU. end_drawing is
-  where rl.set_target_fps parks until the next vblank, so there wall is large and CPU near zero,
-  and that gap is the point: it is the UI's pacing, the way recv_carState is selfdrived's. A
-  single clock cannot tell pacing from work.
-
-  Why a marker file and not a Param or an env var. Same reasoning as PhaseTimer, and it is not
-  cosmetic: a new Param key lives in common/params_keys.h, which is compiled into
-  libparams_c.so, so it would turn a pure-Python change into a host build plus a committed
-  aarch64 .so plus a sync. An env var in launch_env.sh would need either a sync to flip or an
-  in-place ssh edit, and the latter leaves the device tree dirty, which breaks the only
-  verification c3-sync has. /data is not in git.
-
-    on:   ssh comma@<device> touch /data/ui_profile     (takes effect at next process start)
-    off:  ssh comma@<device> rm /data/ui_profile
-
-  WHAT IS COPIED FROM PhaseTimer AND MUST NOT BE RE-DERIVED
-
-  Four things there cost three revisions and two on-car routes to get right:
-
-    1. A log histogram, not sample buffers. sorted() is one C call that holds the GIL until it
-       returns -- 5.3 ms per call on the car, 18 calls per window.
-    2. Two queues, _full and _free, not one. With one queue a set that had been get() was in
-       neither the queue nor the hot thread's hands, and the second rotate handed the hot thread
-       back the set the writer was still reading.
-    3. Buckets cleared by the WRITER, not at the window boundary. Zeroing the counters is far
-       too much work for the hot thread.
-    4. Explicit sleeps between phases in _emit. They were added for the sorts, removed when the
-       sorts went, and turned out to matter for a different reason: the bound is
-       sys.getswitchinterval(), 5 ms, not how long any single call runs.
-
-  WHAT IS DIFFERENT HERE, AND WHY
-
-    * PERIOD_FRAMES is 1800, not 3000 -- the UI runs at 60 Hz, so 30 s is 1800 frames.
-    * The writer must not land on core 5. That is the UI's own core (ui.py pins it), so a writer
-      there would contend with the thread it exists to keep clear. [0, 1, 2] is also not core 3,
-      which carries pandad at FIFO 54 plus the spi_geni IRQ.
-    * drop_realtime() is mandatory and for a sharper reason than in selfdrived: ui.py calls
-      config_realtime_process(0, Priority.CTRL_HIGH), so a thread created here inherits SCHED_FIFO
-      53. A periodic emit at real-time priority on the display core is the defect, not the fix.
-  """
-  MARKER = "/data/ui_profile"
-
-  # 30 s at 60 Hz. Not 3000: that is selfdrived's 100 Hz number and would make the UI's windows
-  # 50 s while every report assumed 30.
-  PERIOD_FRAMES = 1800
-
-  # The frame, in the order the render loop executes it. end_drawing is last and is the pacing
-  # phase; yielded_work is whatever the caller does between the yield and the resume, which for
-  # ui.py is ui_state.update() -- a 27-service SubMaster -- plus the uiDebug build and send.
-  #
-  # The six onroad_pre..widget_rest phases are the inside of the widget tree, marked from
-  # augmented_road_view.py via gui_app.mark_phase(). Route 00000030 measured the whole tree at
-  # 72.9% of the frame's CPU and 96% of everything driving adds, as ONE number; these split it.
-  #
-  # THEY ARE CONDITIONAL, and _emit accounts for that. AugmentedRoadView._render returns before
-  # any of them when ui_state.started is false, so an offroad window has no samples for the five
-  # onroad phases at all -- and widget_rest correctly absorbs the home screen or settings
-  # instead. selfdrived's PhaseTimer has no such path, which is why only this class needs the
-  # partial-window handling.
-  PHASES = ("mouse_drain", "begin_drawing", "nav_ticks",
-            "onroad_pre", "camera", "model",
-            "hud_base", "hud_torque", "hud_devui", "hud_roadname", "hud_speedlimit",
-            "hud_scc", "hud_turnsig", "hud_alerts", "hud_rocketfuel", "hud_rest",
-            "alert", "driver_state", "widget_rest",
-            "yielded_work", "overlays", "end_drawing", "monitor_fps")
-
-  SUB_BITS = 5
-  SUB_MASK = (1 << SUB_BITS) - 1
-  NB_BUCKETS = 1024
-
-  @classmethod
-  def create(cls):
-    """A FrameTimer if the marker is present, else None. Checked once at construction, never on
-    the hot path."""
-    try:
-      return cls() if os.path.exists(cls.MARKER) else None
-    except OSError:
-      return None
-
-  @classmethod
-  def bucket_mid(cls, idx):
-    sh = (idx >> cls.SUB_BITS) - 1
-    if sh < 0:
-      return idx
-    lo = ((1 << cls.SUB_BITS) | (idx & cls.SUB_MASK)) << sh
-    return lo + (1 << sh) // 2
-
-  def _new_set(self):
-    return {'wall': {p: [0] * self.NB_BUCKETS for p in self.PHASES},
-            'cpu': {p: [0] * self.NB_BUCKETS for p in self.PHASES}}
-
-  def __init__(self):
-    self._sets = [self._new_set() for _ in range(2)]
-    self.wall = self._sets[0]['wall']
-    self.cpu = self._sets[0]['cpu']
-    self.i = 0
-    self.periods = 0
-    self.dropped = 0
-    self._full = queue.Queue(maxsize=1)
-    self._free = queue.Queue(maxsize=2)
-    self._free.put_nowait(self._sets[1])
-    self._w = 0
-    self._c = 0
-    self._stop = threading.Event()
-    self._thread = None
-
-  def start(self):
-    if self._thread is None:
-      self._thread = threading.Thread(target=self._writer, daemon=True)
-      self._thread.start()
-
-  def stop(self):
-    self._stop.set()
-
-  def begin(self):
-    self._w = time.perf_counter_ns()
-    self._c = time.thread_time_ns()
-
-  # Largest index NB_BUCKETS allows. Anything past it saturates into the top bucket, which is
-  # what a histogram is supposed to do -- and is NOT what this did before.
-  #
-  # It raised IndexError. mark() computes a bucket from the delta since the previous mark, and
-  # 1024 buckets run out at about 137 s; a mark reached with a stale cursor produces a delta of
-  # "nanoseconds since boot", indexes past the end, and takes the process down. The host wiring
-  # check hit exactly that the first time mark_phase() was called from the widget tree. On a
-  # 100 Hz control loop an instrument that can raise is bad; in the process that draws the
-  # screen it is worse, and no diagnostic is worth a black display. Saturating costs one
-  # comparison per clock -- pay it.
-  MAX_BUCKET = NB_BUCKETS - 1
-
-  def mark(self, phase):
-    w = time.perf_counter_ns()
-    c = time.thread_time_ns()
-    dw = w - self._w
-    dc = c - self._c
-    sh = dw.bit_length() - 6
-    if sh < 0:
-      sh = 0
-    i = ((sh + 1) << 5) | ((dw >> sh) & 31)
-    self.wall[phase][i if i <= self.MAX_BUCKET else self.MAX_BUCKET] += 1
-    sh = dc.bit_length() - 6
-    if sh < 0:
-      sh = 0
-    i = ((sh + 1) << 5) | ((dc >> sh) & 31)
-    self.cpu[phase][i if i <= self.MAX_BUCKET else self.MAX_BUCKET] += 1
-    self._w = w
-    self._c = c
-
-  def end_frame(self):
-    self.i += 1
-    if self.i >= self.PERIOD_FRAMES:
-      self._rotate()
-
-  def _rotate(self):
-    """Hand the filled buffers off and take a free set. Runs on the render thread, so it does no
-    work beyond two queue operations and three stores, and never blocks."""
-    n = self.i
-    self.i = 0
-    if n < 2:
-      return
-    try:
-      spare = self._free.get_nowait()
-    except queue.Empty:
-      # The writer still owns the other set. Overwrite the active one rather than wait: losing a
-      # window of diagnostics beats stalling the render loop, and the count rides along in the
-      # next event so the loss is visible rather than silent.
-      self.dropped += 1
-      return
-    filled = self.wall, self.cpu
-    self.wall = spare['wall']
-    self.cpu = spare['cpu']
-    self._full.put_nowait(({'wall': filled[0], 'cpu': filled[1]}, n))
-
-  def _writer(self):
-    # Demote FIRST, and in its own try: ui.py has already put this process at SCHED_FIFO 53 on
-    # core 5, and a thread inherits its creator's policy. Sharing one try block with the affinity
-    # call would let a raise from either skip the other -- selfdrived hit exactly that and left
-    # the writer at FIFO 53 on the control core.
-    try:
-      drop_realtime()
-    except OSError:
-      cloudlog.exception("ui.frame_timing writer: could not drop to SCHED_OTHER")
-    try:
-      # Little cluster, and NOT core 3 (pandad FIFO 54 + spi_geni) and NOT core 5 (this UI).
-      set_core_affinity([0, 1, 2])
-    except OSError:
-      cloudlog.exception("ui.frame_timing writer: could not set affinity")
-    while not self._stop.is_set():
-      try:
-        buf, n = self._full.get(timeout=0.5)
-      except queue.Empty:
-        continue
-      try:
-        self._emit(buf, n)
-      except Exception:
-        cloudlog.exception("ui.frame_timing writer failed")
-      finally:
-        # ALWAYS hand the set back, including after a failed emit. Skipping this on the error
-        # path strands the set, leaves _free empty, and turns every later window into a silent
-        # drop.
-        try:
-          self._clear(buf)
-        except Exception:
-          cloudlog.exception("ui.frame_timing clear failed")
-        try:
-          self._free.put_nowait(buf)
-        except queue.Full:
-          pass
-
-  def _emit(self, buf, n):
-    self.periods += 1
-
-    def stats(h):
-      """Percentiles straight out of the buckets -- no sort, no slice. Values are bucket
-      midpoints, so everything carries ~3% relative error; the event says so rather than hiding
-      it behind a decimal place."""
-      total = 0
-      for c in h:
-        total += c
-      if total == 0:
-        return None
-      want = (int(total * 0.5), int(total * 0.95), int(total * 0.99))
-      out = [0.0, 0.0, 0.0]
-      seen = 0
-      acc = 0.0
-      last = 0
-      k = 0
-      for idx, c in enumerate(h):
-        if not c:
-          continue
-        last = idx
-        mid = FrameTimer.bucket_mid(idx)
-        acc += mid * c
-        seen += c
-        while k < 3 and seen > want[k]:
-          out[k] = mid
-          k += 1
-      while k < 3:
-        out[k] = FrameTimer.bucket_mid(last)
-        k += 1
-      return {
-        "p50": round(out[0] / 1000.0, 1),
-        "p95": round(out[1] / 1000.0, 1),
-        "p99": round(out[2] / 1000.0, 1),
-        "max": round(FrameTimer.bucket_mid(last) / 1000.0, 1),
-        "mean": round(acc / total / 1000.0, 1),
-      }
-
-    # Yield between phases. Not cosmetic and not cheap-insurance: selfdrived shipped a revision
-    # with these removed, on the reasoning that the histogram left no long GIL hold, and the car
-    # said the stalls got MORE frequent (7 of 20 windows, max 8.89 ms). The bound is
-    # sys.getswitchinterval() -- 5 ms -- not the duration of any single call. 16 sleeps of 200 us
-    # add 3.2 ms to a writer that has 30 s.
-    cpu = {}
-    wall = {}
-    for p in self.PHASES:
-      cpu[p] = stats(buf['cpu'][p])
-      time.sleep(0.0002)
-      wall[p] = stats(buf['wall'][p])
-      time.sleep(0.0002)
-    # Drop the window only when NOTHING ran. An earlier version dropped it if ANY phase was
-    # empty, which was right while every phase was unconditional and became a silent hole the
-    # moment the onroad sub-phases arrived: a window with the car offroad would have had five
-    # empty phases and been thrown away whole, so the UI would have gone dark in the log exactly
-    # when it was showing the home screen. Empty phases now emit as null and the reader skips
-    # them; a phase that never ran is data, not a fault.
-    if all(v is None for v in cpu.values()):
-      return
-
-    cloudlog.event(
-      "ui.frame_timing",
-      frames=n,
-      period=self.periods,
-      cpu_us=cpu,
-      wall_us=wall,
-      cpu_total_us=round(sum(c["mean"] for c in cpu.values() if c), 1),
-      wall_total_us=round(sum(w["mean"] for w in wall.values() if w), 1),
-      dropped=self.dropped,
-      bucket_pct=round(100.0 / (1 << self.SUB_BITS), 1),
-    )
-
-  def _clear(self, buf):
-    """Fresh lists rather than an in-place loop: 16 C-level allocations beat 16384 Python stores,
-    and refcounting reclaims the old ones immediately."""
-    for clk in ('wall', 'cpu'):
-      d = buf[clk]
-      for p in self.PHASES:
-        d[p] = [0] * self.NB_BUCKETS
 
 
 class MousePosWithTime(NamedTuple):
@@ -560,7 +275,8 @@ class GuiApplication(GuiApplicationExt):
     self._profile_render_frames = PROFILE_RENDER
     self._render_profiler = None
     self._render_profile_start_time = None
-    self._frame_timer = FrameTimer.create()
+    self._frame_timer = PhaseTimer.create(FRAME_TIMER_MARKER, FRAME_TIMER_EVENT,
+                                      FRAME_PHASES, FRAME_TIMER_PERIOD)
 
     GuiApplicationExt.__init__(self)
 
@@ -930,7 +646,7 @@ class GuiApplication(GuiApplicationExt):
       if ft is not None:
         ft.start()
         cloudlog.warning(f"ui.frame_timing armed: {ft.PERIOD_FRAMES}-frame windows, "
-                         + f"marker {FrameTimer.MARKER}")
+                         + f"marker {FRAME_TIMER_MARKER}")
 
       while not (self._window_close_requested or rl.window_should_close()):
         # Re-read per frame rather than trusting the local captured above. mark_phase() reads it

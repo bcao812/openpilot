@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import queue
 import time
 import threading
 
@@ -13,8 +12,9 @@ from msgq.visionipc import VisionIpcClient
 
 
 from openpilot.common.params import Params
-from openpilot.common.realtime import config_realtime_process, drop_realtime, set_core_affinity, Priority, Ratekeeper, DT_CTRL
+from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper, DT_CTRL
 from openpilot.common.swaglog import cloudlog
+from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_events import CarEvents
@@ -59,288 +59,16 @@ TurnDirection = custom.ModelDataV2SP.TurnDirection
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
 
-class PhaseTimer:
-  """Per-phase wall and CPU timing for step(), written to the log every 30 s. Off by default.
+# selfdrived's step(), in the order it calls them. recv_carState is the 100 Hz pacer -- a
+# BLOCKING recv_one, so its wall is ~8 ms and its CPU is the receive syscall plus
+# log_from_bytes deserialising carState, which is real work and is not subtracted.
+PHASE_TIMER_MARKER = "/data/selfdrived_profile"
+PHASE_TIMER_EVENT = "selfdrived.phase_timing"
+PHASE_TIMER_PERIOD = 3000        # 30 s at 100 Hz
+PHASES = ("recv_carState", "sm_update", "data_sample_rest", "update_events", "state_machine",
+          "mads", "update_alerts", "button_tracker", "publish")
 
-  Why this exists. procs.py measures selfdrived at 26.1% of one core, but that is a whole-process
-  number read from /proc, and it cannot say which part of step() spends it. Nothing else here can
-  answer that either: this process is paced by a BLOCKING recv_one(carState), so any wall-clock
-  profiler charges the wait as work, and cProfile's ~1 us per call would add milliseconds per
-  frame to a SCHED_FIFO 53 process sitting in the card -> selfdrived -> controlsd chain.
 
-  Why two clocks and not one. perf_counter_ns is wall, thread_time_ns is this thread's CPU. The
-  first phase blocks; there wall is large and CPU is ~0, and that difference is the whole point
-  -- it separates "waiting for carState" from "computing". A single clock cannot make that call,
-  and reading only CPU would hide the pacing.
-
-  Cost, measured rather than estimated. A full frame of instrumentation -- start(), nine mark()s
-  and end_frame() -- costs 6.8 us of CPU on an x86 host (_logs/sm_cost.py's host, 2026-08-29).
-  Not the ~1 us a count of clock reads suggests: perf_counter_ns is 86 ns from the vDSO, but
-  thread_time_ns is 291 ns because CLOCK_THREAD_CPUTIME_ID is a real syscall, and there are ten
-  of each. On the device, at an unmeasured 2-5x, that is 14-34 us per frame: 0.14-0.34% of the
-  10 ms period, or 0.5-1.3% of the 2.61 ms of CPU selfdrived actually burns per frame. So the
-  instrument perturbs its own subject by about one percent -- an order of magnitude below the
-  26.1% it exists to attribute, and therefore usable, but NOT the free measurement a naive count
-  of clock reads would predict. Cost is still not the reason it defaults to off; see below.
-
-  Why a marker file and not a Param or an env var. A Param would have to be added to
-  common/params_keys.h, which is compiled into libparams_c.so -- so a new key stops being a pure
-  Python change and pulls in a host build, a committed aarch64 .so and a sync. An env var in
-  launch_env.sh would either need syncing to flip, or an in-place ssh edit that leaves the device
-  tree dirty and breaks c3-sync's only verification (an empty git status). /data is not in git,
-  so a marker file flips the switch without touching either.
-
-    on:   ssh comma@<device> touch /data/selfdrived_profile   (takes effect at next process start)
-    off:  ssh comma@<device> rm /data/selfdrived_profile
-
-  Why it defaults to off, given the cost is negligible. Two reasons, neither of them CPU:
-  a permanent debug path on a 100 Hz actuation chain is one more thing every future reader of
-  this file has to classify as instrument-or-function; and an event every 30 s for the life of
-  the device is long-term noise in a log that boot.py and procs.py have to read.
-  """
-  MARKER = "/data/selfdrived_profile"
-
-  # 30 s at 100 Hz.
-  PERIOD_FRAMES = 3000
-
-  PHASES = ("recv_carState", "sm_update", "data_sample_rest", "update_events", "state_machine",
-            "mads", "update_alerts", "button_tracker", "publish")
-
-  # Log-scale histogram, HdrHistogram-style: SUB_BITS sub-buckets per octave, so the relative
-  # resolution is constant at ~1/32 = 3% across the whole range instead of being fixed in
-  # absolute terms. That matters because these phases span three orders of magnitude in one
-  # frame -- data_sample_rest is ~20 us and recv_carState's wall is ~8 ms.
-  #
-  # Replaces per-frame sample buffers, and the reason is measured, not aesthetic. Storing raw
-  # samples meant the writer had to sort 3000 of them per phase per clock, and `sorted()` is one
-  # C call that holds the GIL until it returns. On the car that was ~5.3 ms per call, 18 calls
-  # per window, and the control thread -- which releases the GIL at the poll() inside
-  # SubMaster.update and must then reacquire it -- was suspended for 5 to 14 ms waiting. Route
-  # 0000002c: sm_update wall max 14081 us against a cpu max of 808 us, on 5 of 20 windows.
-  # Reading buckets is an interpreter-bound loop instead, ~26 us on a host.
-  #
-  # NB_BUCKETS covers 1 ns to well past 1 s: the largest index for 1e9 ns is 831.
-  SUB_BITS = 5
-  SUB_MASK = (1 << SUB_BITS) - 1
-  NB_BUCKETS = 1024
-
-  @classmethod
-  def create(cls):
-    """A PhaseTimer if the marker is present, else None. Checked once at construction, never on
-    the hot path -- flipping the marker takes effect at the next process start, which on this
-    device means the next ignition cycle."""
-    try:
-      return cls() if os.path.exists(cls.MARKER) else None
-    except OSError:
-      return None
-
-  @classmethod
-  def bucket_mid(cls, idx):
-    """Midpoint of a bucket, in ns. The inverse of the index arithmetic in mark()."""
-    sh = (idx >> cls.SUB_BITS) - 1
-    if sh < 0:
-      return idx
-    lo = ((1 << cls.SUB_BITS) | (idx & cls.SUB_MASK)) << sh
-    return lo + (1 << sh) // 2
-
-  def _new_set(self):
-    return {'wall': {p: [0] * self.NB_BUCKETS for p in self.PHASES},
-            'cpu': {p: [0] * self.NB_BUCKETS for p in self.PHASES}}
-
-  def __init__(self):
-    # A set is always in exactly one of four places: written by the hot thread, sitting in
-    # _full, held by the writer inside _emit, or sitting in _free. Two queues rather than one
-    # because a set that has been get() off a single queue is in NEITHER the queue nor the hot
-    # thread's hands, and an earlier revision lost track of exactly that: with one queue and two
-    # sets, the second rotate found the queue empty (the writer had already taken the item),
-    # succeeded, and handed the hot thread back the set the writer was still reading. _free is
-    # what makes the writer say when it is finished.
-    self._sets = [self._new_set() for _ in range(2)]
-    self.wall = self._sets[0]['wall']
-    self.cpu = self._sets[0]['cpu']
-    self.i = 0
-    self.periods = 0
-    self.dropped = 0
-    self._full = queue.Queue(maxsize=1)
-    self._free = queue.Queue(maxsize=2)
-    self._free.put_nowait(self._sets[1])
-    self._w = 0
-    self._c = 0
-
-  def start(self):
-    self._w = time.perf_counter_ns()
-    self._c = time.thread_time_ns()
-
-  def mark(self, phase):
-    w = time.perf_counter_ns()
-    c = time.thread_time_ns()
-    dw = w - self._w
-    dc = c - self._c
-    # Branchless bucket index -- the branch cost 22 ns per call and every real delta is far
-    # above the linear region it protected. A delta under 64 ns mis-files by one bucket; the
-    # smallest phase on the car is ~10 us, so nothing real lands there.
-    sh = dw.bit_length() - 6
-    if sh < 0:
-      sh = 0
-    self.wall[phase][((sh + 1) << 5) | ((dw >> sh) & 31)] += 1
-    sh = dc.bit_length() - 6
-    if sh < 0:
-      sh = 0
-    self.cpu[phase][((sh + 1) << 5) | ((dc >> sh) & 31)] += 1
-    self._w = w
-    self._c = c
-
-  def end_frame(self):
-    self.i += 1
-    if self.i >= self.PERIOD_FRAMES:
-      self._rotate()
-
-  def _rotate(self):
-    """Hand the filled buffers off and take a free set. Runs on the 100 Hz thread, so it does
-    no work beyond two queue operations and three stores, and never blocks."""
-    n = self.i
-    self.i = 0
-    if n < 2:
-      return
-    try:
-      spare = self._free.get_nowait()
-    except queue.Empty:
-      # The writer still owns the other set. Overwrite the active one rather than wait: losing
-      # a window of diagnostics beats stalling the actuation chain, and the count rides along
-      # in the next event so the loss is visible rather than silent.
-      self.dropped += 1
-      return
-    filled = self.wall, self.cpu
-    self.wall = spare['wall']
-    self.cpu = spare['cpu']
-    self._full.put_nowait(({'wall': filled[0], 'cpu': filled[1]}, n))
-
-  def writer(self, evt):
-    """Sorts and emits, off the control thread. Started by SelfdriveD.run().
-
-    Demotes itself first. A thread inherits the creator's scheduling policy, and selfdrived's
-    main thread is SCHED_FIFO 53 on core 4 (config_realtime_process at the bottom of this
-    file) -- inheriting that would put a periodic sort at real-time priority on the actuation
-    core, which is the whole problem this thread exists to remove.
-    """
-    # Two separate try blocks, and both failures are logged. Sharing one block meant a raise
-    # from the first call skipped the second, leaving the thread at FIFO 53 pinned to core 4 --
-    # silently restoring the defect. drop_realtime() rather than an inline sched_setscheduler
-    # because it carries the not-PC guard this file has no business duplicating.
-    try:
-      drop_realtime()
-    except OSError:
-      cloudlog.exception("phase_timing writer: could not drop to SCHED_OTHER")
-    try:
-      # NOT core 3: that is pandad at FIFO 54 plus the spi_geni IRQ (common/realtime.py
-      # Priority). A thread that can be preempted by pandad while holding the GIL would block
-      # selfdrived on core 4 through the very lock this thread exists to avoid holding.
-      set_core_affinity([0, 1, 2])
-    except OSError:
-      cloudlog.exception("phase_timing writer: could not set affinity")
-    while not evt.is_set():
-      try:
-        buf, n = self._full.get(timeout=0.5)
-      except queue.Empty:
-        continue
-      try:
-        self._emit(buf, n)
-      except Exception:
-        cloudlog.exception("selfdrived.phase_timing writer failed")
-      finally:
-        # ALWAYS hand the set back, including after a failed emit. Skipping this on the error
-        # path would strand the set, leave _free empty, and turn every later window into a
-        # silent drop. Cleared HERE, on the writer, because zeroing 18432 counters is far too
-        # much work for the 100 Hz thread to do at a window boundary.
-        try:
-          self._clear(buf)
-        except Exception:
-          cloudlog.exception("selfdrived.phase_timing clear failed")
-        try:
-          self._free.put_nowait(buf)
-        except queue.Full:
-          pass
-
-  def _emit(self, buf, n):
-    self.periods += 1
-
-    def stats(h):
-      """Percentiles straight out of the buckets. No sort, no slice, no sum over samples --
-      the whole point of the histogram. Values are bucket midpoints, so everything here
-      carries ~3% relative error; that is stated in the event rather than hidden behind a
-      spurious decimal place."""
-      total = 0
-      for c in h:
-        total += c
-      if total == 0:
-        return None
-      want = (int(total * 0.5), int(total * 0.95), int(total * 0.99))
-      out = [0.0, 0.0, 0.0]
-      seen = 0
-      acc = 0.0
-      last = 0
-      k = 0
-      for idx, c in enumerate(h):
-        if not c:
-          continue
-        last = idx
-        mid = PhaseTimer.bucket_mid(idx)
-        acc += mid * c
-        seen += c
-        while k < 3 and seen > want[k]:
-          out[k] = mid
-          k += 1
-      while k < 3:
-        out[k] = PhaseTimer.bucket_mid(last)
-        k += 1
-      return {
-        "p50": round(out[0] / 1000.0, 1),
-        "p95": round(out[1] / 1000.0, 1),
-        "p99": round(out[2] / 1000.0, 1),
-        "max": round(PhaseTimer.bucket_mid(last) / 1000.0, 1),
-        "mean": round(acc / total / 1000.0, 1),
-      }
-
-    # Yield between phases. This was removed when the sorts went, on the grounds that no single
-    # call held the GIL long any more -- and the car disagreed: 7 of 20 windows showed
-    # sm_update suspended, worst 8.89 ms, WORSE in count than the version with sorts.
-    #
-    # The bound that matters is not how long one call runs, it is sys.getswitchinterval(),
-    # 5 ms by default. Pure Python does release the GIL, but only once a waiting thread has
-    # asked and that interval has elapsed. A ~7 ms emit of uninterrupted bytecode therefore
-    # makes the control thread wait most of an interval no matter how short each operation is.
-    # An explicit sleep offers the GIL up immediately, so the wait becomes one phase's scan.
-    #
-    # 200 us x 18 adds 3.6 ms to a writer that has 30 s. It is the cheapest thing here.
-    cpu = {}
-    wall = {}
-    for p in self.PHASES:
-      cpu[p] = stats(buf['cpu'][p])
-      time.sleep(0.0002)
-      wall[p] = stats(buf['wall'][p])
-      time.sleep(0.0002)
-    if any(v is None for v in cpu.values()):
-      return
-
-    cloudlog.event(
-      "selfdrived.phase_timing",
-      frames=n,
-      period=self.periods,
-      cpu_us=cpu,
-      wall_us=wall,
-      cpu_total_us=round(sum(c["mean"] for c in cpu.values()), 1),
-      wall_total_us=round(sum(w["mean"] for w in wall.values()), 1),
-      dropped=self.dropped,
-      bucket_pct=round(100.0 / (1 << self.SUB_BITS), 1),
-    )
-
-  def _clear(self, buf):
-    """Fresh lists rather than an in-place loop: 18 C-level allocations beat 18432 Python
-    stores, and refcounting reclaims the old ones immediately -- gc.disable() only stops cycle
-    collection, and there are no cycles here."""
-    for p in self.PHASES:
-      buf['wall'][p] = [0] * self.NB_BUCKETS
-      buf['cpu'][p] = [0] * self.NB_BUCKETS
 
 
 class SelfdriveD(CruiseHelper):
@@ -494,9 +222,9 @@ class SelfdriveD(CruiseHelper):
     # None unless /data/selfdrived_profile exists at start. Every timing call below is guarded by
     # `if self.prof:`, so with it absent the cost on the 100 Hz path is one attribute test per
     # phase boundary and nothing else.
-    self.prof = PhaseTimer.create()
+    self.prof = PhaseTimer.create(PHASE_TIMER_MARKER, PHASE_TIMER_EVENT, PHASES, PHASE_TIMER_PERIOD)
     if self.prof is not None:
-      cloudlog.warning("selfdrived: phase timing ENABLED by %s", PhaseTimer.MARKER)
+      cloudlog.warning("selfdrived: phase timing ENABLED by %s", PHASE_TIMER_MARKER)
 
     self.ignored_processes = {'mapd', }
 
@@ -1035,7 +763,7 @@ class SelfdriveD(CruiseHelper):
 
   def step(self):
     if self.prof:
-      self.prof.start()
+      self.prof.begin()
     CS = self.data_sample()
     if self.prof:
       self.prof.mark("data_sample_rest")
@@ -1084,24 +812,21 @@ class SelfdriveD(CruiseHelper):
   def run(self):
     e = threading.Event()
     t = threading.Thread(target=self.params_thread, args=(e, ))
-    # Started here, not in PhaseTimer.__init__, so its lifetime is tied to run()'s try/finally
-    # exactly as params_thread's is. None when the marker is absent, so a device that is not
-    # profiling carries no extra thread at all.
-    pt = threading.Thread(target=self.prof.writer, args=(e, )) if self.prof else None
     try:
       t.start()
-      if pt is not None:
-        pt.start()
+      # The writer owns its own thread now. It is a daemon, so it does not need joining here --
+      # which also removes the is_alive() dance the hand-built thread needed to avoid replacing
+      # a real traceback with a RuntimeError from joining a thread that never started.
+      if self.prof:
+        self.prof.start()
       while True:
         self.step()
         self.rk.monitor_time()
     finally:
       e.set()
       t.join()
-      # is_alive(), not just `is not None`: if pt.start() raised inside the try above, joining
-      # a never-started thread raises RuntimeError and replaces the original traceback.
-      if pt is not None and pt.is_alive():
-        pt.join()
+      if self.prof:
+        self.prof.stop()
 
 
 def main():

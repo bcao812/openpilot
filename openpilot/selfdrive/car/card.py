@@ -10,6 +10,7 @@ from opendbc.car.structs import car
 
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
+from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
 
 from opendbc.car import DT_CTRL, structs
@@ -31,6 +32,16 @@ EventName = log.OnroadEvent.EventName
 
 # forward
 carlog.addHandler(ForwardingHandler(cloudlog))
+
+# card's step(), in the order it runs. can_recv is the 100 Hz pacer -- a BLOCKING
+# drain_sock_raw(wait_for_one=True) -- so its wall is the period and its CPU is the receive
+# syscall alone; the deserialise is can_parse, split out because selfdrived's equivalent turned
+# out to be deserialisation rather than waiting.
+PHASE_TIMER_MARKER = "/data/card_profile"
+PHASE_TIMER_EVENT = "card.phase_timing"
+PHASE_TIMER_PERIOD = 3000        # 30 s at 100 Hz
+PHASES = ("can_recv", "can_parse", "radar_update", "sm_update", "cruise_helper",
+          "state_publish", "controls_update", "step_rest")
 
 
 def obd_callback(params: Params) -> ObdCallback:
@@ -186,23 +197,43 @@ class Car:
     # card is driven by can recv, expected at 100Hz
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
+    # None unless /data/card_profile exists at process start. Every timing call is guarded by
+    # `if self.prof:`, so with the marker absent the cost on the 100 Hz actuation path is one
+    # attribute test per phase boundary. The writer drops to SCHED_OTHER and pins to [0, 1, 2] --
+    # card runs FIFO 53 on core 4 with selfdrived and controlsd, and a thread inheriting that
+    # would put a periodic emit at real-time priority on the actuation core.
+    self.prof = PhaseTimer.create(PHASE_TIMER_MARKER, PHASE_TIMER_EVENT, PHASES, PHASE_TIMER_PERIOD)
+    if self.prof is not None:
+      cloudlog.warning("card: phase timing ENABLED by %s", PHASE_TIMER_MARKER)
+
     # log fingerprint in sentry
     sunnypilot_interfaces.log_fingerprint(self.CP)
 
   def state_update(self) -> tuple[car.CarState, custom.CarStateSP, structs.RadarDataT | None]:
     """carState update loop, driven by can"""
 
+    # BLOCKING, and the 100 Hz pacer for this whole process -- wall here is the period, not work.
+    # Same shape as selfdrived's recv_one(carState), where the CPU under the block turned out to
+    # be deserialisation rather than waiting. can_parse is split out below for that reason.
     can_strs = messaging.drain_sock_raw(self.can_sock, wait_for_one=True)
+    if self.prof:
+      self.prof.mark("can_recv")
     can_list = can_capnp_to_list(can_strs)
 
     # Update carState from CAN
     CS, CS_SP = self.CI.update(can_list)
     CS_SP = convert_to_capnp(CS_SP)
+    if self.prof:
+      self.prof.mark("can_parse")
 
     # Update radar tracks from CAN
     RD: structs.RadarDataT | None = self.RI.update(can_list)
+    if self.prof:
+      self.prof.mark("radar_update")
 
     self.sm.update(0)
+    if self.prof:
+      self.prof.mark("sm_update")
 
     can_rcv_valid = len(can_strs) > 0
 
@@ -222,6 +253,8 @@ class Car:
     # TODO: mirror the carState.cruiseState struct?
     CS.vCruise = float(self.v_cruise_helper.v_cruise_kph)
     CS.vCruiseCluster = float(self.v_cruise_helper.v_cruise_cluster_kph)
+    if self.prof:
+      self.prof.mark("cruise_helper")
 
     return CS, CS_SP, RD
 
@@ -286,18 +319,29 @@ class Car:
       self.CC_prev = CC
 
   def step(self):
+    if self.prof:
+      self.prof.begin()
     CS, CS_SP, RD = self.state_update()
 
     self.state_publish(CS, CS_SP, RD)
+    if self.prof:
+      self.prof.mark("state_publish")
 
     initialized = (not any(e.name == EventName.selfdriveInitializing for e in self.sm['onroadEvents']) and
                    self.sm.seen['onroadEvents'])
     if not self.CP.passive and initialized:
       self.controls_update(CS, self.sm['carControl'], self.sm['carControlSP'])
+    # CI.apply() and the sendcan publish. This is the actuator command -- the phase worth
+    # knowing the cost of, and the reason this file's instrumentation goes past safety-reviewer.
+    if self.prof:
+      self.prof.mark("controls_update")
 
     self.initialized_prev = initialized
     self.CS_prev = CS
     self.CS_SP_prev = CS_SP
+    if self.prof:
+      self.prof.mark("step_rest")
+      self.prof.end_frame()
 
   def params_thread(self, evt):
     while not evt.is_set():
@@ -315,12 +359,16 @@ class Car:
     t = threading.Thread(target=self.params_thread, args=(e, ))
     try:
       t.start()
+      if self.prof:
+        self.prof.start()
       while True:
         self.step()
         self.rk.monitor_time()
     finally:
       e.set()
       t.join()
+      if self.prof:
+        self.prof.stop()
 
 
 def main():

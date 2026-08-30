@@ -12,6 +12,7 @@ from openpilot.common.transformations.orientation import rot_from_euler
 from openpilot.common.realtime import config_realtime_process
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
+from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.selfdrive.locationd.helpers import rotate_std
 from openpilot.selfdrive.locationd.models.pose_kf import PoseKalman, States
 from openpilot.selfdrive.locationd.models.constants import ObservationKind, GENERATED_DIR
@@ -261,6 +262,22 @@ def sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, senso
   return all(sensor_alive.values()) and all(sensor_valid.values())
 
 
+# locationd's loop, in the order it runs. sm_update is the pacer -- a BLOCKING poll on
+# cameraOdometry at 20 Hz -- so its wall is the period. 36% of a core at 20 Hz is ~18 ms of CPU
+# per 50 ms iteration, the highest per-iteration cost in the corpus, and nothing has ever said
+# which part.
+#
+# msg_sort gets its own phase rather than being folded into handle_log because sorted() is one C
+# call that holds the GIL until it returns, and this corpus has already been bitten by that
+# once: the phase timer's own writer stalled a 100 Hz loop for 5.3 ms per sort. Here it is a
+# 20 Hz thread at priority 5 on the little cluster, so it is not the same hazard -- but it is
+# worth measuring rather than assuming.
+PHASE_TIMER_MARKER = "/data/locationd_profile"
+PHASE_TIMER_EVENT = "locationd.phase_timing"
+PHASE_TIMER_PERIOD = 600         # 30 s at 20 Hz -- NOT 3000, which is a 100 Hz number
+PHASES = ("sm_update", "sensor_drain", "msg_sort", "handle_log", "publish")
+
+
 def main():
   config_realtime_process([0, 1, 2, 3], 5)
 
@@ -276,6 +293,13 @@ def main():
   params = Params()
 
   estimator = LocationEstimator(DEBUG)
+
+  # None unless /data/locationd_profile exists at process start. Guarded at every call site, so
+  # with the marker absent this costs one attribute test per phase boundary.
+  prof = PhaseTimer.create(PHASE_TIMER_MARKER, PHASE_TIMER_EVENT, PHASES, PHASE_TIMER_PERIOD)
+  if prof is not None:
+    prof.start()
+    cloudlog.warning("locationd: phase timing ENABLED by %s", PHASE_TIMER_MARKER)
 
   filter_initialized = False
   critcal_services = ["accelerometer", "gyroscope", "cameraOdometry"]
@@ -294,9 +318,15 @@ def main():
       estimator.reset(None, x_initial, P_initial)
 
   while True:
+    if prof:
+      prof.begin()
     sm.update()
+    if prof:
+      prof.mark("sm_update")
 
     acc_msgs, gyro_msgs = (messaging.drain_sock(sock) for sock in sensor_sockets)
+    if prof:
+      prof.mark("sensor_drain")
 
     if filter_initialized:
       msgs = []
@@ -308,8 +338,11 @@ def main():
           continue
         t, valid, data = sm.logMonoTime[which], sm.valid[which], sm[which]
         msgs.append((t, valid, which, data))
+      ordered = sorted(msgs, key=lambda x: x[0])
+      if prof:
+        prof.mark("msg_sort")
 
-      for log_mono_time, valid, which, msg in sorted(msgs, key=lambda x: x[0]):
+      for log_mono_time, valid, which, msg in ordered:
         if valid:
           t = log_mono_time * 1e-9
           res = estimator.handle_log(t, which, msg)
@@ -326,6 +359,11 @@ def main():
             observation_input_invalid[which] *= input_invalid_decay[which]
     else:
       filter_initialized = sm.all_checks() and sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, sensor_alive, SIMULATION)
+    # msg_sort and handle_log do not run before the filter initialises, so they emit as null for
+    # those windows rather than dropping the window -- the same conditional-phase path the UI's
+    # onroad sub-phases needed.
+    if prof:
+      prof.mark("handle_log")
 
     if sm.updated["cameraOdometry"]:
       critical_service_inputs_valid = all(observation_input_invalid[s] < input_invalid_threshold[s] for s in critcal_services)
@@ -334,6 +372,9 @@ def main():
 
       msg = estimator.get_msg(sensors_valid, inputs_valid, filter_initialized)
       pm.send("deviceMotion", msg)
+    if prof:
+      prof.mark("publish")
+      prof.end_frame()
 
 
 if __name__ == "__main__":
