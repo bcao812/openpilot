@@ -91,7 +91,7 @@ class CarController(CarControllerBase):
         steer_required=CC.latActive,
       ))
 
-    new_actuators = actuators.as_builder()
+    new_actuators = actuators  # already a mutable builder in sunnypilot opendbc
     new_actuators.torque = self.apply_torque_last / self.params.STEER_MAX
     new_actuators.torqueOutputCan = self.apply_torque_last
     new_actuators.accel = self.accel
