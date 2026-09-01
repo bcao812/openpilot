@@ -43,7 +43,9 @@ def build_sorted_car_list(platforms, footnotes) -> dict[str, dict[str, list[str]
     car_docs = platform.config.get_all_docs()
     CP, CP_SP = _get_params_for_docs_sp(platform)
 
-    if CP.dashcamOnly or not len(car_docs):
+    # Include dashcam-only platforms too (e.g. MG): selecting one runs the
+    # device in dashcam mode.
+    if not len(car_docs):
       continue
 
     # A platform can include multiple car models

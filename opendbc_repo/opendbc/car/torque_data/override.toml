@@ -106,6 +106,7 @@ legend = ["LAT_ACCEL_FACTOR", "MAX_LAT_ACCEL_MEASURED", "FRICTION"]
 "ACURA_RDX_3G_MMR" = [1.5, 1.5, 0.16]
 
 # Dashcam or fallback configured as ideal car
+"MG_5_EV" = [1.2, 2.5, 0.18]
 "MOCK" = [10.0, 10, 0.0]
 
 # Manually checked

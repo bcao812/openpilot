@@ -200,6 +200,37 @@
     ],
     "package": "Driver Confidence Package 2"
   },
+  "Buick Regal Essence 2018": {
+    "platform": "BUICK_REGAL",
+    "make": "Buick",
+    "brand": "gm",
+    "model": "Regal Essence",
+    "year": [
+      "2018"
+    ],
+    "package": "Adaptive Cruise Control (ACC)"
+  },
+  "Cadillac ATS Premium Performance 2018": {
+    "platform": "CADILLAC_ATS",
+    "make": "Cadillac",
+    "brand": "gm",
+    "model": "ATS Premium Performance",
+    "year": [
+      "2018"
+    ],
+    "package": "Adaptive Cruise Control (ACC)"
+  },
+  "Cadillac CT6 Non-ACC 2017-18": {
+    "platform": "CADILLAC_CT6_NON_ACC_1ST_GEN",
+    "make": "Cadillac",
+    "brand": "gm",
+    "model": "CT6 Non-ACC",
+    "year": [
+      "2017",
+      "2018"
+    ],
+    "package": "No Adaptive Cruise Control (Non-ACC)"
+  },
   "Cadillac Escalade 2017": {
     "platform": "CADILLAC_ESCALADE",
     "make": "Cadillac",
@@ -239,6 +270,16 @@
       "2023"
     ],
     "package": "Driver Assist Package"
+  },
+  "Cadillac XT5 Non-ACC 2018": {
+    "platform": "CADILLAC_XT5_NON_ACC_1ST_GEN",
+    "make": "Cadillac",
+    "brand": "gm",
+    "model": "XT5 Non-ACC",
+    "year": [
+      "2018"
+    ],
+    "package": "No Adaptive Cruise Control (Non-ACC)"
   },
   "Chevrolet Bolt EUV 2022-23": {
     "platform": "CHEVROLET_BOLT_EUV",
@@ -350,6 +391,16 @@
     ],
     "package": "No Adaptive Cruise Control (Non-ACC)"
   },
+  "Chevrolet Malibu Premier 2017": {
+    "platform": "CHEVROLET_MALIBU",
+    "make": "Chevrolet",
+    "brand": "gm",
+    "model": "Malibu Premier",
+    "year": [
+      "2017"
+    ],
+    "package": "Adaptive Cruise Control (ACC)"
+  },
   "Chevrolet Silverado 1500 2020-21": {
     "platform": "CHEVROLET_SILVERADO",
     "make": "Chevrolet",
@@ -361,6 +412,20 @@
     ],
     "package": "Safety Package II"
   },
+  "Chevrolet Suburban Non-ACC 2016-20": {
+    "platform": "CHEVROLET_SUBURBAN_NON_ACC_11TH_GEN",
+    "make": "Chevrolet",
+    "brand": "gm",
+    "model": "Suburban Non-ACC",
+    "year": [
+      "2016",
+      "2017",
+      "2018",
+      "2019",
+      "2020"
+    ],
+    "package": "No Adaptive Cruise Control (Non-ACC)"
+  },
   "Chevrolet Trailblazer 2021-22": {
     "platform": "CHEVROLET_TRAILBLAZER",
     "make": "Chevrolet",
@@ -371,6 +436,17 @@
       "2022"
     ],
     "package": "Adaptive Cruise Control (ACC)"
+  },
+  "Chevrolet Trailblazer Non-ACC 2021-22": {
+    "platform": "CHEVROLET_TRAILBLAZER_NON_ACC_2ND_GEN",
+    "make": "Chevrolet",
+    "brand": "gm",
+    "model": "Trailblazer Non-ACC",
+    "year": [
+      "2021",
+      "2022"
+    ],
+    "package": "No Adaptive Cruise Control (Non-ACC)"
   },
   "Chevrolet Traverse 2022-23": {
     "platform": "CHEVROLET_TRAVERSE",
@@ -853,6 +929,16 @@
     ],
     "package": "All"
   },
+  "Genesis G70 Non-SCC 2021": {
+    "platform": "GENESIS_G70_2021_NON_SCC",
+    "make": "Genesis",
+    "brand": "hyundai",
+    "model": "G70 Non-SCC",
+    "year": [
+      "2021"
+    ],
+    "package": "No Smart Cruise Control (Non-SCC)"
+  },
   "Genesis G80 2017": {
     "platform": "HYUNDAI_GENESIS",
     "make": "Genesis",
@@ -992,6 +1078,27 @@
       "2021"
     ],
     "package": "Driver Alert Package II"
+  },
+  "GMC Yukon 2019-20": {
+    "platform": "GMC_YUKON",
+    "make": "GMC",
+    "brand": "gm",
+    "model": "Yukon",
+    "year": [
+      "2019",
+      "2020"
+    ],
+    "package": "Adaptive Cruise Control (ACC) & LKAS"
+  },
+  "Holden Astra 2017": {
+    "platform": "HOLDEN_ASTRA",
+    "make": "Holden",
+    "brand": "gm",
+    "model": "Astra",
+    "year": [
+      "2017"
+    ],
+    "package": "Adaptive Cruise Control (ACC)"
   },
   "Honda Accord 2018-22": {
     "platform": "HONDA_ACCORD",
@@ -1482,6 +1589,16 @@
       "2020"
     ],
     "package": "All"
+  },
+  "Hyundai Bayon Non-SCC 2021": {
+    "platform": "HYUNDAI_BAYON_1ST_GEN_NON_SCC",
+    "make": "Hyundai",
+    "brand": "hyundai",
+    "model": "Bayon Non-SCC",
+    "year": [
+      "2021"
+    ],
+    "package": "No Smart Cruise Control (Non-SCC)"
   },
   "Hyundai Custin 2023": {
     "platform": "HYUNDAI_CUSTIN_1ST_GEN",
@@ -1993,6 +2110,20 @@
     ],
     "package": "Smart Cruise Control (SCC)"
   },
+  "Jeep Cherokee 2019-23": {
+    "platform": "JEEP_CHEROKEE_5TH_GEN",
+    "make": "Jeep",
+    "brand": "chrysler",
+    "model": "Cherokee",
+    "year": [
+      "2019",
+      "2020",
+      "2021",
+      "2022",
+      "2023"
+    ],
+    "package": "Adaptive Cruise Control (ACC)"
+  },
   "Jeep Grand Cherokee 2016-18": {
     "platform": "JEEP_GRAND_CHEROKEE",
     "make": "Jeep",
@@ -2127,6 +2258,16 @@
     "model": "Forte Non-SCC",
     "year": [
       "2019"
+    ],
+    "package": "No Smart Cruise Control (Non-SCC)"
+  },
+  "Kia Forte Non-SCC 2021": {
+    "platform": "KIA_FORTE_2021_NON_SCC",
+    "make": "Kia",
+    "brand": "hyundai",
+    "model": "Forte Non-SCC",
+    "year": [
+      "2021"
     ],
     "package": "No Smart Cruise Control (Non-SCC)"
   },
@@ -2341,6 +2482,16 @@
     ],
     "package": "Smart Cruise Control (SCC)"
   },
+  "Kia Optima Hybrid 2017": {
+    "platform": "KIA_OPTIMA_H",
+    "make": "Kia",
+    "brand": "hyundai",
+    "model": "Optima Hybrid",
+    "year": [
+      "2017"
+    ],
+    "package": "Advanced Smart Cruise Control"
+  },
   "Kia Optima Hybrid 2019": {
     "platform": "KIA_OPTIMA_H_G4_FL",
     "make": "Kia",
@@ -2360,6 +2511,17 @@
       "2021"
     ],
     "package": "Smart Cruise Control (SCC)"
+  },
+  "Kia Seltos Non-SCC 2023-24": {
+    "platform": "KIA_SELTOS_2023_NON_SCC",
+    "make": "Kia",
+    "brand": "hyundai",
+    "model": "Seltos Non-SCC",
+    "year": [
+      "2023",
+      "2024"
+    ],
+    "package": "No Smart Cruise Control (Non-SCC)"
   },
   "Kia Sorento 2018": {
     "platform": "KIA_SORENTO",
@@ -2800,6 +2962,44 @@
     ],
     "package": "Adaptive Cruise Control (ACC) & Lane Assist"
   },
+  "Mazda 3 2017-18": {
+    "platform": "MAZDA_3",
+    "make": "Mazda",
+    "brand": "mazda",
+    "model": "3",
+    "year": [
+      "2017",
+      "2018"
+    ],
+    "package": "All"
+  },
+  "Mazda 6 2017-20": {
+    "platform": "MAZDA_6",
+    "make": "Mazda",
+    "brand": "mazda",
+    "model": "6",
+    "year": [
+      "2017",
+      "2018",
+      "2019",
+      "2020"
+    ],
+    "package": "All"
+  },
+  "Mazda CX-5 2017-21": {
+    "platform": "MAZDA_CX5",
+    "make": "Mazda",
+    "brand": "mazda",
+    "model": "CX-5",
+    "year": [
+      "2017",
+      "2018",
+      "2019",
+      "2020",
+      "2021"
+    ],
+    "package": "All"
+  },
   "Mazda CX-5 2022-25": {
     "platform": "MAZDA_CX5_2022",
     "make": "Mazda",
@@ -2813,6 +3013,20 @@
     ],
     "package": "All"
   },
+  "Mazda CX-9 2016-20": {
+    "platform": "MAZDA_CX9",
+    "make": "Mazda",
+    "brand": "mazda",
+    "model": "CX-9",
+    "year": [
+      "2016",
+      "2017",
+      "2018",
+      "2019",
+      "2020"
+    ],
+    "package": "All"
+  },
   "Mazda CX-9 2021-23": {
     "platform": "MAZDA_CX9_2021",
     "make": "Mazda",
@@ -2822,6 +3036,16 @@
       "2021",
       "2022",
       "2023"
+    ],
+    "package": "All"
+  },
+  "MG 5 EV 2021": {
+    "platform": "MG_5_EV",
+    "make": "MG",
+    "brand": "mg",
+    "model": "5 EV",
+    "year": [
+      "2021"
     ],
     "package": "All"
   },
@@ -2891,6 +3115,22 @@
       "2017"
     ],
     "package": "ProPILOT Assist"
+  },
+  "Peugeot 208 2019-25": {
+    "platform": "PSA_PEUGEOT_208",
+    "make": "Peugeot",
+    "brand": "psa",
+    "model": "208",
+    "year": [
+      "2019",
+      "2020",
+      "2021",
+      "2022",
+      "2023",
+      "2024",
+      "2025"
+    ],
+    "package": "Adaptive Cruise Control (ACC) & Lane Assist"
   },
   "Porsche Macan 2017-24": {
     "platform": "PORSCHE_MACAN_MK1",
@@ -3052,6 +3292,16 @@
     ],
     "package": "All"
   },
+  "Subaru Ascent 2023": {
+    "platform": "SUBARU_ASCENT_2023",
+    "make": "Subaru",
+    "brand": "subaru",
+    "model": "Ascent",
+    "year": [
+      "2023"
+    ],
+    "package": "All"
+  },
   "Subaru Crosstrek 2018-19": {
     "platform": "SUBARU_IMPREZA",
     "make": "Subaru",
@@ -3073,6 +3323,16 @@
       "2021",
       "2022",
       "2023"
+    ],
+    "package": "EyeSight Driver Assistance"
+  },
+  "Subaru Crosstrek Hybrid 2020": {
+    "platform": "SUBARU_CROSSTREK_HYBRID",
+    "make": "Subaru",
+    "brand": "subaru",
+    "model": "Crosstrek Hybrid",
+    "year": [
+      "2020"
     ],
     "package": "EyeSight Driver Assistance"
   },
@@ -3098,6 +3358,28 @@
       "2021"
     ],
     "package": "All"
+  },
+  "Subaru Forester 2022-24": {
+    "platform": "SUBARU_FORESTER_2022",
+    "make": "Subaru",
+    "brand": "subaru",
+    "model": "Forester",
+    "year": [
+      "2022",
+      "2023",
+      "2024"
+    ],
+    "package": "All"
+  },
+  "Subaru Forester Hybrid 2020": {
+    "platform": "SUBARU_FORESTER_HYBRID",
+    "make": "Subaru",
+    "brand": "subaru",
+    "model": "Forester Hybrid",
+    "year": [
+      "2020"
+    ],
+    "package": "EyeSight Driver Assistance"
   },
   "Subaru Impreza 2017-19": {
     "platform": "SUBARU_IMPREZA",
@@ -3180,6 +3462,16 @@
       "2020",
       "2021",
       "2022"
+    ],
+    "package": "All"
+  },
+  "Subaru Outback 2023": {
+    "platform": "SUBARU_OUTBACK_2023",
+    "make": "Subaru",
+    "brand": "subaru",
+    "model": "Outback",
+    "year": [
+      "2023"
     ],
     "package": "All"
   },
