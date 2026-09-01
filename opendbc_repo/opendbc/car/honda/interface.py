@@ -116,13 +116,40 @@ class CarInterface(CarInterfaceBase):
 
     elif candidate == CAR.HONDA_ACCORD:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
-      # Taper the gain in below 10 m/s, same shape as HONDA_CIVIC_2022 above. The model's desired
+      # Taper the gain in below 15 m/s, same shape as HONDA_CIVIC_2022 above. The model's desired
       # curvature carries a ~0.7 Hz limit cycle down there: curv_from_psis divides by v, so the
       # same heading wobble asks for v times more curvature, and a flat 0.6 answers that with a
       # full-scale bang-bang -- ~10 deg peak-to-peak at the wheel to chase 0.017 m/s^2 of lateral
-      # acceleration. At and above 10 m/s this is the 0.6/0.18 it has always been.
-      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0, 10], [0.06, 0.6]]
-      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0, 10], [0.018, 0.18]]
+      # acceleration. At and above 15 m/s this is the 0.6/0.18 it has always been.
+      #
+      # The breakpoint was 10 m/s from 89b57eb61 until 2026-09-01. That commit named this exact
+      # knob as the one to reach for "if a road test says this is not enough", and it does: over
+      # 80.4 min engaged on a5cbfbf72 (routes 37/3a/3b) the wheel still runs 1.39 deg rms with
+      # the PID on its rail in 18% of 6 s windows at 10-20 km/h, against 0.56 deg / 3% on the
+      # calmest route of the same arm. Replaying the recorded angle error through this schedule
+      # takes rail time at 10-20 km/h from 13.6% to 9.9% (0-10 km/h 8.8 -> 7.2, 20-30 km/h
+      # 7.9 -> 6.6). Moving the low-speed END of the schedule instead does almost nothing
+      # (0.06 -> 0.03 gives 12.8%), so it is the breakpoint that owns this band, not the endpoint.
+      #
+      # That replay is an UPPER BOUND and cannot be anything else: it holds the recorded angle
+      # error fixed, and the error is itself the loop's output, so a loop that stops ringing
+      # would never have produced it. Not verifiable off the car.
+      #
+      # What this does NOT do is remove the ripple's source. The command is already ringing when
+      # it reaches the controller -- on straight road at 2-6 m/s the 0.60-0.95 Hz band holds 5.1%
+      # of the model's raw action power, 4.9% of desiredCurvature, 4.9% at the actuators and
+      # 3.9% at the wheel, so nothing downstream of the model adds any of it and the wheel
+      # attenuates. vEgo is clean in that band (0.0%), which rules out the /v^2 conversion as the
+      # injector. It needs openpilot in the loop -- 4.9% while it steers against 1.7% while the
+      # driver does -- so the model is the element with gain here, not an independent noise
+      # source. Lowering kp reduces how faithfully the wheel reproduces that ring; it does not
+      # stop the ringing. LAT_SMOOTH_SECONDS, the one damper on the command path, is ALREADY 0.1
+      # on this car -- it comes from the active model bundle's 'lat' override, not from
+      # selfdrive/modeld/modeld.py, which this car does not run (it runs modeld_tinygrad).
+      #
+      # No panda change -- car tuning, not safety. Lateral accel/jerk limits are untouched.
+      ret.lateralTuning.pid.kpBP, ret.lateralTuning.pid.kpV = [[0, 15], [0.06, 0.6]]
+      ret.lateralTuning.pid.kiBP, ret.lateralTuning.pid.kiV = [[0, 15], [0.018, 0.18]]
 
     elif candidate == CAR.ACURA_ILX:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 3840], [0, 3840]]  # TODO: determine if there is a dead zone at the top end
