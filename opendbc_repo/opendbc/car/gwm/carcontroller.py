@@ -20,7 +20,7 @@ class CarController(CarControllerBase):
     self.CAN = gwmcan.CanBus(CP)
     self.accel = 0.0
 
-  def update(self, CC, CS, now_nanos):
+  def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
     actuators = CC.actuators
     lat_active = CC.latActive and abs(CS.out.steeringTorque) < MAX_USER_TORQUE

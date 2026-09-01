@@ -36,7 +36,7 @@ class CarInterface(CarInterfaceBase):
     cp_cam = self.can_parsers[Bus.cam]
     self.pcm_follow_distance = cp_cam.vl["ACC"]["CAR_DISTANCE_SELECTION"]
 
-    ret = super().update(can_packets)
+    ret, ret_sp = super().update(can_packets)
     ret.steerFaultTemporary |= self.steer_fault_temporary_counter > 100
     if (self.pcm_follow_distance == 4 and self.current_personality != 3) or \
        (self.pcm_follow_distance == 3 and self.current_personality != 3) or \
@@ -45,7 +45,7 @@ class CarInterface(CarInterfaceBase):
       self.press_gac_button = not self.press_gac_button
     ret.buttonEvents = create_button_events(self.press_gac_button, True, {1: ButtonType.gapAdjustCruise})
 
-    return ret
+    return ret, ret_sp
 
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:

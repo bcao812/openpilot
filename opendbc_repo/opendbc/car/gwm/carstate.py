@@ -27,6 +27,7 @@ class CarState(CarStateBase):
     cp = can_parsers[Bus.main]
     cp_cam = can_parsers[Bus.cam]
     ret = structs.CarState()
+    ret_sp = structs.CarStateSP()
 
     self.steer_and_ap_stalk_msg = copy.copy(cp.vl["STEER_AND_AP_STALK"])
     self.eps_stock_values = copy.copy(cp.vl["RX_STEER_RELATED"])
@@ -49,7 +50,7 @@ class CarState(CarStateBase):
     ret.standstill = abs(ret.vEgoRaw) < 1e-3
     ret.gasPressed = cp.vl["CAR_OVERALL_SIGNALS2"]["GAS_POSITION"] > 0
     ret.brakePressed = cp.vl["BRAKE2"]["PEDAL_BRAKE_PRESSED"] != 0
-    ret.brake = cp.vl["BRAKE"]["BRAKE_PRESSURE"] if not ret.brakePressed else 0
+    ret.deprecated.brake = cp.vl["BRAKE"]["BRAKE_PRESSURE"] if not ret.brakePressed else 0
     ret.parkingBrake = cp.vl["CAR_OVERALL_SIGNALS"]["DRIVE_MODE"] == 0
 
     ret.gearShifter = GearShifter.drive if int(cp.vl["CAR_OVERALL_SIGNALS"]["DRIVE_MODE"]) == 1 else \
@@ -90,10 +91,10 @@ class CarState(CarStateBase):
     ret.cruiseState.available = self.main_on
     ret.cruiseState.enabled = self.main_on
 
-    return ret
+    return ret, ret_sp
 
   @staticmethod
-  def get_can_parsers(CP):
+  def get_can_parsers(CP, CP_SP):
     # Compute bus offset from number of safetyConfigs so multipanda setups
     # (internal + external pandas) map DBCs to the correct physical bus.
     can_base = CanBusBase(CP, None)
