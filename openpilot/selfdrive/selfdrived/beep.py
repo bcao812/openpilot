@@ -12,6 +12,8 @@ AudibleAlert = car.CarControl.HUDControl.AudibleAlert
 class Beepd:
   def __init__(self):
     self.current_alert = AudibleAlert.none
+    # Owned by whichever alert started a repeating pattern; see update_alert.
+    self._repeat_stop = threading.Event()
     self.enable_gpio()
     #self.startup_beep()
 
@@ -58,6 +60,34 @@ class Beepd:
       self._beep(False)
       time.sleep(0.01)
 
+  def warning_immediate(self, stop):
+    # warningImmediate is a takeover request: it persists for as long as its condition does, and
+    # soundd -- which this replaces -- plays it on a loop. Sounding once on the transition, the
+    # way every other pattern here does, would answer the highest-severity alert in the set with
+    # one burst and then silence. So this repeats until the alert changes.
+    #
+    # Longer pulses than warning() so the two are told apart by ear rather than by counting.
+    # stop.wait() rather than time.sleep() throughout: the pre-emption has to be felt inside a
+    # pulse, not only between bursts.
+    try:
+      while not stop.is_set():
+        for _ in range(4):
+          if stop.is_set():
+            return
+          self._beep(True)
+          if stop.wait(0.12):
+            return
+          self._beep(False)
+          if stop.wait(0.08):
+            return
+        stop.wait(0.4)
+    finally:
+      # Always release the buzzer, including when pre-empted mid-pulse. The incoming pattern may
+      # clip one of its own pulses on this, which is survivable because every pattern here is
+      # multi-pulse; a buzzer latched on is not. Handing the release to the next alert is not an
+      # option either -- AudibleAlert.none dispatches nothing at all.
+      self._beep(False)
+
   #def startup_beep(self):
     #self._beep(True)
     #time.sleep(0.1)
@@ -70,11 +100,26 @@ class Beepd:
     if new_alert != self.current_alert:
       self.current_alert = new_alert
       print(f"[BEEP] New alert: {new_alert}")
+
+      # A repeating pattern belongs to the alert that started it. Retire it here, on the reader
+      # thread, so the replacement event is in place before the new pattern is dispatched.
+      self._repeat_stop.set()
+      self._repeat_stop = threading.Event()
+
+      # Exhaustive over car.capnp's AudibleAlert. It was not: warningImmediate and promptRepeat
+      # fell through to nothing, and with soundd disabled (process_config.py) this is the only
+      # audible channel on the device, so they were silent rather than merely different.
+      # promptDistracted cannot currently fire -- DISABLE_DRIVER=1 stops dmonitoringd -- but it
+      # is wired anyway so repairing the cabin camera does not quietly re-open the same hole.
       if new_alert == AudibleAlert.engage:
         self.dispatch_beep(self.engage)
       elif new_alert == AudibleAlert.disengage:
         self.dispatch_beep(self.disengage)
-      if new_alert in [AudibleAlert.refuse, AudibleAlert.prompt, AudibleAlert.warningSoft]:
+      elif new_alert == AudibleAlert.warningImmediate:
+        stop = self._repeat_stop
+        self.dispatch_beep(lambda: self.warning_immediate(stop))
+      elif new_alert in (AudibleAlert.refuse, AudibleAlert.warningSoft, AudibleAlert.prompt,
+                         AudibleAlert.promptRepeat, AudibleAlert.promptDistracted):
         self.dispatch_beep(self.warning)
 
   def get_audible_alert(self, sm):
