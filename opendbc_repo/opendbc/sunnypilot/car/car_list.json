@@ -4236,12 +4236,17 @@
     ],
     "package": "All"
   },
-  "Toyota Sienna 2026 PRC": {
-    "platform": "TOYOTA_SIENNA_2026_PRC",
+  "Toyota Sienna 2021-26 PATCHED": {
+    "platform": "TOYOTA_SIENNA_PATCHED",
     "make": "Toyota",
     "brand": "toyota",
     "model": "Sienna",
     "year": [
+      "2021",
+      "2022",
+      "2023",
+      "2024",
+      "2025",
       "2026"
     ],
     "package": "All"
