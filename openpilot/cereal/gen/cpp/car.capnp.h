@@ -286,6 +286,8 @@ enum class SafetyModel_95551e5b1edaf451: uint16_t {
   FCA_GIORGIO,
   RIVIAN,
   VOLKSWAGEN_MEB,
+  MG,
+  GWM,
 };
 CAPNP_DECLARE_ENUM(SafetyModel, 95551e5b1edaf451);
 CAPNP_DECLARE_SCHEMA(d661512be2def77f);

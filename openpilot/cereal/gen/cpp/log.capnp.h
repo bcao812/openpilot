@@ -1513,7 +1513,7 @@ struct DrivingModelData {
   struct MetaData;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(e8f9ba819993a776, 2, 4)
+    CAPNP_DECLARE_STRUCT_HEADER(e8f9ba819993a776, 3, 4)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -7300,6 +7300,8 @@ public:
 
   inline  ::int16_t getSupplyCurrent() const;
 
+  inline bool getSupplyFault() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -7357,6 +7359,9 @@ public:
 
   inline  ::int16_t getSupplyCurrent();
   inline void setSupplyCurrent( ::int16_t value);
+
+  inline bool getSupplyFault();
+  inline void setSupplyFault(bool value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -9594,6 +9599,8 @@ public:
 
   inline float getModelExecutionTime() const;
 
+  inline bool getBig() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -9661,6 +9668,9 @@ public:
 
   inline float getModelExecutionTime();
   inline void setModelExecutionTime(float value);
+
+  inline bool getBig();
+  inline void setBig(bool value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -30413,6 +30423,20 @@ inline void ChestnutState::Builder::setSupplyCurrent( ::int16_t value) {
       ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
 }
 
+inline bool ChestnutState::Reader::getSupplyFault() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<208>() * ::capnp::ELEMENTS);
+}
+
+inline bool ChestnutState::Builder::getSupplyFault() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<208>() * ::capnp::ELEMENTS);
+}
+inline void ChestnutState::Builder::setSupplyFault(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<208>() * ::capnp::ELEMENTS, value);
+}
+
 inline typename RadarState::Deprecated::Reader RadarState::Reader::getDeprecated() const {
   return typename RadarState::Deprecated::Reader(_reader);
 }
@@ -33882,6 +33906,20 @@ inline float DrivingModelData::Builder::getModelExecutionTime() {
 inline void DrivingModelData::Builder::setModelExecutionTime(float value) {
   _builder.setDataField<float>(
       ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool DrivingModelData::Reader::getBig() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<128>() * ::capnp::ELEMENTS);
+}
+
+inline bool DrivingModelData::Builder::getBig() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<128>() * ::capnp::ELEMENTS);
+}
+inline void DrivingModelData::Builder::setBig(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<128>() * ::capnp::ELEMENTS, value);
 }
 
 inline bool DrivingModelData::PolyPath::Reader::hasXCoefficients() const {
