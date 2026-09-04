@@ -334,6 +334,17 @@ class ModelManagerSP:
             if DEFAULT_MODEL_REF:
               self.params.put("ModelManager_DownloadRef", DEFAULT_MODEL_REF)
 
+        # First-boot default: no qcom bundle selected -> auto-use the default
+        # model (DEFAULT_MODEL_REF, i.e. CD210) instead of falling back to the
+        # stock selfdrive modeld. Mirrors upstream: the default model runs on
+        # first boot without any user selection (downloaded once, then active).
+        if (get_selected_bundle(self.params, "qcom") is None
+            and self.params.get("ModelManager_DownloadRef") is None
+            and not self.chestnut_present):
+          from openpilot.sunnypilot.models.model_name import DEFAULT_MODEL_REF
+          if DEFAULT_MODEL_REF:
+            self.params.put("ModelManager_DownloadRef", DEFAULT_MODEL_REF)
+
         self._process_download_requests()
 
         if self.params.get("ModelManager_ClearCache"):
