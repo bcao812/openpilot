@@ -74,10 +74,18 @@ def _pkl_exists(path):
   return all(os.path.exists(get_chunk_name(path, i, num_chunks)) for i in range(num_chunks))
 
 
-def _find_driving_pkl(bundle):
+def _find_driving_pkl(bundle, chestnut: bool = False):
   if (override := os.environ.get('COMBINED_MODEL_PKL')) and _pkl_exists(override):
     return override
-  if bundle is None or not bundle.models:
+  if bundle is None:
+    # no active bundle: use the bundled default pkl (CD210) so a fresh install
+    # works immediately without downloading a model
+    from openpilot.selfdrive.modeld.helpers import modeld_pkl_path
+    bundled = str(modeld_pkl_path(chestnut))
+    if _pkl_exists(bundled):
+      return bundled
+    return None
+  if not bundle.models:
     return None
   from openpilot.common.hardware.hw import Paths
   model_root = Paths.model_root()
@@ -120,7 +128,7 @@ class ModelState(ModelStateBase):
     self.PLANPLUS_CONTROL: float = 1.0
     self.chestnut = chestnut
 
-    pkl_path = _find_driving_pkl(model_bundle)
+    pkl_path = _find_driving_pkl(model_bundle, chestnut=chestnut)
     assert pkl_path is not None, f"No driving pkl found for {'chestnut' if chestnut else 'small model'} — all models must be compiled with compile_modeld.py"
     self._init_combined(pkl_path, cam_w, cam_h, model_bundle)
 
