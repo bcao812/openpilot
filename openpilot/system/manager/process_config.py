@@ -182,7 +182,7 @@ procs = [
 # sunnypilot
 procs += [
   # Models
-  PythonProcess("models_manager", "openpilot.sunnypilot.models.manager", only_offroad),
+  PythonProcess("models_manager", "openpilot.sunnypilot.models.manager", always_run),
   NativeProcess("modeld_tinygrad", "openpilot/sunnypilot/modeld_v2", ["./modeld"], and_(only_onroad, is_tinygrad_model)),
 
   # Backup

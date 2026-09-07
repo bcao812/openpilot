@@ -59,8 +59,19 @@ BIG_MODEL_TIMEOUT = 60
 
 
 def _pkl_exists(path):
-  from openpilot.common.file_chunker import get_manifest_path
-  return os.path.exists(path) or os.path.exists(get_manifest_path(path))
+  # a bare chunkmanifest is written eagerly for every model in the catalog, so it
+  # must NOT be treated as downloaded - require the pkl or every chunk file
+  from openpilot.common.file_chunker import get_chunk_name, get_manifest_path
+  if os.path.exists(path):
+    return True
+  manifest_path = get_manifest_path(path)
+  if not os.path.exists(manifest_path):
+    return False
+  try:
+    num_chunks = int(open(manifest_path).read().strip())
+  except Exception:
+    return False
+  return all(os.path.exists(get_chunk_name(path, i, num_chunks)) for i in range(num_chunks))
 
 
 def _find_driving_pkl(bundle):

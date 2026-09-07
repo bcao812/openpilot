@@ -301,7 +301,13 @@ class ModelsLayout(Widget):
     bundles = bundles_for_source(source)
     if not bundles:
       return []
-    folders_list = [TreeFolder("", [TreeNode("Default", {'display_name': default_model_name(source)})])]
+    folders_list = []
+    # only synthesize the Default row when the default model is not already listed
+    # in the catalog, otherwise the same model (e.g. CD210) would appear twice
+    from openpilot.sunnypilot.models.model_name import DEFAULT_BIG_MODEL_REF, DEFAULT_MODEL_REF
+    default_ref = DEFAULT_BIG_MODEL_REF if source == "chestnut" else DEFAULT_MODEL_REF
+    if not any(bundle.ref == default_ref for bundle in bundles):
+      folders_list.append(TreeFolder("", [TreeNode("Default", {'display_name': default_model_name(source)})]))
     folders_list.extend(self._get_folders(favorites, bundles))
     return folders_list
 
