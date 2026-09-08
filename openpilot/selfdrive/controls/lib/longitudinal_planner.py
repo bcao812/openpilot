@@ -3,6 +3,7 @@ import math
 import numpy as np
 
 import openpilot.cereal.messaging as messaging
+from opendbc.car.honda.values import CAR
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -26,6 +27,8 @@ A_CRUISE_MIN = -1.2
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
+LOW_SPEED_STATE_ERROR = 0.2
+LOW_SPEED_STATE_BP = [2.0, 5.0]
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -36,6 +39,14 @@ def get_max_accel(v_ego):
 
 def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
+
+
+def constrain_braking_speed(v_desired: float, v_ego: float, a_target: float) -> float:
+  if a_target >= 0.0 or v_ego >= LOW_SPEED_STATE_BP[-1]:
+    return v_desired
+  correction = max(v_ego - LOW_SPEED_STATE_ERROR - v_desired, 0.0)
+  weight = float(np.interp(v_ego, LOW_SPEED_STATE_BP, [1.0, 0.0]))
+  return v_desired + weight * correction
 
 
 # Long enough that no single hill is mistaken for the mount, short enough to settle inside one
@@ -172,6 +183,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
+    if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
+        and not sm['carState'].gasPressed and not sm['carState'].brakePressed and not sm['carControl'].cruiseControl.override):
+      self.v_desired_filter.x = constrain_braking_speed(self.v_desired_filter.x, v_ego, self.output_a_target)
 
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
