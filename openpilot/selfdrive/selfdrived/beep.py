@@ -9,12 +9,21 @@ from openpilot.common.realtime import Ratekeeper
 
 AudibleAlert = car.CarControl.HUDControl.AudibleAlert
 
+BEEP_DUTY_CYCLE = 0.6
+BEEP_PWM_PERIOD = 1 / 500
+
 class Beepd:
   def __init__(self):
     self.current_alert = AudibleAlert.none
     # Owned by whichever alert started a repeating pattern; see update_alert.
     self._repeat_stop = threading.Event()
     self.enable_gpio()
+    self._pwm_condition = threading.Condition()
+    self._pwm_on = False
+    self._pwm_closed = False
+    self._pwm_failed = False
+    self._pwm_thread = threading.Thread(target=self._pwm_loop, name="beep-pwm", daemon=True)
+    self._pwm_thread.start()
     #self.startup_beep()
 
   def enable_gpio(self):
@@ -33,13 +42,63 @@ class Beepd:
                    stdout=subprocess.DEVNULL,
                    encoding='utf8')
 
-  def _beep(self, on):
+  def _write_gpio(self, on):
+    with open('/sys/class/gpio/gpio42/value', 'w') as gpio:
+      gpio.write('1' if on else '0')
+
+  def _legacy_beep(self, on):
     val = "1" if on else "0"
     subprocess.run(f"echo \"{val}\" | sudo tee /sys/class/gpio/gpio42/value",
                    shell=True,
                    stderr=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL,
                    encoding='utf8')
+
+  def _pwm_loop(self):
+    with self._pwm_condition:
+      try:
+        while not self._pwm_closed:
+          self._pwm_condition.wait_for(lambda: self._pwm_on or self._pwm_closed)
+          if self._pwm_closed:
+            break
+          self._write_gpio(True)
+          interrupted = self._pwm_condition.wait_for(
+            lambda: not self._pwm_on or self._pwm_closed, timeout=BEEP_PWM_PERIOD * BEEP_DUTY_CYCLE)
+          self._write_gpio(False)
+          if not interrupted:
+            self._pwm_condition.wait_for(
+              lambda: not self._pwm_on or self._pwm_closed, timeout=BEEP_PWM_PERIOD * (1 - BEEP_DUTY_CYCLE))
+      except OSError as error:
+        self._pwm_failed = True
+        print(f"[BEEP] PWM unavailable, using full-volume GPIO: {error}")
+        self._legacy_beep(self._pwm_on and not self._pwm_closed)
+      finally:
+        if not self._pwm_failed:
+          try:
+            self._write_gpio(False)
+          except OSError:
+            self._pwm_failed = True
+            self._legacy_beep(False)
+
+  def _beep(self, on):
+    with self._pwm_condition:
+      if self._pwm_closed:
+        return
+      self._pwm_on = bool(on)
+      if self._pwm_failed:
+        self._legacy_beep(self._pwm_on)
+      else:
+        self._pwm_condition.notify_all()
+
+  def close(self):
+    self._repeat_stop.set()
+    with self._pwm_condition:
+      self._pwm_closed = True
+      self._pwm_on = False
+      if self._pwm_failed:
+        self._legacy_beep(False)
+      self._pwm_condition.notify_all()
+    self._pwm_thread.join()
 
   def engage(self):
     self._beep(True)
@@ -161,8 +220,11 @@ class Beepd:
       rk.keep_time()
 
 def main():
-  s = Beepd()
-  s.beepd_thread(test=False)  # 改成 True 可启用模拟测试数据
+  beepd = Beepd()
+  try:
+    beepd.beepd_thread(test=False)
+  finally:
+    beepd.close()
 
 if __name__ == "__main__":
   main()
