@@ -18,7 +18,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL, S
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource as LongitudinalPlanSourceSP
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -29,6 +29,10 @@ ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
 LOW_SPEED_STATE_ERROR = 0.2
 LOW_SPEED_STATE_BP = [2.0, 5.0]
+CRUISE_COAST_BP = [-0.3, -0.25, -0.15, -0.1]
+CRUISE_COAST_ACCEL = -0.19
+CRUISE_COAST_MIN_SPEED = 10.0
+CRUISE_COAST_MAX_SPEED_ERROR = 1.0 * CV.KPH_TO_MS
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -47,6 +51,13 @@ def constrain_braking_speed(v_desired: float, v_ego: float, a_target: float) -> 
   correction = max(v_ego - LOW_SPEED_STATE_ERROR - v_desired, 0.0)
   weight = float(np.interp(v_ego, LOW_SPEED_STATE_BP, [1.0, 0.0]))
   return v_desired + weight * correction
+
+
+def get_cruise_coast_accel(a_cruise: float) -> float:
+  if not CRUISE_COAST_BP[0] < a_cruise < CRUISE_COAST_BP[-1]:
+    return a_cruise
+  return float(np.interp(a_cruise, CRUISE_COAST_BP,
+                         [CRUISE_COAST_BP[0], CRUISE_COAST_ACCEL, CRUISE_COAST_ACCEL, CRUISE_COAST_BP[-1]]))
 
 
 # Long enough that no single hill is mistaken for the mount, short enough to settle inside one
@@ -222,9 +233,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                                      self.a_cruise, steer_angle_without_offset, self.CP, self.dt,
                                      accel_coast, self.allow_throttle)
     cruise_should_stop = should_stop(v_ego, self.a_cruise)
+    output_a_cruise = self.a_cruise
+    if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
+        and sm['carControl'].longActive and not sm['carControl'].cruiseControl.override
+        and not sm['carState'].gasPressed and not sm['carState'].brakePressed
+        and not sm['controlsState'].forceDecel and not is_e2e and self.allow_throttle
+        and not sm['radarState'].leadOne.present and not sm['radarState'].leadTwo.present
+        and self.source == LongitudinalPlanSourceSP.cruise and self.a_cruise <= output_a_target_mpc
+        and v_ego >= CRUISE_COAST_MIN_SPEED and abs(v_cruise - v_ego) <= CRUISE_COAST_MAX_SPEED_ERROR
+        and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState'])):
+      output_a_cruise = get_cruise_coast_accel(self.a_cruise)
 
     candidates = [(output_a_target_mpc, self.mpc.source, output_should_stop_mpc),
-                  (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
+                  (output_a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
     if is_e2e:
       candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
 
