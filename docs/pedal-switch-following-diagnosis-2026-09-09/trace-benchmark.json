@@ -1,0 +1,47 @@
+{
+  "disabled": {
+    "calls": 3900,
+    "us": {
+      "p50": 0.222,
+      "p95": 0.241,
+      "p99": 0.307,
+      "max": 1.407
+    },
+    "dropped": 0,
+    "failures": 0
+  },
+  "full": {
+    "calls": 3900,
+    "us": {
+      "p50": 31.237000000000002,
+      "p95": 64.12069999999996,
+      "p99": 122.42863999999994,
+      "max": 308.999
+    },
+    "dropped": 3960,
+    "failures": 0
+  },
+  "writer": {
+    "calls": 3900,
+    "us": {
+      "p50": 82.953,
+      "p95": 285.1802499999992,
+      "p99": 421.33080999999976,
+      "max": 852.687
+    },
+    "dropped": 0,
+    "failures": 0
+  },
+  "serialization": {
+    "batches": 400,
+    "us": {
+      "p50": 156.452,
+      "p95": 303.3451,
+      "p99": 446.8684499999999,
+      "max": 494.791
+    },
+    "max_bytes": 5674,
+    "fields": 62
+  },
+  "scope": "Host-only microbenchmark; excludes actual C3 scheduling, ZMQ, logmessaged, compression and storage"
+}

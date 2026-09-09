@@ -1,0 +1,58 @@
+{
+  "scripts": {
+    "align-chain.py": {
+      "archived_sha256": "49162638a64ec5c35c408560f7810e0f249bffcee429232ce3dd4c1c3bea6657",
+      "executed_source_sha256": "c3c71cc27ea5bb797d40e38a0f19739810a2cad52054b98ed503d84fa09aeadd",
+      "normalized_ast_equal": true
+    },
+    "analyze-trace.py": {
+      "archived_sha256": "99caab86fe5284148be1f964d03eb93c245086d69deadbc0c6c706ea5d6a9bd6",
+      "executed_source_sha256": "22f406118a8d9a6f3dd1baecab63ee69ba04049cd4d7e264c06c2d7ba28af376",
+      "normalized_ast_equal": true
+    },
+    "benchmark-trace.py": {
+      "archived_sha256": "4bc8af5a742560d677d7e2ca55de2827986d8ec7f93bf4249bd1b8df13ca176d",
+      "executed_source_sha256": "b6cd7f46374fbeee6d4afb50d5ac61d813bcb36bf899dc073461c5cd77240e32",
+      "normalized_ast_equal": true
+    },
+    "evaluate-probes.py": {
+      "archived_sha256": "5960c7b2f18af02723b31d10556ffd8acd69800c8468890ba52df644956e966f",
+      "executed_source_sha256": "c876be23e17839e029ecaf9adf2b68ddf1a6c39de9cf5b864fe8c7be1b3c482a",
+      "normalized_ast_equal": true
+    },
+    "probe-lead-inputs.py": {
+      "archived_sha256": "01a31f47a8b8e7d54cba334def39a382ee66399ee6c3ef06a98ea256d308897b",
+      "executed_source_sha256": "8ea38068b693e6520fdb5685209c1d3fcccfd992d605524204f78dcb678a16fd",
+      "normalized_ast_equal": true
+    },
+    "response-screen.py": {
+      "archived_sha256": "901c148a040e81ddd9f85c1c59bea0b294c606c40c06c7eb7a094a340ec0ac99",
+      "executed_source_sha256": "1a982020ddcb8901c70575cb9cac6156a369d9539c908dc1d6031452bab8bc8e",
+      "normalized_ast_equal": true
+    },
+    "screen-following.py": {
+      "archived_sha256": "1808ccc2028c6c57080972fff6255c8b8cb64330880bd6c83360fd33ae2354a0",
+      "executed_source_sha256": "606e100a88fa790e1501fc8eda649d12896f180d559431fc4f325592b13497ec",
+      "normalized_ast_equal": true
+    },
+    "select-chain-windows.py": {
+      "archived_sha256": "d0333508c2613b1ed2469a5b01e96b76648c7180d00257d7a8946852ad1d6e85",
+      "executed_source_sha256": "a5595498a71364a1952b62c73bdefe379d2e0d8d81caf3588ccf0a6f4c2f19df",
+      "normalized_ast_equal": true
+    },
+    "summarize-run.py": {
+      "archived_sha256": "8532d6dfc9c6cc9c35c50e511727f50c011ee9d88352ffdff900c396ee0073d6",
+      "executed_source_sha256": "04febf00c561b9945cc6e2ce0be94870b5c8fec50ced531c0e2e71c3221a7358",
+      "normalized_ast_equal": true
+    },
+    "trace-chain.py": {
+      "archived_sha256": "84e64d30e3a5abadf022f50a6062cc97b70726f0c89a5eb428f637a231b54a2d",
+      "executed_source_sha256": "e3698d41dc86b6fed75afb9cad7cd9336f28a97176fd53f272865564d7ffdaec",
+      "normalized_ast_equal": true
+    }
+  },
+  "all_local_links_resolve": true,
+  "all_json_parse": true,
+  "source_and_host_hashes_match": true,
+  "normalization": "Ignore module docstring/unused columns import; fold constant string concatenation"
+}
