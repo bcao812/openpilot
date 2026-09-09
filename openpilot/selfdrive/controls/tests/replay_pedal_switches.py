@@ -170,16 +170,30 @@ def switch_metrics(rows, dwell=0.15):
   return {'raw': len(changes(0.0)), 'debounced': len(switches), 'switches': switches}
 
 
-def replay_window(cache, window, experimental_coast_with_lead=False, recorded_plan=False):
-  messages = list(LogReader([str(cache)], sort_by_time=True))
-  plan_decisions = {}
-  pending_plan = None
+def paired_messages(messages, maximum_delay=0.25, maximum_messages=512):
+  pending = []
   for message in messages:
-    if message.which() == 'longitudinalPlan':
-      pending_plan = message.logMonoTime
-    elif message.which() == 'longitudinalPlanSP' and pending_plan is not None:
-      plan_decisions[pending_plan] = message.longitudinalPlanSP
-      pending_plan = None
+    service = message.which()
+    if pending and (service == 'longitudinalPlan' or len(pending) >= maximum_messages
+                    or message.logMonoTime - pending[0].logMonoTime > maximum_delay * 1e9):
+      yield from ((buffered, None) for buffered in pending)
+      pending = []
+    if service == 'longitudinalPlan':
+      pending = [message]
+    elif pending:
+      pending.append(message)
+      if service == 'longitudinalPlanSP':
+        yield pending[0], message.longitudinalPlanSP
+        yield from ((buffered, None) for buffered in pending[1:])
+        pending = []
+    else:
+      yield message, None
+  yield from ((buffered, None) for buffered in pending)
+
+
+def replay_window(cache, window, experimental_coast_with_lead=False, recorded_plan=False, *, messages=None, row_sink=None, strict=True):
+  if messages is None:
+    messages = LogReader([str(cache)], sort_by_time=True)
   latest, valid, stamps, models, generated = {}, {}, {}, {}, {}
   planner = controller = longitudinal = None
   params = params_sp = None
@@ -189,9 +203,24 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
   current = {}
   plan_rows, can_rows, control_rows = [], [], []
   coverage = {'plans': 0, 'matched_plans': 0, 'controls': 0, 'matched_controls': 0, 'sendcan': 0, 'matched_sendcan': 0}
+  missing = {}
+  resets = []
+  previous_timestamp = None
+  controller_skipped = True
+  solver_failures = 0
   warmup_start = window['start'] - 60.0
   control_sp = structs.CarControlSP()
   state_wrapper = SimpleNamespace(v_cruise_factor=1.0, is_metric=False, acc_hud={}, lkas_hud={}, stock_brake={})
+
+  def emit(kind, row):
+    if row_sink is not None:
+      row_sink(kind, row)
+    else:
+      {'plan': plan_rows, 'control': control_rows, 'can': can_rows}[kind].append(row)
+
+  def unavailable(reason, measured):
+    if measured:
+      missing[reason] = missing.get(reason, 0) + 1
 
   def update_targets(instance, state, v_ego, a_ego, v_cruise):
     instance.source = current['sp'].longitudinalPlanSource
@@ -202,13 +231,26 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
     dec = current['sp'].dec
     return state['selfdriveState'].experimentalMode and (not dec.active or str(dec.state) == 'blended')
 
-  with patch.object(LongitudinalPlannerSP, 'update', return_value=None), \
+  def frozen_sp_update(instance, state):
+    """A non-recording stub must not accumulate every full-route input like Mock does."""
+    return None
+
+  with patch.object(LongitudinalPlannerSP, 'update', new=frozen_sp_update), \
        patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets), \
        patch.object(planner_module.LongitudinalPlanner, 'is_e2e', new=is_e2e):
-    for message in messages:
+    for message, decision in paired_messages(messages):
       service = message.which()
       timestamp = message.logMonoTime / 1e9 - window['origin']
       measured = window['start'] <= timestamp <= window['end']
+      if service not in PARAMETERS:
+        if previous_timestamp is not None and timestamp < previous_timestamp:
+          raise ValueError(f'Nonmonotonic replay input at {timestamp:.9f}')
+        if not strict and previous_timestamp is not None and timestamp - previous_timestamp > 0.5:
+          resets.append({'before': previous_timestamp, 'after': timestamp})
+          latest, valid, stamps, models, generated, control_outputs = {}, {}, {}, {}, {}, {}
+          planner = controller = longitudinal = pending_control = controller_input = None
+          first_controller_frame = controller_skipped = True
+        previous_timestamp = timestamp
       if service == 'carParams':
         params = message.carParams
       elif service == 'carParamsSP':
@@ -243,15 +285,16 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
         plan = message.longitudinalPlan
         state = models.get(plan.modelMonoTime)
         plan_time = timestamp
-        if state is not None and planner is not None and message.logMonoTime in plan_decisions and plan_time >= warmup_start:
-          current['sp'] = plan_decisions[message.logMonoTime]
+        if state is not None and planner is not None and decision is not None and plan_time >= warmup_start:
+          current['sp'] = decision
           planner.update(state)
           replayed_accel = float(np.float32(planner.output_a_target))
           replayed_stop = bool(planner.output_should_stop)
           generated[message.logMonoTime] = (plan.aTarget, plan.shouldStop) if recorded_plan else (replayed_accel, replayed_stop)
           if window['start'] <= plan_time <= window['end']:
             coverage['matched_plans'] += 1
-            plan_rows.append({'t': plan_time, 'mono': message.logMonoTime, 'accel': replayed_accel,
+            solver_failures += int(planner.mpc.solution_status != 0)
+            emit('plan', {'t': plan_time, 'mono': message.logMonoTime, 'accel': replayed_accel,
                               'stop': replayed_stop, 'recorded_accel': plan.aTarget, 'recorded_stop': plan.shouldStop,
                               'speed': float(planner.v_desired_trajectory[0]), 'recorded_speed': plan.speeds[0],
                               'solver_status': int(planner.mpc.solution_status), 'source': str(planner.mpc.source),
@@ -260,15 +303,24 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
                               'automatic': bool(state['selfdriveState'].enabled and state['carControl'].enabled
                                                 and state['carControl'].longActive and not state['carState'].gasPressed
                                                 and not state['carState'].brakePressed and not state['carControl'].cruiseControl.override),
-                              'valid': bool(message.valid and state.all_checks())})
+                              'valid': bool(message.valid and state.all_checks()), 'model_accel': state['modelV2'].action.desiredAcceleration,
+                              'model_stop': bool(state['modelV2'].action.shouldStop), 'fcw': bool(planner.fcw),
+                              'force_decel': bool(state['controlsState'].forceDecel), 'allow_throttle': bool(planner.allow_throttle),
+                              'sp_cruise': str(decision.longitudinalPlanSource) == 'cruise'})
           if len(generated) > 100:
             del generated[next(iter(generated))]
+        else:
+          reason = 'plan_parameters' if planner is None else 'plan_model' if state is None else 'plan_sp' if decision is None else 'plan_warmup'
+          unavailable(reason, measured)
       elif service == 'controlsState' and 'carState' in latest:
         pending_control = (message.controlsState.longitudinalPlanMonoTime, latest['carState'])
-      elif service == 'carControl' and longitudinal is not None and pending_control is not None:
+      elif service == 'carControl':
+        coverage['controls'] += int(measured)
+        if longitudinal is None or pending_control is None:
+          unavailable('control_parameters' if longitudinal is None else 'control_state', measured)
+          continue
         plan_mono, car_state = pending_control
         pending_control = None
-        coverage['controls'] += int(measured)
         if plan_mono in generated:
           target_accel, target_stop = generated[plan_mono]
           limits = CarInterface.get_pid_accel_limits(params, controller_params_sp, car_state.vEgo, car_state.vCruise / 3.6)
@@ -279,24 +331,37 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
           control_outputs[message.logMonoTime] = control.as_reader()
           if measured:
             coverage['matched_controls'] += 1
-            control_rows.append({'t': timestamp, 'accel': control.actuators.accel, 'recorded_accel': message.carControl.actuators.accel,
+            emit('control', {'t': timestamp, 'mono': message.logMonoTime, 'plan_mono': plan_mono,
+                                 'accel': control.actuators.accel, 'recorded_accel': message.carControl.actuators.accel,
                                  'state': str(longitudinal.long_control_state), 'recorded_state': str(message.carControl.actuators.longControlState)})
           if len(control_outputs) > 100:
             del control_outputs[next(iter(control_outputs))]
+        else:
+          unavailable('control_plan', measured)
       elif service == 'carState' and 'carControl' in stamps:
         controller_input = (stamps['carControl'], message.carState)
-      elif service == 'sendcan' and controller_input is not None and controller is not None:
+      elif service == 'sendcan':
         raw_can = [(frame.address, frame.dat, frame.src) for frame in message.sendcan]
-        has_acc = any(address == 0x1df and bus == CanBus(params).pt for address, _, bus in raw_can)
+        has_acc = any(address == 0x1df and bus == 1 for address, _, bus in raw_can)
         coverage['sendcan'] += int(measured and has_acc)
+        if controller_input is None or controller is None:
+          unavailable('can_parameters' if controller is None else 'can_state', measured and has_acc)
+          controller_skipped = True
+          continue
         control_mono, car_state = controller_input
         controller_input = None
         if control_mono not in control_outputs:
+          unavailable('can_control', measured and has_acc)
+          controller_skipped = True
           continue
         control = control_outputs[control_mono]
         if first_controller_frame:
           controller.frame = 0 if has_acc else 1
           first_controller_frame = False
+        elif not strict and controller_skipped and (controller.frame % 2 == 0) != has_acc:
+          controller.frame += 1
+          resets.append({'can_cadence': timestamp})
+        controller_skipped = False
         state_wrapper.out = car_state
         _, sends = controller.update(control, control_sp, state_wrapper, message.logMonoTime)
         actual_acc = any(address == 0x1df for address, _, _ in sends)
@@ -313,16 +378,18 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
                        and latest['selfdriveState'].enabled and message.valid
                        and all(valid.get(name, False) and 0 <= (message.logMonoTime - stamps[name]) / 1e9 <= 0.15
                                for name in ('carControl', 'carState', 'selfdriveState')))
-          can_rows.append({'t': timestamp, 'automatic': bool(automatic), 'can_accel': values['ACCEL_COMMAND'],
+          emit('can', {'t': timestamp, 'mono': message.logMonoTime, 'automatic': bool(automatic), 'can_accel': values['ACCEL_COMMAND'],
                            'can_brake': bool(values['BRAKE_REQUEST']), 'can_gas': int(values['GAS_COMMAND']),
                            'recorded_accel': recorded['ACCEL_COMMAND'], 'recorded_brake': bool(recorded['BRAKE_REQUEST']),
-                           'recorded_gas': int(recorded['GAS_COMMAND'])})
+                           'recorded_gas': int(recorded['GAS_COMMAND']), 'can_on': int(values['CONTROL_ON']),
+                           'recorded_on': int(recorded['CONTROL_ON']), 'can_stop': bool(values['STANDSTILL']),
+                           'recorded_can_stop': bool(recorded['STANDSTILL'])})
   for expected, matched in (('plans', 'matched_plans'), ('controls', 'matched_controls'), ('sendcan', 'matched_sendcan')):
-    if not coverage[expected] or coverage[expected] != coverage[matched]:
+    if strict and (not coverage[expected] or coverage[expected] != coverage[matched]):
       raise ValueError(f'Incomplete replay: {window["cache"]}: {coverage}')
   errors = np.abs([row['accel'] - row['recorded_accel'] for row in plan_rows if row['automatic'] and row['valid']])
   return {'window': window, 'coverage': coverage, 'plan_rows': plan_rows, 'control_rows': control_rows, 'can_rows': can_rows,
-          'solver_failures': sum(row['solver_status'] != 0 for row in plan_rows),
+          'missing': missing, 'resets': resets, 'solver_failures': solver_failures,
           'planner_error': {'p95': float(np.percentile(errors, 95)), 'maximum': float(max(errors))} if len(errors) else None,
           'switches': switch_metrics(can_rows)}
 
