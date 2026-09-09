@@ -152,7 +152,7 @@ def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, 
 
 class LongitudinalPlanner(LongitudinalPlannerSP):
   def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, experimental_coast_with_lead=False,
-               experimental_cruise_smoothing=CruiseSmoothingMode.OFF):
+               experimental_cruise_smoothing=CruiseSmoothingMode.OFF, trace=None):
     self.CP = CP
     self.mpc = LongitudinalMpc(dt=dt)
     LongitudinalPlannerSP.__init__(self, self.CP, CP_SP, self.mpc)
@@ -161,6 +161,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.allow_throttle = True
     self.experimental_coast_with_lead = experimental_coast_with_lead
     self.cruise_smoother = CruiseSmoother(experimental_cruise_smoothing, dt)
+    self.trace = trace
     if experimental_coast_with_lead and self.cruise_smoother.mode != CruiseSmoothingMode.OFF:
       raise ValueError('Lead cruise experiments must be evaluated separately')
 
@@ -234,6 +235,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.output_a_target)
+    if self.trace is not None:
+      self.trace.begin(self, sm, reset_state, v_cruise, accel_coast)
     self.mpc.update(sm['radarState'], personality=sm['selfdriveState'].personality)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
@@ -408,6 +411,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
+    if self.trace is not None:
+      self.trace.finish(self, candidates, is_e2e)
 
   def publish(self, sm, pm):
     plan_send = messaging.new_message('longitudinalPlan')
@@ -435,3 +440,5 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     pm.send('longitudinalPlan', plan_send)
 
     self.publish_longitudinal_plan_sp(sm, pm)
+    if self.trace is not None:
+      self.trace.publish(plan_send.logMonoTime)

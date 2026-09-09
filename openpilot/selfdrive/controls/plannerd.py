@@ -8,6 +8,7 @@ from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.lib.ldw import LaneDepartureWarning
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
+from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace, TRACE_MARKER
 import openpilot.cereal.messaging as messaging
 
 
@@ -52,7 +53,10 @@ def main():
   ignore_services = ["liveMapDataSP", "carStateSP", "selfdriveStateSP", gps_location_service]
 
   ldw = LaneDepartureWarning()
-  longitudinal_planner = LongitudinalPlanner(CP, CP_SP)
+  trace = LongitudinalTrace.create(CP)
+  if trace is not None:
+    cloudlog.warning("plannerd: longitudinal trace ENABLED by %s", TRACE_MARKER)
+  longitudinal_planner = LongitudinalPlanner(CP, CP_SP, trace=trace)
   pm = messaging.PubMaster(['longitudinalPlan', 'driverAssistance', 'longitudinalPlanSP'])
   sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'vehicleParameters', 'radarState', 'modelV2', 'selfdriveState',
                             'liveMapDataSP', 'carStateSP', 'selfdriveStateSP', gps_location_service],

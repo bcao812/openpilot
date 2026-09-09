@@ -1,0 +1,239 @@
+"""Opt-in, output-neutral planner evidence with bounded asynchronous logging."""
+
+import math
+import os
+import threading
+import logging
+from collections import deque
+
+from opendbc.car.honda.values import CAR
+from openpilot.common.realtime import drop_realtime, set_core_affinity
+from openpilot.common.logging_extra import SwagFormatter, SwagLogger
+from openpilot.common.swaglog import UnixDomainSocketHandler, cloudlog
+
+
+TRACE_MARKER = '/data/longitudinal_trace'
+TRACE_EVENT = 'longitudinal.trace'
+TRACE_SCHEMA = 1
+INPUT_SERVICES = ('modelV2', 'radarState', 'carState', 'carControl', 'controlsState', 'selfdriveState', 'vehicleParameters')
+LEAD_FIELDS = ('present', 'radar', 'modelProb', 'dRel', 'vRel', 'vLead', 'aLeadK', 'aLeadTau', 'radarTrackId')
+TRACE_FIELDS = (
+  'sequence',
+  'plan_mono',
+  *(service + '_mono' for service in INPUT_SERVICES),
+  'radar_model_mono',
+  'valid',
+  'enabled',
+  'long_active',
+  'gas_pressed',
+  'brake_pressed',
+  'override',
+  'force_decel',
+  'reset_state',
+  'long_control_state',
+  'personality',
+  'v_ego',
+  'a_ego',
+  'v_cruise',
+  'mpc_initial_v',
+  'mpc_initial_a',
+  'previous_cruise',
+  'coast_limit',
+  *(name + '_' + field for name in ('leadOne', 'leadTwo') for field in LEAD_FIELDS),
+  'model_accel',
+  'model_stop',
+  'mpc_accel',
+  'mpc_source',
+  'mpc_stop',
+  'cruise_raw',
+  'cruise_accel',
+  'cruise_stop',
+  'e2e_allowed',
+  'source',
+  'a_target',
+  'should_stop',
+  'allow_throttle',
+  'fcw',
+  'solver_status',
+  'desired_v_next',
+  'obstacle_initial',
+)
+
+
+class LongitudinalTrace:
+  """Single-producer/single-consumer CPython deque; logging threads never hold a producer mutex."""
+
+  @classmethod
+  def create(cls, params, marker=TRACE_MARKER):
+    if params.carFingerprint != CAR.HONDA_ACCORD or not params.openpilotLongitudinalControl:
+      return None
+    try:
+      if not os.path.isfile(marker):
+        return None
+      recorder = cls()
+      return recorder if recorder.start() else None
+    except OSError:
+      return None
+
+  def __init__(self, *, emit=None, capacity=40, batch_size=10):
+    if capacity <= 0 or not 0 < batch_size <= capacity:
+      raise ValueError('Trace queue and batch sizes must be positive and bounded')
+    self.emit = emit
+    self.queue = deque()
+    self.capacity = capacity
+    self.batch_size = batch_size
+    self.sequence = 0
+    self.dropped = 0
+    self.failures = 0
+    self.disabled = False
+    self.pending = None
+    self.complete = False
+    self.stop = threading.Event()
+    self.ready = threading.Event()
+    self.thread = None
+
+  def fail(self):
+    self.failures += 1
+    self.disabled = True
+    self.pending = None
+    self.complete = False
+
+  def begin(self, planner, state, reset_state, cruise_target, coast_limit):
+    self.pending = None
+    self.complete = False
+    if self.disabled:
+      return
+    try:
+      self.pending = (
+        *(int(state.logMonoTime[service]) for service in INPUT_SERVICES),
+        int(state['radarState'].mdMonoTime),
+        bool(state.all_checks()),
+        bool(state['selfdriveState'].enabled),
+        bool(state['carControl'].longActive),
+        bool(state['carState'].gasPressed),
+        bool(state['carState'].brakePressed),
+        bool(state['carControl'].cruiseControl.override),
+        bool(state['controlsState'].forceDecel),
+        bool(reset_state),
+        str(state['controlsState'].longControlState),
+        str(state['selfdriveState'].personality),
+        float(state['carState'].vEgo),
+        float(state['carState'].aEgo),
+        float(cruise_target),
+        float(planner.mpc.x0[1]),
+        float(planner.mpc.x0[2]),
+        float(planner.a_cruise),
+        float(coast_limit),
+        *(getattr(getattr(state['radarState'], name), field) for name in ('leadOne', 'leadTwo') for field in LEAD_FIELDS),
+        float(state['modelV2'].action.desiredAcceleration),
+        bool(state['modelV2'].action.shouldStop),
+      )
+    except Exception:
+      self.fail()
+
+  def finish(self, planner, candidates, is_e2e):
+    if self.disabled or self.pending is None:
+      return
+    try:
+      mpc_accel, mpc_source, mpc_stop = candidates[0]
+      cruise_accel, _, cruise_stop = candidates[1]
+      self.pending += (
+        float(mpc_accel),
+        str(mpc_source),
+        bool(mpc_stop),
+        float(planner.a_cruise),
+        float(cruise_accel),
+        bool(cruise_stop),
+        bool(is_e2e),
+        str(planner.mpc.source),
+        float(planner.output_a_target),
+        bool(planner.output_should_stop),
+        bool(planner.allow_throttle),
+        bool(planner.fcw),
+        int(planner.mpc.solution_status),
+        float(planner.v_desired_filter.x),
+        float(planner.mpc.params[0, 2]),
+      )
+      self.complete = True
+    except Exception:
+      self.fail()
+
+  def publish(self, plan_mono):
+    pending, complete = self.pending, self.complete
+    self.pending = None
+    self.complete = False
+    if self.disabled or pending is None or not complete:
+      return
+    try:
+      self.sequence += 1
+      if len(self.queue) >= self.capacity:
+        self.dropped += 1
+      else:
+        self.queue.append((self.sequence, int(plan_mono), *pending))
+    except Exception:
+      self.fail()
+
+  def start(self):
+    if self.thread is not None or self.disabled:
+      return False
+    try:
+      self.thread = threading.Thread(target=self._writer, name='longitudinal_trace', daemon=True)
+      self.thread.start()
+      if not self.ready.wait(timeout=1.0) or self.disabled:
+        self.disabled = True
+        self.stop.set()
+        return False
+      return True
+    except RuntimeError:
+      self.fail()
+      return False
+
+  def close(self, timeout=1.0):
+    self.stop.set()
+    if self.thread is not None:
+      self.thread.join(timeout=timeout)
+
+  def _writer(self):
+    handler = None
+    try:
+      drop_realtime()
+      set_core_affinity([0, 1, 2])
+      if self.emit is None:
+        logger = SwagLogger()
+        logger.setLevel(logging.DEBUG)
+        logger.bind_global(**cloudlog.get_ctx())
+        handler = UnixDomainSocketHandler(SwagFormatter(logger))
+        logger.addHandler(handler)
+        self.emit = logger.event
+    except Exception:
+      self.fail()
+      self.ready.set()
+      return
+    self.ready.set()
+    try:
+      self._drain()
+    finally:
+      if handler is not None:
+        handler.close()
+
+  def _drain(self):
+    batch = []
+    while not self.stop.is_set() or self.queue:
+      try:
+        batch.append(self.queue.popleft())
+      except IndexError:
+        self.stop.wait(timeout=0.05)
+      if batch and (len(batch) >= self.batch_size or not self.queue and self.stop.is_set()):
+        self._emit(batch)
+        batch = []
+      if self.disabled:
+        return
+    if batch:
+      self._emit(batch)
+
+  def _emit(self, batch):
+    try:
+      samples = [tuple(None if isinstance(value, float) and not math.isfinite(value) else value for value in sample) for sample in batch]
+      self.emit(TRACE_EVENT, schema=TRACE_SCHEMA, fields=TRACE_FIELDS, samples=samples, dropped=self.dropped, failures=self.failures, debug=True)
+    except Exception:
+      self.fail()
