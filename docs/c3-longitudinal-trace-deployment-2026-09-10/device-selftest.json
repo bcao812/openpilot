@@ -1,0 +1,35 @@
+{
+  "kind": "isolated_on_device_synthetic_snapshot_not_live_control",
+  "frames": 1200,
+  "sampling_us": {
+    "p50": 185.27249999999998,
+    "p95": 240.61565,
+    "p99": 261.4703000000001,
+    "max": 480.975
+  },
+  "received": 1200,
+  "dropped": 0,
+  "failures": 0,
+  "writer_policy": 0,
+  "writer_affinity": [
+    0,
+    1,
+    2
+  ],
+  "serialized_bytes": 894664,
+  "endpoint": "ipc:///tmp/logmessagec3_longitudinal_trace_selftest_20260910",
+  "control_channels_published": false,
+  "marker_enabled": false,
+  "available_cpus": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "test_cpu": 7,
+  "isolated_gate_passed": true
+}

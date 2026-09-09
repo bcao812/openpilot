@@ -1,0 +1,749 @@
+{
+  "base": "1115e7a94a2c4bb6e80545f14c608ee0ab4e18e1",
+  "windows": [
+    {
+      "id": "000",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 224,
+        "matched_plans": 224,
+        "controls": 1120,
+        "matched_controls": 1120,
+        "sendcan": 561,
+        "matched_sendcan": 561
+      },
+      "trace": {
+        "samples": 224,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "001",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 246,
+        "matched_plans": 246,
+        "controls": 1226,
+        "matched_controls": 1226,
+        "sendcan": 614,
+        "matched_sendcan": 614
+      },
+      "trace": {
+        "samples": 246,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "002",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 247,
+        "matched_plans": 247,
+        "controls": 1230,
+        "matched_controls": 1230,
+        "sendcan": 616,
+        "matched_sendcan": 616
+      },
+      "trace": {
+        "samples": 247,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "003",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 282,
+        "matched_plans": 282,
+        "controls": 1404,
+        "matched_controls": 1404,
+        "sendcan": 703,
+        "matched_sendcan": 703
+      },
+      "trace": {
+        "samples": 282,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "004",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 253,
+        "matched_plans": 253,
+        "controls": 1260,
+        "matched_controls": 1260,
+        "sendcan": 631,
+        "matched_sendcan": 631
+      },
+      "trace": {
+        "samples": 253,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "005",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 253,
+        "matched_plans": 253,
+        "controls": 1260,
+        "matched_controls": 1260,
+        "sendcan": 629,
+        "matched_sendcan": 629
+      },
+      "trace": {
+        "samples": 253,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "006",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 265,
+        "matched_plans": 265,
+        "controls": 1318,
+        "matched_controls": 1318,
+        "sendcan": 660,
+        "matched_sendcan": 660
+      },
+      "trace": {
+        "samples": 265,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "007",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 251,
+        "matched_plans": 251,
+        "controls": 1250,
+        "matched_controls": 1250,
+        "sendcan": 626,
+        "matched_sendcan": 626
+      },
+      "trace": {
+        "samples": 251,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "008",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 286,
+        "matched_plans": 286,
+        "controls": 1424,
+        "matched_controls": 1424,
+        "sendcan": 713,
+        "matched_sendcan": 713
+      },
+      "trace": {
+        "samples": 286,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "009",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 753,
+        "matched_plans": 753,
+        "controls": 3752,
+        "matched_controls": 3752,
+        "sendcan": 1876,
+        "matched_sendcan": 1876
+      },
+      "trace": {
+        "samples": 753,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "010",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 651,
+        "matched_plans": 651,
+        "controls": 3244,
+        "matched_controls": 3244,
+        "sendcan": 1623,
+        "matched_sendcan": 1623
+      },
+      "trace": {
+        "samples": 651,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "011",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 525,
+        "matched_plans": 525,
+        "controls": 2614,
+        "matched_controls": 2614,
+        "sendcan": 1308,
+        "matched_sendcan": 1308
+      },
+      "trace": {
+        "samples": 525,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "012",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 548,
+        "matched_plans": 548,
+        "controls": 2730,
+        "matched_controls": 2730,
+        "sendcan": 1365,
+        "matched_sendcan": 1365
+      },
+      "trace": {
+        "samples": 548,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "013",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 844,
+        "matched_plans": 844,
+        "controls": 4204,
+        "matched_controls": 4204,
+        "sendcan": 2103,
+        "matched_sendcan": 2103
+      },
+      "trace": {
+        "samples": 844,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "014",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 745,
+        "matched_plans": 745,
+        "controls": 3710,
+        "matched_controls": 3710,
+        "sendcan": 1856,
+        "matched_sendcan": 1856
+      },
+      "trace": {
+        "samples": 745,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "015",
+      "group": "oscillation",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 716,
+        "matched_plans": 716,
+        "controls": 3566,
+        "matched_controls": 3566,
+        "sendcan": 1783,
+        "matched_sendcan": 1783
+      },
+      "trace": {
+        "samples": 716,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "016",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 800,
+        "matched_plans": 800,
+        "controls": 3985,
+        "matched_controls": 3985,
+        "sendcan": 1992,
+        "matched_sendcan": 1992
+      },
+      "trace": {
+        "samples": 800,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "017",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 800,
+        "matched_plans": 800,
+        "controls": 3985,
+        "matched_controls": 3985,
+        "sendcan": 1992,
+        "matched_sendcan": 1992
+      },
+      "trace": {
+        "samples": 800,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "018",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 800,
+        "matched_plans": 800,
+        "controls": 3984,
+        "matched_controls": 3984,
+        "sendcan": 1992,
+        "matched_sendcan": 1992
+      },
+      "trace": {
+        "samples": 800,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "019",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 800,
+        "matched_plans": 800,
+        "controls": 3982,
+        "matched_controls": 3982,
+        "sendcan": 1992,
+        "matched_sendcan": 1992
+      },
+      "trace": {
+        "samples": 800,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "020",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 708,
+        "matched_plans": 708,
+        "controls": 3528,
+        "matched_controls": 3528,
+        "sendcan": 1765,
+        "matched_sendcan": 1765
+      },
+      "trace": {
+        "samples": 708,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "021",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 800,
+        "matched_plans": 800,
+        "controls": 3985,
+        "matched_controls": 3985,
+        "sendcan": 1993,
+        "matched_sendcan": 1993
+      },
+      "trace": {
+        "samples": 800,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "022",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 800,
+        "matched_plans": 800,
+        "controls": 3983,
+        "matched_controls": 3983,
+        "sendcan": 1992,
+        "matched_sendcan": 1992
+      },
+      "trace": {
+        "samples": 800,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "023",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 800,
+        "matched_plans": 800,
+        "controls": 3985,
+        "matched_controls": 3985,
+        "sendcan": 1993,
+        "matched_sendcan": 1993
+      },
+      "trace": {
+        "samples": 800,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "024",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 623,
+        "matched_plans": 623,
+        "controls": 3102,
+        "matched_controls": 3102,
+        "sendcan": 1552,
+        "matched_sendcan": 1552
+      },
+      "trace": {
+        "samples": 623,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "025",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 800,
+        "matched_plans": 800,
+        "controls": 3985,
+        "matched_controls": 3985,
+        "sendcan": 1992,
+        "matched_sendcan": 1992
+      },
+      "trace": {
+        "samples": 800,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "026",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 800,
+        "matched_plans": 800,
+        "controls": 3985,
+        "matched_controls": 3985,
+        "sendcan": 1993,
+        "matched_sendcan": 1993
+      },
+      "trace": {
+        "samples": 800,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "027",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 800,
+        "matched_plans": 800,
+        "controls": 3985,
+        "matched_controls": 3985,
+        "sendcan": 1992,
+        "matched_sendcan": 1992
+      },
+      "trace": {
+        "samples": 800,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "028",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 1500,
+        "matched_plans": 1500,
+        "controls": 7472,
+        "matched_controls": 7472,
+        "sendcan": 3736,
+        "matched_sendcan": 3736
+      },
+      "trace": {
+        "samples": 1500,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "029",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 1501,
+        "matched_plans": 1501,
+        "controls": 7471,
+        "matched_controls": 7471,
+        "sendcan": 3735,
+        "matched_sendcan": 3735
+      },
+      "trace": {
+        "samples": 1501,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "030",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 141,
+        "matched_plans": 141,
+        "controls": 700,
+        "matched_controls": 700,
+        "sendcan": 351,
+        "matched_sendcan": 351
+      },
+      "trace": {
+        "samples": 141,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "031",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 500,
+        "matched_plans": 500,
+        "controls": 2488,
+        "matched_controls": 2488,
+        "sendcan": 1245,
+        "matched_sendcan": 1245
+      },
+      "trace": {
+        "samples": 500,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "032",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 1500,
+        "matched_plans": 1500,
+        "controls": 7471,
+        "matched_controls": 7471,
+        "sendcan": 3735,
+        "matched_sendcan": 3735
+      },
+      "trace": {
+        "samples": 1500,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "033",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 556,
+        "matched_plans": 556,
+        "controls": 2768,
+        "matched_controls": 2768,
+        "sendcan": 1385,
+        "matched_sendcan": 1385
+      },
+      "trace": {
+        "samples": 556,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "034",
+      "group": "normal",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 1381,
+        "matched_plans": 1381,
+        "controls": 6874,
+        "matched_controls": 6874,
+        "sendcan": 3438,
+        "matched_sendcan": 3438
+      },
+      "trace": {
+        "samples": 1381,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "035",
+      "group": "risk",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 400,
+        "matched_plans": 400,
+        "controls": 1992,
+        "matched_controls": 1992,
+        "sendcan": 996,
+        "matched_sendcan": 996
+      },
+      "trace": {
+        "samples": 400,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "036",
+      "group": "risk",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 300,
+        "matched_plans": 300,
+        "controls": 1494,
+        "matched_controls": 1494,
+        "sendcan": 747,
+        "matched_sendcan": 747
+      },
+      "trace": {
+        "samples": 300,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "037",
+      "group": "risk",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 181,
+        "matched_plans": 181,
+        "controls": 903,
+        "matched_controls": 903,
+        "sendcan": 451,
+        "matched_sendcan": 451
+      },
+      "trace": {
+        "samples": 181,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "038",
+      "group": "risk",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 501,
+        "matched_plans": 501,
+        "controls": 2490,
+        "matched_controls": 2490,
+        "sendcan": 1245,
+        "matched_sendcan": 1245
+      },
+      "trace": {
+        "samples": 501,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "039",
+      "group": "risk",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 460,
+        "matched_plans": 460,
+        "controls": 2291,
+        "matched_controls": 2291,
+        "sendcan": 1145,
+        "matched_sendcan": 1145
+      },
+      "trace": {
+        "samples": 460,
+        "dropped": 0,
+        "failures": 0
+      }
+    },
+    {
+      "id": "040",
+      "group": "risk",
+      "exact_equal": true,
+      "coverage": {
+        "plans": 600,
+        "matched_plans": 600,
+        "controls": 2988,
+        "matched_controls": 2988,
+        "sendcan": 1494,
+        "matched_sendcan": 1494
+      },
+      "trace": {
+        "samples": 600,
+        "dropped": 0,
+        "failures": 0
+      }
+    }
+  ],
+  "closed_loop_equal": 18,
+  "source_sha256": {
+    "openpilot/selfdrive/controls/lib/longitudinal_planner.py": "ba797185c837a04ac89e3b10388a776e6e80d2c3a5c3dc4e92493ca81e9f264b",
+    "openpilot/selfdrive/controls/lib/longitudinal_trace.py": "e89304162dcfc59ccd517f285435b8794d1a4ccd36bcd64d7c5fadf13d0b84ac",
+    "openpilot/selfdrive/controls/plannerd.py": "12cd1bb23bd7cc65ee1cd403f169229ca35233df3781de2d25780da24a103f18"
+  }
+}

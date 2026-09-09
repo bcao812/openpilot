@@ -1,0 +1,58 @@
+{
+  "head": "153ccd592e4cceea51f17bf07721c3ecd561f4b4",
+  "parent": "1115e7a94a2c4bb6e80545f14c608ee0ab4e18e1",
+  "branch": "c3xl-dev",
+  "backup": "/data/diagnostics/longitudinal-trace-20260910-0008",
+  "imports": "device_imports=pass",
+  "runtime_sha256": {
+    "openpilot/selfdrive/controls/lib/longitudinal_planner.py": "ba797185c837a04ac89e3b10388a776e6e80d2c3a5c3dc4e92493ca81e9f264b",
+    "openpilot/selfdrive/controls/lib/longitudinal_trace.py": "e89304162dcfc59ccd517f285435b8794d1a4ccd36bcd64d7c5fadf13d0b84ac",
+    "openpilot/selfdrive/controls/plannerd.py": "12cd1bb23bd7cc65ee1cd403f169229ca35233df3781de2d25780da24a103f18"
+  },
+  "preserved_dirty_files": 40,
+  "status_after": "M msgq_repo/msgq/visionipc/visionipc_pyx.so\n M openpilot/common/libparams_c.so\n M openpilot/selfdrive/locationd/models/generated/car.cpp\n M openpilot/selfdrive/locationd/models/generated/car.h\n M openpilot/selfdrive/locationd/models/generated/libcar.so\n M openpilot/selfdrive/locationd/models/generated/libpose.so\n M openpilot/selfdrive/locationd/models/generated/pose.cpp\n M openpilot/selfdrive/locationd/models/generated/pose.h\n M openpilot/selfdrive/modeld/models/dm_warp_1344x760_tinygrad.pkl\n M openpilot/selfdrive/modeld/models/dm_warp_1928x1208_tinygrad.pkl\n M openpilot/selfdrive/modeld/models/dmonitoring_model_tinygrad.pkl.chunk01of01\n M openpilot/selfdrive/modeld/models/driving_tinygrad.pkl.chunk01of02\n M openpilot/selfdrive/modeld/models/driving_tinygrad.pkl.chunk02of02\n M openpilot/selfdrive/pandad/pandad\n M openpilot/selfdrive/selfdrived/beep.py\n M openpilot/sunnypilot/selfdrive/locationd/locationd\n M openpilot/sunnypilot/selfdrive/locationd/models/generated/liblive.so\n M openpilot/sunnypilot/selfdrive/locationd/models/generated/live.cpp\n M openpilot/sunnypilot/selfdrive/locationd/models/generated/live.h\n M openpilot/system/camerad/camerad\n M openpilot/system/loggerd/bootlog\n M openpilot/system/loggerd/encoderd\n M openpilot/system/loggerd/loggerd\n M panda/board/obj/body_h7.bin.signed\n M panda/board/obj/body_h7/bootstub.elf\n M panda/board/obj/body_h7/main.bin\n M panda/board/obj/body_h7/main.elf\n M panda/board/obj/bootstub.body_h7.bin\n M panda/board/obj/bootstub.panda_h7.bin\n M panda/board/obj/bootstub.panda_jungle_h7.bin\n M panda/board/obj/gitversion.h\n M panda/board/obj/panda_h7.bin.signed\n M panda/board/obj/panda_h7/bootstub.elf\n M panda/board/obj/panda_h7/main.bin\n M panda/board/obj/panda_h7/main.elf\n M panda/board/obj/panda_jungle_h7.bin.signed\n M panda/board/obj/panda_jungle_h7/bootstub.elf\n M panda/board/obj/panda_jungle_h7/main.bin\n M panda/board/obj/panda_jungle_h7/main.elf\n M panda/board/obj/version",
+  "marker_enabled": true,
+  "restart_performed": false,
+  "marker": "/data/longitudinal_trace",
+  "enabled_at_unix_ns": 1788970373254506943,
+  "selftest": {
+    "kind": "isolated_on_device_synthetic_snapshot_not_live_control",
+    "frames": 1200,
+    "sampling_us": {
+      "p50": 185.27249999999998,
+      "p95": 240.61565,
+      "p99": 261.4703000000001,
+      "max": 480.975
+    },
+    "received": 1200,
+    "dropped": 0,
+    "failures": 0,
+    "writer_policy": 0,
+    "writer_affinity": [
+      0,
+      1,
+      2
+    ],
+    "serialized_bytes": 894664,
+    "endpoint": "ipc:///tmp/logmessagec3_longitudinal_trace_selftest_20260910",
+    "control_channels_published": false,
+    "marker_enabled": false,
+    "available_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "test_cpu": 7,
+    "isolated_gate_passed": true
+  },
+  "live_planner_sampling_verified": false,
+  "onroad_checked": false,
+  "restarted": false,
+  "files_before_tar_sha256": "e3e7e237b983d2d8bcc1914141bab27be788adca829a0a15c559f5d2edcba058",
+  "commit_bundle_sha256": "8e690df8671788b1159c78999ac8e1be807a380edac58461c3db931c887615b8"
+}
