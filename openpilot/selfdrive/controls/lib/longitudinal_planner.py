@@ -10,6 +10,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+from openpilot.selfdrive.controls.lib.cruise_smoothing import CruiseSmoother, CruiseSmoothingMode
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (STOP_DISTANCE, get_T_FOLLOW,
@@ -150,7 +151,8 @@ def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, 
 
 
 class LongitudinalPlanner(LongitudinalPlannerSP):
-  def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, experimental_coast_with_lead=False):
+  def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, experimental_coast_with_lead=False,
+               experimental_cruise_smoothing=CruiseSmoothingMode.OFF):
     self.CP = CP
     self.mpc = LongitudinalMpc(dt=dt)
     LongitudinalPlannerSP.__init__(self, self.CP, CP_SP, self.mpc)
@@ -158,6 +160,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.dt = dt
     self.allow_throttle = True
     self.experimental_coast_with_lead = experimental_coast_with_lead
+    self.cruise_smoother = CruiseSmoother(experimental_cruise_smoothing, dt)
+    if experimental_coast_with_lead and self.cruise_smoother.mode != CruiseSmoothingMode.OFF:
+      raise ValueError('Lead cruise experiments must be evaluated separately')
 
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
     self.pitch_bias = PitchBiasEstimator(self.dt)
@@ -272,6 +277,25 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
              or (self.experimental_coast_with_lead and output_a_target_mpc - self.a_cruise >= CRUISE_COAST_MPC_MARGIN
                  and cruise_coast_leads_clear(sm['radarState'], v_ego, sm['selfdriveState'].personality)))):
       output_a_cruise = get_cruise_coast_accel(self.a_cruise)
+
+    if self.cruise_smoother.mode != CruiseSmoothingMode.OFF:
+      lead_cruise_eligible = (
+        self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
+        and sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
+        and not sm['carControl'].cruiseControl.override and not sm['carState'].gasPressed and not sm['carState'].brakePressed
+        and not sm['controlsState'].forceDecel and not is_e2e and self.allow_throttle
+        and not self.fcw and not output_should_stop_mpc and not output_should_stop_e2e
+        and math.isfinite(output_a_target_mpc) and math.isfinite(output_a_target_e2e)
+        and output_a_target_e2e >= CRUISE_COAST_RISK_ACCEL
+        and sm['controlsState'].longControlState == LongCtrlState.pid
+        and self.source == LongitudinalPlanSourceSP.cruise
+        and v_ego >= CRUISE_COAST_MIN_SPEED and abs(v_cruise - v_ego) <= CRUISE_COAST_MAX_SPEED_ERROR
+        and -0.3 < self.a_cruise < -0.1
+        and output_a_target_mpc - self.a_cruise >= CRUISE_COAST_MPC_MARGIN
+        and (sm['radarState'].leadOne.present or sm['radarState'].leadTwo.present)
+        and cruise_coast_leads_clear(sm['radarState'], v_ego, sm['selfdriveState'].personality)
+        and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState']))
+      output_a_cruise = self.cruise_smoother.update(output_a_cruise, lead_cruise_eligible)
 
     candidates = [(output_a_target_mpc, self.mpc.source, output_should_stop_mpc),
                   (output_a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]

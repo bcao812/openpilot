@@ -191,7 +191,10 @@ def paired_messages(messages, maximum_delay=0.25, maximum_messages=512):
   yield from ((buffered, None) for buffered in pending)
 
 
-def replay_window(cache, window, experimental_coast_with_lead=False, recorded_plan=False, *, messages=None, row_sink=None, strict=True):
+def replay_window(cache, window, experimental_coast_with_lead=False, recorded_plan=False, *, messages=None, row_sink=None, strict=True,
+                  experimental_cruise_smoothing='off'):
+  if experimental_coast_with_lead and experimental_cruise_smoothing != 'off':
+    raise ValueError('Lead cruise experiments must be replayed separately')
   if messages is None:
     messages = LogReader([str(cache)], sort_by_time=True)
   latest, valid, stamps, models, generated = {}, {}, {}, {}, {}
@@ -208,7 +211,7 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
   previous_timestamp = None
   controller_skipped = True
   solver_failures = 0
-  warmup_start = window['start'] - 60.0
+  warmup_start = window.get('warmup', window['start'] - 60.0)
   control_sp = structs.CarControlSP()
   state_wrapper = SimpleNamespace(v_cruise_factor=1.0, is_metric=False, acc_hud={}, lkas_hud={}, stock_brake={})
 
@@ -258,7 +261,8 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
       if planner is None and params is not None and params_sp is not None:
         if params.carFingerprint != CAR.HONDA_ACCORD or not params.openpilotLongitudinalControl:
           raise ValueError('This replay requires Accord openpilot longitudinal')
-        planner = planner_module.LongitudinalPlanner(params, params_sp)
+        planner_options = {'experimental_cruise_smoothing': experimental_cruise_smoothing} if experimental_cruise_smoothing != 'off' else {}
+        planner = planner_module.LongitudinalPlanner(params, params_sp, **planner_options)
         if experimental_coast_with_lead:
           if not hasattr(planner, 'experimental_coast_with_lead'):
             raise ValueError('Planner does not implement the experimental lead gate')
