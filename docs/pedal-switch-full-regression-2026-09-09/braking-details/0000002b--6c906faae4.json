@@ -1,0 +1,51 @@
+{
+  "route": "0000002b--6c906faae4",
+  "comparisons": {
+    "default": {
+      "weaker_strong_frames": 0,
+      "weaker_strong_seconds": 0,
+      "maximum_reduction": 0.0,
+      "runs": [],
+      "extra_brake_runs": []
+    },
+    "experimental": {
+      "weaker_strong_frames": 8,
+      "weaker_strong_seconds": 0.15919989699978032,
+      "maximum_reduction": 0.010000000000000009,
+      "runs": [
+        {
+          "start": 1448.264774134,
+          "end": 1448.3243860619998,
+          "seconds": 0.059611927999867476,
+          "frames": 3
+        },
+        {
+          "start": 1448.4244347069998,
+          "end": 1448.4649105409999,
+          "seconds": 0.040475834000062605,
+          "frames": 2
+        },
+        {
+          "start": 1449.167596582,
+          "end": 1449.2267087169998,
+          "seconds": 0.05911213499985024,
+          "frames": 3
+        }
+      ],
+      "extra_brake_runs": [],
+      "worst_context": {
+        "t": 1448.264774134,
+        "v_ego": 18.672653198242188,
+        "a_ego": -1.0684194564819336,
+        "lead_drel": 13.729771614074707,
+        "lead_vrel": -1.843057632446289,
+        "lead_alead": -0.17846401035785675,
+        "model_accel": -0.7336634993553162,
+        "a_target": -1.1609232425689697,
+        "accel_cmd": -1.1609232425689697,
+        "before": -1.1400000000000001,
+        "after": -1.1300000000000001
+      }
+    }
+  }
+}

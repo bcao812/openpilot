@@ -1,0 +1,4008 @@
+{
+  "release-final": {
+    "testsuite": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "6",
+        "tests": "338",
+        "time": "155.004",
+        "timestamp": "2026-09-09T20:52:01.171037+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "testcase_counts": {
+      "passed": 263,
+      "skipped": 2,
+      "xfail": 4
+    },
+    "skipped_details": [
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_following_distance.TestFollowingDistance",
+        "name": "test_following_distance",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios",
+        "name": "test_experimental_lead_extension_release_gate[0.254545-0.8]",
+        "type": "pytest.xfail",
+        "reason": "Experimental lead shaping introduces a limit cycle with long unmodelled actuator delay"
+      },
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios",
+        "name": "test_experimental_lead_extension_release_gate[0.25-0.5]",
+        "type": "pytest.xfail",
+        "reason": "Experimental lead shaping introduces a limit cycle with long unmodelled actuator delay"
+      },
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios",
+        "name": "test_experimental_lead_extension_release_gate[0.254545-0.5]",
+        "type": "pytest.xfail",
+        "reason": "Experimental lead shaping introduces a limit cycle with long unmodelled actuator delay"
+      },
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios",
+        "name": "test_long_actuator_lag_collision_release_gate",
+        "type": "pytest.xfail",
+        "reason": "Both default and experimental control exceed the stop gap under excessive actuator lag"
+      },
+      {
+        "class": "openpilot.selfdrive.test.longitudinal_maneuvers.test_longitudinal.TestLongitudinalControl",
+        "name": "test_maneuver",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      }
+    ]
+  },
+  "honda-safety": {
+    "testsuite": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "581",
+        "tests": "2225",
+        "time": "6.679",
+        "timestamp": "2026-09-09T19:18:03.325328+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "testcase_counts": {
+      "skipped": 581,
+      "passed": 760
+    },
+    "skipped_details": [
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_allow_engage_with_gas_interceptor_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_allow_engage_with_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_allow_user_brake_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_alt_exp_bit_discrimination",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_brake_disengage_with_acc_main_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_brake_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_cruise_engaged_prev",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_default_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_disable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_enable_control_allowed_from_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_enable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_enable_control_allowed_with_mads_button",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_enable_control_allowed_with_mads_button_and_disable_with_main_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_enable_control_allowed_with_manual_acc_main_on_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_enable_control_allowed_with_manual_mads_button_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_enable_lateral_control_with_controls_allowed_rising_edge",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_engage_with_brake_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_fwd_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_gas_interceptor_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_heartbeat_agreement_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_heartbeat_agreement_pause_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_heartbeat_engaged_mads_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_heartbeat_engaged_mads_exact_threshold",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_heartbeat_engaged_mads_reset_on_match",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_lat_active_false_when_mads_disabled_and_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_lat_active_only_with_mads_enabled",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_lat_active_with_controls_allowed_and_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_lateral_defaults_false_on_safety_init",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_longitudinal_allowed_independent_of_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_mads_brake_disengage_lateral_only_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_mads_button_not_engaged_without_press",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_mads_button_rising_edge_from_not_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_mads_lateral_only_controls_split",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_mads_params_individual_flags",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_mads_with_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_manually_enable_controls_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_no_disengage_on_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_no_disengage_on_gas_interceptor",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_no_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_not_allow_user_brake_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_pause_lateral_on_brake_persistent_control_allowed_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_pause_lateral_on_brake_setup",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_pause_lateral_on_brake_with_pressed_and_released",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_prev_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_prev_gas_interceptor",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_prev_user_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_relay_malfunction",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_safety_tick",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_safety_tick_clears_lateral",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_spam_can_buses",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_steering_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_tx_hook_on_wrong_safety_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_tx_msg_in_scanned_range",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.GasInterceptorSafetyTest",
+        "name": "test_vehicle_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_allow_engage_with_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_allow_user_brake_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_alt_exp_bit_discrimination",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_brake_disengage_with_acc_main_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_brake_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_buttons_with_main_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_cruise_engaged_prev",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_default_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_disable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_disengage_on_main",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_enable_control_allowed_from_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_enable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_enable_control_allowed_with_mads_button",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_enable_control_allowed_with_mads_button_and_disable_with_main_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_enable_control_allowed_with_manual_acc_main_on_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_enable_control_allowed_with_manual_mads_button_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_enable_lateral_control_with_controls_allowed_rising_edge",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_engage_with_brake_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_fwd_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_heartbeat_agreement_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_heartbeat_agreement_pause_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_heartbeat_engaged_mads_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_heartbeat_engaged_mads_exact_threshold",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_heartbeat_engaged_mads_reset_on_match",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_lat_active_false_when_mads_disabled_and_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_lat_active_only_with_mads_enabled",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_lat_active_with_controls_allowed_and_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_lateral_defaults_false_on_safety_init",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_longitudinal_allowed_independent_of_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_mads_brake_disengage_lateral_only_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_mads_button_not_engaged_without_press",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_mads_button_rising_edge_from_not_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_mads_lateral_only_controls_split",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_mads_params_individual_flags",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_mads_with_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_main_cancel_buttons",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_manually_enable_controls_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_no_disengage_on_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_no_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_not_allow_user_brake_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_pause_lateral_on_brake_persistent_control_allowed_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_pause_lateral_on_brake_setup",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_pause_lateral_on_brake_with_pressed_and_released",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_prev_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_prev_user_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_relay_malfunction",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_rx_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_safety_tick",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_safety_tick_clears_lateral",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_set_resume_buttons",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_spam_can_buses",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_steering_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_tx_hook_on_wrong_safety_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_tx_msg_in_scanned_range",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaButtonEnableBase",
+        "name": "test_vehicle_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_allow_engage_with_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_allow_user_brake_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_alt_exp_bit_discrimination",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_brake_disengage_with_acc_main_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_brake_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_buttons",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_cruise_engaged_prev",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_default_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_disable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_enable_control_allowed_from_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_enable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_enable_control_allowed_with_mads_button",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_enable_control_allowed_with_mads_button_and_disable_with_main_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_enable_control_allowed_with_manual_acc_main_on_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_enable_control_allowed_with_manual_mads_button_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_enable_lateral_control_with_controls_allowed_rising_edge",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_engage_with_brake_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_fwd_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_heartbeat_agreement_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_heartbeat_agreement_pause_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_heartbeat_engaged_mads_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_heartbeat_engaged_mads_exact_threshold",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_heartbeat_engaged_mads_reset_on_match",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_lat_active_false_when_mads_disabled_and_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_lat_active_only_with_mads_enabled",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_lat_active_with_controls_allowed_and_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_lateral_defaults_false_on_safety_init",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_longitudinal_allowed_independent_of_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_mads_brake_disengage_lateral_only_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_mads_button_not_engaged_without_press",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_mads_button_rising_edge_from_not_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_mads_lateral_only_controls_split",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_mads_params_individual_flags",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_mads_with_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_manually_enable_controls_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_no_disengage_on_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_no_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_not_allow_user_brake_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_pause_lateral_on_brake_persistent_control_allowed_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_pause_lateral_on_brake_setup",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_pause_lateral_on_brake_with_pressed_and_released",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_prev_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_prev_user_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_relay_malfunction",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_safety_tick",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_safety_tick_clears_lateral",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_spam_can_buses",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_steering_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_tx_hook_on_wrong_safety_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_tx_msg_in_scanned_range",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaPcmEnableBase",
+        "name": "test_vehicle_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_allow_engage_with_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_allow_user_brake_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_alt_exp_bit_discrimination",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_brake_disengage_with_acc_main_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_brake_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_cruise_engaged_prev",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_default_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_disable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_enable_control_allowed_from_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_enable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_enable_control_allowed_with_mads_button",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_enable_control_allowed_with_mads_button_and_disable_with_main_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_enable_control_allowed_with_manual_acc_main_on_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_enable_control_allowed_with_manual_mads_button_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_enable_lateral_control_with_controls_allowed_rising_edge",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_engage_with_brake_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_fwd_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_heartbeat_agreement_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_heartbeat_agreement_pause_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_heartbeat_engaged_mads_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_heartbeat_engaged_mads_exact_threshold",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_heartbeat_engaged_mads_reset_on_match",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_lat_active_false_when_mads_disabled_and_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_lat_active_only_with_mads_enabled",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_lat_active_with_controls_allowed_and_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_lateral_defaults_false_on_safety_init",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_longitudinal_allowed_independent_of_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_mads_brake_disengage_lateral_only_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_mads_button_not_engaged_without_press",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_mads_button_rising_edge_from_not_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_mads_lateral_only_controls_split",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_mads_params_individual_flags",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_mads_with_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_manually_enable_controls_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_no_disengage_on_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_no_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_not_allow_user_brake_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_pause_lateral_on_brake_persistent_control_allowed_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_pause_lateral_on_brake_setup",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_pause_lateral_on_brake_with_pressed_and_released",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_prev_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_prev_user_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_relay_malfunction",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_safety_tick",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_safety_tick_clears_lateral",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_spam_can_buses",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_steer_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_steering_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_tx_hook_on_wrong_safety_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_tx_msg_in_scanned_range",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.HondaBase",
+        "name": "test_vehicle_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_acc_hud_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_allow_engage_with_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_allow_user_brake_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_alt_exp_bit_discrimination",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_brake_disengage_with_acc_main_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_brake_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_brake_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_cruise_engaged_prev",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_default_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_disable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_enable_control_allowed_from_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_enable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_enable_control_allowed_with_mads_button",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_enable_control_allowed_with_mads_button_and_disable_with_main_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_enable_control_allowed_with_manual_acc_main_on_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_enable_control_allowed_with_manual_mads_button_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_enable_lateral_control_with_controls_allowed_rising_edge",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_engage_with_brake_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_fwd_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_heartbeat_agreement_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_heartbeat_agreement_pause_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_heartbeat_engaged_mads_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_heartbeat_engaged_mads_exact_threshold",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_heartbeat_engaged_mads_reset_on_match",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_honda_fwd_brake_latching",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_lat_active_false_when_mads_disabled_and_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_lat_active_only_with_mads_enabled",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_lat_active_with_controls_allowed_and_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_lateral_defaults_false_on_safety_init",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_longitudinal_allowed_independent_of_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_mads_brake_disengage_lateral_only_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_mads_button_not_engaged_without_press",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_mads_button_rising_edge_from_not_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_mads_lateral_only_controls_split",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_mads_params_individual_flags",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_mads_with_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_manually_enable_controls_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_no_disengage_on_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_no_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_not_allow_user_brake_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_pause_lateral_on_brake_persistent_control_allowed_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_pause_lateral_on_brake_setup",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_pause_lateral_on_brake_with_pressed_and_released",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_prev_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_prev_user_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_relay_malfunction",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_safety_tick",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_safety_tick_clears_lateral",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_spam_can_buses",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_steer_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_steering_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_tx_hook_on_wrong_safety_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_tx_msg_in_scanned_range",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecSafetyBase",
+        "name": "test_vehicle_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecPcmSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecPcmSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecPcmSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecPcmSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecGasInterceptorSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecGasInterceptorSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecGasInterceptorSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecGasInterceptorSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecPcmAltSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecPcmAltSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecPcmAltSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecPcmAltSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecAltGasInterceptorSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecAltGasInterceptorSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecAltGasInterceptorSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecAltGasInterceptorSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_allow_engage_with_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_allow_user_brake_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_alt_exp_bit_discrimination",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_brake_disengage_with_acc_main_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_brake_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_cruise_engaged_prev",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_default_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_disable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_enable_control_allowed_from_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_enable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_enable_control_allowed_with_mads_button",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_enable_control_allowed_with_mads_button_and_disable_with_main_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_enable_control_allowed_with_manual_acc_main_on_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_enable_control_allowed_with_manual_mads_button_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_enable_lateral_control_with_controls_allowed_rising_edge",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_engage_with_brake_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_fwd_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_heartbeat_agreement_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_heartbeat_agreement_pause_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_heartbeat_engaged_mads_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_heartbeat_engaged_mads_exact_threshold",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_heartbeat_engaged_mads_reset_on_match",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_lat_active_false_when_mads_disabled_and_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_lat_active_only_with_mads_enabled",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_lat_active_with_controls_allowed_and_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_lateral_defaults_false_on_safety_init",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_longitudinal_allowed_independent_of_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_mads_brake_disengage_lateral_only_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_mads_button_not_engaged_without_press",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_mads_button_rising_edge_from_not_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_mads_lateral_only_controls_split",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_mads_params_individual_flags",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_mads_with_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_manually_enable_controls_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_no_disengage_on_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_no_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_not_allow_user_brake_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_pause_lateral_on_brake_persistent_control_allowed_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_pause_lateral_on_brake_setup",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_pause_lateral_on_brake_with_pressed_and_released",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_prev_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_prev_user_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_relay_malfunction",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_safety_tick",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_safety_tick_clears_lateral",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_spam_can_buses",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_spam_cancel_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_steer_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_steering_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_tx_hook_on_wrong_safety_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_tx_msg_in_scanned_range",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafetyBase",
+        "name": "test_vehicle_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_allow_engage_with_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_allow_user_brake_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_alt_brake_rx_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_alt_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_alt_exp_bit_discrimination",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_brake_disengage_with_acc_main_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_brake_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_cruise_engaged_prev",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_default_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_disable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_enable_control_allowed_from_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_enable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_enable_control_allowed_with_mads_button",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_enable_control_allowed_with_mads_button_and_disable_with_main_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_enable_control_allowed_with_manual_acc_main_on_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_enable_control_allowed_with_manual_mads_button_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_enable_lateral_control_with_controls_allowed_rising_edge",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_engage_with_brake_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_fwd_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_heartbeat_agreement_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_heartbeat_agreement_pause_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_heartbeat_engaged_mads_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_heartbeat_engaged_mads_exact_threshold",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_heartbeat_engaged_mads_reset_on_match",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_lat_active_false_when_mads_disabled_and_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_lat_active_only_with_mads_enabled",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_lat_active_with_controls_allowed_and_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_lateral_defaults_false_on_safety_init",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_longitudinal_allowed_independent_of_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_mads_brake_disengage_lateral_only_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_mads_button_not_engaged_without_press",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_mads_button_rising_edge_from_not_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_mads_lateral_only_controls_split",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_mads_params_individual_flags",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_mads_with_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_manually_enable_controls_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_no_disengage_on_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_no_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_not_allow_user_brake_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_pause_lateral_on_brake_persistent_control_allowed_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_pause_lateral_on_brake_setup",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_pause_lateral_on_brake_with_pressed_and_released",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_prev_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_prev_user_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_relay_malfunction",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_safety_tick",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_safety_tick_clears_lateral",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_spam_can_buses",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_spam_cancel_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_steer_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_steering_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_tx_hook_on_wrong_safety_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_tx_msg_in_scanned_range",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafetyBase",
+        "name": "test_vehicle_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschAltBrakeSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschLongSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschLongSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschLongSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschLongSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_allow_engage_with_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_allow_user_brake_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_alt_exp_bit_discrimination",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_brake_disengage_with_acc_main_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_brake_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_cruise_engaged_prev",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_default_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_disable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_enable_control_allowed_from_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_enable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_enable_control_allowed_with_mads_button",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_enable_control_allowed_with_mads_button_and_disable_with_main_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_enable_control_allowed_with_manual_acc_main_on_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_enable_control_allowed_with_manual_mads_button_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_enable_lateral_control_with_controls_allowed_rising_edge",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_engage_with_brake_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_fwd_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_heartbeat_agreement_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_heartbeat_agreement_pause_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_heartbeat_engaged_mads_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_heartbeat_engaged_mads_exact_threshold",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_heartbeat_engaged_mads_reset_on_match",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_lat_active_false_when_mads_disabled_and_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_lat_active_only_with_mads_enabled",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_lat_active_with_controls_allowed_and_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_lateral_defaults_false_on_safety_init",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_longitudinal_allowed_independent_of_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_mads_brake_disengage_lateral_only_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_mads_button_not_engaged_without_press",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_mads_button_rising_edge_from_not_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_mads_lateral_only_controls_split",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_mads_params_individual_flags",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_mads_with_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_manually_enable_controls_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_no_disengage_on_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_no_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_not_allow_user_brake_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_pause_lateral_on_brake_persistent_control_allowed_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_pause_lateral_on_brake_setup",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_pause_lateral_on_brake_with_pressed_and_released",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_prev_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_prev_user_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_relay_malfunction",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_safety_tick",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_safety_tick_clears_lateral",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_spam_can_buses",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_spam_cancel_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_steer_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_steering_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_tx_hook_on_wrong_safety_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_tx_msg_in_scanned_range",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafetyBase",
+        "name": "test_vehicle_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessAltBrakeSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessAltBrakeSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessAltBrakeSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessAltBrakeSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessLongSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessLongSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessLongSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschRadarlessLongSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_allow_engage_with_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_allow_user_brake_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_alt_exp_bit_discrimination",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_brake_disengage_with_acc_main_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_brake_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_cruise_engaged_prev",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_default_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_disable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_enable_control_allowed_from_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_enable_control_allowed_from_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_enable_control_allowed_with_mads_button",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_enable_control_allowed_with_mads_button_and_disable_with_main_cruise",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_enable_control_allowed_with_manual_acc_main_on_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_enable_control_allowed_with_manual_mads_button_state",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_enable_lateral_control_with_controls_allowed_rising_edge",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_engage_with_brake_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_fwd_hook",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_heartbeat_agreement_disengage_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_heartbeat_agreement_pause_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_heartbeat_engaged_mads_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_heartbeat_engaged_mads_exact_threshold",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_heartbeat_engaged_mads_reset_on_match",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_lat_active_false_when_mads_disabled_and_controls_not_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_lat_active_only_with_mads_enabled",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_lat_active_with_controls_allowed_and_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_lateral_defaults_false_on_safety_init",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_longitudinal_allowed_independent_of_mads",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_mads_brake_disengage_lateral_only_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_mads_button_not_engaged_without_press",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_mads_button_rising_edge_from_not_pressed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_mads_lateral_only_controls_split",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_mads_params_individual_flags",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_mads_with_acc_main_on",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_manually_enable_controls_allowed",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_no_disengage_on_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_no_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_not_allow_user_brake_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_pause_lateral_on_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_pause_lateral_on_brake_persistent_control_allowed_off",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_pause_lateral_on_brake_setup",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_pause_lateral_on_brake_with_pressed_and_released",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_prev_gas",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_prev_user_brake",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_relay_malfunction",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_safety_tick",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_safety_tick_clears_lateral",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_spam_can_buses",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_spam_cancel_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_steer_safety_check",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_steering_disengage_with_control_request",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_tx_hook_on_wrong_safety_mode",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_tx_msg_in_scanned_range",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafetyBase",
+        "name": "test_vehicle_moving",
+        "type": "pytest.skip",
+        "reason": "Skipped"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDAltBrakeSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDAltBrakeSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDAltBrakeSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaBoschCANFDAltBrakeSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecHybridSafety",
+        "name": "test_allow_user_regen_at_zero_speed",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecHybridSafety",
+        "name": "test_not_allow_user_regen_when_moving",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecHybridSafety",
+        "name": "test_prev_user_regen",
+        "type": "pytest.skip",
+        "reason": "Safety mode implements no _user_regen_msg"
+      },
+      {
+        "class": "opendbc.safety.tests.test_honda.TestHondaNidecHybridSafety",
+        "name": "test_rx_hook_speed_mismatch",
+        "type": "pytest.skip",
+        "reason": "No second speed message for this safety mode"
+      }
+    ]
+  },
+  "full-tool-tests": {
+    "testsuite": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "29",
+        "time": "1.241",
+        "timestamp": "2026-09-09T20:51:37.687243+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "testcase_counts": {
+      "passed": 29
+    },
+    "skipped_details": []
+  },
+  "expanded-release-gates": {
+    "testsuite": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "4",
+        "skipped": "0",
+        "tests": "4",
+        "time": "39.734",
+        "timestamp": "2026-09-09T19:50:34.531088+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "testcase_counts": {
+      "failed": 4
+    },
+    "skipped_details": []
+  },
+  "adjacent-longitudinal": {
+    "testsuite": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "30",
+        "tests": "124",
+        "time": "8.339",
+        "timestamp": "2026-09-09T20:36:00.788734+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "testcase_counts": {
+      "passed": 94,
+      "skipped": 30
+    },
+    "skipped_details": [
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestVCruiseHelper",
+        "name": "test_adjust_speed",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestVCruiseHelper",
+        "name": "test_initialize_v_cruise",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestVCruiseHelper",
+        "name": "test_resume_in_standstill",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestVCruiseHelper",
+        "name": "test_rising_edge_enable",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestVCruiseHelper",
+        "name": "test_set_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_accel_decel_symmetry_0",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_accel_decel_symmetry_1",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_adjust_speed",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_long_press_increments_0",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_long_press_increments_1",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_long_press_increments_2",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_0",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_1",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_2",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_3",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_4",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_5",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_6",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_7",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_8",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_9",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_default_behavior_when_disabled",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_initialize_v_cruise",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_invalid_values_fallback",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_resume_in_standstill",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_rising_edge_enable",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_rounding_behavior",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_set_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_cruise_mode.TestCruiseHelper",
+        "name": "test_gap_adjust_cruise_long_press_toggle_mode",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_cruise_mode.TestCruiseHelper",
+        "name": "test_gap_adjust_cruise_short_press_toggle_mode",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      }
+    ]
+  },
+  "adjacent-baseline": {
+    "testsuite": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "30",
+        "tests": "124",
+        "time": "7.283",
+        "timestamp": "2026-09-09T20:36:44.011559+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "testcase_counts": {
+      "passed": 94,
+      "skipped": 30
+    },
+    "skipped_details": [
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestVCruiseHelper",
+        "name": "test_adjust_speed",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestVCruiseHelper",
+        "name": "test_initialize_v_cruise",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestVCruiseHelper",
+        "name": "test_resume_in_standstill",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestVCruiseHelper",
+        "name": "test_rising_edge_enable",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestVCruiseHelper",
+        "name": "test_set_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_accel_decel_symmetry_0",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_accel_decel_symmetry_1",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_adjust_speed",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_long_press_increments_0",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_long_press_increments_1",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_long_press_increments_2",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_0",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_1",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_2",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_3",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_4",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_5",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_6",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_7",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_8",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_custom_short_press_increments_9",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_default_behavior_when_disabled",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_initialize_v_cruise",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_invalid_values_fallback",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_resume_in_standstill",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_rising_edge_enable",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_rounding_behavior",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_custom_cruise.TestCustomAccIncrements",
+        "name": "test_set_gas_pressed",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_cruise_mode.TestCruiseHelper",
+        "name": "test_gap_adjust_cruise_long_press_toggle_mode",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      },
+      {
+        "class": "openpilot.sunnypilot.selfdrive.car.tests.test_cruise_mode.TestCruiseHelper",
+        "name": "test_gap_adjust_cruise_short_press_toggle_mode",
+        "type": "pytest.skip",
+        "reason": "parameterized base class"
+      }
+    ]
+  },
+  "current_unique_totals": {
+    "passed": 1117,
+    "skipped": 613,
+    "xfail": 4,
+    "failed": 0,
+    "error": 0
+  }
+}

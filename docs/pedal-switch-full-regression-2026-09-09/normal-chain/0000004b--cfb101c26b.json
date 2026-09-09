@@ -1,0 +1,89 @@
+{
+  "route": "0000004b--cfb101c26b",
+  "commit": "0893979ab44c92e80e8230813eb035db789d7b56",
+  "recorded_plan": true,
+  "planner_sha256": "47a81c64d9a1bbd718299f0c9a32772f0e4dc2ed8707a11577b9baf96750e4eb",
+  "result_sha256": "386509bc6b0d2102ff13084fbe3bb711b4f01c3872ff71f9357353d2eb4c22a0",
+  "paired_clean_s": 108.30802688599995,
+  "missing_clean_s": 0.0,
+  "plan_error": {
+    "frames": 2169,
+    "changed": 1274,
+    "minimum": -0.011786885559558868,
+    "maximum": 0.008740954101085663,
+    "p95_abs": 0.002896315604448318
+  },
+  "can_accel_error": {
+    "frames": 5395,
+    "changed": 0,
+    "minimum": 0.0,
+    "maximum": 0.0,
+    "p95_abs": 0.0
+  },
+  "can_brake_mismatches": 0,
+  "can_gas_mismatches": 0,
+  "stop_mismatches": 0,
+  "metrics": {
+    "clean/native": {
+      "raw": 12,
+      "debounced": 10,
+      "events": []
+    },
+    "clean/recorded_source": {
+      "raw": 12,
+      "debounced": 10,
+      "events": []
+    },
+    "normal/native": {
+      "raw": 12,
+      "debounced": 10,
+      "events": []
+    },
+    "normal/recorded_source": {
+      "raw": 12,
+      "debounced": 10,
+      "events": []
+    }
+  },
+  "coverage": [
+    {
+      "window": {
+        "route": "0000004b--cfb101c26b",
+        "origin": 54.702328207,
+        "start": -1000000.0,
+        "end": 1000000.0,
+        "cache": "0000004b--cfb101c26b-block-0",
+        "segments": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "coverage": {
+        "plans": 5079,
+        "matched_plans": 5078,
+        "controls": 25554,
+        "matched_controls": 25291,
+        "sendcan": 12584,
+        "matched_sendcan": 12583
+      },
+      "missing": {
+        "control_plan": 263,
+        "plan_model": 1,
+        "can_state": 1
+      },
+      "resets": [
+        {
+          "before": -1.3246269779999977,
+          "after": 0.0
+        },
+        {
+          "can_cadence": 3.9476563529999993
+        }
+      ],
+      "solver_failures": 0
+    }
+  ]
+}

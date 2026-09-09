@@ -1,0 +1,4 @@
+.....................................................................sss [ 58%]
+ss.......................sssssssssssssssssssssss..ss                     [100%]
+94 passed, 30 skipped in 9.61s
+openpilot/common/params.cc: Failed to lock file /tmp/c3-pedal-full-20260909-WgogBo/home/.comma40bf1098dae647f/params/.lock, errno=2

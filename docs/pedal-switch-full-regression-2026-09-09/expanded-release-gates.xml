@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="4" time="39.734" timestamp="2026-09-09T19:50:34.531088+08:00" hostname="CBO"><testcase classname="openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios" name="test_experimental_lead_extension_release_gate[0.254545-0.8]" time="11.101"><failure message="assert 26 &lt;= 0">offset = 0.254545, delay = 0.8
+
+    @pytest.mark.xfail(strict=True, reason='Experimental lead shaping introduces a limit cycle with long unmodelled actuator delay')
+    @pytest.mark.parametrize('offset,delay', [(0.254545, 0.8), (0.25, 0.5), (0.254545, 0.5)])
+    def test_experimental_lead_extension_release_gate(offset, delay):
+      before = simulate_lead_cruise(False, offset=offset, noise=0.02, delay=delay)
+      after = simulate_lead_cruise(True, offset=offset, noise=0.02, delay=delay)
+&gt;     assert after['switches']['debounced'] &lt;= before['switches']['debounced']
+E     assert 26 &lt;= 0
+
+openpilot/selfdrive/controls/tests/test_longitudinal_cruise_scenarios.py:146: AssertionError</failure></testcase><testcase classname="openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios" name="test_experimental_lead_extension_release_gate[0.25-0.5]" time="11.347"><failure message="assert 28 &lt;= 0">offset = 0.25, delay = 0.5
+
+    @pytest.mark.xfail(strict=True, reason='Experimental lead shaping introduces a limit cycle with long unmodelled actuator delay')
+    @pytest.mark.parametrize('offset,delay', [(0.254545, 0.8), (0.25, 0.5), (0.254545, 0.5)])
+    def test_experimental_lead_extension_release_gate(offset, delay):
+      before = simulate_lead_cruise(False, offset=offset, noise=0.02, delay=delay)
+      after = simulate_lead_cruise(True, offset=offset, noise=0.02, delay=delay)
+&gt;     assert after['switches']['debounced'] &lt;= before['switches']['debounced']
+E     assert 28 &lt;= 0
+
+openpilot/selfdrive/controls/tests/test_longitudinal_cruise_scenarios.py:146: AssertionError</failure></testcase><testcase classname="openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios" name="test_experimental_lead_extension_release_gate[0.254545-0.5]" time="12.511"><failure message="assert 6 &lt;= 0">offset = 0.254545, delay = 0.5
+
+    @pytest.mark.xfail(strict=True, reason='Experimental lead shaping introduces a limit cycle with long unmodelled actuator delay')
+    @pytest.mark.parametrize('offset,delay', [(0.254545, 0.8), (0.25, 0.5), (0.254545, 0.5)])
+    def test_experimental_lead_extension_release_gate(offset, delay):
+      before = simulate_lead_cruise(False, offset=offset, noise=0.02, delay=delay)
+      after = simulate_lead_cruise(True, offset=offset, noise=0.02, delay=delay)
+&gt;     assert after['switches']['debounced'] &lt;= before['switches']['debounced']
+E     assert 6 &lt;= 0
+
+openpilot/selfdrive/controls/tests/test_longitudinal_cruise_scenarios.py:146: AssertionError</failure></testcase><testcase classname="openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios" name="test_long_actuator_lag_collision_release_gate" time="3.659"><failure message="assert -1.8652195608552704 &gt; 2.0">@pytest.mark.xfail(strict=True, reason='Both default and experimental control exceed the stop gap under excessive actuator lag')
+    def test_long_actuator_lag_collision_release_gate():
+      for enabled in (False, True):
+        result = simulate_lead_cruise(enabled, scenario='lead_brake', duration=55.0, delay=0.5, response_time=0.4)
+&gt;       assert result['minimum_gap'] &gt; 2.0
+E       assert -1.8652195608552704 &gt; 2.0
+
+openpilot/selfdrive/controls/tests/test_longitudinal_cruise_scenarios.py:153: AssertionError</failure></testcase></testsuite></testsuites>

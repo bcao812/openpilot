@@ -1,0 +1,96 @@
+{
+  "route": "00000045--af558aec8c",
+  "commit": "0893979ab44c92e80e8230813eb035db789d7b56",
+  "recorded_plan": false,
+  "planner_sha256": "47a81c64d9a1bbd718299f0c9a32772f0e4dc2ed8707a11577b9baf96750e4eb",
+  "result_sha256": "8f84ffd5bb4e359cbaa64a6674bfb8b9552a26edbc6829cca870d8c896c72483",
+  "paired_clean_s": 0.0,
+  "missing_clean_s": 0.0,
+  "plan_error": {
+    "frames": 0,
+    "changed": 0,
+    "minimum": null,
+    "maximum": null,
+    "p95_abs": null
+  },
+  "can_accel_error": {
+    "frames": 0,
+    "changed": 0,
+    "minimum": null,
+    "maximum": null,
+    "p95_abs": null
+  },
+  "can_brake_mismatches": 0,
+  "can_gas_mismatches": 0,
+  "stop_mismatches": 0,
+  "metrics": {
+    "clean/native": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    },
+    "clean/recorded_source": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    },
+    "normal/native": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    },
+    "normal/recorded_source": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    }
+  },
+  "coverage": [
+    {
+      "window": {
+        "route": "00000045--af558aec8c",
+        "origin": 33.685927642,
+        "start": -1000000.0,
+        "end": 1000000.0,
+        "cache": "00000045--af558aec8c-block-0",
+        "segments": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ]
+      },
+      "coverage": {
+        "plans": 11991,
+        "matched_plans": 11990,
+        "controls": 60261,
+        "matched_controls": 59720,
+        "sendcan": 29827,
+        "matched_sendcan": 29826
+      },
+      "missing": {
+        "control_parameters": 2,
+        "control_plan": 539,
+        "plan_model": 1,
+        "can_state": 1
+      },
+      "resets": [
+        {
+          "before": -1.3980730720000025,
+          "after": 0.0
+        },
+        {
+          "can_cadence": 6.0923807789999955
+        }
+      ],
+      "solver_failures": 0
+    }
+  ]
+}

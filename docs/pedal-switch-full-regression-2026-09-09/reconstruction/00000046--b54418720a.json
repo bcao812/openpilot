@@ -1,0 +1,89 @@
+{
+  "route": "00000046--b54418720a",
+  "commit": "0893979ab44c92e80e8230813eb035db789d7b56",
+  "recorded_plan": false,
+  "planner_sha256": "47a81c64d9a1bbd718299f0c9a32772f0e4dc2ed8707a11577b9baf96750e4eb",
+  "result_sha256": "c0851e41d7c4c85e7d011bd5fc378a41d3cfae00aa43eaffc5789c76569b80c0",
+  "paired_clean_s": 0.0,
+  "missing_clean_s": 0.0,
+  "plan_error": {
+    "frames": 0,
+    "changed": 0,
+    "minimum": null,
+    "maximum": null,
+    "p95_abs": null
+  },
+  "can_accel_error": {
+    "frames": 0,
+    "changed": 0,
+    "minimum": null,
+    "maximum": null,
+    "p95_abs": null
+  },
+  "can_brake_mismatches": 0,
+  "can_gas_mismatches": 0,
+  "stop_mismatches": 0,
+  "metrics": {
+    "clean/native": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    },
+    "clean/recorded_source": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    },
+    "normal/native": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    },
+    "normal/recorded_source": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    }
+  },
+  "coverage": [
+    {
+      "window": {
+        "route": "00000046--b54418720a",
+        "origin": 34.211550975,
+        "start": -1000000.0,
+        "end": 1000000.0,
+        "cache": "00000046--b54418720a-block-0",
+        "segments": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "coverage": {
+        "plans": 5743,
+        "matched_plans": 5742,
+        "controls": 29192,
+        "matched_controls": 28601,
+        "sendcan": 14291,
+        "matched_sendcan": 14290
+      },
+      "missing": {
+        "control_plan": 591,
+        "plan_model": 1,
+        "can_state": 1
+      },
+      "resets": [
+        {
+          "before": -1.4169079159999995,
+          "after": 0.0
+        },
+        {
+          "can_cadence": 6.0880399449999985
+        }
+      ],
+      "solver_failures": 0
+    }
+  ]
+}

@@ -1,0 +1,238 @@
+{
+  "route": "0000002c--0545fb49cb",
+  "added_raw_changes": [
+    {
+      "index": 17157,
+      "t": 349.908686116,
+      "duration": 0.05986770799995611,
+      "block": 8,
+      "side": 1
+    },
+    {
+      "index": 17160,
+      "t": 349.96855382399997,
+      "duration": 16.585174681000012,
+      "block": 8,
+      "side": -1
+    }
+  ],
+  "rows": [
+    {
+      "t": 349.82866247,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.21,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 349.847851428,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.21,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 349.868895908,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 349.889274658,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 349.908686116,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.19,
+      "baseline_brake": true,
+      "experimental_brake": false
+    },
+    {
+      "t": 349.928321897,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.19,
+      "baseline_brake": true,
+      "experimental_brake": false
+    },
+    {
+      "t": 349.94877793899997,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.19,
+      "baseline_brake": true,
+      "experimental_brake": false
+    },
+    {
+      "t": 349.96855382399997,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 349.988072678,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.008324658,
+      "baseline_accel": -0.31,
+      "experimental_accel": -0.31,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.028920647,
+      "baseline_accel": -0.31,
+      "experimental_accel": -0.31,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.048119241,
+      "baseline_accel": -0.31,
+      "experimental_accel": -0.31,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.06860622,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.088407574,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.108477418,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.21,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 349.868895908,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 349.889274658,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 349.908686116,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.19,
+      "baseline_brake": true,
+      "experimental_brake": false
+    },
+    {
+      "t": 349.928321897,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.19,
+      "baseline_brake": true,
+      "experimental_brake": false
+    },
+    {
+      "t": 349.94877793899997,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.19,
+      "baseline_brake": true,
+      "experimental_brake": false
+    },
+    {
+      "t": 349.96855382399997,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 349.988072678,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.008324658,
+      "baseline_accel": -0.31,
+      "experimental_accel": -0.31,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.028920647,
+      "baseline_accel": -0.31,
+      "experimental_accel": -0.31,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.048119241,
+      "baseline_accel": -0.31,
+      "experimental_accel": -0.31,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.06860622,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.088407574,
+      "baseline_accel": -0.26,
+      "experimental_accel": -0.26,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.108477418,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.21,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.12883846,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.21,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.149287626,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.21,
+      "baseline_brake": true,
+      "experimental_brake": true
+    },
+    {
+      "t": 350.16806971,
+      "baseline_accel": -0.21,
+      "experimental_accel": -0.21,
+      "baseline_brake": true,
+      "experimental_brake": true
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "route": "00000025--eb1870438f",
+  "comparisons": {
+    "default": {
+      "weaker_strong_frames": 0,
+      "weaker_strong_seconds": 0,
+      "maximum_reduction": 0.0,
+      "runs": [],
+      "extra_brake_runs": [
+        {
+          "start": 1071.537646327,
+          "end": 1071.578889851,
+          "seconds": 0.04124352400003772,
+          "frames": 2
+        },
+        {
+          "start": 1071.677517178,
+          "end": 1071.73936467,
+          "seconds": 0.06184749199996986,
+          "frames": 3
+        }
+      ]
+    },
+    "experimental": {
+      "weaker_strong_frames": 0,
+      "weaker_strong_seconds": 0,
+      "maximum_reduction": 0.0,
+      "runs": [],
+      "extra_brake_runs": []
+    }
+  }
+}

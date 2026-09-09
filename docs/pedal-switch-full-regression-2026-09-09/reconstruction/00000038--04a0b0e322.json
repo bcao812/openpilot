@@ -1,0 +1,89 @@
+{
+  "route": "00000038--04a0b0e322",
+  "commit": "a5cbfbf7242c9e7c48cba72876d3a2609cbcb7c3",
+  "recorded_plan": false,
+  "planner_sha256": "47a81c64d9a1bbd718299f0c9a32772f0e4dc2ed8707a11577b9baf96750e4eb",
+  "result_sha256": "60175a55ef4778b15350ba949025cf421c00d8f83a9070eb1eb1e7ee8b60bdbc",
+  "paired_clean_s": 9.034202392000026,
+  "missing_clean_s": 0.0,
+  "plan_error": {
+    "frames": 182,
+    "changed": 121,
+    "minimum": -0.015910863876342773,
+    "maximum": 0.06167316436767578,
+    "p95_abs": 0.061624225974082944
+  },
+  "can_accel_error": {
+    "frames": 450,
+    "changed": 66,
+    "minimum": -0.020000000000000018,
+    "maximum": 0.06999999999999995,
+    "p95_abs": 0.05999999999999994
+  },
+  "can_brake_mismatches": 2,
+  "can_gas_mismatches": 60,
+  "stop_mismatches": 0,
+  "metrics": {
+    "clean/native": {
+      "raw": 2,
+      "debounced": 1,
+      "events": []
+    },
+    "clean/recorded_source": {
+      "raw": 2,
+      "debounced": 1,
+      "events": []
+    },
+    "normal/native": {
+      "raw": 2,
+      "debounced": 1,
+      "events": []
+    },
+    "normal/recorded_source": {
+      "raw": 2,
+      "debounced": 1,
+      "events": []
+    }
+  },
+  "coverage": [
+    {
+      "window": {
+        "route": "00000038--04a0b0e322",
+        "origin": 31.846759829,
+        "start": -1000000.0,
+        "end": 1000000.0,
+        "cache": "00000038--04a0b0e322-block-0",
+        "segments": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "coverage": {
+        "plans": 6563,
+        "matched_plans": 6562,
+        "controls": 33287,
+        "matched_controls": 32677,
+        "sendcan": 16345,
+        "matched_sendcan": 16338
+      },
+      "missing": {
+        "control_plan": 607,
+        "can_state": 2,
+        "can_control": 5,
+        "plan_model": 1,
+        "control_state": 3
+      },
+      "resets": [
+        {
+          "before": -1.4047554160000004,
+          "after": 0.0
+        }
+      ],
+      "solver_failures": 0
+    }
+  ]
+}

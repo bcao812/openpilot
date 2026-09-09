@@ -1,0 +1,133 @@
+{
+  "route": "0000004c--37c6188881",
+  "commit": "0893979ab44c92e80e8230813eb035db789d7b56",
+  "recorded_plan": false,
+  "planner_sha256": "47a81c64d9a1bbd718299f0c9a32772f0e4dc2ed8707a11577b9baf96750e4eb",
+  "result_sha256": "d40d8f4530e17dd0133f3bc2545d0b950d34ae334af53b3cae4c297a72893df4",
+  "paired_clean_s": 176.98621274500005,
+  "missing_clean_s": 0.0,
+  "plan_error": {
+    "frames": 3540,
+    "changed": 2605,
+    "minimum": -0.6245630979537964,
+    "maximum": 0.3766995668411255,
+    "p95_abs": 0.02403178513050079
+  },
+  "can_accel_error": {
+    "frames": 8815,
+    "changed": 3092,
+    "minimum": -0.63,
+    "maximum": 0.38,
+    "p95_abs": 0.020000000000000018
+  },
+  "can_brake_mismatches": 35,
+  "can_gas_mismatches": 3429,
+  "stop_mismatches": 0,
+  "metrics": {
+    "clean/native": {
+      "raw": 20,
+      "debounced": 20,
+      "events": [
+        {
+          "start": 264.232791513,
+          "end": 273.026406666,
+          "duration": 8.793615153000019,
+          "switches": 4,
+          "switches_per_s": 0.34115661736419334,
+          "block": 1
+        },
+        {
+          "start": 300.48815170800003,
+          "end": 308.13680170500004,
+          "duration": 7.648649997000007,
+          "switches": 4,
+          "switches_per_s": 0.39222607926584113,
+          "block": 1
+        }
+      ]
+    },
+    "clean/recorded_source": {
+      "raw": 20,
+      "debounced": 20,
+      "events": [
+        {
+          "start": 264.132218024,
+          "end": 273.12770177,
+          "duration": 8.99548374599999,
+          "switches": 4,
+          "switches_per_s": 0.3335006859785618,
+          "block": 1
+        },
+        {
+          "start": 300.48815170800003,
+          "end": 308.13680170500004,
+          "duration": 7.648649997000007,
+          "switches": 4,
+          "switches_per_s": 0.39222607926584113,
+          "block": 1
+        }
+      ]
+    },
+    "normal/native": {
+      "raw": 11,
+      "debounced": 10,
+      "events": []
+    },
+    "normal/recorded_source": {
+      "raw": 11,
+      "debounced": 10,
+      "events": []
+    }
+  },
+  "coverage": [
+    {
+      "window": {
+        "route": "0000004c--37c6188881",
+        "origin": 48.358934198,
+        "start": -1000000.0,
+        "end": 1000000.0,
+        "cache": "0000004c--37c6188881-block-0",
+        "segments": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14
+        ]
+      },
+      "coverage": {
+        "plans": 17699,
+        "matched_plans": 17697,
+        "controls": 88406,
+        "matched_controls": 88145,
+        "sendcan": 44019,
+        "matched_sendcan": 44018
+      },
+      "missing": {
+        "control_plan": 261,
+        "plan_model": 2,
+        "can_state": 1
+      },
+      "resets": [
+        {
+          "before": -1.4061600510000005,
+          "after": 0.0
+        },
+        {
+          "can_cadence": 3.686449686000003
+        }
+      ],
+      "solver_failures": 0
+    }
+  ]
+}

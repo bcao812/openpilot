@@ -1,0 +1,1305 @@
+{
+  "route": "00000033--ef8e4d9f34",
+  "commit": "58af12d56ec1708b89a26ed223fa12530c40f6a6",
+  "original_events": 0,
+  "native_enabled_s": {},
+  "clean_s": 0.0,
+  "normal_s": 0.0,
+  "paired_clean_s": 0.0,
+  "paired_normal_s": 0.0,
+  "missing_clean_s": 0.0,
+  "missing_clean_frames": 0,
+  "normal_mask_sha256": "3560a1006ba0fd87d65a984e24f581ab2ab56a17fa128e4d2f675916837b60ba",
+  "coverage": {
+    "baseline": [
+      {
+        "window": {
+          "route": "00000033--ef8e4d9f34",
+          "origin": 38.515001912,
+          "start": -1000000.0,
+          "end": 1000000.0,
+          "cache": "00000033--ef8e4d9f34-block-0",
+          "segments": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25
+          ]
+        },
+        "coverage": {
+          "plans": 30531,
+          "matched_plans": 30530,
+          "controls": 152570,
+          "matched_controls": 152081,
+          "sendcan": 75980,
+          "matched_sendcan": 75979
+        },
+        "missing": {
+          "control_parameters": 1,
+          "control_plan": 488,
+          "plan_model": 1,
+          "can_state": 1
+        },
+        "resets": [
+          {
+            "before": -1.4356374480000014,
+            "after": 0.0
+          },
+          {
+            "can_cadence": 6.077365518000001
+          }
+        ],
+        "solver_failures": 0
+      }
+    ],
+    "default": [
+      {
+        "window": {
+          "route": "00000033--ef8e4d9f34",
+          "origin": 38.515001912,
+          "start": -1000000.0,
+          "end": 1000000.0,
+          "cache": "00000033--ef8e4d9f34-block-0",
+          "segments": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25
+          ]
+        },
+        "coverage": {
+          "plans": 30531,
+          "matched_plans": 30530,
+          "controls": 152570,
+          "matched_controls": 152081,
+          "sendcan": 75980,
+          "matched_sendcan": 75979
+        },
+        "missing": {
+          "control_parameters": 1,
+          "control_plan": 488,
+          "plan_model": 1,
+          "can_state": 1
+        },
+        "resets": [
+          {
+            "before": -1.4356374480000014,
+            "after": 0.0
+          },
+          {
+            "can_cadence": 6.077365518000001
+          }
+        ],
+        "solver_failures": 0
+      }
+    ],
+    "experimental": [
+      {
+        "window": {
+          "route": "00000033--ef8e4d9f34",
+          "origin": 38.515001912,
+          "start": -1000000.0,
+          "end": 1000000.0,
+          "cache": "00000033--ef8e4d9f34-block-0",
+          "segments": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25
+          ]
+        },
+        "coverage": {
+          "plans": 30531,
+          "matched_plans": 30530,
+          "controls": 152570,
+          "matched_controls": 152081,
+          "sendcan": 75980,
+          "matched_sendcan": 75979
+        },
+        "missing": {
+          "control_parameters": 1,
+          "control_plan": 488,
+          "plan_model": 1,
+          "can_state": 1
+        },
+        "resets": [
+          {
+            "before": -1.4356374480000014,
+            "after": 0.0
+          },
+          {
+            "can_cadence": 6.077365518000001
+          }
+        ],
+        "solver_failures": 0
+      }
+    ]
+  },
+  "metrics": {
+    "clean": {
+      "native": {
+        "raw": 0,
+        "debounced": 0,
+        "raw_events": [],
+        "events": [],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "baseline": {
+        "raw": 0,
+        "debounced": 0,
+        "raw_events": [],
+        "events": [],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "default": {
+        "raw": 0,
+        "debounced": 0,
+        "raw_events": [],
+        "events": [],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "experimental": {
+        "raw": 0,
+        "debounced": 0,
+        "raw_events": [],
+        "events": [],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      }
+    },
+    "normal": {
+      "native": {
+        "raw": 0,
+        "debounced": 0,
+        "raw_events": [],
+        "events": [],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "baseline": {
+        "raw": 0,
+        "debounced": 0,
+        "raw_events": [],
+        "events": [],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "default": {
+        "raw": 0,
+        "debounced": 0,
+        "raw_events": [],
+        "events": [],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "experimental": {
+        "raw": 0,
+        "debounced": 0,
+        "raw_events": [],
+        "events": [],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      }
+    }
+  },
+  "comparisons": {
+    "clean/default_vs_baseline": {
+      "accel": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": [],
+      "new_events": [],
+      "resolved_events": [],
+      "new_raw_events": [],
+      "resolved_raw_events": []
+    },
+    "clean/experimental_vs_default": {
+      "accel": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": [],
+      "new_events": [],
+      "resolved_events": [],
+      "new_raw_events": [],
+      "resolved_raw_events": []
+    },
+    "normal/default_vs_baseline": {
+      "accel": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": [],
+      "new_events": [],
+      "resolved_events": [],
+      "new_raw_events": [],
+      "resolved_raw_events": []
+    },
+    "normal/experimental_vs_default": {
+      "accel": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": [],
+      "new_events": [],
+      "resolved_events": [],
+      "new_raw_events": [],
+      "resolved_raw_events": []
+    }
+  },
+  "strata": {
+    "speed_lt10kph": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "speed_10to36kph": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "speed_36to72kph": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "speed_ge72kph": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "lead_present": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "no_lead": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "acc": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "e2e": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "model_braking_or_stop": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "force_decel": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "following_source": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "cruise_source": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "first_2s_after_engagement": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    }
+  },
+  "plans": {
+    "default": {
+      "engaged": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "low_speed": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "model_risk": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "strong_brake": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "stop_changes": 0,
+      "fcw_changes": 0,
+      "nonfinite": 0,
+      "solver_failures": 0
+    },
+    "experimental": {
+      "engaged": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "low_speed": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "model_risk": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "strong_brake": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "stop_changes": 0,
+      "fcw_changes": 0,
+      "nonfinite": 0,
+      "solver_failures": 0
+    }
+  },
+  "event_windows": [],
+  "missing_clean_runs": [],
+  "manual": {
+    "default": {
+      "accel": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": []
+    },
+    "experimental": {
+      "accel": {
+        "frames": 0,
+        "changed": 0,
+        "minimum": null,
+        "maximum": null,
+        "p95_abs": null
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": []
+    }
+  },
+  "cold_normal_s": 0.0,
+  "warm_normal_metrics": {
+    "native": {
+      "debounced": 0,
+      "events": 0
+    },
+    "baseline": {
+      "debounced": 0,
+      "events": 0
+    },
+    "default": {
+      "debounced": 0,
+      "events": 0
+    },
+    "experimental": {
+      "debounced": 0,
+      "events": 0
+    }
+  },
+  "artifacts": {
+    "baseline": "bf111c2b525bf501a280ab50a2ce2910651aa035a33a5e3823e8722ec7634239",
+    "default": "93f672af0ce99d6a57779923a487b1b3e0527a0c403a933769a90e6b04d3bc80",
+    "experimental": "05f692c52b3ae3972cc036f0f309480cd15410c2b777985d61dca2dd330eb2e5"
+  }
+}

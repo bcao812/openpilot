@@ -1,0 +1,4813 @@
+{
+  "route": "00000037--7ccc0ba588",
+  "commit": "a5cbfbf7242c9e7c48cba72876d3a2609cbcb7c3",
+  "original_events": 28,
+  "native_enabled_s": {
+    "selfdriveState": 2793.053867791,
+    "carControl": 2793.0526036220003
+  },
+  "clean_s": 2778.2072883149995,
+  "normal_s": 1961.876454622002,
+  "paired_clean_s": 2778.2072883149995,
+  "paired_normal_s": 1961.876454622002,
+  "missing_clean_s": 0.0,
+  "missing_clean_frames": 0,
+  "normal_mask_sha256": "468fe1f38d6136a8d5ad23d8eb81781dbbece5de2bd00eb0b45f3f7e3913ff84",
+  "coverage": {
+    "baseline": [
+      {
+        "window": {
+          "route": "00000037--7ccc0ba588",
+          "origin": 29.847844883,
+          "start": -1000000.0,
+          "end": 1000000.0,
+          "cache": "00000037--7ccc0ba588-block-0",
+          "segments": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54
+          ]
+        },
+        "coverage": {
+          "plans": 64758,
+          "matched_plans": 64757,
+          "controls": 323159,
+          "matched_controls": 322551,
+          "sendcan": 161277,
+          "matched_sendcan": 161276
+        },
+        "missing": {
+          "control_parameters": 1,
+          "control_plan": 607,
+          "plan_model": 1,
+          "can_state": 1
+        },
+        "resets": [
+          {
+            "before": -1.3859834370000002,
+            "after": 0.0
+          }
+        ],
+        "solver_failures": 0
+      }
+    ],
+    "default": [
+      {
+        "window": {
+          "route": "00000037--7ccc0ba588",
+          "origin": 29.847844883,
+          "start": -1000000.0,
+          "end": 1000000.0,
+          "cache": "00000037--7ccc0ba588-block-0",
+          "segments": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54
+          ]
+        },
+        "coverage": {
+          "plans": 64758,
+          "matched_plans": 64757,
+          "controls": 323159,
+          "matched_controls": 322551,
+          "sendcan": 161277,
+          "matched_sendcan": 161276
+        },
+        "missing": {
+          "control_parameters": 1,
+          "control_plan": 607,
+          "plan_model": 1,
+          "can_state": 1
+        },
+        "resets": [
+          {
+            "before": -1.3859834370000002,
+            "after": 0.0
+          }
+        ],
+        "solver_failures": 0
+      }
+    ],
+    "experimental": [
+      {
+        "window": {
+          "route": "00000037--7ccc0ba588",
+          "origin": 29.847844883,
+          "start": -1000000.0,
+          "end": 1000000.0,
+          "cache": "00000037--7ccc0ba588-block-0",
+          "segments": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54
+          ]
+        },
+        "coverage": {
+          "plans": 64758,
+          "matched_plans": 64757,
+          "controls": 323159,
+          "matched_controls": 322551,
+          "sendcan": 161277,
+          "matched_sendcan": 161276
+        },
+        "missing": {
+          "control_parameters": 1,
+          "control_plan": 607,
+          "plan_model": 1,
+          "can_state": 1
+        },
+        "resets": [
+          {
+            "before": -1.3859834370000002,
+            "after": 0.0
+          }
+        ],
+        "solver_failures": 0
+      }
+    ]
+  },
+  "metrics": {
+    "clean": {
+      "native": {
+        "raw": 414,
+        "debounced": 396,
+        "raw_events": [
+          {
+            "start": 232.144619337,
+            "end": 237.40477324200003,
+            "duration": 5.260153905000038,
+            "switches": 5,
+            "switches_per_s": 0.7604340238405953,
+            "block": 4,
+            "speed_kph": 59.10470123291016,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 515.051232719,
+            "end": 527.359157714,
+            "duration": 12.307924995000008,
+            "switches": 4,
+            "switches_per_s": 0.24374539178770793,
+            "block": 7,
+            "speed_kph": 27.30501823425293,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 663.913584537,
+            "end": 681.56128927,
+            "duration": 17.647704732999955,
+            "switches": 7,
+            "switches_per_s": 0.33998755593300617,
+            "block": 7,
+            "speed_kph": 64.26784286499024,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 1352.8712381809999,
+            "end": 1361.7638643229998,
+            "duration": 8.892626141999926,
+            "switches": 4,
+            "switches_per_s": 0.3373581608059493,
+            "block": 11,
+            "speed_kph": 14.31449203491211,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1398.8690164969998,
+            "end": 1405.374014775,
+            "duration": 6.50499827800013,
+            "switches": 4,
+            "switches_per_s": 0.4611838269267471,
+            "block": 11,
+            "speed_kph": 16.534964561462402,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1508.32466359,
+            "end": 1515.8740165559998,
+            "duration": 7.549352965999788,
+            "switches": 4,
+            "switches_per_s": 0.3973850492235793,
+            "block": 12,
+            "speed_kph": 48.00356941223145,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1653.7245556179998,
+            "end": 1663.1834593639999,
+            "duration": 9.458903746000033,
+            "switches": 4,
+            "switches_per_s": 0.3171614893817516,
+            "block": 15,
+            "speed_kph": 17.3568097114563,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1669.3272919659998,
+            "end": 1684.286110242,
+            "duration": 14.958818276000102,
+            "switches": 5,
+            "switches_per_s": 0.26740080173429154,
+            "block": 15,
+            "speed_kph": 18.249151039123536,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1712.5328114289998,
+            "end": 1712.933868095,
+            "duration": 0.40105666600015866,
+            "switches": 5,
+            "switches_per_s": 9.973652950075682,
+            "block": 15,
+            "speed_kph": 24.9549654006958,
+            "lead_fraction": 1.0,
+            "frequency_group": ">=2",
+            "duration_group": "<5"
+          },
+          {
+            "start": 1783.734412756,
+            "end": 1793.3694853559998,
+            "duration": 9.63507259999983,
+            "switches": 4,
+            "switches_per_s": 0.31136246965072717,
+            "block": 15,
+            "speed_kph": 30.319505310058595,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1892.978199016,
+            "end": 1898.038643233,
+            "duration": 5.06044421699994,
+            "switches": 4,
+            "switches_per_s": 0.5928333307028401,
+            "block": 15,
+            "speed_kph": 15.125483894348145,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1927.185440305,
+            "end": 1938.541635457,
+            "duration": 11.356195152000055,
+            "switches": 4,
+            "switches_per_s": 0.264172987505559,
+            "block": 15,
+            "speed_kph": 30.072865676879882,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1944.6851798819998,
+            "end": 1959.338135501,
+            "duration": 14.652955619000068,
+            "switches": 6,
+            "switches_per_s": 0.3412280859921969,
+            "block": 15,
+            "speed_kph": 28.23615074157715,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2001.5797916309998,
+            "end": 2013.022101991,
+            "duration": 11.442310360000192,
+            "switches": 5,
+            "switches_per_s": 0.3495797504307454,
+            "block": 15,
+            "speed_kph": 21.255436134338378,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2039.1203858879999,
+            "end": 2048.7352990599998,
+            "duration": 9.614913171999888,
+            "switches": 4,
+            "switches_per_s": 0.3120152981450174,
+            "block": 15,
+            "speed_kph": 25.848594188690186,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2054.133293694,
+            "end": 2066.6846100949997,
+            "duration": 12.551316400999895,
+            "switches": 5,
+            "switches_per_s": 0.31869167123229736,
+            "block": 15,
+            "speed_kph": 14.683579444885254,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2072.082586136,
+            "end": 2082.785103111,
+            "duration": 10.70251697499998,
+            "switches": 4,
+            "switches_per_s": 0.28030789458290073,
+            "block": 15,
+            "speed_kph": 12.83414568901062,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2104.987587008,
+            "end": 2107.838388414,
+            "duration": 2.850801405999846,
+            "switches": 4,
+            "switches_per_s": 1.0523356673271411,
+            "block": 18,
+            "speed_kph": 6.399715948104858,
+            "lead_fraction": 1.0,
+            "frequency_group": "1-2",
+            "duration_group": "<5"
+          },
+          {
+            "start": 2113.17906263,
+            "end": 2119.243035701,
+            "duration": 6.063973070999964,
+            "switches": 4,
+            "switches_per_s": 0.49472515211966345,
+            "block": 18,
+            "speed_kph": 6.998281574249268,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2137.673876579,
+            "end": 2146.226818399,
+            "duration": 8.552941819999887,
+            "switches": 6,
+            "switches_per_s": 0.5845941788482861,
+            "block": 18,
+            "speed_kph": 10.167366027832031,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2245.9306222669998,
+            "end": 2258.540576325,
+            "duration": 12.609954058000312,
+            "switches": 4,
+            "switches_per_s": 0.23790729024081317,
+            "block": 18,
+            "speed_kph": 11.915246200561525,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2347.993427801,
+            "end": 2360.377760713,
+            "duration": 12.38433291199999,
+            "switches": 4,
+            "switches_per_s": 0.24224154997425043,
+            "block": 18,
+            "speed_kph": 12.334444570541383,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2383.5450809649997,
+            "end": 2394.587407783,
+            "duration": 11.04232681800022,
+            "switches": 4,
+            "switches_per_s": 0.2716818700846335,
+            "block": 18,
+            "speed_kph": 13.345493602752686,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2401.130593041,
+            "end": 2411.288412673,
+            "duration": 10.157819632000155,
+            "switches": 5,
+            "switches_per_s": 0.3937852949661372,
+            "block": 18,
+            "speed_kph": 9.905494022369385,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2456.7805321349997,
+            "end": 2465.189048746,
+            "duration": 8.408516611000323,
+            "switches": 4,
+            "switches_per_s": 0.35678112309075927,
+            "block": 18,
+            "speed_kph": 33.930726814270024,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2474.88897369,
+            "end": 2483.4811901969997,
+            "duration": 8.592216506999648,
+            "switches": 4,
+            "switches_per_s": 0.3491532129754936,
+            "block": 18,
+            "speed_kph": 35.017190551757814,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2571.736208966,
+            "end": 2578.982122296,
+            "duration": 7.245913329999894,
+            "switches": 4,
+            "switches_per_s": 0.4140264813242037,
+            "block": 18,
+            "speed_kph": 10.251897239685059,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2644.540882636,
+            "end": 2655.099331903,
+            "duration": 10.558449267000015,
+            "switches": 4,
+            "switches_per_s": 0.28413263388747556,
+            "block": 18,
+            "speed_kph": 29.451324462890625,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2687.984612984,
+            "end": 2700.386216208,
+            "duration": 12.401603224000155,
+            "switches": 4,
+            "switches_per_s": 0.2419042075297379,
+            "block": 18,
+            "speed_kph": 20.466700172424318,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2738.0944608289997,
+            "end": 2753.653440876,
+            "duration": 15.558980047000205,
+            "switches": 5,
+            "switches_per_s": 0.25708626066213164,
+            "block": 21,
+            "speed_kph": 56.99663600921631,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 2781.902610604,
+            "end": 2788.687835706,
+            "duration": 6.785225101999913,
+            "switches": 4,
+            "switches_per_s": 0.4421371369264911,
+            "block": 21,
+            "speed_kph": 39.06910285949707,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "events": [
+          {
+            "start": 515.051232719,
+            "end": 527.359157714,
+            "duration": 12.307924995000008,
+            "switches": 4,
+            "switches_per_s": 0.24374539178770793,
+            "block": 7,
+            "speed_kph": 27.30501823425293,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 663.913584537,
+            "end": 681.56128927,
+            "duration": 17.647704732999955,
+            "switches": 7,
+            "switches_per_s": 0.33998755593300617,
+            "block": 7,
+            "speed_kph": 64.26784286499024,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 1352.8712381809999,
+            "end": 1361.7638643229998,
+            "duration": 8.892626141999926,
+            "switches": 4,
+            "switches_per_s": 0.3373581608059493,
+            "block": 11,
+            "speed_kph": 14.31449203491211,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1398.8690164969998,
+            "end": 1405.374014775,
+            "duration": 6.50499827800013,
+            "switches": 4,
+            "switches_per_s": 0.4611838269267471,
+            "block": 11,
+            "speed_kph": 16.534964561462402,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1508.32466359,
+            "end": 1515.8740165559998,
+            "duration": 7.549352965999788,
+            "switches": 4,
+            "switches_per_s": 0.3973850492235793,
+            "block": 12,
+            "speed_kph": 48.00356941223145,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1653.7245556179998,
+            "end": 1663.1834593639999,
+            "duration": 9.458903746000033,
+            "switches": 4,
+            "switches_per_s": 0.3171614893817516,
+            "block": 15,
+            "speed_kph": 17.3568097114563,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1669.3272919659998,
+            "end": 1684.286110242,
+            "duration": 14.958818276000102,
+            "switches": 5,
+            "switches_per_s": 0.26740080173429154,
+            "block": 15,
+            "speed_kph": 18.249151039123536,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1783.734412756,
+            "end": 1793.3694853559998,
+            "duration": 9.63507259999983,
+            "switches": 4,
+            "switches_per_s": 0.31136246965072717,
+            "block": 15,
+            "speed_kph": 30.319505310058595,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1892.978199016,
+            "end": 1898.038643233,
+            "duration": 5.06044421699994,
+            "switches": 4,
+            "switches_per_s": 0.5928333307028401,
+            "block": 15,
+            "speed_kph": 15.125483894348145,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1927.185440305,
+            "end": 1938.541635457,
+            "duration": 11.356195152000055,
+            "switches": 4,
+            "switches_per_s": 0.264172987505559,
+            "block": 15,
+            "speed_kph": 30.072865676879882,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1944.6851798819998,
+            "end": 1959.338135501,
+            "duration": 14.652955619000068,
+            "switches": 6,
+            "switches_per_s": 0.3412280859921969,
+            "block": 15,
+            "speed_kph": 28.23615074157715,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2001.5797916309998,
+            "end": 2013.022101991,
+            "duration": 11.442310360000192,
+            "switches": 5,
+            "switches_per_s": 0.3495797504307454,
+            "block": 15,
+            "speed_kph": 21.255436134338378,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2039.1203858879999,
+            "end": 2048.7352990599998,
+            "duration": 9.614913171999888,
+            "switches": 4,
+            "switches_per_s": 0.3120152981450174,
+            "block": 15,
+            "speed_kph": 25.848594188690186,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2054.133293694,
+            "end": 2066.6846100949997,
+            "duration": 12.551316400999895,
+            "switches": 5,
+            "switches_per_s": 0.31869167123229736,
+            "block": 15,
+            "speed_kph": 14.683579444885254,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2072.082586136,
+            "end": 2082.785103111,
+            "duration": 10.70251697499998,
+            "switches": 4,
+            "switches_per_s": 0.28030789458290073,
+            "block": 15,
+            "speed_kph": 12.83414568901062,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2104.987587008,
+            "end": 2107.838388414,
+            "duration": 2.850801405999846,
+            "switches": 4,
+            "switches_per_s": 1.0523356673271411,
+            "block": 18,
+            "speed_kph": 6.399715948104858,
+            "lead_fraction": 1.0,
+            "frequency_group": "1-2",
+            "duration_group": "<5"
+          },
+          {
+            "start": 2137.673876579,
+            "end": 2146.226818399,
+            "duration": 8.552941819999887,
+            "switches": 6,
+            "switches_per_s": 0.5845941788482861,
+            "block": 18,
+            "speed_kph": 10.167366027832031,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2245.9306222669998,
+            "end": 2258.540576325,
+            "duration": 12.609954058000312,
+            "switches": 4,
+            "switches_per_s": 0.23790729024081317,
+            "block": 18,
+            "speed_kph": 11.915246200561525,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2347.993427801,
+            "end": 2360.377760713,
+            "duration": 12.38433291199999,
+            "switches": 4,
+            "switches_per_s": 0.24224154997425043,
+            "block": 18,
+            "speed_kph": 12.334444570541383,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2383.5450809649997,
+            "end": 2394.587407783,
+            "duration": 11.04232681800022,
+            "switches": 4,
+            "switches_per_s": 0.2716818700846335,
+            "block": 18,
+            "speed_kph": 13.345493602752686,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2401.130593041,
+            "end": 2411.288412673,
+            "duration": 10.157819632000155,
+            "switches": 5,
+            "switches_per_s": 0.3937852949661372,
+            "block": 18,
+            "speed_kph": 9.905494022369385,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2456.7805321349997,
+            "end": 2465.189048746,
+            "duration": 8.408516611000323,
+            "switches": 4,
+            "switches_per_s": 0.35678112309075927,
+            "block": 18,
+            "speed_kph": 33.930726814270024,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2474.88897369,
+            "end": 2483.4811901969997,
+            "duration": 8.592216506999648,
+            "switches": 4,
+            "switches_per_s": 0.3491532129754936,
+            "block": 18,
+            "speed_kph": 35.017190551757814,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2571.736208966,
+            "end": 2578.982122296,
+            "duration": 7.245913329999894,
+            "switches": 4,
+            "switches_per_s": 0.4140264813242037,
+            "block": 18,
+            "speed_kph": 10.251897239685059,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2644.540882636,
+            "end": 2655.099331903,
+            "duration": 10.558449267000015,
+            "switches": 4,
+            "switches_per_s": 0.28413263388747556,
+            "block": 18,
+            "speed_kph": 29.451324462890625,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2687.984612984,
+            "end": 2700.386216208,
+            "duration": 12.401603224000155,
+            "switches": 4,
+            "switches_per_s": 0.2419042075297379,
+            "block": 18,
+            "speed_kph": 20.466700172424318,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2738.0944608289997,
+            "end": 2753.653440876,
+            "duration": 15.558980047000205,
+            "switches": 5,
+            "switches_per_s": 0.25708626066213164,
+            "block": 21,
+            "speed_kph": 56.99663600921631,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 2781.902610604,
+            "end": 2788.687835706,
+            "duration": 6.785225101999913,
+            "switches": 4,
+            "switches_per_s": 0.4421371369264911,
+            "block": 21,
+            "speed_kph": 39.06910285949707,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "baseline": {
+        "raw": 411,
+        "debounced": 400,
+        "raw_events": [
+          {
+            "start": 232.144619337,
+            "end": 237.40477324200003,
+            "duration": 5.260153905000038,
+            "switches": 5,
+            "switches_per_s": 0.7604340238405953,
+            "block": 4,
+            "speed_kph": 59.10470123291016,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 515.051232719,
+            "end": 527.359157714,
+            "duration": 12.307924995000008,
+            "switches": 4,
+            "switches_per_s": 0.24374539178770793,
+            "block": 7,
+            "speed_kph": 27.30501823425293,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 663.913584537,
+            "end": 681.56128927,
+            "duration": 17.647704732999955,
+            "switches": 7,
+            "switches_per_s": 0.33998755593300617,
+            "block": 7,
+            "speed_kph": 64.26784286499024,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 1352.8712381809999,
+            "end": 1361.926479844,
+            "duration": 9.05524166300006,
+            "switches": 4,
+            "switches_per_s": 0.33129982739809954,
+            "block": 11,
+            "speed_kph": 14.283054828643799,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1398.8690164969998,
+            "end": 1405.4150217539998,
+            "duration": 6.546005256999933,
+            "switches": 4,
+            "switches_per_s": 0.45829477402144875,
+            "block": 11,
+            "speed_kph": 16.532290077209474,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1508.32466359,
+            "end": 1515.9132641079998,
+            "duration": 7.588600517999794,
+            "switches": 4,
+            "switches_per_s": 0.3953298098752392,
+            "block": 11,
+            "speed_kph": 47.966253662109374,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1653.624014004,
+            "end": 1663.1834593639999,
+            "duration": 9.559445359999927,
+            "switches": 4,
+            "switches_per_s": 0.3138257385259037,
+            "block": 14,
+            "speed_kph": 17.38495445251465,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1669.3272919659998,
+            "end": 1684.286110242,
+            "duration": 14.958818276000102,
+            "switches": 5,
+            "switches_per_s": 0.26740080173429154,
+            "block": 14,
+            "speed_kph": 18.249151039123536,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1783.7726080159998,
+            "end": 1793.3694853559998,
+            "duration": 9.596877339999992,
+            "switches": 4,
+            "switches_per_s": 0.3126016821634195,
+            "block": 14,
+            "speed_kph": 30.300382232666017,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1892.978199016,
+            "end": 1898.038643233,
+            "duration": 5.06044421699994,
+            "switches": 4,
+            "switches_per_s": 0.5928333307028401,
+            "block": 15,
+            "speed_kph": 15.125483894348145,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1927.185440305,
+            "end": 1938.4819469679999,
+            "duration": 11.296506662999946,
+            "switches": 4,
+            "switches_per_s": 0.2655688249028402,
+            "block": 15,
+            "speed_kph": 30.087465476989745,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1944.6851798819998,
+            "end": 1959.338135501,
+            "duration": 14.652955619000068,
+            "switches": 6,
+            "switches_per_s": 0.3412280859921969,
+            "block": 15,
+            "speed_kph": 28.23615074157715,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2001.6198645999998,
+            "end": 2013.022101991,
+            "duration": 11.402237391000199,
+            "switches": 5,
+            "switches_per_s": 0.3508083425062879,
+            "block": 15,
+            "speed_kph": 21.262405586242675,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2039.221261409,
+            "end": 2048.7352990599998,
+            "duration": 9.514037650999853,
+            "switches": 4,
+            "switches_per_s": 0.3153235366568812,
+            "block": 15,
+            "speed_kph": 25.847705841064453,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2054.133293694,
+            "end": 2066.6846100949997,
+            "duration": 12.551316400999895,
+            "switches": 5,
+            "switches_per_s": 0.31869167123229736,
+            "block": 15,
+            "speed_kph": 14.683579444885254,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2072.082586136,
+            "end": 2082.8840527449997,
+            "duration": 10.801466608999817,
+            "switches": 4,
+            "switches_per_s": 0.2777400614746511,
+            "block": 15,
+            "speed_kph": 12.81128854751587,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2137.673876579,
+            "end": 2146.226818399,
+            "duration": 8.552941819999887,
+            "switches": 6,
+            "switches_per_s": 0.5845941788482861,
+            "block": 16,
+            "speed_kph": 10.167366027832031,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2245.9306222669998,
+            "end": 2258.580867002,
+            "duration": 12.650244735000342,
+            "switches": 4,
+            "switches_per_s": 0.23714956215034197,
+            "block": 16,
+            "speed_kph": 11.89539785385132,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2347.993427801,
+            "end": 2360.4388161819998,
+            "duration": 12.445388380999702,
+            "switches": 4,
+            "switches_per_s": 0.24105314419757937,
+            "block": 16,
+            "speed_kph": 12.317278003692627,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2383.5450809649997,
+            "end": 2394.587407783,
+            "duration": 11.04232681800022,
+            "switches": 4,
+            "switches_per_s": 0.2716818700846335,
+            "block": 16,
+            "speed_kph": 13.345493602752686,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2401.189847625,
+            "end": 2411.4308225689997,
+            "duration": 10.240974943999845,
+            "switches": 5,
+            "switches_per_s": 0.39058781237850676,
+            "block": 16,
+            "speed_kph": 9.847322273254395,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 16,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2456.8397008849997,
+            "end": 2465.189048746,
+            "duration": 8.349347861000297,
+            "switches": 4,
+            "switches_per_s": 0.3593094993697608,
+            "block": 16,
+            "speed_kph": 33.87514801025391,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2474.88897369,
+            "end": 2483.4811901969997,
+            "duration": 8.592216506999648,
+            "switches": 4,
+            "switches_per_s": 0.3491532129754936,
+            "block": 16,
+            "speed_kph": 35.017190551757814,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2571.736208966,
+            "end": 2578.982122296,
+            "duration": 7.245913329999894,
+            "switches": 4,
+            "switches_per_s": 0.4140264813242037,
+            "block": 16,
+            "speed_kph": 10.251897239685059,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2644.540882636,
+            "end": 2655.099331903,
+            "duration": 10.558449267000015,
+            "switches": 4,
+            "switches_per_s": 0.28413263388747556,
+            "block": 16,
+            "speed_kph": 29.451324462890625,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2687.984612984,
+            "end": 2700.386216208,
+            "duration": 12.401603224000155,
+            "switches": 4,
+            "switches_per_s": 0.2419042075297379,
+            "block": 16,
+            "speed_kph": 20.466700172424318,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2738.1342911419997,
+            "end": 2753.5936811359998,
+            "duration": 15.459389994000048,
+            "switches": 5,
+            "switches_per_s": 0.25874242137318754,
+            "block": 19,
+            "speed_kph": 57.033798980712895,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 2781.9426926359997,
+            "end": 2788.687835706,
+            "duration": 6.7451430700002675,
+            "switches": 4,
+            "switches_per_s": 0.44476447257921264,
+            "block": 19,
+            "speed_kph": 39.04018135070801,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2849.195671047,
+            "end": 2852.347011202,
+            "duration": 3.151340155000071,
+            "switches": 4,
+            "switches_per_s": 0.9519759379957929,
+            "block": 19,
+            "speed_kph": 65.53085861206056,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "<5"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 20,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "events": [
+          {
+            "start": 515.051232719,
+            "end": 527.359157714,
+            "duration": 12.307924995000008,
+            "switches": 4,
+            "switches_per_s": 0.24374539178770793,
+            "block": 7,
+            "speed_kph": 27.30501823425293,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 663.913584537,
+            "end": 681.56128927,
+            "duration": 17.647704732999955,
+            "switches": 7,
+            "switches_per_s": 0.33998755593300617,
+            "block": 7,
+            "speed_kph": 64.26784286499024,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 1352.8712381809999,
+            "end": 1361.926479844,
+            "duration": 9.05524166300006,
+            "switches": 4,
+            "switches_per_s": 0.33129982739809954,
+            "block": 11,
+            "speed_kph": 14.283054828643799,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1398.8690164969998,
+            "end": 1405.4150217539998,
+            "duration": 6.546005256999933,
+            "switches": 4,
+            "switches_per_s": 0.45829477402144875,
+            "block": 11,
+            "speed_kph": 16.532290077209474,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1508.32466359,
+            "end": 1515.9132641079998,
+            "duration": 7.588600517999794,
+            "switches": 4,
+            "switches_per_s": 0.3953298098752392,
+            "block": 11,
+            "speed_kph": 47.966253662109374,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1653.624014004,
+            "end": 1663.1834593639999,
+            "duration": 9.559445359999927,
+            "switches": 4,
+            "switches_per_s": 0.3138257385259037,
+            "block": 14,
+            "speed_kph": 17.38495445251465,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1669.3272919659998,
+            "end": 1684.286110242,
+            "duration": 14.958818276000102,
+            "switches": 5,
+            "switches_per_s": 0.26740080173429154,
+            "block": 14,
+            "speed_kph": 18.249151039123536,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1783.7726080159998,
+            "end": 1793.3694853559998,
+            "duration": 9.596877339999992,
+            "switches": 4,
+            "switches_per_s": 0.3126016821634195,
+            "block": 14,
+            "speed_kph": 30.300382232666017,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1892.978199016,
+            "end": 1898.038643233,
+            "duration": 5.06044421699994,
+            "switches": 4,
+            "switches_per_s": 0.5928333307028401,
+            "block": 15,
+            "speed_kph": 15.125483894348145,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1927.185440305,
+            "end": 1938.4819469679999,
+            "duration": 11.296506662999946,
+            "switches": 4,
+            "switches_per_s": 0.2655688249028402,
+            "block": 15,
+            "speed_kph": 30.087465476989745,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1944.6851798819998,
+            "end": 1959.338135501,
+            "duration": 14.652955619000068,
+            "switches": 6,
+            "switches_per_s": 0.3412280859921969,
+            "block": 15,
+            "speed_kph": 28.23615074157715,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2001.6198645999998,
+            "end": 2013.022101991,
+            "duration": 11.402237391000199,
+            "switches": 5,
+            "switches_per_s": 0.3508083425062879,
+            "block": 15,
+            "speed_kph": 21.262405586242675,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2039.221261409,
+            "end": 2048.7352990599998,
+            "duration": 9.514037650999853,
+            "switches": 4,
+            "switches_per_s": 0.3153235366568812,
+            "block": 15,
+            "speed_kph": 25.847705841064453,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2054.133293694,
+            "end": 2066.6846100949997,
+            "duration": 12.551316400999895,
+            "switches": 5,
+            "switches_per_s": 0.31869167123229736,
+            "block": 15,
+            "speed_kph": 14.683579444885254,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2072.082586136,
+            "end": 2082.8840527449997,
+            "duration": 10.801466608999817,
+            "switches": 4,
+            "switches_per_s": 0.2777400614746511,
+            "block": 15,
+            "speed_kph": 12.81128854751587,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2137.673876579,
+            "end": 2146.226818399,
+            "duration": 8.552941819999887,
+            "switches": 6,
+            "switches_per_s": 0.5845941788482861,
+            "block": 16,
+            "speed_kph": 10.167366027832031,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2245.9306222669998,
+            "end": 2258.580867002,
+            "duration": 12.650244735000342,
+            "switches": 4,
+            "switches_per_s": 0.23714956215034197,
+            "block": 16,
+            "speed_kph": 11.89539785385132,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2347.993427801,
+            "end": 2360.4388161819998,
+            "duration": 12.445388380999702,
+            "switches": 4,
+            "switches_per_s": 0.24105314419757937,
+            "block": 16,
+            "speed_kph": 12.317278003692627,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2383.5450809649997,
+            "end": 2394.587407783,
+            "duration": 11.04232681800022,
+            "switches": 4,
+            "switches_per_s": 0.2716818700846335,
+            "block": 16,
+            "speed_kph": 13.345493602752686,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2401.189847625,
+            "end": 2411.4308225689997,
+            "duration": 10.240974943999845,
+            "switches": 5,
+            "switches_per_s": 0.39058781237850676,
+            "block": 16,
+            "speed_kph": 9.847322273254395,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 16,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2456.8397008849997,
+            "end": 2465.189048746,
+            "duration": 8.349347861000297,
+            "switches": 4,
+            "switches_per_s": 0.3593094993697608,
+            "block": 16,
+            "speed_kph": 33.87514801025391,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2474.88897369,
+            "end": 2483.4811901969997,
+            "duration": 8.592216506999648,
+            "switches": 4,
+            "switches_per_s": 0.3491532129754936,
+            "block": 16,
+            "speed_kph": 35.017190551757814,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2571.736208966,
+            "end": 2578.982122296,
+            "duration": 7.245913329999894,
+            "switches": 4,
+            "switches_per_s": 0.4140264813242037,
+            "block": 16,
+            "speed_kph": 10.251897239685059,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2644.540882636,
+            "end": 2655.099331903,
+            "duration": 10.558449267000015,
+            "switches": 4,
+            "switches_per_s": 0.28413263388747556,
+            "block": 16,
+            "speed_kph": 29.451324462890625,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2687.984612984,
+            "end": 2700.386216208,
+            "duration": 12.401603224000155,
+            "switches": 4,
+            "switches_per_s": 0.2419042075297379,
+            "block": 16,
+            "speed_kph": 20.466700172424318,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2738.1342911419997,
+            "end": 2753.5936811359998,
+            "duration": 15.459389994000048,
+            "switches": 5,
+            "switches_per_s": 0.25874242137318754,
+            "block": 19,
+            "speed_kph": 57.033798980712895,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 2781.9426926359997,
+            "end": 2788.687835706,
+            "duration": 6.7451430700002675,
+            "switches": 4,
+            "switches_per_s": 0.44476447257921264,
+            "block": 19,
+            "speed_kph": 39.04018135070801,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 20,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "default": {
+        "raw": 411,
+        "debounced": 400,
+        "raw_events": [
+          {
+            "start": 232.144619337,
+            "end": 237.40477324200003,
+            "duration": 5.260153905000038,
+            "switches": 5,
+            "switches_per_s": 0.7604340238405953,
+            "block": 4,
+            "speed_kph": 59.10470123291016,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 515.051232719,
+            "end": 527.359157714,
+            "duration": 12.307924995000008,
+            "switches": 4,
+            "switches_per_s": 0.24374539178770793,
+            "block": 7,
+            "speed_kph": 27.30501823425293,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 663.913584537,
+            "end": 681.56128927,
+            "duration": 17.647704732999955,
+            "switches": 7,
+            "switches_per_s": 0.33998755593300617,
+            "block": 7,
+            "speed_kph": 64.26784286499024,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 1352.8712381809999,
+            "end": 1361.926479844,
+            "duration": 9.05524166300006,
+            "switches": 4,
+            "switches_per_s": 0.33129982739809954,
+            "block": 11,
+            "speed_kph": 14.283054828643799,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1398.8690164969998,
+            "end": 1405.4150217539998,
+            "duration": 6.546005256999933,
+            "switches": 4,
+            "switches_per_s": 0.45829477402144875,
+            "block": 11,
+            "speed_kph": 16.532290077209474,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1508.32466359,
+            "end": 1515.9132641079998,
+            "duration": 7.588600517999794,
+            "switches": 4,
+            "switches_per_s": 0.3953298098752392,
+            "block": 11,
+            "speed_kph": 47.966253662109374,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1653.624014004,
+            "end": 1663.1834593639999,
+            "duration": 9.559445359999927,
+            "switches": 4,
+            "switches_per_s": 0.3138257385259037,
+            "block": 14,
+            "speed_kph": 17.38495445251465,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1669.3272919659998,
+            "end": 1684.286110242,
+            "duration": 14.958818276000102,
+            "switches": 5,
+            "switches_per_s": 0.26740080173429154,
+            "block": 14,
+            "speed_kph": 18.249151039123536,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1783.7726080159998,
+            "end": 1793.3694853559998,
+            "duration": 9.596877339999992,
+            "switches": 4,
+            "switches_per_s": 0.3126016821634195,
+            "block": 14,
+            "speed_kph": 30.300382232666017,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1892.978199016,
+            "end": 1898.038643233,
+            "duration": 5.06044421699994,
+            "switches": 4,
+            "switches_per_s": 0.5928333307028401,
+            "block": 15,
+            "speed_kph": 15.125483894348145,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1927.185440305,
+            "end": 1938.4819469679999,
+            "duration": 11.296506662999946,
+            "switches": 4,
+            "switches_per_s": 0.2655688249028402,
+            "block": 15,
+            "speed_kph": 30.087465476989745,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1944.6851798819998,
+            "end": 1959.338135501,
+            "duration": 14.652955619000068,
+            "switches": 6,
+            "switches_per_s": 0.3412280859921969,
+            "block": 15,
+            "speed_kph": 28.23615074157715,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2001.6198645999998,
+            "end": 2013.022101991,
+            "duration": 11.402237391000199,
+            "switches": 5,
+            "switches_per_s": 0.3508083425062879,
+            "block": 15,
+            "speed_kph": 21.262405586242675,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2039.221261409,
+            "end": 2048.7352990599998,
+            "duration": 9.514037650999853,
+            "switches": 4,
+            "switches_per_s": 0.3153235366568812,
+            "block": 15,
+            "speed_kph": 25.847705841064453,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2054.133293694,
+            "end": 2066.6846100949997,
+            "duration": 12.551316400999895,
+            "switches": 5,
+            "switches_per_s": 0.31869167123229736,
+            "block": 15,
+            "speed_kph": 14.683579444885254,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2072.082586136,
+            "end": 2082.8840527449997,
+            "duration": 10.801466608999817,
+            "switches": 4,
+            "switches_per_s": 0.2777400614746511,
+            "block": 15,
+            "speed_kph": 12.81128854751587,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2137.673876579,
+            "end": 2146.226818399,
+            "duration": 8.552941819999887,
+            "switches": 6,
+            "switches_per_s": 0.5845941788482861,
+            "block": 16,
+            "speed_kph": 10.167366027832031,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2245.9306222669998,
+            "end": 2258.580867002,
+            "duration": 12.650244735000342,
+            "switches": 4,
+            "switches_per_s": 0.23714956215034197,
+            "block": 16,
+            "speed_kph": 11.89539785385132,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2347.993427801,
+            "end": 2360.4388161819998,
+            "duration": 12.445388380999702,
+            "switches": 4,
+            "switches_per_s": 0.24105314419757937,
+            "block": 16,
+            "speed_kph": 12.317278003692627,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2383.5450809649997,
+            "end": 2394.587407783,
+            "duration": 11.04232681800022,
+            "switches": 4,
+            "switches_per_s": 0.2716818700846335,
+            "block": 16,
+            "speed_kph": 13.345493602752686,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2401.189847625,
+            "end": 2411.4308225689997,
+            "duration": 10.240974943999845,
+            "switches": 5,
+            "switches_per_s": 0.39058781237850676,
+            "block": 16,
+            "speed_kph": 9.847322273254395,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 16,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2456.8397008849997,
+            "end": 2465.189048746,
+            "duration": 8.349347861000297,
+            "switches": 4,
+            "switches_per_s": 0.3593094993697608,
+            "block": 16,
+            "speed_kph": 33.87514801025391,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2474.88897369,
+            "end": 2483.4811901969997,
+            "duration": 8.592216506999648,
+            "switches": 4,
+            "switches_per_s": 0.3491532129754936,
+            "block": 16,
+            "speed_kph": 35.017190551757814,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2571.736208966,
+            "end": 2578.982122296,
+            "duration": 7.245913329999894,
+            "switches": 4,
+            "switches_per_s": 0.4140264813242037,
+            "block": 16,
+            "speed_kph": 10.251897239685059,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2644.540882636,
+            "end": 2655.099331903,
+            "duration": 10.558449267000015,
+            "switches": 4,
+            "switches_per_s": 0.28413263388747556,
+            "block": 16,
+            "speed_kph": 29.451324462890625,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2687.984612984,
+            "end": 2700.386216208,
+            "duration": 12.401603224000155,
+            "switches": 4,
+            "switches_per_s": 0.2419042075297379,
+            "block": 16,
+            "speed_kph": 20.466700172424318,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2738.1342911419997,
+            "end": 2753.5936811359998,
+            "duration": 15.459389994000048,
+            "switches": 5,
+            "switches_per_s": 0.25874242137318754,
+            "block": 19,
+            "speed_kph": 57.033798980712895,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 2781.9426926359997,
+            "end": 2788.687835706,
+            "duration": 6.7451430700002675,
+            "switches": 4,
+            "switches_per_s": 0.44476447257921264,
+            "block": 19,
+            "speed_kph": 39.04018135070801,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2849.195671047,
+            "end": 2852.347011202,
+            "duration": 3.151340155000071,
+            "switches": 4,
+            "switches_per_s": 0.9519759379957929,
+            "block": 19,
+            "speed_kph": 65.53085861206056,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "<5"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 20,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "events": [
+          {
+            "start": 515.051232719,
+            "end": 527.359157714,
+            "duration": 12.307924995000008,
+            "switches": 4,
+            "switches_per_s": 0.24374539178770793,
+            "block": 7,
+            "speed_kph": 27.30501823425293,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 663.913584537,
+            "end": 681.56128927,
+            "duration": 17.647704732999955,
+            "switches": 7,
+            "switches_per_s": 0.33998755593300617,
+            "block": 7,
+            "speed_kph": 64.26784286499024,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 1352.8712381809999,
+            "end": 1361.926479844,
+            "duration": 9.05524166300006,
+            "switches": 4,
+            "switches_per_s": 0.33129982739809954,
+            "block": 11,
+            "speed_kph": 14.283054828643799,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1398.8690164969998,
+            "end": 1405.4150217539998,
+            "duration": 6.546005256999933,
+            "switches": 4,
+            "switches_per_s": 0.45829477402144875,
+            "block": 11,
+            "speed_kph": 16.532290077209474,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1508.32466359,
+            "end": 1515.9132641079998,
+            "duration": 7.588600517999794,
+            "switches": 4,
+            "switches_per_s": 0.3953298098752392,
+            "block": 11,
+            "speed_kph": 47.966253662109374,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1653.624014004,
+            "end": 1663.1834593639999,
+            "duration": 9.559445359999927,
+            "switches": 4,
+            "switches_per_s": 0.3138257385259037,
+            "block": 14,
+            "speed_kph": 17.38495445251465,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1669.3272919659998,
+            "end": 1684.286110242,
+            "duration": 14.958818276000102,
+            "switches": 5,
+            "switches_per_s": 0.26740080173429154,
+            "block": 14,
+            "speed_kph": 18.249151039123536,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1783.7726080159998,
+            "end": 1793.3694853559998,
+            "duration": 9.596877339999992,
+            "switches": 4,
+            "switches_per_s": 0.3126016821634195,
+            "block": 14,
+            "speed_kph": 30.300382232666017,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1892.978199016,
+            "end": 1898.038643233,
+            "duration": 5.06044421699994,
+            "switches": 4,
+            "switches_per_s": 0.5928333307028401,
+            "block": 15,
+            "speed_kph": 15.125483894348145,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1927.185440305,
+            "end": 1938.4819469679999,
+            "duration": 11.296506662999946,
+            "switches": 4,
+            "switches_per_s": 0.2655688249028402,
+            "block": 15,
+            "speed_kph": 30.087465476989745,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1944.6851798819998,
+            "end": 1959.338135501,
+            "duration": 14.652955619000068,
+            "switches": 6,
+            "switches_per_s": 0.3412280859921969,
+            "block": 15,
+            "speed_kph": 28.23615074157715,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2001.6198645999998,
+            "end": 2013.022101991,
+            "duration": 11.402237391000199,
+            "switches": 5,
+            "switches_per_s": 0.3508083425062879,
+            "block": 15,
+            "speed_kph": 21.262405586242675,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2039.221261409,
+            "end": 2048.7352990599998,
+            "duration": 9.514037650999853,
+            "switches": 4,
+            "switches_per_s": 0.3153235366568812,
+            "block": 15,
+            "speed_kph": 25.847705841064453,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2054.133293694,
+            "end": 2066.6846100949997,
+            "duration": 12.551316400999895,
+            "switches": 5,
+            "switches_per_s": 0.31869167123229736,
+            "block": 15,
+            "speed_kph": 14.683579444885254,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2072.082586136,
+            "end": 2082.8840527449997,
+            "duration": 10.801466608999817,
+            "switches": 4,
+            "switches_per_s": 0.2777400614746511,
+            "block": 15,
+            "speed_kph": 12.81128854751587,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2137.673876579,
+            "end": 2146.226818399,
+            "duration": 8.552941819999887,
+            "switches": 6,
+            "switches_per_s": 0.5845941788482861,
+            "block": 16,
+            "speed_kph": 10.167366027832031,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2245.9306222669998,
+            "end": 2258.580867002,
+            "duration": 12.650244735000342,
+            "switches": 4,
+            "switches_per_s": 0.23714956215034197,
+            "block": 16,
+            "speed_kph": 11.89539785385132,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2347.993427801,
+            "end": 2360.4388161819998,
+            "duration": 12.445388380999702,
+            "switches": 4,
+            "switches_per_s": 0.24105314419757937,
+            "block": 16,
+            "speed_kph": 12.317278003692627,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2383.5450809649997,
+            "end": 2394.587407783,
+            "duration": 11.04232681800022,
+            "switches": 4,
+            "switches_per_s": 0.2716818700846335,
+            "block": 16,
+            "speed_kph": 13.345493602752686,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2401.189847625,
+            "end": 2411.4308225689997,
+            "duration": 10.240974943999845,
+            "switches": 5,
+            "switches_per_s": 0.39058781237850676,
+            "block": 16,
+            "speed_kph": 9.847322273254395,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 16,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2456.8397008849997,
+            "end": 2465.189048746,
+            "duration": 8.349347861000297,
+            "switches": 4,
+            "switches_per_s": 0.3593094993697608,
+            "block": 16,
+            "speed_kph": 33.87514801025391,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2474.88897369,
+            "end": 2483.4811901969997,
+            "duration": 8.592216506999648,
+            "switches": 4,
+            "switches_per_s": 0.3491532129754936,
+            "block": 16,
+            "speed_kph": 35.017190551757814,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2571.736208966,
+            "end": 2578.982122296,
+            "duration": 7.245913329999894,
+            "switches": 4,
+            "switches_per_s": 0.4140264813242037,
+            "block": 16,
+            "speed_kph": 10.251897239685059,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2644.540882636,
+            "end": 2655.099331903,
+            "duration": 10.558449267000015,
+            "switches": 4,
+            "switches_per_s": 0.28413263388747556,
+            "block": 16,
+            "speed_kph": 29.451324462890625,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2687.984612984,
+            "end": 2700.386216208,
+            "duration": 12.401603224000155,
+            "switches": 4,
+            "switches_per_s": 0.2419042075297379,
+            "block": 16,
+            "speed_kph": 20.466700172424318,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2738.1342911419997,
+            "end": 2753.5936811359998,
+            "duration": 15.459389994000048,
+            "switches": 5,
+            "switches_per_s": 0.25874242137318754,
+            "block": 19,
+            "speed_kph": 57.033798980712895,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 2781.9426926359997,
+            "end": 2788.687835706,
+            "duration": 6.7451430700002675,
+            "switches": 4,
+            "switches_per_s": 0.44476447257921264,
+            "block": 19,
+            "speed_kph": 39.04018135070801,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 20,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "experimental": {
+        "raw": 411,
+        "debounced": 400,
+        "raw_events": [
+          {
+            "start": 232.144619337,
+            "end": 237.40477324200003,
+            "duration": 5.260153905000038,
+            "switches": 5,
+            "switches_per_s": 0.7604340238405953,
+            "block": 4,
+            "speed_kph": 59.10470123291016,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 515.051232719,
+            "end": 527.359157714,
+            "duration": 12.307924995000008,
+            "switches": 4,
+            "switches_per_s": 0.24374539178770793,
+            "block": 7,
+            "speed_kph": 27.30501823425293,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 663.913584537,
+            "end": 681.56128927,
+            "duration": 17.647704732999955,
+            "switches": 7,
+            "switches_per_s": 0.33998755593300617,
+            "block": 7,
+            "speed_kph": 64.26784286499024,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 1352.8712381809999,
+            "end": 1361.926479844,
+            "duration": 9.05524166300006,
+            "switches": 4,
+            "switches_per_s": 0.33129982739809954,
+            "block": 11,
+            "speed_kph": 14.283054828643799,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1398.8690164969998,
+            "end": 1405.4150217539998,
+            "duration": 6.546005256999933,
+            "switches": 4,
+            "switches_per_s": 0.45829477402144875,
+            "block": 11,
+            "speed_kph": 16.532290077209474,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1508.32466359,
+            "end": 1515.9132641079998,
+            "duration": 7.588600517999794,
+            "switches": 4,
+            "switches_per_s": 0.3953298098752392,
+            "block": 11,
+            "speed_kph": 47.966253662109374,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1653.624014004,
+            "end": 1663.1834593639999,
+            "duration": 9.559445359999927,
+            "switches": 4,
+            "switches_per_s": 0.3138257385259037,
+            "block": 14,
+            "speed_kph": 17.38495445251465,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1669.3272919659998,
+            "end": 1684.286110242,
+            "duration": 14.958818276000102,
+            "switches": 5,
+            "switches_per_s": 0.26740080173429154,
+            "block": 14,
+            "speed_kph": 18.249151039123536,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1783.7726080159998,
+            "end": 1793.3694853559998,
+            "duration": 9.596877339999992,
+            "switches": 4,
+            "switches_per_s": 0.3126016821634195,
+            "block": 14,
+            "speed_kph": 30.300382232666017,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1892.978199016,
+            "end": 1898.038643233,
+            "duration": 5.06044421699994,
+            "switches": 4,
+            "switches_per_s": 0.5928333307028401,
+            "block": 15,
+            "speed_kph": 15.125483894348145,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1927.185440305,
+            "end": 1938.4819469679999,
+            "duration": 11.296506662999946,
+            "switches": 4,
+            "switches_per_s": 0.2655688249028402,
+            "block": 15,
+            "speed_kph": 30.087465476989745,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1944.6851798819998,
+            "end": 1959.338135501,
+            "duration": 14.652955619000068,
+            "switches": 6,
+            "switches_per_s": 0.3412280859921969,
+            "block": 15,
+            "speed_kph": 28.23615074157715,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2001.6198645999998,
+            "end": 2013.022101991,
+            "duration": 11.402237391000199,
+            "switches": 5,
+            "switches_per_s": 0.3508083425062879,
+            "block": 15,
+            "speed_kph": 21.262405586242675,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2039.221261409,
+            "end": 2048.7352990599998,
+            "duration": 9.514037650999853,
+            "switches": 4,
+            "switches_per_s": 0.3153235366568812,
+            "block": 15,
+            "speed_kph": 25.847705841064453,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2054.133293694,
+            "end": 2066.6846100949997,
+            "duration": 12.551316400999895,
+            "switches": 5,
+            "switches_per_s": 0.31869167123229736,
+            "block": 15,
+            "speed_kph": 14.683579444885254,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2072.082586136,
+            "end": 2082.8840527449997,
+            "duration": 10.801466608999817,
+            "switches": 4,
+            "switches_per_s": 0.2777400614746511,
+            "block": 15,
+            "speed_kph": 12.81128854751587,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2137.673876579,
+            "end": 2146.226818399,
+            "duration": 8.552941819999887,
+            "switches": 6,
+            "switches_per_s": 0.5845941788482861,
+            "block": 16,
+            "speed_kph": 10.167366027832031,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2245.9306222669998,
+            "end": 2258.580867002,
+            "duration": 12.650244735000342,
+            "switches": 4,
+            "switches_per_s": 0.23714956215034197,
+            "block": 16,
+            "speed_kph": 11.89539785385132,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2347.993427801,
+            "end": 2360.4388161819998,
+            "duration": 12.445388380999702,
+            "switches": 4,
+            "switches_per_s": 0.24105314419757937,
+            "block": 16,
+            "speed_kph": 12.317278003692627,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2383.5450809649997,
+            "end": 2394.587407783,
+            "duration": 11.04232681800022,
+            "switches": 4,
+            "switches_per_s": 0.2716818700846335,
+            "block": 16,
+            "speed_kph": 13.345493602752686,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2401.189847625,
+            "end": 2411.4308225689997,
+            "duration": 10.240974943999845,
+            "switches": 5,
+            "switches_per_s": 0.39058781237850676,
+            "block": 16,
+            "speed_kph": 9.847322273254395,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 16,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2456.8397008849997,
+            "end": 2465.189048746,
+            "duration": 8.349347861000297,
+            "switches": 4,
+            "switches_per_s": 0.3593094993697608,
+            "block": 16,
+            "speed_kph": 33.87514801025391,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2474.88897369,
+            "end": 2483.4811901969997,
+            "duration": 8.592216506999648,
+            "switches": 4,
+            "switches_per_s": 0.3491532129754936,
+            "block": 16,
+            "speed_kph": 35.017190551757814,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2571.736208966,
+            "end": 2578.982122296,
+            "duration": 7.245913329999894,
+            "switches": 4,
+            "switches_per_s": 0.4140264813242037,
+            "block": 16,
+            "speed_kph": 10.251897239685059,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2644.540882636,
+            "end": 2655.099331903,
+            "duration": 10.558449267000015,
+            "switches": 4,
+            "switches_per_s": 0.28413263388747556,
+            "block": 16,
+            "speed_kph": 29.451324462890625,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2687.984612984,
+            "end": 2700.386216208,
+            "duration": 12.401603224000155,
+            "switches": 4,
+            "switches_per_s": 0.2419042075297379,
+            "block": 16,
+            "speed_kph": 20.466700172424318,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2738.1342911419997,
+            "end": 2753.5936811359998,
+            "duration": 15.459389994000048,
+            "switches": 5,
+            "switches_per_s": 0.25874242137318754,
+            "block": 19,
+            "speed_kph": 57.033798980712895,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 2781.9426926359997,
+            "end": 2788.687835706,
+            "duration": 6.7451430700002675,
+            "switches": 4,
+            "switches_per_s": 0.44476447257921264,
+            "block": 19,
+            "speed_kph": 39.04018135070801,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2849.195671047,
+            "end": 2852.347011202,
+            "duration": 3.151340155000071,
+            "switches": 4,
+            "switches_per_s": 0.9519759379957929,
+            "block": 19,
+            "speed_kph": 65.53085861206056,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "<5"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 20,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "events": [
+          {
+            "start": 515.051232719,
+            "end": 527.359157714,
+            "duration": 12.307924995000008,
+            "switches": 4,
+            "switches_per_s": 0.24374539178770793,
+            "block": 7,
+            "speed_kph": 27.30501823425293,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 663.913584537,
+            "end": 681.56128927,
+            "duration": 17.647704732999955,
+            "switches": 7,
+            "switches_per_s": 0.33998755593300617,
+            "block": 7,
+            "speed_kph": 64.26784286499024,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 1352.8712381809999,
+            "end": 1361.926479844,
+            "duration": 9.05524166300006,
+            "switches": 4,
+            "switches_per_s": 0.33129982739809954,
+            "block": 11,
+            "speed_kph": 14.283054828643799,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1398.8690164969998,
+            "end": 1405.4150217539998,
+            "duration": 6.546005256999933,
+            "switches": 4,
+            "switches_per_s": 0.45829477402144875,
+            "block": 11,
+            "speed_kph": 16.532290077209474,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1508.32466359,
+            "end": 1515.9132641079998,
+            "duration": 7.588600517999794,
+            "switches": 4,
+            "switches_per_s": 0.3953298098752392,
+            "block": 11,
+            "speed_kph": 47.966253662109374,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1653.624014004,
+            "end": 1663.1834593639999,
+            "duration": 9.559445359999927,
+            "switches": 4,
+            "switches_per_s": 0.3138257385259037,
+            "block": 14,
+            "speed_kph": 17.38495445251465,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1669.3272919659998,
+            "end": 1684.286110242,
+            "duration": 14.958818276000102,
+            "switches": 5,
+            "switches_per_s": 0.26740080173429154,
+            "block": 14,
+            "speed_kph": 18.249151039123536,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1783.7726080159998,
+            "end": 1793.3694853559998,
+            "duration": 9.596877339999992,
+            "switches": 4,
+            "switches_per_s": 0.3126016821634195,
+            "block": 14,
+            "speed_kph": 30.300382232666017,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1892.978199016,
+            "end": 1898.038643233,
+            "duration": 5.06044421699994,
+            "switches": 4,
+            "switches_per_s": 0.5928333307028401,
+            "block": 15,
+            "speed_kph": 15.125483894348145,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1927.185440305,
+            "end": 1938.4819469679999,
+            "duration": 11.296506662999946,
+            "switches": 4,
+            "switches_per_s": 0.2655688249028402,
+            "block": 15,
+            "speed_kph": 30.087465476989745,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 1944.6851798819998,
+            "end": 1959.338135501,
+            "duration": 14.652955619000068,
+            "switches": 6,
+            "switches_per_s": 0.3412280859921969,
+            "block": 15,
+            "speed_kph": 28.23615074157715,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2001.6198645999998,
+            "end": 2013.022101991,
+            "duration": 11.402237391000199,
+            "switches": 5,
+            "switches_per_s": 0.3508083425062879,
+            "block": 15,
+            "speed_kph": 21.262405586242675,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2039.221261409,
+            "end": 2048.7352990599998,
+            "duration": 9.514037650999853,
+            "switches": 4,
+            "switches_per_s": 0.3153235366568812,
+            "block": 15,
+            "speed_kph": 25.847705841064453,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2054.133293694,
+            "end": 2066.6846100949997,
+            "duration": 12.551316400999895,
+            "switches": 5,
+            "switches_per_s": 0.31869167123229736,
+            "block": 15,
+            "speed_kph": 14.683579444885254,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2072.082586136,
+            "end": 2082.8840527449997,
+            "duration": 10.801466608999817,
+            "switches": 4,
+            "switches_per_s": 0.2777400614746511,
+            "block": 15,
+            "speed_kph": 12.81128854751587,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2137.673876579,
+            "end": 2146.226818399,
+            "duration": 8.552941819999887,
+            "switches": 6,
+            "switches_per_s": 0.5845941788482861,
+            "block": 16,
+            "speed_kph": 10.167366027832031,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2245.9306222669998,
+            "end": 2258.580867002,
+            "duration": 12.650244735000342,
+            "switches": 4,
+            "switches_per_s": 0.23714956215034197,
+            "block": 16,
+            "speed_kph": 11.89539785385132,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2347.993427801,
+            "end": 2360.4388161819998,
+            "duration": 12.445388380999702,
+            "switches": 4,
+            "switches_per_s": 0.24105314419757937,
+            "block": 16,
+            "speed_kph": 12.317278003692627,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2383.5450809649997,
+            "end": 2394.587407783,
+            "duration": 11.04232681800022,
+            "switches": 4,
+            "switches_per_s": 0.2716818700846335,
+            "block": 16,
+            "speed_kph": 13.345493602752686,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2401.189847625,
+            "end": 2411.4308225689997,
+            "duration": 10.240974943999845,
+            "switches": 5,
+            "switches_per_s": 0.39058781237850676,
+            "block": 16,
+            "speed_kph": 9.847322273254395,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 16,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2456.8397008849997,
+            "end": 2465.189048746,
+            "duration": 8.349347861000297,
+            "switches": 4,
+            "switches_per_s": 0.3593094993697608,
+            "block": 16,
+            "speed_kph": 33.87514801025391,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2474.88897369,
+            "end": 2483.4811901969997,
+            "duration": 8.592216506999648,
+            "switches": 4,
+            "switches_per_s": 0.3491532129754936,
+            "block": 16,
+            "speed_kph": 35.017190551757814,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2571.736208966,
+            "end": 2578.982122296,
+            "duration": 7.245913329999894,
+            "switches": 4,
+            "switches_per_s": 0.4140264813242037,
+            "block": 16,
+            "speed_kph": 10.251897239685059,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2644.540882636,
+            "end": 2655.099331903,
+            "duration": 10.558449267000015,
+            "switches": 4,
+            "switches_per_s": 0.28413263388747556,
+            "block": 16,
+            "speed_kph": 29.451324462890625,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2687.984612984,
+            "end": 2700.386216208,
+            "duration": 12.401603224000155,
+            "switches": 4,
+            "switches_per_s": 0.2419042075297379,
+            "block": 16,
+            "speed_kph": 20.466700172424318,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2738.1342911419997,
+            "end": 2753.5936811359998,
+            "duration": 15.459389994000048,
+            "switches": 5,
+            "switches_per_s": 0.25874242137318754,
+            "block": 19,
+            "speed_kph": 57.033798980712895,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "15-30"
+          },
+          {
+            "start": 2781.9426926359997,
+            "end": 2788.687835706,
+            "duration": 6.7451430700002675,
+            "switches": 4,
+            "switches_per_s": 0.44476447257921264,
+            "block": 19,
+            "speed_kph": 39.04018135070801,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 20,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      }
+    },
+    "normal": {
+      "native": {
+        "raw": 232,
+        "debounced": 221,
+        "raw_events": [],
+        "events": [],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "baseline": {
+        "raw": 237,
+        "debounced": 226,
+        "raw_events": [
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 31,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2849.195671047,
+            "end": 2852.347011202,
+            "duration": 3.151340155000071,
+            "switches": 4,
+            "switches_per_s": 0.9519759379957929,
+            "block": 40,
+            "speed_kph": 65.53085861206056,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "<5"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 41,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "events": [
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 31,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 41,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "default": {
+        "raw": 237,
+        "debounced": 226,
+        "raw_events": [
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 31,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2849.195671047,
+            "end": 2852.347011202,
+            "duration": 3.151340155000071,
+            "switches": 4,
+            "switches_per_s": 0.9519759379957929,
+            "block": 40,
+            "speed_kph": 65.53085861206056,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "<5"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 41,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "events": [
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 31,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 41,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      },
+      "experimental": {
+        "raw": 237,
+        "debounced": 226,
+        "raw_events": [
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 31,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2849.195671047,
+            "end": 2852.347011202,
+            "duration": 3.151340155000071,
+            "switches": 4,
+            "switches_per_s": 0.9519759379957929,
+            "block": 40,
+            "speed_kph": 65.53085861206056,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.5-1",
+            "duration_group": "<5"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 41,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "events": [
+          {
+            "start": 2430.481601572,
+            "end": 2436.687943288,
+            "duration": 6.2063417160002246,
+            "switches": 4,
+            "switches_per_s": 0.4833765424591216,
+            "block": 31,
+            "speed_kph": 15.875219249725342,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          },
+          {
+            "start": 2876.698249735,
+            "end": 2884.790661815,
+            "duration": 8.092412080000031,
+            "switches": 4,
+            "switches_per_s": 0.37071765134332957,
+            "block": 41,
+            "speed_kph": 69.95669403076172,
+            "lead_fraction": 1.0,
+            "frequency_group": "0.2-0.5",
+            "duration_group": "5-15"
+          }
+        ],
+        "conflicts": 0,
+        "outside_accel_limits": 0
+      }
+    }
+  },
+  "comparisons": {
+    "clean/default_vs_baseline": {
+      "accel": {
+        "frames": 138380,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": [],
+      "new_events": [],
+      "resolved_events": [],
+      "new_raw_events": [],
+      "resolved_raw_events": []
+    },
+    "clean/experimental_vs_default": {
+      "accel": {
+        "frames": 138380,
+        "changed": 104,
+        "minimum": -0.020000000000000018,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": [],
+      "new_events": [],
+      "resolved_events": [],
+      "new_raw_events": [],
+      "resolved_raw_events": []
+    },
+    "normal/default_vs_baseline": {
+      "accel": {
+        "frames": 97719,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": [],
+      "new_events": [],
+      "resolved_events": [],
+      "new_raw_events": [],
+      "resolved_raw_events": []
+    },
+    "normal/experimental_vs_default": {
+      "accel": {
+        "frames": 97719,
+        "changed": 104,
+        "minimum": -0.020000000000000018,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": [],
+      "new_events": [],
+      "resolved_events": [],
+      "new_raw_events": [],
+      "resolved_raw_events": []
+    }
+  },
+  "strata": {
+    "speed_lt10kph": {
+      "seconds": 184.52529602599986,
+      "switches": {
+        "native": {
+          "raw": 28,
+          "debounced": 26
+        },
+        "baseline": {
+          "raw": 26,
+          "debounced": 26
+        },
+        "default": {
+          "raw": 26,
+          "debounced": 26
+        },
+        "experimental": {
+          "raw": 26,
+          "debounced": 26
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 9191,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 9191,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "speed_10to36kph": {
+      "seconds": 826.486022913003,
+      "switches": {
+        "native": {
+          "raw": 112,
+          "debounced": 104
+        },
+        "baseline": {
+          "raw": 116,
+          "debounced": 107
+        },
+        "default": {
+          "raw": 116,
+          "debounced": 107
+        },
+        "experimental": {
+          "raw": 116,
+          "debounced": 107
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 41166,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 41166,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "speed_36to72kph": {
+      "seconds": 838.1218554639993,
+      "switches": {
+        "native": {
+          "raw": 77,
+          "debounced": 76
+        },
+        "baseline": {
+          "raw": 79,
+          "debounced": 77
+        },
+        "default": {
+          "raw": 79,
+          "debounced": 77
+        },
+        "experimental": {
+          "raw": 79,
+          "debounced": 77
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 41747,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 41747,
+          "changed": 104,
+          "minimum": -0.020000000000000018,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "speed_ge72kph": {
+      "seconds": 112.74328021899976,
+      "switches": {
+        "native": {
+          "raw": 15,
+          "debounced": 15
+        },
+        "baseline": {
+          "raw": 16,
+          "debounced": 16
+        },
+        "default": {
+          "raw": 16,
+          "debounced": 16
+        },
+        "experimental": {
+          "raw": 16,
+          "debounced": 16
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 5615,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 5615,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "lead_present": {
+      "seconds": 1915.318742452002,
+      "switches": {
+        "native": {
+          "raw": 230,
+          "debounced": 220
+        },
+        "baseline": {
+          "raw": 235,
+          "debounced": 225
+        },
+        "default": {
+          "raw": 235,
+          "debounced": 225
+        },
+        "experimental": {
+          "raw": 235,
+          "debounced": 225
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 95400,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 95400,
+          "changed": 104,
+          "minimum": -0.020000000000000018,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "no_lead": {
+      "seconds": 46.55771216999989,
+      "switches": {
+        "native": {
+          "raw": 2,
+          "debounced": 1
+        },
+        "baseline": {
+          "raw": 2,
+          "debounced": 1
+        },
+        "default": {
+          "raw": 2,
+          "debounced": 1
+        },
+        "experimental": {
+          "raw": 2,
+          "debounced": 1
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 2319,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 2319,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "acc": {
+      "seconds": 1429.7404377350015,
+      "switches": {
+        "native": {
+          "raw": 160,
+          "debounced": 151
+        },
+        "baseline": {
+          "raw": 165,
+          "debounced": 155
+        },
+        "default": {
+          "raw": 165,
+          "debounced": 155
+        },
+        "experimental": {
+          "raw": 165,
+          "debounced": 155
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 71215,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 71215,
+          "changed": 104,
+          "minimum": -0.020000000000000018,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "e2e": {
+      "seconds": 532.1360168870006,
+      "switches": {
+        "native": {
+          "raw": 72,
+          "debounced": 70
+        },
+        "baseline": {
+          "raw": 72,
+          "debounced": 71
+        },
+        "default": {
+          "raw": 72,
+          "debounced": 71
+        },
+        "experimental": {
+          "raw": 72,
+          "debounced": 71
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 26504,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 26504,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "model_braking_or_stop": {
+      "seconds": 200.4067237699992,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 1,
+          "debounced": 1
+        },
+        "default": {
+          "raw": 1,
+          "debounced": 1
+        },
+        "experimental": {
+          "raw": 1,
+          "debounced": 1
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 9982,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 9982,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "force_decel": {
+      "seconds": 0.0,
+      "switches": {
+        "native": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "baseline": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "default": {
+          "raw": 0,
+          "debounced": 0
+        },
+        "experimental": {
+          "raw": 0,
+          "debounced": 0
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 0,
+          "changed": 0,
+          "minimum": null,
+          "maximum": null,
+          "p95_abs": null
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "following_source": {
+      "seconds": 1767.460303494001,
+      "switches": {
+        "native": {
+          "raw": 201,
+          "debounced": 194
+        },
+        "baseline": {
+          "raw": 207,
+          "debounced": 200
+        },
+        "default": {
+          "raw": 207,
+          "debounced": 200
+        },
+        "experimental": {
+          "raw": 207,
+          "debounced": 200
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 88036,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 88036,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "cruise_source": {
+      "seconds": 83.33589143100016,
+      "switches": {
+        "native": {
+          "raw": 5,
+          "debounced": 1
+        },
+        "baseline": {
+          "raw": 5,
+          "debounced": 1
+        },
+        "default": {
+          "raw": 5,
+          "debounced": 1
+        },
+        "experimental": {
+          "raw": 5,
+          "debounced": 1
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 4151,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 4151,
+          "changed": 104,
+          "minimum": -0.020000000000000018,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    },
+    "first_2s_after_engagement": {
+      "seconds": 29.758636762000123,
+      "switches": {
+        "native": {
+          "raw": 8,
+          "debounced": 2
+        },
+        "baseline": {
+          "raw": 8,
+          "debounced": 2
+        },
+        "default": {
+          "raw": 8,
+          "debounced": 2
+        },
+        "experimental": {
+          "raw": 8,
+          "debounced": 2
+        }
+      },
+      "default": {
+        "accel": {
+          "frames": 1482,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      },
+      "experimental": {
+        "accel": {
+          "frames": 1482,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "extra_brake_frames": 0,
+        "extra_brake_seconds": 0.0,
+        "removed_brake_frames": 0,
+        "removed_brake_seconds": 0.0,
+        "weaker_strong_brake_frames": 0,
+        "maximum_strong_brake_reduction": 0.0,
+        "extra_brake_minimum_accel": null,
+        "extra_brake_maximum_accel": null,
+        "control_on_changes": 0,
+        "standstill_changes": 0,
+        "extra_brake_runs": []
+      }
+    }
+  },
+  "plans": {
+    "default": {
+      "engaged": {
+        "frames": 55564,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "low_speed": {
+        "frames": 33224,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "model_risk": {
+        "frames": 4824,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "strong_brake": {
+        "frames": 2027,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "stop_changes": 0,
+      "fcw_changes": 0,
+      "nonfinite": 0,
+      "solver_failures": 0
+    },
+    "experimental": {
+      "engaged": {
+        "frames": 55564,
+        "changed": 80,
+        "minimum": -0.018745720386505127,
+        "maximum": 5.960464477539063e-08,
+        "p95_abs": 0.0
+      },
+      "low_speed": {
+        "frames": 33224,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "model_risk": {
+        "frames": 4824,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "strong_brake": {
+        "frames": 2027,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "stop_changes": 0,
+      "fcw_changes": 0,
+      "nonfinite": 0,
+      "solver_failures": 0
+    }
+  },
+  "event_windows": [
+    {
+      "start": 515.051232719,
+      "end": 527.359157714,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 663.913584537,
+      "end": 681.56128927,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "15\u201330",
+      "switches": {
+        "native": 7,
+        "baseline": 7,
+        "default": 7,
+        "experimental": 7
+      }
+    },
+    {
+      "start": 1352.8712381809999,
+      "end": 1361.7638643229998,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 3,
+        "default": 3,
+        "experimental": 3
+      }
+    },
+    {
+      "start": 1398.8690164969998,
+      "end": 1405.374014775,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 3,
+        "default": 3,
+        "experimental": 3
+      }
+    },
+    {
+      "start": 1508.32466359,
+      "end": 1515.8740165559998,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 3,
+        "default": 3,
+        "experimental": 3
+      }
+    },
+    {
+      "start": 1653.7245556179998,
+      "end": 1663.1834593639999,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 3,
+        "default": 3,
+        "experimental": 3
+      }
+    },
+    {
+      "start": 1669.3272919659998,
+      "end": 1684.286110242,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 5,
+        "baseline": 5,
+        "default": 5,
+        "experimental": 5
+      }
+    },
+    {
+      "start": 1783.734412756,
+      "end": 1793.3694853559998,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 1892.978199016,
+      "end": 1898.038643233,
+      "category": "lead_following",
+      "frequency_group": "0.5\u20131",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 1927.185440305,
+      "end": 1938.541635457,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 1944.6851798819998,
+      "end": 1959.338135501,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 6,
+        "baseline": 6,
+        "default": 6,
+        "experimental": 6
+      }
+    },
+    {
+      "start": 2001.5797916309998,
+      "end": 2013.022101991,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 5,
+        "baseline": 5,
+        "default": 5,
+        "experimental": 5
+      }
+    },
+    {
+      "start": 2039.1203858879999,
+      "end": 2048.7352990599998,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 2054.133293694,
+      "end": 2066.6846100949997,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 5,
+        "baseline": 5,
+        "default": 5,
+        "experimental": 5
+      }
+    },
+    {
+      "start": 2072.082586136,
+      "end": 2082.785103111,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 3,
+        "default": 3,
+        "experimental": 3
+      }
+    },
+    {
+      "start": 2104.987587008,
+      "end": 2107.838388414,
+      "category": "low_speed_stop_start",
+      "frequency_group": "1\u20132",
+      "duration_group": "<5",
+      "switches": {
+        "native": 4,
+        "baseline": 0,
+        "default": 0,
+        "experimental": 0
+      }
+    },
+    {
+      "start": 2137.673876579,
+      "end": 2146.226818399,
+      "category": "lead_following",
+      "frequency_group": "0.5\u20131",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 6,
+        "baseline": 6,
+        "default": 6,
+        "experimental": 6
+      }
+    },
+    {
+      "start": 2245.9306222669998,
+      "end": 2258.540576325,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 3,
+        "default": 3,
+        "experimental": 3
+      }
+    },
+    {
+      "start": 2347.993427801,
+      "end": 2360.377760713,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 3,
+        "default": 3,
+        "experimental": 3
+      }
+    },
+    {
+      "start": 2383.5450809649997,
+      "end": 2394.587407783,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 2401.130593041,
+      "end": 2411.288412673,
+      "category": "low_speed_stop_start",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 5,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 2456.7805321349997,
+      "end": 2465.189048746,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 2474.88897369,
+      "end": 2483.4811901969997,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 2571.736208966,
+      "end": 2578.982122296,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 2644.540882636,
+      "end": 2655.099331903,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 2687.984612984,
+      "end": 2700.386216208,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    },
+    {
+      "start": 2738.0944608289997,
+      "end": 2753.653440876,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "15\u201330",
+      "switches": {
+        "native": 5,
+        "baseline": 5,
+        "default": 5,
+        "experimental": 5
+      }
+    },
+    {
+      "start": 2781.902610604,
+      "end": 2788.687835706,
+      "category": "lead_following",
+      "frequency_group": "0.2\u20130.5",
+      "duration_group": "5\u201315",
+      "switches": {
+        "native": 4,
+        "baseline": 4,
+        "default": 4,
+        "experimental": 4
+      }
+    }
+  ],
+  "missing_clean_runs": [],
+  "manual": {
+    "default": {
+      "accel": {
+        "frames": 19333,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": []
+    },
+    "experimental": {
+      "accel": {
+        "frames": 19333,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0
+      },
+      "extra_brake_frames": 0,
+      "extra_brake_seconds": 0.0,
+      "removed_brake_frames": 0,
+      "removed_brake_seconds": 0.0,
+      "weaker_strong_brake_frames": 0,
+      "maximum_strong_brake_reduction": 0.0,
+      "extra_brake_minimum_accel": null,
+      "extra_brake_maximum_accel": null,
+      "control_on_changes": 0,
+      "standstill_changes": 0,
+      "extra_brake_runs": []
+    }
+  },
+  "cold_normal_s": 0.0,
+  "warm_normal_metrics": {
+    "native": {
+      "debounced": 221,
+      "events": 0
+    },
+    "baseline": {
+      "debounced": 226,
+      "events": 2
+    },
+    "default": {
+      "debounced": 226,
+      "events": 2
+    },
+    "experimental": {
+      "debounced": 226,
+      "events": 2
+    }
+  },
+  "artifacts": {
+    "baseline": "f5abd5327389264e96e2329c222e8fbb81553eb2c6c8e7d474dba329d344c89a",
+    "default": "d4620fddb43624a364c46809920c6dc49e56de5f73bcf1e42e7a4715c864a1ac",
+    "experimental": "b30bc076f33eafc0c3a8521514874c3df81fc3acee4852594a9685b784dd2c44"
+  }
+}

@@ -1,0 +1,2634 @@
+{
+  "normal_removed_brake_runs": 27,
+  "isolated_new_gas_pulses": [
+    {
+      "start": 349.908686116,
+      "end": 349.96855382399997,
+      "seconds": 0.05986770799995611,
+      "frames": 3,
+      "context": {
+        "t": 349.908686116,
+        "v_ego": 16.778757095336914,
+        "a_ego": 0.03489547595381737,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 56.98922348022461,
+        "lead_vrel": -2.7509260177612305,
+        "model_accel": -0.12521687150001526,
+        "model_stop": 0.0,
+        "a_target": -0.20600837469100952,
+        "accel_cmd": -0.20600837469100952,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.21,
+      "before_accel_max": -0.21,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.01999999999999999,
+      "minimum_accel_delta": 0.01999999999999999,
+      "route": "0000002c--0545fb49cb",
+      "new_gas_pulse_between_unchanged_brakes": true,
+      "raw_changes_nearby": {
+        "baseline": [
+          349.807884918
+        ],
+        "default": [
+          349.807884918
+        ],
+        "experimental": [
+          349.807884918,
+          349.908686116,
+          349.96855382399997
+        ]
+      }
+    },
+    {
+      "start": 3937.42157709,
+      "end": 3937.462945424,
+      "seconds": 0.04136833399979878,
+      "frames": 2,
+      "context": {
+        "t": 3937.42157709,
+        "v_ego": 19.706457138061523,
+        "a_ego": 0.2108362764120102,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 76.1191635131836,
+        "lead_vrel": -4.314535140991211,
+        "model_accel": 0.10037551820278168,
+        "model_stop": 0.0,
+        "a_target": -0.2502538859844208,
+        "accel_cmd": -0.2502538859844208,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.25,
+      "before_accel_max": -0.25,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.06,
+      "minimum_accel_delta": 0.06,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": true,
+      "raw_changes_nearby": {
+        "baseline": [
+          3937.323102715
+        ],
+        "default": [
+          3937.323102715
+        ],
+        "experimental": [
+          3937.382499747,
+          3937.42157709,
+          3937.462945424,
+          3937.524720424,
+          3937.563640892
+        ]
+      }
+    },
+    {
+      "start": 3937.524720424,
+      "end": 3937.563640892,
+      "seconds": 0.03892046800001481,
+      "frames": 2,
+      "context": {
+        "t": 3937.524720424,
+        "v_ego": 19.69997215270996,
+        "a_ego": 0.08742843568325043,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 79.79344940185547,
+        "lead_vrel": -4.20716667175293,
+        "model_accel": 0.09889770299196243,
+        "model_stop": 0.0,
+        "a_target": -0.24199125170707703,
+        "accel_cmd": -0.24199125170707703,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.24,
+      "before_accel_max": -0.24,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.04999999999999999,
+      "minimum_accel_delta": 0.04999999999999999,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": true,
+      "raw_changes_nearby": {
+        "baseline": [],
+        "default": [],
+        "experimental": [
+          3937.382499747,
+          3937.42157709,
+          3937.462945424,
+          3937.524720424,
+          3937.563640892,
+          3937.704258132
+        ]
+      }
+    },
+    {
+      "start": 616.4807861710001,
+      "end": 616.51979315,
+      "seconds": 0.039006978999964304,
+      "frames": 2,
+      "context": {
+        "t": 616.4807861710001,
+        "v_ego": 16.713207244873047,
+        "a_ego": -0.10522227734327316,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 59.8292121887207,
+        "lead_vrel": -4.591158866882324,
+        "model_accel": -0.29130464792251587,
+        "model_stop": 0.0,
+        "a_target": -0.22186477482318878,
+        "accel_cmd": -0.22186477482318878,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.22,
+      "before_accel_max": -0.22,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.03,
+      "minimum_accel_delta": 0.03,
+      "route": "00000051--4c602a02a6",
+      "new_gas_pulse_between_unchanged_brakes": true,
+      "raw_changes_nearby": {
+        "baseline": [
+          616.359816744
+        ],
+        "default": [
+          616.359816744
+        ],
+        "experimental": [
+          616.359816744,
+          616.4807861710001,
+          616.51979315
+        ]
+      }
+    }
+  ],
+  "all_runs": [
+    {
+      "start": 179.36844014,
+      "end": 179.8279379,
+      "seconds": 0.459497760000005,
+      "frames": 23,
+      "context": {
+        "t": 179.36844014,
+        "v_ego": 25.227581024169922,
+        "a_ego": 0.17488126456737518,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 100.9114990234375,
+        "lead_vrel": -2.1689815521240234,
+        "model_accel": 0.0820162296295166,
+        "model_stop": 0.0,
+        "a_target": -0.21748407185077667,
+        "accel_cmd": -0.21748407185077667,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.25,
+      "before_accel_max": -0.21,
+      "after_accel_min": -0.2,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.06,
+      "minimum_accel_delta": 0.01999999999999999,
+      "route": "00000014--e713f6d095",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          179.36844014,
+          179.8279379
+        ],
+        "default": [
+          179.36844014,
+          179.8279379
+        ],
+        "experimental": []
+      }
+    },
+    {
+      "start": 597.2262900320001,
+      "end": 597.265920761,
+      "seconds": 0.03963072899989584,
+      "frames": 2,
+      "context": {
+        "t": 597.2262900320001,
+        "v_ego": 24.92640495300293,
+        "a_ego": -0.21740499138832092,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 43.21106719970703,
+        "lead_vrel": -1.0400390625,
+        "model_accel": -0.09888620674610138,
+        "model_stop": 0.0,
+        "a_target": -0.19946077466011047,
+        "accel_cmd": -0.19946077466011047,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.2,
+      "before_accel_max": -0.2,
+      "after_accel_min": -0.2,
+      "after_accel_max": -0.2,
+      "maximum_accel_delta": 0.0,
+      "minimum_accel_delta": 0.0,
+      "route": "00000016--a629c6e62e",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          597.2262900320001
+        ],
+        "default": [
+          597.2262900320001
+        ],
+        "experimental": [
+          597.265920761
+        ]
+      }
+    },
+    {
+      "start": 147.610622445,
+      "end": 147.648354528,
+      "seconds": 0.03773208300000874,
+      "frames": 2,
+      "context": {
+        "t": 147.610622445,
+        "v_ego": 11.1599702835083,
+        "a_ego": -0.09520518034696579,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 23.31709861755371,
+        "lead_vrel": 1.2658729553222656,
+        "model_accel": 0.23017819225788116,
+        "model_stop": 0.0,
+        "a_target": -0.3438309133052826,
+        "accel_cmd": -0.3438309133052826,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.22,
+      "before_accel_max": -0.22,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.03,
+      "minimum_accel_delta": 0.03,
+      "route": "00000017--37d9117bd8",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          147.648354528,
+          147.72871770499998
+        ],
+        "default": [
+          147.648354528,
+          147.72871770499998
+        ],
+        "experimental": [
+          147.610622445,
+          147.72871770499998
+        ]
+      }
+    },
+    {
+      "start": 184.753213419,
+      "end": 184.933217534,
+      "seconds": 0.18000411500000268,
+      "frames": 9,
+      "context": {
+        "t": 184.753213419,
+        "v_ego": 14.088817596435547,
+        "a_ego": -0.002396373311057687,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 43.71318817138672,
+        "lead_vrel": 1.6982917785644531,
+        "model_accel": 0.6962904930114746,
+        "model_stop": 0.0,
+        "a_target": -0.21760600805282593,
+        "accel_cmd": -0.21760600805282593,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.22,
+      "before_accel_max": -0.21,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.03,
+      "minimum_accel_delta": 0.01999999999999999,
+      "route": "00000026--a18bca8589",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          184.753213419,
+          184.933217534
+        ],
+        "default": [
+          184.753213419,
+          184.933217534
+        ],
+        "experimental": []
+      }
+    },
+    {
+      "start": 349.908686116,
+      "end": 349.96855382399997,
+      "seconds": 0.05986770799995611,
+      "frames": 3,
+      "context": {
+        "t": 349.908686116,
+        "v_ego": 16.778757095336914,
+        "a_ego": 0.03489547595381737,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 56.98922348022461,
+        "lead_vrel": -2.7509260177612305,
+        "model_accel": -0.12521687150001526,
+        "model_stop": 0.0,
+        "a_target": -0.20600837469100952,
+        "accel_cmd": -0.20600837469100952,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.21,
+      "before_accel_max": -0.21,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.01999999999999999,
+      "minimum_accel_delta": 0.01999999999999999,
+      "route": "0000002c--0545fb49cb",
+      "new_gas_pulse_between_unchanged_brakes": true,
+      "raw_changes_nearby": {
+        "baseline": [
+          349.807884918
+        ],
+        "default": [
+          349.807884918
+        ],
+        "experimental": [
+          349.807884918,
+          349.908686116,
+          349.96855382399997
+        ]
+      }
+    },
+    {
+      "start": 1634.262118109,
+      "end": 1634.32282459,
+      "seconds": 0.060706480999897394,
+      "frames": 3,
+      "context": {
+        "t": 1634.262118109,
+        "v_ego": 16.795682907104492,
+        "a_ego": 0.11438159644603729,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 107.0259017944336,
+        "lead_vrel": -1.9358634948730469,
+        "model_accel": -0.05632171779870987,
+        "model_stop": 0.0,
+        "a_target": -0.20750322937965393,
+        "accel_cmd": -0.20750322937965393,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.21,
+      "before_accel_max": -0.21,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.01999999999999999,
+      "minimum_accel_delta": 0.01999999999999999,
+      "route": "00000030--4888ac9eaf",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          1634.159745715,
+          1634.32282459
+        ],
+        "default": [
+          1634.159745715,
+          1634.32282459
+        ],
+        "experimental": [
+          1634.159745715,
+          1634.262118109
+        ]
+      }
+    },
+    {
+      "start": 709.915817333,
+      "end": 709.976254208,
+      "seconds": 0.06043687500005035,
+      "frames": 3,
+      "context": {
+        "t": 709.915817333,
+        "v_ego": 19.60910415649414,
+        "a_ego": 0.0636405274271965,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 52.24431610107422,
+        "lead_vrel": -4.148107528686523,
+        "model_accel": -0.2673182785511017,
+        "model_stop": 0.0,
+        "a_target": -0.20377476513385773,
+        "accel_cmd": -0.20377476513385773,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.2,
+      "before_accel_max": -0.2,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.010000000000000009,
+      "minimum_accel_delta": 0.010000000000000009,
+      "route": "00000034--303ea73eeb",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          709.915817333
+        ],
+        "default": [
+          709.915817333
+        ],
+        "experimental": [
+          709.976254208
+        ]
+      }
+    },
+    {
+      "start": 955.623754114,
+      "end": 955.6648978119999,
+      "seconds": 0.04114369799992801,
+      "frames": 2,
+      "context": {
+        "t": 955.623754114,
+        "v_ego": 18.1035099029541,
+        "a_ego": -0.08043558150529861,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 61.12950134277344,
+        "lead_vrel": -4.764009475708008,
+        "model_accel": -0.47524502873420715,
+        "model_stop": 0.0,
+        "a_target": -0.223319411277771,
+        "accel_cmd": -0.223319411277771,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.22,
+      "before_accel_max": -0.22,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.03,
+      "minimum_accel_delta": 0.03,
+      "route": "00000035--dbe41a8d82",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          955.6648978119999,
+          955.7252908849999
+        ],
+        "default": [
+          955.6648978119999,
+          955.7252908849999
+        ],
+        "experimental": [
+          955.623754114,
+          955.7252908849999
+        ]
+      }
+    },
+    {
+      "start": 1511.7843151,
+      "end": 1511.82433109,
+      "seconds": 0.04001599000002898,
+      "frames": 2,
+      "context": {
+        "t": 1511.7843151,
+        "v_ego": 22.344810485839844,
+        "a_ego": 0.023501278832554817,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 58.713932037353516,
+        "lead_vrel": -3.653594970703125,
+        "model_accel": -0.4347839951515198,
+        "model_stop": 0.0,
+        "a_target": -0.21194550395011902,
+        "accel_cmd": -0.21194550395011902,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.2,
+      "before_accel_max": -0.2,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.010000000000000009,
+      "minimum_accel_delta": 0.010000000000000009,
+      "route": "00000040--453b4ea1a8",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          1511.7843151
+        ],
+        "default": [
+          1511.7843151
+        ],
+        "experimental": [
+          1511.82433109
+        ]
+      }
+    },
+    {
+      "start": 1367.323880936,
+      "end": 1367.42413479,
+      "seconds": 0.10025385399990228,
+      "frames": 5,
+      "context": {
+        "t": 1367.323880936,
+        "v_ego": 15.497180938720703,
+        "a_ego": -0.4725022315979004,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 42.14826202392578,
+        "lead_vrel": 0.9634122848510742,
+        "model_accel": 0.09290362149477005,
+        "model_stop": 0.0,
+        "a_target": -0.22190751135349274,
+        "accel_cmd": -0.22190751135349274,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.22,
+      "before_accel_max": -0.21,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.03,
+      "minimum_accel_delta": 0.01999999999999999,
+      "route": "0000004a--463712a822",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          1367.42413479
+        ],
+        "default": [
+          1367.42413479
+        ],
+        "experimental": [
+          1367.323880936
+        ]
+      }
+    },
+    {
+      "start": 79.340265907,
+      "end": 79.54072059500001,
+      "seconds": 0.20045468800000776,
+      "frames": 10,
+      "context": {
+        "t": 79.340265907,
+        "v_ego": 11.348320007324219,
+        "a_ego": -0.26796412467956543,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 93.90338134765625,
+        "lead_vrel": -4.409996032714844,
+        "model_accel": 0.39631450176239014,
+        "model_stop": 0.0,
+        "a_target": -0.2462363839149475,
+        "accel_cmd": -0.2462363839149475,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.25,
+      "before_accel_max": -0.21,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.06,
+      "minimum_accel_delta": 0.01999999999999999,
+      "route": "0000004b--cfb101c26b",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          79.54072059500001
+        ],
+        "default": [
+          79.54072059500001
+        ],
+        "experimental": [
+          79.340265907
+        ]
+      }
+    },
+    {
+      "start": 2856.809068024,
+      "end": 2856.850519743,
+      "seconds": 0.04145171899972411,
+      "frames": 2,
+      "context": {
+        "t": 2856.809068024,
+        "v_ego": 12.557774543762207,
+        "a_ego": -0.3245522379875183,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 44.688201904296875,
+        "lead_vrel": -0.6082401275634766,
+        "model_accel": -0.14528384804725647,
+        "model_stop": 0.0,
+        "a_target": -0.2497900128364563,
+        "accel_cmd": -0.2497900128364563,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.25,
+      "before_accel_max": -0.25,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.06,
+      "minimum_accel_delta": 0.06,
+      "route": "0000004d--66e83255cf",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          2856.850519743
+        ],
+        "default": [
+          2856.850519743
+        ],
+        "experimental": [
+          2856.809068024
+        ]
+      }
+    },
+    {
+      "start": 1561.352681852,
+      "end": 1561.453004664,
+      "seconds": 0.10032281200005855,
+      "frames": 5,
+      "context": {
+        "t": 1561.352681852,
+        "v_ego": 21.051990509033203,
+        "a_ego": 0.2960662841796875,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 46.867637634277344,
+        "lead_vrel": 0.20537376403808594,
+        "model_accel": 0.04758168011903763,
+        "model_stop": 0.0,
+        "a_target": -0.21602313220500946,
+        "accel_cmd": -0.21602313220500946,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.22,
+      "before_accel_max": -0.21,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.03,
+      "minimum_accel_delta": 0.01999999999999999,
+      "route": "0000004e--b6f1c9bc4e",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          1561.352681852
+        ],
+        "default": [
+          1561.352681852
+        ],
+        "experimental": [
+          1561.453004664,
+          1561.5122603940001
+        ]
+      }
+    },
+    {
+      "start": 1561.5122603940001,
+      "end": 1561.614589144,
+      "seconds": 0.10232874999996966,
+      "frames": 5,
+      "context": {
+        "t": 1561.5122603940001,
+        "v_ego": 21.04806900024414,
+        "a_ego": 0.008604275994002819,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 45.781768798828125,
+        "lead_vrel": -0.26671409606933594,
+        "model_accel": 0.02480090968310833,
+        "model_stop": 0.0,
+        "a_target": -0.21481387317180634,
+        "accel_cmd": -0.21481387317180634,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.22,
+      "before_accel_max": -0.21,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.03,
+      "minimum_accel_delta": 0.01999999999999999,
+      "route": "0000004e--b6f1c9bc4e",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [],
+        "default": [],
+        "experimental": [
+          1561.453004664,
+          1561.5122603940001
+        ]
+      }
+    },
+    {
+      "start": 1305.028878564,
+      "end": 1305.0883325739999,
+      "seconds": 0.05945400999985395,
+      "frames": 3,
+      "context": {
+        "t": 1305.028878564,
+        "v_ego": 18.156429290771484,
+        "a_ego": -0.2168070375919342,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 79.67922973632812,
+        "lead_vrel": -3.861227035522461,
+        "model_accel": -0.34353548288345337,
+        "model_stop": 0.0,
+        "a_target": -0.2043059766292572,
+        "accel_cmd": -0.2043059766292572,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.2,
+      "before_accel_max": -0.2,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.010000000000000009,
+      "minimum_accel_delta": 0.010000000000000009,
+      "route": "0000004f--71e3118dbd",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          1305.0883325739999,
+          1305.228452366
+        ],
+        "default": [
+          1305.0883325739999,
+          1305.228452366
+        ],
+        "experimental": [
+          1305.028878564,
+          1305.228452366
+        ]
+      }
+    },
+    {
+      "start": 1834.242762893,
+      "end": 1834.283970288,
+      "seconds": 0.0412073950001286,
+      "frames": 2,
+      "context": {
+        "t": 1834.242762893,
+        "v_ego": 22.369478225708008,
+        "a_ego": 0.047673799097537994,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 58.46419906616211,
+        "lead_vrel": -2.8624343872070312,
+        "model_accel": -0.23353004455566406,
+        "model_stop": 0.0,
+        "a_target": -0.2062620371580124,
+        "accel_cmd": -0.2062620371580124,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.21,
+      "before_accel_max": -0.21,
+      "after_accel_min": -0.2,
+      "after_accel_max": -0.2,
+      "maximum_accel_delta": 0.009999999999999981,
+      "minimum_accel_delta": 0.009999999999999981,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          1834.242762893
+        ],
+        "default": [
+          1834.242762893
+        ],
+        "experimental": [
+          1834.283970288
+        ]
+      }
+    },
+    {
+      "start": 2068.840911709,
+      "end": 2068.88114572,
+      "seconds": 0.04023401099993862,
+      "frames": 2,
+      "context": {
+        "t": 2068.840911709,
+        "v_ego": 22.337791442871094,
+        "a_ego": -0.10076940059661865,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 43.047508239746094,
+        "lead_vrel": -2.0867156982421875,
+        "model_accel": -0.19050827622413635,
+        "model_stop": 0.0,
+        "a_target": -0.20120805501937866,
+        "accel_cmd": -0.20120805501937866,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.2,
+      "before_accel_max": -0.2,
+      "after_accel_min": -0.2,
+      "after_accel_max": -0.2,
+      "maximum_accel_delta": 0.0,
+      "minimum_accel_delta": 0.0,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          2068.840911709
+        ],
+        "default": [
+          2068.840911709
+        ],
+        "experimental": [
+          2068.88114572
+        ]
+      }
+    },
+    {
+      "start": 3712.558308582,
+      "end": 3712.658755405,
+      "seconds": 0.10044682300031127,
+      "frames": 5,
+      "context": {
+        "t": 3712.558308582,
+        "v_ego": 14.120549201965332,
+        "a_ego": -0.476207971572876,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 72.77033233642578,
+        "lead_vrel": 2.4289817810058594,
+        "model_accel": 0.05300689488649368,
+        "model_stop": 0.0,
+        "a_target": -0.23817867040634155,
+        "accel_cmd": -0.23817867040634155,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.24,
+      "before_accel_max": -0.22,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.04999999999999999,
+      "minimum_accel_delta": 0.03,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          3712.658755405
+        ],
+        "default": [
+          3712.658755405
+        ],
+        "experimental": [
+          3712.558308582
+        ]
+      }
+    },
+    {
+      "start": 3805.520859276,
+      "end": 3805.560495839,
+      "seconds": 0.0396365629999309,
+      "frames": 2,
+      "context": {
+        "t": 3805.520859276,
+        "v_ego": 19.60317611694336,
+        "a_ego": 0.039626605808734894,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 35.84341049194336,
+        "lead_vrel": -2.55963134765625,
+        "model_accel": -0.22981618344783783,
+        "model_stop": 0.0,
+        "a_target": -0.20094731450080872,
+        "accel_cmd": -0.20094731450080872,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.2,
+      "before_accel_max": -0.2,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.010000000000000009,
+      "minimum_accel_delta": 0.010000000000000009,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          3805.520859276
+        ],
+        "default": [
+          3805.520859276
+        ],
+        "experimental": [
+          3805.560495839
+        ]
+      }
+    },
+    {
+      "start": 3808.069931983,
+      "end": 3808.110130056,
+      "seconds": 0.04019807299982858,
+      "frames": 2,
+      "context": {
+        "t": 3808.069931983,
+        "v_ego": 18.717737197875977,
+        "a_ego": -0.305391401052475,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 35.61814880371094,
+        "lead_vrel": -0.015380859375,
+        "model_accel": 0.01147522684186697,
+        "model_stop": 0.0,
+        "a_target": -0.2006993591785431,
+        "accel_cmd": -0.2006993591785431,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.2,
+      "before_accel_max": -0.2,
+      "after_accel_min": -0.2,
+      "after_accel_max": -0.2,
+      "maximum_accel_delta": 0.0,
+      "minimum_accel_delta": 0.0,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          3808.110130056
+        ],
+        "default": [
+          3808.110130056
+        ],
+        "experimental": [
+          3808.110130056
+        ]
+      }
+    },
+    {
+      "start": 3937.323102715,
+      "end": 3937.382499747,
+      "seconds": 0.059397032000106265,
+      "frames": 3,
+      "context": {
+        "t": 3937.323102715,
+        "v_ego": 19.69977569580078,
+        "a_ego": 0.37559282779693604,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 82.99109649658203,
+        "lead_vrel": -3.8040542602539062,
+        "model_accel": 0.1083037480711937,
+        "model_stop": 0.0,
+        "a_target": -0.21692141890525818,
+        "accel_cmd": -0.21692141890525818,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.22,
+      "before_accel_max": -0.22,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.03,
+      "minimum_accel_delta": 0.03,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          3937.323102715
+        ],
+        "default": [
+          3937.323102715
+        ],
+        "experimental": [
+          3937.382499747,
+          3937.42157709,
+          3937.462945424,
+          3937.524720424
+        ]
+      }
+    },
+    {
+      "start": 3937.42157709,
+      "end": 3937.462945424,
+      "seconds": 0.04136833399979878,
+      "frames": 2,
+      "context": {
+        "t": 3937.42157709,
+        "v_ego": 19.706457138061523,
+        "a_ego": 0.2108362764120102,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 76.1191635131836,
+        "lead_vrel": -4.314535140991211,
+        "model_accel": 0.10037551820278168,
+        "model_stop": 0.0,
+        "a_target": -0.2502538859844208,
+        "accel_cmd": -0.2502538859844208,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.25,
+      "before_accel_max": -0.25,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.06,
+      "minimum_accel_delta": 0.06,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": true,
+      "raw_changes_nearby": {
+        "baseline": [
+          3937.323102715
+        ],
+        "default": [
+          3937.323102715
+        ],
+        "experimental": [
+          3937.382499747,
+          3937.42157709,
+          3937.462945424,
+          3937.524720424,
+          3937.563640892
+        ]
+      }
+    },
+    {
+      "start": 3937.524720424,
+      "end": 3937.563640892,
+      "seconds": 0.03892046800001481,
+      "frames": 2,
+      "context": {
+        "t": 3937.524720424,
+        "v_ego": 19.69997215270996,
+        "a_ego": 0.08742843568325043,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 79.79344940185547,
+        "lead_vrel": -4.20716667175293,
+        "model_accel": 0.09889770299196243,
+        "model_stop": 0.0,
+        "a_target": -0.24199125170707703,
+        "accel_cmd": -0.24199125170707703,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.24,
+      "before_accel_max": -0.24,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.04999999999999999,
+      "minimum_accel_delta": 0.04999999999999999,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": true,
+      "raw_changes_nearby": {
+        "baseline": [],
+        "default": [],
+        "experimental": [
+          3937.382499747,
+          3937.42157709,
+          3937.462945424,
+          3937.524720424,
+          3937.563640892,
+          3937.704258132
+        ]
+      }
+    },
+    {
+      "start": 3937.704258132,
+      "end": 3937.863925007,
+      "seconds": 0.1596668749998571,
+      "frames": 8,
+      "context": {
+        "t": 3937.704258132,
+        "v_ego": 19.6682071685791,
+        "a_ego": -0.2505424916744232,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 76.60505676269531,
+        "lead_vrel": -3.5466384887695312,
+        "model_accel": 0.09496165066957474,
+        "model_stop": 0.0,
+        "a_target": -0.2353498637676239,
+        "accel_cmd": -0.2353498637676239,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.24,
+      "before_accel_max": -0.2,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.04999999999999999,
+      "minimum_accel_delta": 0.010000000000000009,
+      "route": "00000050--076fbccae6",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          3937.863925007
+        ],
+        "default": [
+          3937.863925007
+        ],
+        "experimental": [
+          3937.563640892,
+          3937.704258132
+        ]
+      }
+    },
+    {
+      "start": 616.4807861710001,
+      "end": 616.51979315,
+      "seconds": 0.039006978999964304,
+      "frames": 2,
+      "context": {
+        "t": 616.4807861710001,
+        "v_ego": 16.713207244873047,
+        "a_ego": -0.10522227734327316,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 59.8292121887207,
+        "lead_vrel": -4.591158866882324,
+        "model_accel": -0.29130464792251587,
+        "model_stop": 0.0,
+        "a_target": -0.22186477482318878,
+        "accel_cmd": -0.22186477482318878,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.22,
+      "before_accel_max": -0.22,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.03,
+      "minimum_accel_delta": 0.03,
+      "route": "00000051--4c602a02a6",
+      "new_gas_pulse_between_unchanged_brakes": true,
+      "raw_changes_nearby": {
+        "baseline": [
+          616.359816744
+        ],
+        "default": [
+          616.359816744
+        ],
+        "experimental": [
+          616.359816744,
+          616.4807861710001,
+          616.51979315
+        ]
+      }
+    },
+    {
+      "start": 1782.3829400490001,
+      "end": 1782.483628486,
+      "seconds": 0.10068843699991703,
+      "frames": 5,
+      "context": {
+        "t": 1782.3829400490001,
+        "v_ego": 30.758098602294922,
+        "a_ego": 0.14027974009513855,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 88.57498168945312,
+        "lead_vrel": -1.7828540802001953,
+        "model_accel": -0.08371610194444656,
+        "model_stop": 0.0,
+        "a_target": -0.1985776722431183,
+        "accel_cmd": -0.1985776722431183,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.21,
+      "before_accel_max": -0.2,
+      "after_accel_min": -0.19,
+      "after_accel_max": -0.19,
+      "maximum_accel_delta": 0.01999999999999999,
+      "minimum_accel_delta": 0.010000000000000009,
+      "route": "00000051--4c602a02a6",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          1782.3829400490001,
+          1782.483628486
+        ],
+        "default": [
+          1782.3829400490001,
+          1782.483628486
+        ],
+        "experimental": []
+      }
+    },
+    {
+      "start": 5590.989015575,
+      "end": 5591.049806408,
+      "seconds": 0.06079083300028287,
+      "frames": 3,
+      "context": {
+        "t": 5590.989015575,
+        "v_ego": 33.42799377441406,
+        "a_ego": -0.16543151438236237,
+        "lead1": 1.0,
+        "lead2": 1.0,
+        "lead_drel": 66.0126953125,
+        "lead_vrel": -1.703817367553711,
+        "model_accel": -0.024034861475229263,
+        "model_stop": 0.0,
+        "a_target": -0.20079150795936584,
+        "accel_cmd": -0.20079150795936584,
+        "long_state": 1.0,
+        "gas_pressed": 0.0,
+        "brake_pressed": 0.0,
+        "override": 0.0
+      },
+      "before_accel_min": -0.2,
+      "before_accel_max": -0.2,
+      "after_accel_min": -0.2,
+      "after_accel_max": -0.2,
+      "maximum_accel_delta": 0.0,
+      "minimum_accel_delta": 0.0,
+      "route": "00000051--4c602a02a6",
+      "new_gas_pulse_between_unchanged_brakes": false,
+      "raw_changes_nearby": {
+        "baseline": [
+          5590.989015575
+        ],
+        "default": [
+          5590.989015575
+        ],
+        "experimental": [
+          5591.049806408
+        ]
+      }
+    }
+  ],
+  "raw_events": [
+    {
+      "route": "0000000f--5184b5ffe4",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000013--f1538e1a32",
+      "baseline": [
+        {
+          "start": 322.99154794900005,
+          "end": 329.898652322,
+          "duration": 6.907104372999925,
+          "switches": 4,
+          "switches_per_s": 0.43433540858700337,
+          "block": 2
+        },
+        {
+          "start": 1279.064170033,
+          "end": 1283.8640604470002,
+          "duration": 4.799890414000174,
+          "switches": 4,
+          "switches_per_s": 0.6250142693361689,
+          "block": 13
+        },
+        {
+          "start": 2666.689218201,
+          "end": 2680.48146955,
+          "duration": 13.792251348999798,
+          "switches": 4,
+          "switches_per_s": 0.21751343737058254,
+          "block": 28
+        },
+        {
+          "start": 2685.882452621,
+          "end": 2705.635372874,
+          "duration": 19.752920252999957,
+          "switches": 7,
+          "switches_per_s": 0.30375255522477773,
+          "block": 28
+        }
+      ],
+      "default": [
+        {
+          "start": 322.99154794900005,
+          "end": 329.898652322,
+          "duration": 6.907104372999925,
+          "switches": 4,
+          "switches_per_s": 0.43433540858700337,
+          "block": 2
+        },
+        {
+          "start": 1279.064170033,
+          "end": 1283.8640604470002,
+          "duration": 4.799890414000174,
+          "switches": 4,
+          "switches_per_s": 0.6250142693361689,
+          "block": 13
+        },
+        {
+          "start": 2666.689218201,
+          "end": 2680.48146955,
+          "duration": 13.792251348999798,
+          "switches": 4,
+          "switches_per_s": 0.21751343737058254,
+          "block": 28
+        },
+        {
+          "start": 2685.882452621,
+          "end": 2705.635372874,
+          "duration": 19.752920252999957,
+          "switches": 7,
+          "switches_per_s": 0.30375255522477773,
+          "block": 28
+        }
+      ],
+      "experimental": [
+        {
+          "start": 322.99154794900005,
+          "end": 329.898652322,
+          "duration": 6.907104372999925,
+          "switches": 4,
+          "switches_per_s": 0.43433540858700337,
+          "block": 2
+        },
+        {
+          "start": 1279.064170033,
+          "end": 1283.8640604470002,
+          "duration": 4.799890414000174,
+          "switches": 4,
+          "switches_per_s": 0.6250142693361689,
+          "block": 13
+        },
+        {
+          "start": 2666.689218201,
+          "end": 2680.48146955,
+          "duration": 13.792251348999798,
+          "switches": 4,
+          "switches_per_s": 0.21751343737058254,
+          "block": 28
+        },
+        {
+          "start": 2685.882452621,
+          "end": 2705.635372874,
+          "duration": 19.752920252999957,
+          "switches": 7,
+          "switches_per_s": 0.30375255522477773,
+          "block": 28
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000014--e713f6d095",
+      "baseline": [
+        {
+          "start": 1058.91398694,
+          "end": 1062.949374282,
+          "duration": 4.035387341999922,
+          "switches": 5,
+          "switches_per_s": 0.9912307446594745,
+          "block": 7
+        }
+      ],
+      "default": [
+        {
+          "start": 1058.91398694,
+          "end": 1062.949374282,
+          "duration": 4.035387341999922,
+          "switches": 5,
+          "switches_per_s": 0.9912307446594745,
+          "block": 7
+        }
+      ],
+      "experimental": [
+        {
+          "start": 1058.91398694,
+          "end": 1062.949374282,
+          "duration": 4.035387341999922,
+          "switches": 5,
+          "switches_per_s": 0.9912307446594745,
+          "block": 7
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000016--a629c6e62e",
+      "baseline": [
+        {
+          "start": 353.810967885,
+          "end": 356.201205905,
+          "duration": 2.3902380199999698,
+          "switches": 4,
+          "switches_per_s": 1.2551051296556808,
+          "block": 5
+        },
+        {
+          "start": 883.667344298,
+          "end": 887.057660703,
+          "duration": 3.3903164050000214,
+          "switches": 5,
+          "switches_per_s": 1.1798308836605398,
+          "block": 9
+        }
+      ],
+      "default": [
+        {
+          "start": 353.810967885,
+          "end": 356.201205905,
+          "duration": 2.3902380199999698,
+          "switches": 4,
+          "switches_per_s": 1.2551051296556808,
+          "block": 5
+        },
+        {
+          "start": 883.667344298,
+          "end": 887.057660703,
+          "duration": 3.3903164050000214,
+          "switches": 5,
+          "switches_per_s": 1.1798308836605398,
+          "block": 9
+        }
+      ],
+      "experimental": [
+        {
+          "start": 353.810967885,
+          "end": 356.201205905,
+          "duration": 2.3902380199999698,
+          "switches": 4,
+          "switches_per_s": 1.2551051296556808,
+          "block": 5
+        },
+        {
+          "start": 883.667344298,
+          "end": 887.057660703,
+          "duration": 3.3903164050000214,
+          "switches": 5,
+          "switches_per_s": 1.1798308836605398,
+          "block": 9
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000017--37d9117bd8",
+      "baseline": [
+        {
+          "start": 147.327613591,
+          "end": 149.014025049,
+          "duration": 1.6864114580000091,
+          "switches": 5,
+          "switches_per_s": 2.3719003930059745,
+          "block": 1
+        },
+        {
+          "start": 1501.100981511,
+          "end": 1513.212623225,
+          "duration": 12.111641713999916,
+          "switches": 6,
+          "switches_per_s": 0.41282595027728336,
+          "block": 15
+        },
+        {
+          "start": 3492.3765259600004,
+          "end": 3500.732827102,
+          "duration": 8.356301141999666,
+          "switches": 4,
+          "switches_per_s": 0.35901051781411736,
+          "block": 38
+        }
+      ],
+      "default": [
+        {
+          "start": 147.327613591,
+          "end": 149.014025049,
+          "duration": 1.6864114580000091,
+          "switches": 5,
+          "switches_per_s": 2.3719003930059745,
+          "block": 1
+        },
+        {
+          "start": 1501.100981511,
+          "end": 1513.212623225,
+          "duration": 12.111641713999916,
+          "switches": 6,
+          "switches_per_s": 0.41282595027728336,
+          "block": 15
+        },
+        {
+          "start": 3492.3765259600004,
+          "end": 3500.732827102,
+          "duration": 8.356301141999666,
+          "switches": 4,
+          "switches_per_s": 0.35901051781411736,
+          "block": 38
+        }
+      ],
+      "experimental": [
+        {
+          "start": 147.327613591,
+          "end": 149.014025049,
+          "duration": 1.6864114580000091,
+          "switches": 5,
+          "switches_per_s": 2.3719003930059745,
+          "block": 1
+        },
+        {
+          "start": 1501.100981511,
+          "end": 1513.212623225,
+          "duration": 12.111641713999916,
+          "switches": 6,
+          "switches_per_s": 0.41282595027728336,
+          "block": 15
+        },
+        {
+          "start": 3492.3765259600004,
+          "end": 3500.732827102,
+          "duration": 8.356301141999666,
+          "switches": 4,
+          "switches_per_s": 0.35901051781411736,
+          "block": 38
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000019--d9aa7199a6",
+      "baseline": [
+        {
+          "start": 1534.985131966,
+          "end": 1536.0899356119999,
+          "duration": 1.1048036459999366,
+          "switches": 4,
+          "switches_per_s": 2.715414644821123,
+          "block": 14
+        }
+      ],
+      "default": [
+        {
+          "start": 1534.985131966,
+          "end": 1536.0899356119999,
+          "duration": 1.1048036459999366,
+          "switches": 4,
+          "switches_per_s": 2.715414644821123,
+          "block": 14
+        }
+      ],
+      "experimental": [
+        {
+          "start": 1534.985131966,
+          "end": 1536.0899356119999,
+          "duration": 1.1048036459999366,
+          "switches": 4,
+          "switches_per_s": 2.715414644821123,
+          "block": 14
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000001a--58a86a54b5",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000001d--8f58ef5d53",
+      "baseline": [
+        {
+          "start": 2665.920185336,
+          "end": 2670.156286637,
+          "duration": 4.236101300999962,
+          "switches": 4,
+          "switches_per_s": 0.7081983613781446,
+          "block": 34
+        }
+      ],
+      "default": [
+        {
+          "start": 2665.920185336,
+          "end": 2670.156286637,
+          "duration": 4.236101300999962,
+          "switches": 4,
+          "switches_per_s": 0.7081983613781446,
+          "block": 34
+        }
+      ],
+      "experimental": [
+        {
+          "start": 2665.920185336,
+          "end": 2670.156286637,
+          "duration": 4.236101300999962,
+          "switches": 4,
+          "switches_per_s": 0.7081983613781446,
+          "block": 34
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000001e--247e3ec6d4",
+      "baseline": [
+        {
+          "start": 646.654145221,
+          "end": 652.096262511,
+          "duration": 5.442117289999942,
+          "switches": 7,
+          "switches_per_s": 1.1025120702608129,
+          "block": 24
+        },
+        {
+          "start": 2237.7673635210003,
+          "end": 2251.5197350780004,
+          "duration": 13.75237155700006,
+          "switches": 4,
+          "switches_per_s": 0.21814419335354399,
+          "block": 37
+        },
+        {
+          "start": 2610.8703193680003,
+          "end": 2612.2765319190003,
+          "duration": 1.4062125509999532,
+          "switches": 5,
+          "switches_per_s": 2.844520195155144,
+          "block": 39
+        }
+      ],
+      "default": [
+        {
+          "start": 646.654145221,
+          "end": 652.096262511,
+          "duration": 5.442117289999942,
+          "switches": 7,
+          "switches_per_s": 1.1025120702608129,
+          "block": 24
+        },
+        {
+          "start": 2237.7673635210003,
+          "end": 2251.5197350780004,
+          "duration": 13.75237155700006,
+          "switches": 4,
+          "switches_per_s": 0.21814419335354399,
+          "block": 37
+        },
+        {
+          "start": 2610.8703193680003,
+          "end": 2612.2765319190003,
+          "duration": 1.4062125509999532,
+          "switches": 5,
+          "switches_per_s": 2.844520195155144,
+          "block": 39
+        }
+      ],
+      "experimental": [
+        {
+          "start": 646.654145221,
+          "end": 652.096262511,
+          "duration": 5.442117289999942,
+          "switches": 7,
+          "switches_per_s": 1.1025120702608129,
+          "block": 24
+        },
+        {
+          "start": 2237.7673635210003,
+          "end": 2251.5197350780004,
+          "duration": 13.75237155700006,
+          "switches": 4,
+          "switches_per_s": 0.21814419335354399,
+          "block": 37
+        },
+        {
+          "start": 2610.8703193680003,
+          "end": 2612.2765319190003,
+          "duration": 1.4062125509999532,
+          "switches": 5,
+          "switches_per_s": 2.844520195155144,
+          "block": 39
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000001f--2fddfa1773",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000021--2be549d587",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000022--376a3a1654",
+      "baseline": [
+        {
+          "start": 130.182637972,
+          "end": 132.671058179,
+          "duration": 2.48842020699999,
+          "switches": 4,
+          "switches_per_s": 1.2055841660347086,
+          "block": 2
+        }
+      ],
+      "default": [
+        {
+          "start": 130.182637972,
+          "end": 132.671058179,
+          "duration": 2.48842020699999,
+          "switches": 4,
+          "switches_per_s": 1.2055841660347086,
+          "block": 2
+        }
+      ],
+      "experimental": [
+        {
+          "start": 130.182637972,
+          "end": 132.671058179,
+          "duration": 2.48842020699999,
+          "switches": 4,
+          "switches_per_s": 1.2055841660347086,
+          "block": 2
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000025--eb1870438f",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000026--a18bca8589",
+      "baseline": [
+        {
+          "start": 727.884895347,
+          "end": 732.983976804,
+          "duration": 5.099081457000011,
+          "switches": 8,
+          "switches_per_s": 1.3727962690987041,
+          "block": 9
+        }
+      ],
+      "default": [
+        {
+          "start": 727.884895347,
+          "end": 732.983976804,
+          "duration": 5.099081457000011,
+          "switches": 8,
+          "switches_per_s": 1.3727962690987041,
+          "block": 9
+        }
+      ],
+      "experimental": [
+        {
+          "start": 727.884895347,
+          "end": 732.983976804,
+          "duration": 5.099081457000011,
+          "switches": 8,
+          "switches_per_s": 1.3727962690987041,
+          "block": 9
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000027--b204e98ece",
+      "baseline": [
+        {
+          "start": 1037.597103978,
+          "end": 1038.141154082,
+          "duration": 0.5440501040000072,
+          "switches": 6,
+          "switches_per_s": 9.190330014163427,
+          "block": 13
+        },
+        {
+          "start": 1173.045376792,
+          "end": 1178.605776842,
+          "duration": 5.560400049999998,
+          "switches": 5,
+          "switches_per_s": 0.7193727005307831,
+          "block": 14
+        }
+      ],
+      "default": [
+        {
+          "start": 1037.597103978,
+          "end": 1038.141154082,
+          "duration": 0.5440501040000072,
+          "switches": 6,
+          "switches_per_s": 9.190330014163427,
+          "block": 13
+        }
+      ],
+      "experimental": [
+        {
+          "start": 1037.597103978,
+          "end": 1038.141154082,
+          "duration": 0.5440501040000072,
+          "switches": 6,
+          "switches_per_s": 9.190330014163427,
+          "block": 13
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [
+        {
+          "start": 1173.045376792,
+          "end": 1178.605776842,
+          "duration": 5.560400049999998,
+          "switches": 5,
+          "switches_per_s": 0.7193727005307831,
+          "block": 14
+        }
+      ],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000029--253749ec88",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000002b--6c906faae4",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000002c--0545fb49cb",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000002d--9eac7ff4d3",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000002e--a362ee3ccc",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000030--4888ac9eaf",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000031--3c41ed5e6b",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000032--194a85c244",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000033--ef8e4d9f34",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000034--303ea73eeb",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000035--dbe41a8d82",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000037--7ccc0ba588",
+      "baseline": [
+        {
+          "start": 2430.481601572,
+          "end": 2436.687943288,
+          "duration": 6.2063417160002246,
+          "switches": 4,
+          "switches_per_s": 0.4833765424591216,
+          "block": 31
+        },
+        {
+          "start": 2849.195671047,
+          "end": 2852.347011202,
+          "duration": 3.151340155000071,
+          "switches": 4,
+          "switches_per_s": 0.9519759379957929,
+          "block": 40
+        },
+        {
+          "start": 2876.698249735,
+          "end": 2884.790661815,
+          "duration": 8.092412080000031,
+          "switches": 4,
+          "switches_per_s": 0.37071765134332957,
+          "block": 41
+        }
+      ],
+      "default": [
+        {
+          "start": 2430.481601572,
+          "end": 2436.687943288,
+          "duration": 6.2063417160002246,
+          "switches": 4,
+          "switches_per_s": 0.4833765424591216,
+          "block": 31
+        },
+        {
+          "start": 2849.195671047,
+          "end": 2852.347011202,
+          "duration": 3.151340155000071,
+          "switches": 4,
+          "switches_per_s": 0.9519759379957929,
+          "block": 40
+        },
+        {
+          "start": 2876.698249735,
+          "end": 2884.790661815,
+          "duration": 8.092412080000031,
+          "switches": 4,
+          "switches_per_s": 0.37071765134332957,
+          "block": 41
+        }
+      ],
+      "experimental": [
+        {
+          "start": 2430.481601572,
+          "end": 2436.687943288,
+          "duration": 6.2063417160002246,
+          "switches": 4,
+          "switches_per_s": 0.4833765424591216,
+          "block": 31
+        },
+        {
+          "start": 2849.195671047,
+          "end": 2852.347011202,
+          "duration": 3.151340155000071,
+          "switches": 4,
+          "switches_per_s": 0.9519759379957929,
+          "block": 40
+        },
+        {
+          "start": 2876.698249735,
+          "end": 2884.790661815,
+          "duration": 8.092412080000031,
+          "switches": 4,
+          "switches_per_s": 0.37071765134332957,
+          "block": 41
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000038--04a0b0e322",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000039--50ffb38eaa",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000003a--d96b768741",
+      "baseline": [
+        {
+          "start": 1166.665763617,
+          "end": 1172.004238094,
+          "duration": 5.338474476999863,
+          "switches": 4,
+          "switches_per_s": 0.561958292190984,
+          "block": 15
+        }
+      ],
+      "default": [
+        {
+          "start": 1166.665763617,
+          "end": 1172.004238094,
+          "duration": 5.338474476999863,
+          "switches": 4,
+          "switches_per_s": 0.561958292190984,
+          "block": 15
+        }
+      ],
+      "experimental": [
+        {
+          "start": 1166.665763617,
+          "end": 1172.004238094,
+          "duration": 5.338474476999863,
+          "switches": 4,
+          "switches_per_s": 0.561958292190984,
+          "block": 15
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000003b--91d9333c1a",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000003c--44ce137c6b",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000003e--93663aaab2",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000003f--2ca5be666d",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000040--453b4ea1a8",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000041--a6635af3d4",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000042--6a732045f2",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000043--0fdabd4133",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000044--f23df9703e",
+      "baseline": [
+        {
+          "start": 72.559658357,
+          "end": 77.159954136,
+          "duration": 4.6002957789999925,
+          "switches": 4,
+          "switches_per_s": 0.6521319810988625,
+          "block": 2
+        }
+      ],
+      "default": [
+        {
+          "start": 72.559658357,
+          "end": 77.159954136,
+          "duration": 4.6002957789999925,
+          "switches": 4,
+          "switches_per_s": 0.6521319810988625,
+          "block": 2
+        }
+      ],
+      "experimental": [
+        {
+          "start": 72.559658357,
+          "end": 77.159954136,
+          "duration": 4.6002957789999925,
+          "switches": 4,
+          "switches_per_s": 0.6521319810988625,
+          "block": 2
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000045--af558aec8c",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000046--b54418720a",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000047--f3ea9093b8",
+      "baseline": [
+        {
+          "start": 3421.562582601,
+          "end": 3426.09956036,
+          "duration": 4.53697775899991,
+          "switches": 4,
+          "switches_per_s": 0.6612331290469655,
+          "block": 30
+        },
+        {
+          "start": 3767.315232209,
+          "end": 3771.571083457,
+          "duration": 4.255851247999999,
+          "switches": 4,
+          "switches_per_s": 0.7049118555094763,
+          "block": 34
+        },
+        {
+          "start": 5393.442750547,
+          "end": 5398.341343097,
+          "duration": 4.898592550000103,
+          "switches": 4,
+          "switches_per_s": 0.6124208064620391,
+          "block": 40
+        }
+      ],
+      "default": [
+        {
+          "start": 3421.562582601,
+          "end": 3426.09956036,
+          "duration": 4.53697775899991,
+          "switches": 4,
+          "switches_per_s": 0.6612331290469655,
+          "block": 30
+        },
+        {
+          "start": 3767.315232209,
+          "end": 3771.571083457,
+          "duration": 4.255851247999999,
+          "switches": 4,
+          "switches_per_s": 0.7049118555094763,
+          "block": 34
+        },
+        {
+          "start": 5393.442750547,
+          "end": 5398.341343097,
+          "duration": 4.898592550000103,
+          "switches": 4,
+          "switches_per_s": 0.6124208064620391,
+          "block": 40
+        }
+      ],
+      "experimental": [
+        {
+          "start": 3421.562582601,
+          "end": 3426.09956036,
+          "duration": 4.53697775899991,
+          "switches": 4,
+          "switches_per_s": 0.6612331290469655,
+          "block": 30
+        },
+        {
+          "start": 3767.315232209,
+          "end": 3771.571083457,
+          "duration": 4.255851247999999,
+          "switches": 4,
+          "switches_per_s": 0.7049118555094763,
+          "block": 34
+        },
+        {
+          "start": 5393.442750547,
+          "end": 5398.341343097,
+          "duration": 4.898592550000103,
+          "switches": 4,
+          "switches_per_s": 0.6124208064620391,
+          "block": 40
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000048--af2db898b0",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000049--d6ff10e5de",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000004a--463712a822",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000004b--cfb101c26b",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000004c--37c6188881",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000004d--66e83255cf",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000004e--b6f1c9bc4e",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "0000004f--71e3118dbd",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000050--076fbccae6",
+      "baseline": [],
+      "default": [],
+      "experimental": [
+        {
+          "start": 3937.382499747,
+          "end": 3937.704258132,
+          "duration": 0.3217583850000665,
+          "switches": 6,
+          "switches_per_s": 15.539610568342972,
+          "block": 21
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [
+        {
+          "start": 3937.382499747,
+          "end": 3937.704258132,
+          "duration": 0.3217583850000665,
+          "switches": 6,
+          "switches_per_s": 15.539610568342972,
+          "block": 21
+        }
+      ],
+      "resolved": []
+    },
+    {
+      "route": "00000051--4c602a02a6",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000052--90cd6c63e3",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000053--82133ac34f",
+      "baseline": [
+        {
+          "start": 160.390159209,
+          "end": 164.64716040500002,
+          "duration": 4.257001196000033,
+          "switches": 4,
+          "switches_per_s": 0.704721436963387,
+          "block": 2
+        }
+      ],
+      "default": [
+        {
+          "start": 160.390159209,
+          "end": 164.64716040500002,
+          "duration": 4.257001196000033,
+          "switches": 4,
+          "switches_per_s": 0.704721436963387,
+          "block": 2
+        }
+      ],
+      "experimental": [
+        {
+          "start": 160.390159209,
+          "end": 164.64716040500002,
+          "duration": 4.257001196000033,
+          "switches": 4,
+          "switches_per_s": 0.704721436963387,
+          "block": 2
+        }
+      ],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    },
+    {
+      "route": "00000054--065a8f745c",
+      "baseline": [],
+      "default": [],
+      "experimental": [],
+      "default_new": [],
+      "default_resolved": [],
+      "new": [],
+      "resolved": []
+    }
+  ],
+  "default_new_raw_events": [],
+  "new_raw_events": [
+    {
+      "start": 3937.382499747,
+      "end": 3937.704258132,
+      "duration": 0.3217583850000665,
+      "switches": 6,
+      "switches_per_s": 15.539610568342972,
+      "block": 21,
+      "route": "00000050--076fbccae6"
+    }
+  ],
+  "definition": "Normal fixed mask, baseline braking across interval and both neighbors; experimental gas strictly inside."
+}

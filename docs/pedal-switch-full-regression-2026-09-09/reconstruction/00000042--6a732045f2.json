@@ -1,0 +1,94 @@
+{
+  "route": "00000042--6a732045f2",
+  "commit": "0893979ab44c92e80e8230813eb035db789d7b56",
+  "recorded_plan": false,
+  "planner_sha256": "47a81c64d9a1bbd718299f0c9a32772f0e4dc2ed8707a11577b9baf96750e4eb",
+  "result_sha256": "4c62f7a7e8f3d0c435517d713207ffb12e1be6087a683c308c16db2c7ca8f818",
+  "paired_clean_s": 99.57105141999989,
+  "missing_clean_s": 0.0,
+  "plan_error": {
+    "frames": 1990,
+    "changed": 784,
+    "minimum": -0.013715319335460663,
+    "maximum": 0.04658764600753784,
+    "p95_abs": 0.0022071808576583857
+  },
+  "can_accel_error": {
+    "frames": 4959,
+    "changed": 215,
+    "minimum": -0.010000000000000009,
+    "maximum": 0.1200000000000001,
+    "p95_abs": 0.0
+  },
+  "can_brake_mismatches": 0,
+  "can_gas_mismatches": 524,
+  "stop_mismatches": 1,
+  "metrics": {
+    "clean/native": {
+      "raw": 9,
+      "debounced": 7,
+      "events": []
+    },
+    "clean/recorded_source": {
+      "raw": 9,
+      "debounced": 7,
+      "events": []
+    },
+    "normal/native": {
+      "raw": 9,
+      "debounced": 7,
+      "events": []
+    },
+    "normal/recorded_source": {
+      "raw": 9,
+      "debounced": 7,
+      "events": []
+    }
+  },
+  "coverage": [
+    {
+      "window": {
+        "route": "00000042--6a732045f2",
+        "origin": 30.286923685,
+        "start": -1000000.0,
+        "end": 1000000.0,
+        "cache": "00000042--6a732045f2-block-0",
+        "segments": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ]
+      },
+      "coverage": {
+        "plans": 11779,
+        "matched_plans": 11778,
+        "controls": 59254,
+        "matched_controls": 58666,
+        "sendcan": 29324,
+        "matched_sendcan": 29323
+      },
+      "missing": {
+        "control_plan": 588,
+        "plan_model": 1,
+        "can_state": 1
+      },
+      "resets": [
+        {
+          "before": -1.4264217190000004,
+          "after": 0.0
+        },
+        {
+          "can_cadence": 6.095406090999997
+        }
+      ],
+      "solver_failures": 0
+    }
+  ]
+}

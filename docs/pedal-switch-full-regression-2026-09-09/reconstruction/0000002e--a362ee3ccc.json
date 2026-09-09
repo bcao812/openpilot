@@ -1,0 +1,106 @@
+{
+  "route": "0000002e--a362ee3ccc",
+  "commit": "c3d00664e2c34dd19caf44f9d68ba078a32c2b99",
+  "recorded_plan": false,
+  "planner_sha256": "47a81c64d9a1bbd718299f0c9a32772f0e4dc2ed8707a11577b9baf96750e4eb",
+  "result_sha256": "683c439eeb1e997d8ef93d6d303f7468fbe8f3fe454aa4850bf70bf70d4ec6bc",
+  "paired_clean_s": 0.0,
+  "missing_clean_s": 0.0,
+  "plan_error": {
+    "frames": 0,
+    "changed": 0,
+    "minimum": null,
+    "maximum": null,
+    "p95_abs": null
+  },
+  "can_accel_error": {
+    "frames": 0,
+    "changed": 0,
+    "minimum": null,
+    "maximum": null,
+    "p95_abs": null
+  },
+  "can_brake_mismatches": 0,
+  "can_gas_mismatches": 0,
+  "stop_mismatches": 0,
+  "metrics": {
+    "clean/native": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    },
+    "clean/recorded_source": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    },
+    "normal/native": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    },
+    "normal/recorded_source": {
+      "raw": 0,
+      "debounced": 0,
+      "events": []
+    }
+  },
+  "coverage": [
+    {
+      "window": {
+        "route": "0000002e--a362ee3ccc",
+        "origin": 50.244718416,
+        "start": -1000000.0,
+        "end": 1000000.0,
+        "cache": "0000002e--a362ee3ccc-block-0",
+        "segments": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "coverage": {
+        "plans": 25043,
+        "matched_plans": 25042,
+        "controls": 124965,
+        "matched_controls": 124728,
+        "sendcan": 62300,
+        "matched_sendcan": 62299
+      },
+      "missing": {
+        "control_parameters": 173,
+        "control_plan": 64,
+        "plan_model": 1,
+        "can_state": 1
+      },
+      "resets": [
+        {
+          "before": -1.3611376559999968,
+          "after": 0.0
+        },
+        {
+          "can_cadence": 3.9011195819999998
+        }
+      ],
+      "solver_failures": 0
+    }
+  ]
+}
