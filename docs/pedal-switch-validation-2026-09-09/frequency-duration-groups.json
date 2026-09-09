@@ -1,0 +1,317 @@
+[
+  {
+    "category": "cruise_with_lead",
+    "frequency_group": "0.5–1",
+    "duration_group": "5–15",
+    "events": 5,
+    "seconds": 46.73942394100027,
+    "default_switches": 34,
+    "experimental_switches": 10
+  },
+  {
+    "category": "cruise_with_lead",
+    "frequency_group": "0.5–1",
+    "duration_group": "<5",
+    "events": 1,
+    "seconds": 3.4113567180002065,
+    "default_switches": 4,
+    "experimental_switches": 4
+  },
+  {
+    "category": "cruise_with_lead",
+    "frequency_group": "0.5–1",
+    "duration_group": "≥30",
+    "events": 1,
+    "seconds": 30.637697436000053,
+    "default_switches": 29,
+    "experimental_switches": 3
+  },
+  {
+    "category": "cruise_with_lead",
+    "frequency_group": "1–2",
+    "duration_group": "15–30",
+    "events": 5,
+    "seconds": 100.81333043099926,
+    "default_switches": 132,
+    "experimental_switches": 54
+  },
+  {
+    "category": "cruise_with_lead",
+    "frequency_group": "1–2",
+    "duration_group": "5–15",
+    "events": 10,
+    "seconds": 93.37817991099939,
+    "default_switches": 131,
+    "experimental_switches": 39
+  },
+  {
+    "category": "cruise_with_lead",
+    "frequency_group": "1–2",
+    "duration_group": "<5",
+    "events": 4,
+    "seconds": 12.567415097999998,
+    "default_switches": 21,
+    "experimental_switches": 15
+  },
+  {
+    "category": "cruise_with_lead",
+    "frequency_group": "1–2",
+    "duration_group": "≥30",
+    "events": 2,
+    "seconds": 72.2199442430001,
+    "default_switches": 106,
+    "experimental_switches": 10
+  },
+  {
+    "category": "cruise_with_lead",
+    "frequency_group": "≥2",
+    "duration_group": "<5",
+    "events": 1,
+    "seconds": 0.8418043219999163,
+    "default_switches": 4,
+    "experimental_switches": 2
+  },
+  {
+    "category": "lead_following",
+    "frequency_group": "0.2–0.5",
+    "duration_group": "15–30",
+    "events": 31,
+    "seconds": 559.4863124429999,
+    "default_switches": 200,
+    "experimental_switches": 200
+  },
+  {
+    "category": "lead_following",
+    "frequency_group": "0.2–0.5",
+    "duration_group": "5–15",
+    "events": 201,
+    "seconds": 2005.817412041,
+    "default_switches": 814,
+    "experimental_switches": 814
+  },
+  {
+    "category": "lead_following",
+    "frequency_group": "0.2–0.5",
+    "duration_group": "≥30",
+    "events": 1,
+    "seconds": 32.19940905000021,
+    "default_switches": 10,
+    "experimental_switches": 10
+  },
+  {
+    "category": "lead_following",
+    "frequency_group": "0.5–1",
+    "duration_group": "5–15",
+    "events": 21,
+    "seconds": 129.14774653100073,
+    "default_switches": 91,
+    "experimental_switches": 91
+  },
+  {
+    "category": "lead_following",
+    "frequency_group": "0.5–1",
+    "duration_group": "<5",
+    "events": 7,
+    "seconds": 27.586694623999733,
+    "default_switches": 24,
+    "experimental_switches": 24
+  },
+  {
+    "category": "lead_following",
+    "frequency_group": "1–2",
+    "duration_group": "5–15",
+    "events": 2,
+    "seconds": 15.597386088000121,
+    "default_switches": 19,
+    "experimental_switches": 19
+  },
+  {
+    "category": "lead_following",
+    "frequency_group": "1–2",
+    "duration_group": "<5",
+    "events": 11,
+    "seconds": 32.50257795800047,
+    "default_switches": 46,
+    "experimental_switches": 46
+  },
+  {
+    "category": "lead_following",
+    "frequency_group": "≥2",
+    "duration_group": "<5",
+    "events": 1,
+    "seconds": 1.2463286970000809,
+    "default_switches": 3,
+    "experimental_switches": 3
+  },
+  {
+    "category": "low_speed_stop_start",
+    "frequency_group": "0.2–0.5",
+    "duration_group": "15–30",
+    "events": 11,
+    "seconds": 251.31965224800047,
+    "default_switches": 86,
+    "experimental_switches": 86
+  },
+  {
+    "category": "low_speed_stop_start",
+    "frequency_group": "0.2–0.5",
+    "duration_group": "5–15",
+    "events": 30,
+    "seconds": 312.7601634220006,
+    "default_switches": 116,
+    "experimental_switches": 116
+  },
+  {
+    "category": "low_speed_stop_start",
+    "frequency_group": "0.5–1",
+    "duration_group": "5–15",
+    "events": 6,
+    "seconds": 38.47563081899989,
+    "default_switches": 25,
+    "experimental_switches": 25
+  },
+  {
+    "category": "low_speed_stop_start",
+    "frequency_group": "0.5–1",
+    "duration_group": "<5",
+    "events": 3,
+    "seconds": 13.069930410999632,
+    "default_switches": 8,
+    "experimental_switches": 8
+  },
+  {
+    "category": "low_speed_stop_start",
+    "frequency_group": "1–2",
+    "duration_group": "<5",
+    "events": 2,
+    "seconds": 5.420545154999672,
+    "default_switches": 3,
+    "experimental_switches": 3
+  },
+  {
+    "category": "mixed",
+    "frequency_group": "0.2–0.5",
+    "duration_group": "5–15",
+    "events": 2,
+    "seconds": 14.838208430999956,
+    "default_switches": 8,
+    "experimental_switches": 8
+  },
+  {
+    "category": "mixed",
+    "frequency_group": "0.5–1",
+    "duration_group": "15–30",
+    "events": 1,
+    "seconds": 23.209356136999986,
+    "default_switches": 16,
+    "experimental_switches": 12
+  },
+  {
+    "category": "mixed",
+    "frequency_group": "0.5–1",
+    "duration_group": "5–15",
+    "events": 1,
+    "seconds": 9.856984944000033,
+    "default_switches": 6,
+    "experimental_switches": 6
+  },
+  {
+    "category": "no_lead_other",
+    "frequency_group": "0.2–0.5",
+    "duration_group": "5–15",
+    "events": 1,
+    "seconds": 12.004623120000034,
+    "default_switches": 4,
+    "experimental_switches": 4
+  },
+  {
+    "category": "no_lead_other",
+    "frequency_group": "0.5–1",
+    "duration_group": "5–15",
+    "events": 2,
+    "seconds": 15.535775565999984,
+    "default_switches": 4,
+    "experimental_switches": 4
+  },
+  {
+    "category": "no_lead_other",
+    "frequency_group": "0.5–1",
+    "duration_group": "<5",
+    "events": 1,
+    "seconds": 4.458013592000015,
+    "default_switches": 4,
+    "experimental_switches": 4
+  },
+  {
+    "category": "no_lead_other",
+    "frequency_group": "1–2",
+    "duration_group": "5–15",
+    "events": 1,
+    "seconds": 12.203086661999919,
+    "default_switches": 2,
+    "experimental_switches": 2
+  },
+  {
+    "category": "no_lead_other",
+    "frequency_group": "1–2",
+    "duration_group": "<5",
+    "events": 1,
+    "seconds": 2.550412238999968,
+    "default_switches": 4,
+    "experimental_switches": 4
+  },
+  {
+    "category": "steady_no_lead_cruise",
+    "frequency_group": "0.5–1",
+    "duration_group": "5–15",
+    "events": 1,
+    "seconds": 5.70437812199998,
+    "default_switches": 0,
+    "experimental_switches": 0
+  },
+  {
+    "category": "steady_no_lead_cruise",
+    "frequency_group": "1–2",
+    "duration_group": "15–30",
+    "events": 1,
+    "seconds": 18.20889400399983,
+    "default_switches": 0,
+    "experimental_switches": 0
+  },
+  {
+    "category": "steady_no_lead_cruise",
+    "frequency_group": "1–2",
+    "duration_group": "5–15",
+    "events": 5,
+    "seconds": 42.57962904699997,
+    "default_switches": 8,
+    "experimental_switches": 6
+  },
+  {
+    "category": "steady_no_lead_cruise",
+    "frequency_group": "1–2",
+    "duration_group": "<5",
+    "events": 3,
+    "seconds": 11.863857548999931,
+    "default_switches": 3,
+    "experimental_switches": 2
+  },
+  {
+    "category": "steady_no_lead_cruise",
+    "frequency_group": "≥2",
+    "duration_group": "<5",
+    "events": 1,
+    "seconds": 0.9034355720000349,
+    "default_switches": 2,
+    "experimental_switches": 2
+  },
+  {
+    "category": "steady_no_lead_cruise",
+    "frequency_group": "≥2",
+    "duration_group": "≥30",
+    "events": 1,
+    "seconds": 34.512984205000066,
+    "default_switches": 2,
+    "experimental_switches": 2
+  }
+]

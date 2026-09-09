@@ -1,0 +1,170 @@
+[
+  {
+    "offset": 0.254545,
+    "noise": 0.02,
+    "delay": 0.8,
+    "scenario": "steady",
+    "result": {
+      "speed_error_kph": 0.9531513478310473,
+      "speed_range_kph": 0.06812495686725129,
+      "minimum_gap": 78.77302370674238,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.4398612976074219,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 0,
+        "debounced": 0,
+        "switches": []
+      },
+      "conflicts": 0
+    }
+  },
+  {
+    "offset": 0.25,
+    "noise": 0.02,
+    "delay": 0.5,
+    "scenario": "flicker",
+    "result": {
+      "speed_error_kph": 0.9405208630980922,
+      "speed_range_kph": 0.011413692316062906,
+      "minimum_gap": 79.03894485751515,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.35809326171875,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 0,
+        "debounced": 0,
+        "switches": []
+      },
+      "conflicts": 0
+    }
+  },
+  {
+    "offset": 0.3,
+    "noise": 0.02,
+    "delay": 0.5,
+    "scenario": "steady",
+    "result": {
+      "speed_error_kph": 1.079999909957661,
+      "speed_range_kph": 0.006800322016793814,
+      "minimum_gap": 75.91777765094514,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.4054985046386719,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 0,
+        "debounced": 0,
+        "switches": []
+      },
+      "conflicts": 0
+    }
+  },
+  {
+    "offset": 0.2,
+    "noise": 0.02,
+    "delay": 0.5,
+    "scenario": "flicker",
+    "result": {
+      "speed_error_kph": 0.7213285677737702,
+      "speed_range_kph": 0.1009392882154657,
+      "minimum_gap": 83.83636479181179,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.31906700134277344,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 20,
+        "debounced": 20,
+        "switches": [
+          20.2,
+          22.5,
+          25.6,
+          28.76,
+          32.0,
+          35.1,
+          38.36,
+          40.660000000000004,
+          43.76,
+          46.96,
+          50.2,
+          52.5,
+          55.6,
+          58.76,
+          62.0,
+          65.1,
+          68.36,
+          70.66,
+          73.76,
+          76.96000000000001
+        ]
+      },
+      "conflicts": 0
+    }
+  },
+  {
+    "offset": 0.2,
+    "noise": 0.02,
+    "delay": 0.5,
+    "scenario": "steady",
+    "result": {
+      "speed_error_kph": 0.7213285677737702,
+      "speed_range_kph": 0.1009392882154657,
+      "minimum_gap": 83.83636479181179,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.31906700134277344,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 20,
+        "debounced": 20,
+        "switches": [
+          20.2,
+          22.5,
+          25.6,
+          28.76,
+          32.0,
+          35.1,
+          38.36,
+          40.660000000000004,
+          43.76,
+          46.96,
+          50.2,
+          52.5,
+          55.6,
+          58.76,
+          62.0,
+          65.1,
+          68.36,
+          70.66,
+          73.76,
+          76.96000000000001
+        ]
+      },
+      "conflicts": 0
+    }
+  },
+  {
+    "offset": 0.19,
+    "noise": 0.02,
+    "delay": 0.8,
+    "scenario": "steady",
+    "result": {
+      "speed_error_kph": 0.6154720925352564,
+      "speed_range_kph": 1.715784506473028e-07,
+      "minimum_gap": 85.97319242315872,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.35379981994628906,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 0,
+        "debounced": 0,
+        "switches": []
+      },
+      "conflicts": 0
+    }
+  }
+]

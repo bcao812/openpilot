@@ -1,0 +1,149 @@
+{
+  "windows": [
+    {
+      "window": 0,
+      "can_frames": 527,
+      "control_frames": 1054,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 25,
+      "can_frames": 316,
+      "control_frames": 632,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 57,
+      "can_frames": 3955,
+      "control_frames": 8086,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 58,
+      "can_frames": 2760,
+      "control_frames": 5520,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 79,
+      "can_frames": 5357,
+      "control_frames": 10714,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 82,
+      "can_frames": 369,
+      "control_frames": 738,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 86,
+      "can_frames": 458,
+      "control_frames": 916,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 103,
+      "can_frames": 767,
+      "control_frames": 1534,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 105,
+      "can_frames": 3709,
+      "control_frames": 7510,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 110,
+      "can_frames": 881,
+      "control_frames": 1762,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 113,
+      "can_frames": 531,
+      "control_frames": 1062,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 114,
+      "can_frames": 241,
+      "control_frames": 482,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 117,
+      "can_frames": 1060,
+      "control_frames": 2120,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 187,
+      "can_frames": 4020,
+      "control_frames": 8040,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 201,
+      "can_frames": 6222,
+      "control_frames": 12444,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    },
+    {
+      "window": 218,
+      "can_frames": 2056,
+      "control_frames": 4112,
+      "control_max_abs_error": 0.0,
+      "can_max_abs_error": 0.0,
+      "brake_mismatches": 0,
+      "gas_mismatches": 0
+    }
+  ],
+  "method": "recorded aTarget/shouldStop; recording LongControl and real100Hz controller+50Hz CAN; same past scheduling"
+}

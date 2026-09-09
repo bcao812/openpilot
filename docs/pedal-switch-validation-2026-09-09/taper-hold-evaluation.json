@@ -1,0 +1,116 @@
+{
+  "method": "open loop; same recorded motion/perception/SP decisions; native 20/100/50Hz alignment; not vehicle outcomes",
+  "manifest_sha256": "3b60822fa72f293d90cdd3c1b7d1604cf8fd0fa08ac4ef74580aab372c000d36",
+  "summary": {
+    "windows": 240,
+    "missing_windows": [],
+    "events": 378,
+    "groups": {
+      "mixed": {
+        "events": 4,
+        "duration": 47.904549511999974,
+        "switches": {
+          "native": 39,
+          "recorded": 38,
+          "baseline": 30,
+          "candidate": 28
+        },
+        "improved": 2,
+        "unchanged": 2,
+        "worse": 0
+      },
+      "no_lead_other": {
+        "events": 6,
+        "duration": 46.75191117899992,
+        "switches": {
+          "native": 43,
+          "recorded": 43,
+          "baseline": 18,
+          "candidate": 31
+        },
+        "improved": 0,
+        "unchanged": 4,
+        "worse": 2
+      },
+      "lead_following": {
+        "events": 275,
+        "duration": 2803.583867432001,
+        "switches": {
+          "native": 1307,
+          "recorded": 1228,
+          "baseline": 1207,
+          "candidate": 1207
+        },
+        "improved": 0,
+        "unchanged": 275,
+        "worse": 0
+      },
+      "low_speed_stop_start": {
+        "events": 52,
+        "duration": 621.0459220550002,
+        "switches": {
+          "native": 304,
+          "recorded": 290,
+          "baseline": 238,
+          "candidate": 238
+        },
+        "improved": 0,
+        "unchanged": 52,
+        "worse": 0
+      },
+      "cruise_with_lead": {
+        "events": 29,
+        "duration": 360.60915209999916,
+        "switches": {
+          "native": 519,
+          "recorded": 509,
+          "baseline": 461,
+          "candidate": 345
+        },
+        "improved": 21,
+        "unchanged": 6,
+        "worse": 2
+      },
+      "steady_no_lead_cruise": {
+        "events": 12,
+        "duration": 113.77317849899981,
+        "switches": {
+          "native": 195,
+          "recorded": 193,
+          "baseline": 15,
+          "candidate": 124
+        },
+        "improved": 0,
+        "unchanged": 1,
+        "worse": 11
+      }
+    },
+    "frames": 180649,
+    "automatic_frames": 178343,
+    "candidate_delta": {
+      "minimum": -0.044316306710243225,
+      "median": 0.0,
+      "p95": 0.0,
+      "maximum": 0.03324829041957855
+    },
+    "reconstruction_error": {
+      "minimum": 0.0,
+      "median": 0.0010785460472106934,
+      "p95": 0.010818228125572201,
+      "maximum": 0.6245630979537964
+    },
+    "solver_failures": {
+      "recorded": 0,
+      "baseline": 0,
+      "candidate": 0
+    },
+    "changed_frames": 8662,
+    "low_speed_changed_frames": 38,
+    "stop_changed_frames": 0,
+    "conflicts": {
+      "recorded": 0,
+      "baseline": 0,
+      "candidate": 0
+    }
+  }
+}

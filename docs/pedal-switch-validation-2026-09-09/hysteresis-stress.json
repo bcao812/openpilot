@@ -1,0 +1,90 @@
+[
+  {
+    "offset": 0.254545,
+    "noise": 0.02,
+    "delay": 0.8,
+    "scenario": "steady",
+    "result": {
+      "speed_error_kph": 0.9976311806988164,
+      "speed_range_kph": 0.39367930027565307,
+      "minimum_gap": 77.8950089505794,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.45352745056152344,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 25,
+        "debounced": 24,
+        "switches": [
+          24.060000000000002,
+          25.46,
+          28.7,
+          30.0,
+          33.26,
+          34.6,
+          37.9,
+          39.2,
+          43.160000000000004,
+          44.56,
+          47.800000000000004,
+          49.1,
+          52.36,
+          53.7,
+          56.96,
+          58.300000000000004,
+          62.26,
+          63.6,
+          66.9,
+          68.2,
+          71.46000000000001,
+          72.76,
+          76.06,
+          77.4
+        ]
+      },
+      "conflicts": 0
+    }
+  },
+  {
+    "offset": 0.25,
+    "noise": 0.02,
+    "delay": 0.5,
+    "scenario": "flicker",
+    "result": {
+      "speed_error_kph": 0.9853224687268096,
+      "speed_range_kph": 0.023466744973410416,
+      "minimum_gap": 78.069857163722,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.3640174865722656,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 0,
+        "debounced": 0,
+        "switches": []
+      },
+      "conflicts": 0
+    }
+  },
+  {
+    "offset": 0.3,
+    "noise": 0.02,
+    "delay": 0.5,
+    "scenario": "steady",
+    "result": {
+      "speed_error_kph": 1.0799999922487373,
+      "speed_range_kph": 0.006800654949246621,
+      "minimum_gap": 75.87069009417846,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.41744232177734375,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 0,
+        "debounced": 0,
+        "switches": []
+      },
+      "conflicts": 0
+    }
+  }
+]

@@ -1,0 +1,122 @@
+[
+  {
+    "offset": 0.254545,
+    "noise": 0.02,
+    "delay": 0.8,
+    "scenario": "steady",
+    "result": {
+      "speed_error_kph": 0.9953169879515728,
+      "speed_range_kph": 0.39921780317517064,
+      "minimum_gap": 77.8659722604655,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.45352745056152344,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 36,
+        "debounced": 33,
+        "switches": [
+          23.400000000000002,
+          24.76,
+          24.96,
+          25.36,
+          28.0,
+          28.2,
+          28.5,
+          30.0,
+          33.160000000000004,
+          34.56,
+          37.76,
+          39.1,
+          42.300000000000004,
+          43.7,
+          46.96,
+          48.300000000000004,
+          51.6,
+          53.6,
+          56.2,
+          56.36,
+          56.76,
+          58.160000000000004,
+          61.36,
+          62.76,
+          65.96000000000001,
+          67.3,
+          70.56,
+          71.9,
+          75.16,
+          76.56,
+          76.86,
+          77.16,
+          79.8
+        ]
+      },
+      "conflicts": 0
+    }
+  },
+  {
+    "offset": 0.25,
+    "noise": 0.02,
+    "delay": 0.5,
+    "scenario": "flicker",
+    "result": {
+      "speed_error_kph": 0.9853495036539386,
+      "speed_range_kph": 0.03722444778022976,
+      "minimum_gap": 78.03983017959278,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.3640174865722656,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 42,
+        "debounced": 22,
+        "switches": [
+          21.56,
+          21.8,
+          22.400000000000002,
+          22.6,
+          25.16,
+          25.46,
+          26.060000000000002,
+          26.26,
+          28.8,
+          29.060000000000002,
+          29.7,
+          29.86,
+          32.46,
+          32.7,
+          36.1,
+          36.300000000000004,
+          39.76,
+          39.96,
+          43.4,
+          43.56,
+          47.0,
+          47.2
+        ]
+      },
+      "conflicts": 0
+    }
+  },
+  {
+    "offset": 0.3,
+    "noise": 0.02,
+    "delay": 0.5,
+    "scenario": "steady",
+    "result": {
+      "speed_error_kph": 1.0799999328102672,
+      "speed_range_kph": 0.006800493250815976,
+      "minimum_gap": 75.8700854633807,
+      "minimum_gap_time": 79.99,
+      "minimum_command": -0.41744232177734375,
+      "maximum_command": -0.04639999940991402,
+      "brake_response": null,
+      "switches": {
+        "raw": 0,
+        "debounced": 0,
+        "switches": []
+      },
+      "conflicts": 0
+    }
+  }
+]
