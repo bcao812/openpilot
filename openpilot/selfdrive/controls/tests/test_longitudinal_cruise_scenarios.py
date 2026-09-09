@@ -139,9 +139,10 @@ def test_closed_loop_risk_response(scenario):
 
 
 @pytest.mark.xfail(strict=True, reason='Experimental lead shaping introduces a limit cycle with long unmodelled actuator delay')
-def test_experimental_lead_extension_release_gate():
-  before = simulate_lead_cruise(False, offset=0.254545, noise=0.02, delay=0.8)
-  after = simulate_lead_cruise(True, offset=0.254545, noise=0.02, delay=0.8)
+@pytest.mark.parametrize('offset,delay', [(0.254545, 0.8), (0.25, 0.5), (0.254545, 0.5)])
+def test_experimental_lead_extension_release_gate(offset, delay):
+  before = simulate_lead_cruise(False, offset=offset, noise=0.02, delay=delay)
+  after = simulate_lead_cruise(True, offset=offset, noise=0.02, delay=delay)
   assert after['switches']['debounced'] <= before['switches']['debounced']
 
 
