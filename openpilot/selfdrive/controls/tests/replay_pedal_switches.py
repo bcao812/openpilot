@@ -280,6 +280,7 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
         stamps[service] = message.logMonoTime
       if service == 'modelV2' and all(name in latest for name in SERVICES):
         state = ReplayState(latest.copy())
+        state.logMonoTime = stamps.copy()
         state.valid = {name: valid[name] and 0 <= (message.logMonoTime - stamps[name]) / 1e9 <= 0.3 for name in SERVICES}
         models[message.logMonoTime] = state
         if len(models) > 30:
