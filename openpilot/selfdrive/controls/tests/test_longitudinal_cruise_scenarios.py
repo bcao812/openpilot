@@ -20,12 +20,13 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import Lon
 
 
 def simulate_lead_cruise(extension, offset=0.25, noise=0.0, delay=0.5, scenario='steady', speed_target=20.0, duration=80.0,
-                         response_time=0.4):
+                         response_time=0.4, smoothing='off'):
   params = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
   params.openpilotLongitudinalControl = True
   params_sp = CarInterface.get_non_essential_params_sp(params, CAR.HONDA_ACCORD)
   speed, acceleration = speed_target + 0.2, 0.0
-  planner = LongitudinalPlanner(params, params_sp, init_v=speed, experimental_coast_with_lead=extension)
+  planner = LongitudinalPlanner(params, params_sp, init_v=speed, experimental_coast_with_lead=extension,
+                               experimental_cruise_smoothing=smoothing)
   longitudinal = LongControl(params, params_sp)
   controller = CarController({Bus.pt: DBC[params.carFingerprint][Bus.pt]}, params, params_sp)
   parser = CANParser(DBC[params.carFingerprint][Bus.pt], [('ACC_CONTROL', 50)], CanBus(params).pt)
