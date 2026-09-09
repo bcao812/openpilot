@@ -1,0 +1,14 @@
+{
+  "seconds": {
+    "scenario-matrix.json": 207.60762085999886,
+    "qualified-matrix.json": 76.77987467600178,
+    "qualified-activity.json": 73.23923829299747,
+    "sensitivity-timing.json": 60.50499041400326,
+    "warmup-fidelity-timing.json": 29.81574632700358,
+    "final-verification-timing.json": 74.68390411099972,
+    "active-normal-activity.json": 39.303310869996494,
+    "cruise-normal-activity.json": 12.177522273996146,
+    "final-boundary-diagnostics.json": 10.006116479999037
+  },
+  "note": "Overlapping jobs; do not sum as end-to-end wall time. Final verification includes active-normal."
+}

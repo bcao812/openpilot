@@ -1,0 +1,2713 @@
+{
+  "summary": {
+    "normal": {
+      "plans": 26879,
+      "eligible": 672,
+      "qualified": 333,
+      "confirmed": 0,
+      "changed": 0
+    },
+    "oscillation": {
+      "plans": 6728,
+      "eligible": 3271,
+      "qualified": 2644,
+      "confirmed": 815,
+      "changed": 234
+    },
+    "risk": {
+      "plans": 2442,
+      "eligible": 51,
+      "qualified": 0,
+      "confirmed": 0,
+      "changed": 0
+    }
+  },
+  "windows": [
+    {
+      "id": "000",
+      "group": "normal",
+      "reason": "previous_disabled_experiment_raw_pulse",
+      "counts": {
+        "plans": 400,
+        "eligible": 30,
+        "qualified": 4,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "001",
+      "group": "normal",
+      "reason": "previous_disabled_experiment_raw_pulse",
+      "counts": {
+        "plans": 400,
+        "eligible": 173,
+        "qualified": 131,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "002",
+      "group": "normal",
+      "reason": "previous_disabled_experiment_raw_pulse",
+      "counts": {
+        "plans": 400,
+        "eligible": 3,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "003",
+      "group": "normal",
+      "reason": "originally_nonoscillating_engaged_route",
+      "counts": {
+        "plans": 1500,
+        "eligible": 37,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "004",
+      "group": "normal",
+      "reason": "originally_nonoscillating_engaged_route",
+      "counts": {
+        "plans": 1501,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "005",
+      "group": "normal",
+      "reason": "originally_nonoscillating_engaged_route",
+      "counts": {
+        "plans": 141,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "006",
+      "group": "normal",
+      "reason": "originally_nonoscillating_engaged_route",
+      "counts": {
+        "plans": 500,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "007",
+      "group": "normal",
+      "reason": "originally_nonoscillating_engaged_route",
+      "counts": {
+        "plans": 1500,
+        "eligible": 38,
+        "qualified": 24,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "008",
+      "group": "normal",
+      "reason": "originally_nonoscillating_engaged_route",
+      "counts": {
+        "plans": 556,
+        "eligible": 251,
+        "qualified": 79,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "009",
+      "group": "normal",
+      "reason": "originally_nonoscillating_engaged_route",
+      "counts": {
+        "plans": 1381,
+        "eligible": 3,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "010",
+      "group": "normal",
+      "reason": "low_speed",
+      "counts": {
+        "plans": 1800,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "011",
+      "group": "normal",
+      "reason": "urban",
+      "counts": {
+        "plans": 1800,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "012",
+      "group": "normal",
+      "reason": "mid_speed",
+      "counts": {
+        "plans": 1800,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "013",
+      "group": "normal",
+      "reason": "high_speed",
+      "counts": {
+        "plans": 1800,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "014",
+      "group": "normal",
+      "reason": "no_lead",
+      "counts": {
+        "plans": 1800,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "015",
+      "group": "normal",
+      "reason": "e2e",
+      "counts": {
+        "plans": 1800,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "016",
+      "group": "normal",
+      "reason": "model_braking",
+      "counts": {
+        "plans": 1800,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "017",
+      "group": "normal",
+      "reason": "cruise_lead",
+      "counts": {
+        "plans": 1800,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "018",
+      "group": "oscillation",
+      "reason": "1\u20132/<5",
+      "counts": {
+        "plans": 247,
+        "eligible": 29,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "019",
+      "group": "oscillation",
+      "reason": "0.5\u20131/<5",
+      "counts": {
+        "plans": 268,
+        "eligible": 70,
+        "qualified": 35,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "020",
+      "group": "oscillation",
+      "reason": "\u22652/<5",
+      "counts": {
+        "plans": 217,
+        "eligible": 60,
+        "qualified": 9,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "021",
+      "group": "oscillation",
+      "reason": "1\u20132/<5",
+      "counts": {
+        "plans": 289,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "022",
+      "group": "oscillation",
+      "reason": "0.5\u20131/\u226530",
+      "counts": {
+        "plans": 813,
+        "eligible": 539,
+        "qualified": 407,
+        "confirmed": 84,
+        "changed": 26
+      },
+      "changed": [
+        {
+          "t": 1117.5619156149999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1814746856689453,
+          "output": -0.20610427856445312
+        },
+        {
+          "t": 1117.612531448,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18334007263183594,
+          "output": -0.20610427856445312
+        },
+        {
+          "t": 1123.6135477999999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17774200439453125,
+          "output": -0.21648025512695312
+        },
+        {
+          "t": 1123.663357227,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1633167266845703,
+          "output": -0.20331672668457032
+        },
+        {
+          "t": 1124.6629407159999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1948089599609375,
+          "output": -0.2008228302001953
+        },
+        {
+          "t": 1124.713709362,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18365097045898438,
+          "output": -0.2008228302001953
+        },
+        {
+          "t": 1124.762878581,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16990280151367188,
+          "output": -0.2008228302001953
+        },
+        {
+          "t": 1125.614151028,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1923503875732422,
+          "output": -0.20328903198242188
+        },
+        {
+          "t": 1125.663477174,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16043663024902344,
+          "output": -0.20043663024902345
+        },
+        {
+          "t": 1125.7139220699999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16411590576171875,
+          "output": -0.20328903198242188
+        },
+        {
+          "t": 1126.5638699859999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17936134338378906,
+          "output": -0.20888519287109375
+        },
+        {
+          "t": 1126.614717538,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16715431213378906,
+          "output": -0.20715431213378907
+        },
+        {
+          "t": 1127.515045871,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18729591369628906,
+          "output": -0.20728683471679688
+        },
+        {
+          "t": 1127.564113371,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1738414764404297,
+          "output": -0.20728683471679688
+        },
+        {
+          "t": 1129.6651869119999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18132972717285156,
+          "output": -0.2090282440185547
+        },
+        {
+          "t": 1129.715887172,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1777210235595703,
+          "output": -0.2090282440185547
+        },
+        {
+          "t": 1131.910921547,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1904735565185547,
+          "output": -0.20619773864746094
+        },
+        {
+          "t": 1131.966846234,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17535972595214844,
+          "output": -0.20619773864746094
+        },
+        {
+          "t": 1132.010817588,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16040420532226562,
+          "output": -0.20040420532226563
+        },
+        {
+          "t": 1134.062268681,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19913291931152344,
+          "output": -0.22617530822753906
+        },
+        {
+          "t": 1134.113198525,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1840953826904297,
+          "output": -0.2240953826904297
+        },
+        {
+          "t": 1136.212420035,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18927001953125,
+          "output": -0.20470428466796875
+        },
+        {
+          "t": 1136.26372342,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16907501220703125,
+          "output": -0.20470428466796875
+        },
+        {
+          "t": 1138.662674773,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19880294799804688,
+          "output": -0.2035961151123047
+        },
+        {
+          "t": 1138.712667534,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1788177490234375,
+          "output": -0.2035961151123047
+        },
+        {
+          "t": 1138.763311388,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16518020629882812,
+          "output": -0.2035961151123047
+        }
+      ]
+    },
+    {
+      "id": "023",
+      "group": "oscillation",
+      "reason": "1\u20132/\u226530",
+      "counts": {
+        "plans": 899,
+        "eligible": 583,
+        "qualified": 547,
+        "confirmed": 341,
+        "changed": 79
+      },
+      "changed": [
+        {
+          "t": 1203.2634545399999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19522857666015625,
+          "output": -0.20264053344726562
+        },
+        {
+          "t": 1203.3134663629999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.196807861328125,
+          "output": -0.20264053344726562
+        },
+        {
+          "t": 1203.3602581339999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18611526489257812,
+          "output": -0.20264053344726562
+        },
+        {
+          "t": 1204.163945321,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19173622131347656,
+          "output": -0.20092010498046875
+        },
+        {
+          "t": 1204.213319748,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.183380126953125,
+          "output": -0.20092010498046875
+        },
+        {
+          "t": 1204.2590237059999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1879405975341797,
+          "output": -0.20092010498046875
+        },
+        {
+          "t": 1205.159709279,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1995868682861328,
+          "output": -0.2000293731689453
+        },
+        {
+          "t": 1205.213917456,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18376541137695312,
+          "output": -0.2000293731689453
+        },
+        {
+          "t": 1205.2646661019999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1889781951904297,
+          "output": -0.2000293731689453
+        },
+        {
+          "t": 1206.365587977,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1956157684326172,
+          "output": -0.20949363708496094
+        },
+        {
+          "t": 1206.465831883,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19498252868652344,
+          "output": -0.2047138214111328
+        },
+        {
+          "t": 1206.564410216,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19330596923828125,
+          "output": -0.20945358276367188
+        },
+        {
+          "t": 1206.611656883,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18869400024414062,
+          "output": -0.20945358276367188
+        },
+        {
+          "t": 1206.664983549,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1887378692626953,
+          "output": -0.20945358276367188
+        },
+        {
+          "t": 1207.715636257,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19734954833984375,
+          "output": -0.2099628448486328
+        },
+        {
+          "t": 1207.764787768,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1965503692626953,
+          "output": -0.2099628448486328
+        },
+        {
+          "t": 1207.814436361,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1890430450439453,
+          "output": -0.2099628448486328
+        },
+        {
+          "t": 1209.066119903,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19492340087890625,
+          "output": -0.20892906188964844
+        },
+        {
+          "t": 1209.116662298,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19959259033203125,
+          "output": -0.20892906188964844
+        },
+        {
+          "t": 1209.165614746,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18236732482910156,
+          "output": -0.20892906188964844
+        },
+        {
+          "t": 1212.4141922449999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19283103942871094,
+          "output": -0.2030010223388672
+        },
+        {
+          "t": 1212.5140628699999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18520164489746094,
+          "output": -0.2013530731201172
+        },
+        {
+          "t": 1212.564609953,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18770980834960938,
+          "output": -0.2013530731201172
+        },
+        {
+          "t": 1212.614400735,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18004989624023438,
+          "output": -0.2013530731201172
+        },
+        {
+          "t": 1213.4142717759999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19473648071289062,
+          "output": -0.20555877685546875
+        },
+        {
+          "t": 1213.514565526,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18682479858398438,
+          "output": -0.20049476623535156
+        },
+        {
+          "t": 1213.5646722449999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18607330322265625,
+          "output": -0.20049476623535156
+        },
+        {
+          "t": 1213.614465161,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1858654022216797,
+          "output": -0.20049476623535156
+        },
+        {
+          "t": 1214.564867505,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1916828155517578,
+          "output": -0.21201515197753906
+        },
+        {
+          "t": 1214.614482661,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19051170349121094,
+          "output": -0.21201515197753906
+        },
+        {
+          "t": 1214.66383714,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18138504028320312,
+          "output": -0.21201515197753906
+        },
+        {
+          "t": 1215.71402089,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19993209838867188,
+          "output": -0.21048545837402344
+        },
+        {
+          "t": 1215.8140109419999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.188995361328125,
+          "output": -0.2033214569091797
+        },
+        {
+          "t": 1215.86448839,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1916027069091797,
+          "output": -0.2033214569091797
+        },
+        {
+          "t": 1215.914056827,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1852283477783203,
+          "output": -0.2033214569091797
+        },
+        {
+          "t": 1217.213904743,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1955280303955078,
+          "output": -0.2012939453125
+        },
+        {
+          "t": 1217.313136201,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19437599182128906,
+          "output": -0.2071247100830078
+        },
+        {
+          "t": 1217.360367608,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19380950927734375,
+          "output": -0.2071247100830078
+        },
+        {
+          "t": 1217.413564899,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.182708740234375,
+          "output": -0.2071247100830078
+        },
+        {
+          "t": 1218.115373545,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19820404052734375,
+          "output": -0.20159530639648438
+        },
+        {
+          "t": 1218.163838493,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19364547729492188,
+          "output": -0.20159530639648438
+        },
+        {
+          "t": 1218.209345107,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19582557678222656,
+          "output": -0.20159530639648438
+        },
+        {
+          "t": 1219.060994899,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1981029510498047,
+          "output": -0.200592041015625
+        },
+        {
+          "t": 1219.114752815,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19546890258789062,
+          "output": -0.200592041015625
+        },
+        {
+          "t": 1219.16362568,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18166160583496094,
+          "output": -0.200592041015625
+        },
+        {
+          "t": 1220.213764169,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19678878784179688,
+          "output": -0.20557212829589844
+        },
+        {
+          "t": 1220.263613805,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19256973266601562,
+          "output": -0.20557212829589844
+        },
+        {
+          "t": 1220.313492346,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18343353271484375,
+          "output": -0.20557212829589844
+        },
+        {
+          "t": 1221.313716617,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19954872131347656,
+          "output": -0.2094097137451172
+        },
+        {
+          "t": 1221.36399771,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19354820251464844,
+          "output": -0.2094097137451172
+        },
+        {
+          "t": 1221.413350523,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1943683624267578,
+          "output": -0.2094097137451172
+        },
+        {
+          "t": 1222.460176981,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1931743621826172,
+          "output": -0.20447349548339844
+        },
+        {
+          "t": 1222.514902866,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1867523193359375,
+          "output": -0.20447349548339844
+        },
+        {
+          "t": 1222.564614377,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1817188262939453,
+          "output": -0.20447349548339844
+        },
+        {
+          "t": 1223.5148975529999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19057083129882812,
+          "output": -0.2073192596435547
+        },
+        {
+          "t": 1223.564733439,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19069862365722656,
+          "output": -0.2073192596435547
+        },
+        {
+          "t": 1223.610089689,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1829395294189453,
+          "output": -0.2073192596435547
+        },
+        {
+          "t": 1224.615192084,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1989307403564453,
+          "output": -0.20430755615234375
+        },
+        {
+          "t": 1224.660601667,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19576644897460938,
+          "output": -0.20430755615234375
+        },
+        {
+          "t": 1224.76500724,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19654273986816406,
+          "output": -0.2045001983642578
+        },
+        {
+          "t": 1224.861884897,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19510650634765625,
+          "output": -0.20244789123535156
+        },
+        {
+          "t": 1225.01552948,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19788551330566406,
+          "output": -0.20087051391601562
+        },
+        {
+          "t": 1225.065296146,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19907569885253906,
+          "output": -0.20087051391601562
+        },
+        {
+          "t": 1225.465546459,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1996631622314453,
+          "output": -0.20702743530273438
+        },
+        {
+          "t": 1225.564964063,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18997764587402344,
+          "output": -0.20205307006835938
+        },
+        {
+          "t": 1225.6146771879999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19332504272460938,
+          "output": -0.20205307006835938
+        },
+        {
+          "t": 1225.665091615,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1915454864501953,
+          "output": -0.20205307006835938
+        },
+        {
+          "t": 1226.367817656,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19581985473632812,
+          "output": -0.20300674438476562
+        },
+        {
+          "t": 1226.411845521,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19906997680664062,
+          "output": -0.20300674438476562
+        },
+        {
+          "t": 1226.46489599,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18775177001953125,
+          "output": -0.20300674438476562
+        },
+        {
+          "t": 1227.716021458,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1932849884033203,
+          "output": -0.2024688720703125
+        },
+        {
+          "t": 1227.765283333,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18149185180664062,
+          "output": -0.2024688720703125
+        },
+        {
+          "t": 1227.815348802,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18195533752441406,
+          "output": -0.2024688720703125
+        },
+        {
+          "t": 1228.916037707,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19081687927246094,
+          "output": -0.20040512084960938
+        },
+        {
+          "t": 1228.966765468,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1802501678466797,
+          "output": -0.20040512084960938
+        },
+        {
+          "t": 1229.017258124,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1800384521484375,
+          "output": -0.20040512084960938
+        },
+        {
+          "t": 1229.967934322,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19040489196777344,
+          "output": -0.20444297790527344
+        },
+        {
+          "t": 1230.017601665,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19878578186035156,
+          "output": -0.20444297790527344
+        },
+        {
+          "t": 1230.067552342,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1797504425048828,
+          "output": -0.20444297790527344
+        }
+      ]
+    },
+    {
+      "id": "024",
+      "group": "oscillation",
+      "reason": "1\u20132/5\u201315",
+      "counts": {
+        "plans": 418,
+        "eligible": 116,
+        "qualified": 70,
+        "confirmed": 9,
+        "changed": 2
+      },
+      "changed": [
+        {
+          "t": 1938.617154415,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19393539428710938,
+          "output": -0.20037269592285156
+        },
+        {
+          "t": 1938.666792853,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1677265167236328,
+          "output": -0.20037269592285156
+        }
+      ]
+    },
+    {
+      "id": "025",
+      "group": "oscillation",
+      "reason": "0.5\u20131/5\u201315",
+      "counts": {
+        "plans": 439,
+        "eligible": 397,
+        "qualified": 344,
+        "confirmed": 17,
+        "changed": 5
+      },
+      "changed": [
+        {
+          "t": 2009.119232513,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1833934783935547,
+          "output": -0.20900726318359375
+        },
+        {
+          "t": 2009.1689721490002,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17450904846191406,
+          "output": -0.20900726318359375
+        },
+        {
+          "t": 2013.418374335,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19667434692382812,
+          "output": -0.22365188598632812
+        },
+        {
+          "t": 2013.4681293859999,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1766204833984375,
+          "output": -0.2166204833984375
+        },
+        {
+          "t": 2020.76878678,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17537689208984375,
+          "output": -0.20178604125976562
+        }
+      ]
+    },
+    {
+      "id": "026",
+      "group": "oscillation",
+      "reason": "1\u20132/15\u201330",
+      "counts": {
+        "plans": 611,
+        "eligible": 261,
+        "qualified": 241,
+        "confirmed": 54,
+        "changed": 19
+      },
+      "changed": [
+        {
+          "t": 3444.387700299,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1948833465576172,
+          "output": -0.20190048217773438
+        },
+        {
+          "t": 3444.438598893,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1752605438232422,
+          "output": -0.20190048217773438
+        },
+        {
+          "t": 3444.487573476,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16721534729003906,
+          "output": -0.20190048217773438
+        },
+        {
+          "t": 3445.64290384,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1861419677734375,
+          "output": -0.20520782470703125
+        },
+        {
+          "t": 3445.692516965,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.170013427734375,
+          "output": -0.20520782470703125
+        },
+        {
+          "t": 3446.842594934,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1839885711669922,
+          "output": -0.2026844024658203
+        },
+        {
+          "t": 3446.896391496,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1724872589111328,
+          "output": -0.2026844024658203
+        },
+        {
+          "t": 3447.893171496,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.188751220703125,
+          "output": -0.2014484405517578
+        },
+        {
+          "t": 3447.943171965,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1776275634765625,
+          "output": -0.2014484405517578
+        },
+        {
+          "t": 3447.990400246,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1770458221435547,
+          "output": -0.2014484405517578
+        },
+        {
+          "t": 3448.892562693,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1975879669189453,
+          "output": -0.20677757263183594
+        },
+        {
+          "t": 3448.943373839,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.192535400390625,
+          "output": -0.20677757263183594
+        },
+        {
+          "t": 3448.993314152,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1856517791748047,
+          "output": -0.20677757263183594
+        },
+        {
+          "t": 3449.842761287,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19555282592773438,
+          "output": -0.20906829833984375
+        },
+        {
+          "t": 3449.89193686,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19069671630859375,
+          "output": -0.20906829833984375
+        },
+        {
+          "t": 3449.94202811,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1825542449951172,
+          "output": -0.20906829833984375
+        },
+        {
+          "t": 3450.843184151,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1957225799560547,
+          "output": -0.20412063598632812
+        },
+        {
+          "t": 3450.892367641,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18914413452148438,
+          "output": -0.20412063598632812
+        },
+        {
+          "t": 3450.942234932,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1745319366455078,
+          "output": -0.20412063598632812
+        }
+      ]
+    },
+    {
+      "id": "027",
+      "group": "oscillation",
+      "reason": "1\u20132/5\u201315",
+      "counts": {
+        "plans": 455,
+        "eligible": 275,
+        "qualified": 223,
+        "confirmed": 89,
+        "changed": 28
+      },
+      "changed": [
+        {
+          "t": 3785.49825543,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18454742431640625,
+          "output": -0.20244407653808594
+        },
+        {
+          "t": 3786.646903971,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18414878845214844,
+          "output": -0.2179241180419922
+        },
+        {
+          "t": 3786.696766158,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18559646606445312,
+          "output": -0.2179241180419922
+        },
+        {
+          "t": 3786.747209179,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.162109375,
+          "output": -0.202109375
+        },
+        {
+          "t": 3787.651574439,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1999073028564453,
+          "output": -0.22787094116210938
+        },
+        {
+          "t": 3787.75033647,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1845989227294922,
+          "output": -0.20862388610839844
+        },
+        {
+          "t": 3787.80035022,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1769428253173828,
+          "output": -0.20862388610839844
+        },
+        {
+          "t": 3787.845609595,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17755508422851562,
+          "output": -0.20862388610839844
+        },
+        {
+          "t": 3788.748505168,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19783592224121094,
+          "output": -0.22440719604492188
+        },
+        {
+          "t": 3788.845189126,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19870376586914062,
+          "output": -0.2024974822998047
+        },
+        {
+          "t": 3788.899134595,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18643569946289062,
+          "output": -0.2024974822998047
+        },
+        {
+          "t": 3788.948601314,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19231796264648438,
+          "output": -0.2024974822998047
+        },
+        {
+          "t": 3789.644795376,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19769287109375,
+          "output": -0.21600341796875
+        },
+        {
+          "t": 3789.744743397,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18090438842773438,
+          "output": -0.20911026000976562
+        },
+        {
+          "t": 3789.848050011,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18317604064941406,
+          "output": -0.2041759490966797
+        },
+        {
+          "t": 3791.348868396,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1883068084716797,
+          "output": -0.21306800842285156
+        },
+        {
+          "t": 3791.398527302,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18999671936035156,
+          "output": -0.21306800842285156
+        },
+        {
+          "t": 3791.443901886,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18524551391601562,
+          "output": -0.21306800842285156
+        },
+        {
+          "t": 3792.698595218,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19066429138183594,
+          "output": -0.2134723663330078
+        },
+        {
+          "t": 3792.798186416,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1876811981201172,
+          "output": -0.20256805419921875
+        },
+        {
+          "t": 3792.852455531,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1701488494873047,
+          "output": -0.20256805419921875
+        },
+        {
+          "t": 3792.898933083,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17781639099121094,
+          "output": -0.20256805419921875
+        },
+        {
+          "t": 3794.549250166,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19821548461914062,
+          "output": -0.20625686645507812
+        },
+        {
+          "t": 3794.595928134,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1935272216796875,
+          "output": -0.20625686645507812
+        },
+        {
+          "t": 3794.646585895,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19336700439453125,
+          "output": -0.20625686645507812
+        },
+        {
+          "t": 3795.398473134,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18830490112304688,
+          "output": -0.21253013610839844
+        },
+        {
+          "t": 3795.448797822,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1943073272705078,
+          "output": -0.21253013610839844
+        },
+        {
+          "t": 3795.494911988,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19074630737304688,
+          "output": -0.21253013610839844
+        }
+      ]
+    },
+    {
+      "id": "028",
+      "group": "oscillation",
+      "reason": "1\u20132/15\u201330",
+      "counts": {
+        "plans": 679,
+        "eligible": 246,
+        "qualified": 221,
+        "confirmed": 56,
+        "changed": 19
+      },
+      "changed": [
+        {
+          "t": 4261.256306081001,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19974517822265625,
+          "output": -0.21488571166992188
+        },
+        {
+          "t": 4261.306488425001,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.198516845703125,
+          "output": -0.21488571166992188
+        },
+        {
+          "t": 4261.352940769,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1657123565673828,
+          "output": -0.20571235656738282
+        },
+        {
+          "t": 4263.556567487,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1778392791748047,
+          "output": -0.2071552276611328
+        },
+        {
+          "t": 4264.560020299001,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19420433044433594,
+          "output": -0.22263145446777344
+        },
+        {
+          "t": 4264.609021236,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18584442138671875,
+          "output": -0.22263145446777344
+        },
+        {
+          "t": 4264.659144882001,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16888046264648438,
+          "output": -0.20888046264648438
+        },
+        {
+          "t": 4266.207331340001,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19563674926757812,
+          "output": -0.2215747833251953
+        },
+        {
+          "t": 4266.256710663,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1771087646484375,
+          "output": -0.2171087646484375
+        },
+        {
+          "t": 4266.306676079001,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16424179077148438,
+          "output": -0.20424179077148438
+        },
+        {
+          "t": 4267.2569091000005,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19349288940429688,
+          "output": -0.20446014404296875
+        },
+        {
+          "t": 4267.30346936,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1743316650390625,
+          "output": -0.20446014404296875
+        },
+        {
+          "t": 4267.356701704,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1803131103515625,
+          "output": -0.20446014404296875
+        },
+        {
+          "t": 4269.6075846720005,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1981372833251953,
+          "output": -0.217529296875
+        },
+        {
+          "t": 4269.651903266001,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18005752563476562,
+          "output": -0.217529296875
+        },
+        {
+          "t": 4269.707639046001,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1671276092529297,
+          "output": -0.2071276092529297
+        },
+        {
+          "t": 4270.505917484001,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1940765380859375,
+          "output": -0.2118072509765625
+        },
+        {
+          "t": 4270.557064672001,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19240570068359375,
+          "output": -0.2118072509765625
+        },
+        {
+          "t": 4271.4064263380005,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1985454559326172,
+          "output": -0.21409034729003906
+        }
+      ]
+    },
+    {
+      "id": "029",
+      "group": "oscillation",
+      "reason": "1\u20132/\u226530",
+      "counts": {
+        "plans": 946,
+        "eligible": 628,
+        "qualified": 538,
+        "confirmed": 165,
+        "changed": 56
+      },
+      "changed": [
+        {
+          "t": 2650.7832827909997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19718170166015625,
+          "output": -0.20871353149414062
+        },
+        {
+          "t": 2650.83412529,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18379974365234375,
+          "output": -0.20871353149414062
+        },
+        {
+          "t": 2654.633988883,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1744842529296875,
+          "output": -0.20348167419433594
+        },
+        {
+          "t": 2654.6850229449997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1755695343017578,
+          "output": -0.20348167419433594
+        },
+        {
+          "t": 2654.73001107,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16453933715820312,
+          "output": -0.20348167419433594
+        },
+        {
+          "t": 2656.384175288,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19485092163085938,
+          "output": -0.2127513885498047
+        },
+        {
+          "t": 2656.4342681529997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18692970275878906,
+          "output": -0.2127513885498047
+        },
+        {
+          "t": 2656.483822111,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18318557739257812,
+          "output": -0.2127513885498047
+        },
+        {
+          "t": 2657.335385132,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1992473602294922,
+          "output": -0.20865440368652344
+        },
+        {
+          "t": 2657.379192684,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19396209716796875,
+          "output": -0.20865440368652344
+        },
+        {
+          "t": 2657.432709767,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1935558319091797,
+          "output": -0.20865440368652344
+        },
+        {
+          "t": 2658.1334215379998,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19839096069335938,
+          "output": -0.2185993194580078
+        },
+        {
+          "t": 2658.192372527,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18694496154785156,
+          "output": -0.2185993194580078
+        },
+        {
+          "t": 2658.2296841939997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18121337890625,
+          "output": -0.2185993194580078
+        },
+        {
+          "t": 2661.079067526,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19539260864257812,
+          "output": -0.2156829833984375
+        },
+        {
+          "t": 2661.128270703,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18161964416503906,
+          "output": -0.2156829833984375
+        },
+        {
+          "t": 2661.182754609,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16005897521972656,
+          "output": -0.20005897521972657
+        },
+        {
+          "t": 2662.0825478899997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19397926330566406,
+          "output": -0.2076873779296875
+        },
+        {
+          "t": 2662.1326108589997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.166778564453125,
+          "output": -0.206778564453125
+        },
+        {
+          "t": 2662.1785353379996,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17666244506835938,
+          "output": -0.2076873779296875
+        },
+        {
+          "t": 2663.531426171,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18433189392089844,
+          "output": -0.20194244384765625
+        },
+        {
+          "t": 2663.5824157019997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18395042419433594,
+          "output": -0.20194244384765625
+        },
+        {
+          "t": 2663.6316462749996,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17041397094726562,
+          "output": -0.20194244384765625
+        },
+        {
+          "t": 2664.532023931,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19959640502929688,
+          "output": -0.21546363830566406
+        },
+        {
+          "t": 2664.582077525,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19906234741210938,
+          "output": -0.21546363830566406
+        },
+        {
+          "t": 2664.628040389,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1840076446533203,
+          "output": -0.21546363830566406
+        },
+        {
+          "t": 2668.0323374189998,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18820762634277344,
+          "output": -0.20033836364746094
+        },
+        {
+          "t": 2668.082490805,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18320274353027344,
+          "output": -0.20033836364746094
+        },
+        {
+          "t": 2668.2316567939997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18981552124023438,
+          "output": -0.21467018127441406
+        },
+        {
+          "t": 2668.2821865859996,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1870250701904297,
+          "output": -0.21467018127441406
+        },
+        {
+          "t": 2668.3324014299997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18787002563476562,
+          "output": -0.21467018127441406
+        },
+        {
+          "t": 2669.479982263,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19298934936523438,
+          "output": -0.20419692993164062
+        },
+        {
+          "t": 2669.5316657519998,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1873760223388672,
+          "output": -0.20419692993164062
+        },
+        {
+          "t": 2669.582365231,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18394088745117188,
+          "output": -0.20419692993164062
+        },
+        {
+          "t": 2670.732348564,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19516754150390625,
+          "output": -0.2000751495361328
+        },
+        {
+          "t": 2670.781824762,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1778411865234375,
+          "output": -0.2000751495361328
+        },
+        {
+          "t": 2670.832475283,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17949867248535156,
+          "output": -0.2000751495361328
+        },
+        {
+          "t": 2672.078078616,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19674110412597656,
+          "output": -0.2022876739501953
+        },
+        {
+          "t": 2672.1317276259997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17270851135253906,
+          "output": -0.2022876739501953
+        },
+        {
+          "t": 2673.48149023,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1788196563720703,
+          "output": -0.2030506134033203
+        },
+        {
+          "t": 2673.528216532,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16890525817871094,
+          "output": -0.2030506134033203
+        },
+        {
+          "t": 2673.582567521,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16482162475585938,
+          "output": -0.2030506134033203
+        },
+        {
+          "t": 2674.531528042,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19512176513671875,
+          "output": -0.2001476287841797
+        },
+        {
+          "t": 2674.5822900209996,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18224716186523438,
+          "output": -0.2001476287841797
+        },
+        {
+          "t": 2674.6294374169997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16335678100585938,
+          "output": -0.2001476287841797
+        },
+        {
+          "t": 2675.928121271,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1923389434814453,
+          "output": -0.208709716796875
+        },
+        {
+          "t": 2675.977649604,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1838512420654297,
+          "output": -0.208709716796875
+        },
+        {
+          "t": 2676.0317452289996,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1838226318359375,
+          "output": -0.208709716796875
+        },
+        {
+          "t": 2677.0828046029997,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.17933082580566406,
+          "output": -0.20236778259277344
+        },
+        {
+          "t": 2677.13213653,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.16363143920898438,
+          "output": -0.20236778259277344
+        },
+        {
+          "t": 2677.182129812,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1618785858154297,
+          "output": -0.2018785858154297
+        },
+        {
+          "t": 2678.131938301,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1994037628173828,
+          "output": -0.20452499389648438
+        },
+        {
+          "t": 2678.182029186,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.19297027587890625,
+          "output": -0.20452499389648438
+        },
+        {
+          "t": 2678.232234968,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18320655822753906,
+          "output": -0.20452499389648438
+        },
+        {
+          "t": 2680.37860981,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.18787838490804037,
+          "output": -0.22405624389648438
+        },
+        {
+          "t": 2682.382065591,
+          "eligible": true,
+          "qualified": true,
+          "confirmed": true,
+          "changed": true,
+          "original": -0.1769561767578125,
+          "output": -0.20121594492594402
+        }
+      ]
+    },
+    {
+      "id": "030",
+      "group": "oscillation",
+      "reason": "0.5\u20131/5\u201315",
+      "counts": {
+        "plans": 447,
+        "eligible": 67,
+        "qualified": 9,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "031",
+      "group": "risk",
+      "reason": "model_gate_brake",
+      "counts": {
+        "plans": 400,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "032",
+      "group": "risk",
+      "reason": "manual_brake_edge",
+      "counts": {
+        "plans": 300,
+        "eligible": 51,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "033",
+      "group": "risk",
+      "reason": "strong_brake",
+      "counts": {
+        "plans": 181,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "034",
+      "group": "risk",
+      "reason": "cut_in",
+      "counts": {
+        "plans": 501,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "035",
+      "group": "risk",
+      "reason": "low_speed_stop",
+      "counts": {
+        "plans": 460,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "036",
+      "group": "risk",
+      "reason": "lead_brake",
+      "counts": {
+        "plans": 600,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "037",
+      "group": "normal",
+      "reason": "native_confirmed_light_braking_negative_control",
+      "counts": {
+        "plans": 600,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "038",
+      "group": "normal",
+      "reason": "native_confirmed_light_braking_negative_control",
+      "counts": {
+        "plans": 600,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "039",
+      "group": "normal",
+      "reason": "native_confirmed_light_braking_negative_control",
+      "counts": {
+        "plans": 600,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "040",
+      "group": "normal",
+      "reason": "native_confirmed_light_braking_negative_control",
+      "counts": {
+        "plans": 600,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "041",
+      "group": "normal",
+      "reason": "native_confirmed_light_braking_negative_control",
+      "counts": {
+        "plans": 600,
+        "eligible": 36,
+        "qualified": 16,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "042",
+      "group": "normal",
+      "reason": "native_confirmed_light_braking_negative_control",
+      "counts": {
+        "plans": 600,
+        "eligible": 0,
+        "qualified": 0,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    },
+    {
+      "id": "043",
+      "group": "normal",
+      "reason": "native_nonbinding_lead_cruise_braking_negative_control",
+      "counts": {
+        "plans": 600,
+        "eligible": 101,
+        "qualified": 79,
+        "confirmed": 0,
+        "changed": 0
+      },
+      "changed": []
+    }
+  ]
+}

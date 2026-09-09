@@ -1,0 +1,163 @@
+{
+  "final-regression": {
+    "junit_suites": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "38",
+        "tests": "561",
+        "time": "196.486",
+        "timestamp": "2026-09-09T21:56:39.023778+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "junit_case_counts": {
+      "passed_testcases": 454,
+      "xfailed": 6,
+      "skipped": 32
+    },
+    "skip_reasons": {
+      "xfail: Median filtering adds brake/gas transitions at the exact crossover with actuator delay": 1,
+      "xfail: Median filtering adds transitions after override reentry at long actuator delay": 1,
+      "skip: parameterized base class": 32,
+      "xfail: Experimental lead shaping introduces a limit cycle with long unmodelled actuator delay": 3,
+      "xfail: Both default and experimental control exceed the stop gap under excessive actuator lag": 1
+    },
+    "failures": [],
+    "log_sha256": "35119a5fd913043c33c839032427796722c5a5c76f2a4804a7ed9d5ad10f38c5",
+    "xml_sha256": "f93b42c3a6b7081fa72784154c13cc49b79bf07c5b3f6c154b1516883ca07aca"
+  },
+  "honda-safety": {
+    "junit_suites": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "581",
+        "tests": "2225",
+        "time": "5.814",
+        "timestamp": "2026-09-09T21:41:45.407419+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "junit_case_counts": {
+      "skipped": 581,
+      "passed_testcases": 760
+    },
+    "skip_reasons": {
+      "skip: Skipped": 529,
+      "skip: Safety mode implements no _user_regen_msg": 39,
+      "skip: No second speed message for this safety mode": 13
+    },
+    "failures": [],
+    "log_sha256": "0e71374c3ddcc40f807202acbb08303b3608e969529ad29a1c16ede57cd47018",
+    "xml_sha256": "11eacf1a363f6241df9fcec33cf5f237bf80096ba87f79db8fa42c37f1cf8359"
+  },
+  "smart-cruise": {
+    "junit_suites": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "12",
+        "time": "0.534",
+        "timestamp": "2026-09-09T22:03:20.036130+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "junit_case_counts": {
+      "passed_testcases": 12
+    },
+    "skip_reasons": {},
+    "failures": [],
+    "log_sha256": "241cf41c94d5e41b1c049fdb243fbc0493e3e29d7b75c6660713ffb9ed713283",
+    "xml_sha256": "fa50db13816ee2682bde8aaaec59c9ae72bbbd5ce3f0b79c79b6cf7197f93f47"
+  },
+  "final-release-gates": {
+    "junit_suites": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "6",
+        "skipped": "0",
+        "tests": "6",
+        "time": "24.771",
+        "timestamp": "2026-09-09T22:02:48.246995+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "junit_case_counts": {
+      "failed": 6
+    },
+    "skip_reasons": {},
+    "failures": [
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_cruise_smoothing_scenarios",
+        "name": "test_median_crossover_release_gate",
+        "message": "assert 2 <= 0"
+      },
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_cruise_smoothing_scenarios",
+        "name": "test_median_reentry_release_gate",
+        "message": "assert 7 <= 5"
+      },
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios",
+        "name": "test_experimental_lead_extension_release_gate[0.254545-0.8]",
+        "message": "assert 26 <= 0"
+      },
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios",
+        "name": "test_experimental_lead_extension_release_gate[0.25-0.5]",
+        "message": "assert 28 <= 0"
+      },
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios",
+        "name": "test_experimental_lead_extension_release_gate[0.254545-0.5]",
+        "message": "assert 6 <= 0"
+      },
+      {
+        "class": "openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios",
+        "name": "test_long_actuator_lag_collision_release_gate",
+        "message": "assert -1.8652195608552704 > 2.0"
+      }
+    ],
+    "log_sha256": "25627bfe86d34e2c581bd8232ac775e3f475caad5827d5bab0245c8c057bc096",
+    "xml_sha256": "563903368c9aaa3c8640f3aad13d3cb9bbf9dc0348b9162ea0fa4916a2ee4cdd"
+  },
+  "postformat-unit": {
+    "junit_suites": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "95",
+        "time": "1.874",
+        "timestamp": "2026-09-09T22:04:32.274983+08:00",
+        "hostname": "CBO"
+      }
+    ],
+    "junit_case_counts": {
+      "passed_testcases": 95
+    },
+    "skip_reasons": {},
+    "failures": [],
+    "log_sha256": "02a1e3d304deb6e0e73afd55d9eae34706e611c3fca1fb28138dc373a03b3478",
+    "xml_sha256": "d296c8f41d617d9ab080d1610681789d4cb02215df74b2a7e5f036b0199c262e"
+  },
+  "unique_current_tests": {
+    "passed": 1226,
+    "skipped": 613,
+    "xfailed": 6,
+    "subtests_passed": 953,
+    "scope": [
+      "final-regression",
+      "honda-safety",
+      "smart-cruise"
+    ],
+    "reruns_not_added": true
+  }
+}

@@ -1,0 +1,227 @@
+{
+  "cases": 94,
+  "default_exact_against_previous": 94,
+  "modes": {
+    "brake_dwell": {
+      "scenarios": {
+        "steady": {
+          "cases": 64,
+          "identical_results": 44,
+          "raw_worse": [
+            {
+              "offset": 0.2,
+              "noise": 0.02,
+              "delay": 0.5,
+              "response_time": 0.2,
+              "scenario": "steady",
+              "speed_target": 20.0
+            },
+            {
+              "offset": 0.2,
+              "noise": 0.02,
+              "delay": 0.5,
+              "response_time": 0.4,
+              "scenario": "steady",
+              "speed_target": 20.0
+            },
+            {
+              "offset": 0.2,
+              "noise": 0.02,
+              "delay": 0.8,
+              "response_time": 0.4,
+              "scenario": "steady",
+              "speed_target": 20.0
+            }
+          ],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [],
+          "debounced_introduced_from_zero": []
+        },
+        "flicker": {
+          "cases": 6,
+          "identical_results": 6,
+          "raw_worse": [],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [],
+          "debounced_introduced_from_zero": []
+        },
+        "override": {
+          "cases": 6,
+          "identical_results": 4,
+          "raw_worse": [],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [],
+          "debounced_introduced_from_zero": []
+        },
+        "no_lead": {
+          "cases": 6,
+          "identical_results": 6,
+          "raw_worse": [],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [],
+          "debounced_introduced_from_zero": []
+        },
+        "cut_in": {
+          "cases": 6,
+          "identical_results": 5,
+          "raw_worse": [],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [],
+          "debounced_introduced_from_zero": []
+        },
+        "lead_brake": {
+          "cases": 6,
+          "identical_results": 5,
+          "raw_worse": [],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [],
+          "debounced_introduced_from_zero": []
+        }
+      },
+      "maximum_mean_speed_error_delta_kph": 0.00816953144034327,
+      "minimum_gap_delta_m": -1.831980902977648e-06,
+      "risk_braking_response_changes": []
+    },
+    "median": {
+      "scenarios": {
+        "steady": {
+          "cases": 64,
+          "identical_results": 7,
+          "raw_worse": [
+            {
+              "offset": 0.2,
+              "noise": 0.0,
+              "delay": 0.8,
+              "response_time": 0.4,
+              "scenario": "steady",
+              "speed_target": 20.0
+            },
+            {
+              "offset": 0.2,
+              "noise": 0.02,
+              "delay": 0.5,
+              "response_time": 0.2,
+              "scenario": "steady",
+              "speed_target": 20.0
+            },
+            {
+              "offset": 0.2,
+              "noise": 0.02,
+              "delay": 0.5,
+              "response_time": 0.4,
+              "scenario": "steady",
+              "speed_target": 20.0
+            },
+            {
+              "offset": 0.2,
+              "noise": 0.02,
+              "delay": 0.8,
+              "response_time": 0.2,
+              "scenario": "steady",
+              "speed_target": 20.0
+            },
+            {
+              "offset": 0.2,
+              "noise": 0.02,
+              "delay": 0.8,
+              "response_time": 0.4,
+              "scenario": "steady",
+              "speed_target": 20.0
+            }
+          ],
+          "raw_introduced_from_zero": [
+            {
+              "offset": 0.2,
+              "noise": 0.0,
+              "delay": 0.8,
+              "response_time": 0.4,
+              "scenario": "steady",
+              "speed_target": 20.0
+            }
+          ],
+          "debounced_worse": [
+            {
+              "offset": 0.2,
+              "noise": 0.0,
+              "delay": 0.8,
+              "response_time": 0.4,
+              "scenario": "steady",
+              "speed_target": 20.0
+            },
+            {
+              "offset": 0.2,
+              "noise": 0.02,
+              "delay": 0.3,
+              "response_time": 0.2,
+              "scenario": "steady",
+              "speed_target": 20.0
+            }
+          ],
+          "debounced_introduced_from_zero": [
+            {
+              "offset": 0.2,
+              "noise": 0.0,
+              "delay": 0.8,
+              "response_time": 0.4,
+              "scenario": "steady",
+              "speed_target": 20.0
+            }
+          ]
+        },
+        "flicker": {
+          "cases": 6,
+          "identical_results": 6,
+          "raw_worse": [],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [],
+          "debounced_introduced_from_zero": []
+        },
+        "override": {
+          "cases": 6,
+          "identical_results": 0,
+          "raw_worse": [],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [
+            {
+              "offset": 0.25,
+              "noise": 0.02,
+              "delay": 0.8,
+              "response_time": 0.4,
+              "scenario": "override",
+              "speed_target": 20.0,
+              "duration": 80.0
+            }
+          ],
+          "debounced_introduced_from_zero": []
+        },
+        "no_lead": {
+          "cases": 6,
+          "identical_results": 6,
+          "raw_worse": [],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [],
+          "debounced_introduced_from_zero": []
+        },
+        "cut_in": {
+          "cases": 6,
+          "identical_results": 0,
+          "raw_worse": [],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [],
+          "debounced_introduced_from_zero": []
+        },
+        "lead_brake": {
+          "cases": 6,
+          "identical_results": 0,
+          "raw_worse": [],
+          "raw_introduced_from_zero": [],
+          "debounced_worse": [],
+          "debounced_introduced_from_zero": []
+        }
+      },
+      "maximum_mean_speed_error_delta_kph": 0.0005842184226168001,
+      "minimum_gap_delta_m": -0.03268874030453617,
+      "risk_braking_response_changes": []
+    }
+  }
+}

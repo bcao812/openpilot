@@ -1,0 +1,37 @@
+{
+  "decision": "prioritize_confirmed_brake_dwell_for_offline_research_keep_both_experiments_off",
+  "production_smoothing_default": "off",
+  "legacy_experiment_default": false,
+  "plannerd_unchanged": true,
+  "road_release_approved": false,
+  "device_contacted": false,
+  "deployed": false,
+  "sample_routes": 23,
+  "sample_windows": 44,
+  "measured_gross_seconds": 1802.2213006519994,
+  "measured_clean_seconds": 1791.7134086800002,
+  "warmup_gross_seconds": 3060.0,
+  "normal_confirmed_smoothing_frames": 0,
+  "normal_output_changes_from_smoother": 0,
+  "brake_dwell_benefit_raw": [
+    508,
+    480
+  ],
+  "brake_dwell_benefit_debounced": [
+    276,
+    260
+  ],
+  "brake_dwell_extra_brake_seconds": 11.763143957002512,
+  "remaining_risks": [
+    "No confirmed-dwell activation in sampled normal logs despite added native controls",
+    "Long noise-driven crossover oscillation remains; raw window-edge count changes in three closed-loop cases",
+    "Finite warmup and recorded planner reconstruction are not full-route state fidelity",
+    "Extra light-braking duty and recursive MPC residuals require calibrated plant and vehicle validation",
+    "Simplified closed-loop model does not identify delivered Honda brake pressure or pedal deadband",
+    "Existing excessive-actuator-lag gap release gate still fails"
+  ],
+  "median_rejected_for": [
+    "New normal raw burst at route50 3937.323-3937.964s",
+    "Two failing new closed-loop release gates"
+  ]
+}

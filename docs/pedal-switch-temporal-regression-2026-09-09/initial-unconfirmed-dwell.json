@@ -1,0 +1,1924 @@
+{
+  "historical_variant_only": true,
+  "smoother_code": "from collections import deque\nfrom enum import StrEnum\nimport math\nfrom statistics import median\n\n\nclass CruiseSmoothingMode(StrEnum):\n  OFF = 'off'\n  BRAKE_DWELL = 'brake_dwell'\n  MEDIAN = 'median'\n\n\nclass CruiseSmoother:\n  BRAKE_THRESHOLD = -0.2\n  MINIMUM_BRAKE_TIME = 0.3\n  RELEASE_CONFIRMATION_TIME = 0.15\n  MAXIMUM_HOLD_DELTA = 0.04\n  MEDIAN_WINDOW = 0.2\n  MAXIMUM_FILTER_DELTA = 0.06\n  ELIGIBILITY_CONFIRMATION_TIME = 0.5\n\n  def __init__(self, mode=CruiseSmoothingMode.OFF, dt=0.05):\n    self.mode = CruiseSmoothingMode(mode)\n    if not math.isfinite(dt) or dt <= 0:\n      raise ValueError('Cruise smoothing requires a positive finite timestep')\n    self.dt = dt\n    samples = max(3, round(self.MEDIAN_WINDOW / dt) + 1)\n    self.samples = deque(maxlen=samples if samples % 2 else samples + 1)\n    self.reset()\n\n  def reset(self):\n    self.samples.clear()\n    self.braking = False\n    self.brake_time = 0.0\n    self.release_time = 0.0\n    self.brake_accel = self.BRAKE_THRESHOLD\n    self.eligible_time = 0.0\n\n  def update(self, accel, eligible):\n    if self.mode == CruiseSmoothingMode.OFF or not eligible or not math.isfinite(accel):\n      self.reset()\n      return accel\n    self.eligible_time = min(self.eligible_time + self.dt, self.ELIGIBILITY_CONFIRMATION_TIME + self.dt)\n    if self.eligible_time <= self.ELIGIBILITY_CONFIRMATION_TIME + 1e-9:\n      return accel\n    if self.mode == CruiseSmoothingMode.MEDIAN:\n      self.samples.append(accel)\n      if len(self.samples) < self.samples.maxlen:\n        return accel\n      return max(accel - self.MAXIMUM_FILTER_DELTA, min(median(self.samples), accel + self.MAXIMUM_FILTER_DELTA))\n    if accel < self.BRAKE_THRESHOLD:\n      self.brake_time = self.brake_time + self.dt if self.braking else 0.0\n      self.braking = True\n      self.brake_accel = accel\n      self.release_time = 0.0\n      return accel\n    if self.braking:\n      self.brake_time += self.dt\n      self.release_time += self.dt\n      hold = max(self.brake_accel, accel - self.MAXIMUM_HOLD_DELTA)\n      pending = (self.brake_time + 1e-9 < self.MINIMUM_BRAKE_TIME\n                 or self.release_time <= self.RELEASE_CONFIRMATION_TIME + 1e-9)\n      if pending and hold < self.BRAKE_THRESHOLD:\n        return hold\n    self.braking = False\n    self.brake_time = self.release_time = 0.0\n    return accel\n",
+  "summary": {
+    "normal": {
+      "windows": 18,
+      "seconds": 1133.464272886001,
+      "modes": {
+        "off": {
+          "raw": 66,
+          "debounced": 60,
+          "solver_failures": 0,
+          "conflicts": 0,
+          "events": 2,
+          "raw_events": 2
+        },
+        "brake_dwell": {
+          "raw": 66,
+          "debounced": 60,
+          "solver_failures": 0,
+          "conflicts": 0,
+          "events": 2,
+          "raw_events": 2
+        },
+        "median": {
+          "raw": 68,
+          "debounced": 60,
+          "solver_failures": 0,
+          "conflicts": 0,
+          "events": 2,
+          "raw_events": 3
+        }
+      },
+      "comparisons": {
+        "brake_dwell": {
+          "extra_brake_frames": 3,
+          "extra_brake_seconds": 0.060206405999906565,
+          "removed_brake_frames": 0,
+          "removed_brake_seconds": 0.0,
+          "weaker_strong_brake_frames": 0,
+          "stop_changes": 0,
+          "fcw_changes": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "new_events": [],
+          "new_raw_events": [],
+          "worse_debounced_windows": [],
+          "improved_debounced_windows": []
+        },
+        "median": {
+          "extra_brake_frames": 2,
+          "extra_brake_seconds": 0.039595676999852,
+          "removed_brake_frames": 0,
+          "removed_brake_seconds": 0.0,
+          "weaker_strong_brake_frames": 0,
+          "stop_changes": 0,
+          "fcw_changes": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "new_events": [],
+          "new_raw_events": [
+            {
+              "start": 3937.323102715,
+              "end": 3937.96372709,
+              "duration": 0.6406243749997884,
+              "switches": 4,
+              "switches_per_s": 4.682931397983398,
+              "block": 0,
+              "id": "001",
+              "route": "00000050--076fbccae6"
+            }
+          ],
+          "worse_debounced_windows": [],
+          "improved_debounced_windows": []
+        }
+      }
+    },
+    "oscillation": {
+      "windows": 13,
+      "seconds": 336.1801423739994,
+      "modes": {
+        "off": {
+          "raw": 508,
+          "debounced": 276,
+          "solver_failures": 0,
+          "conflicts": 0,
+          "events": 13,
+          "raw_events": 13
+        },
+        "brake_dwell": {
+          "raw": 396,
+          "debounced": 270,
+          "solver_failures": 0,
+          "conflicts": 0,
+          "events": 13,
+          "raw_events": 13
+        },
+        "median": {
+          "raw": 407,
+          "debounced": 283,
+          "solver_failures": 0,
+          "conflicts": 0,
+          "events": 14,
+          "raw_events": 14
+        }
+      },
+      "comparisons": {
+        "brake_dwell": {
+          "extra_brake_frames": 856,
+          "extra_brake_seconds": 17.187583286002337,
+          "removed_brake_frames": 0,
+          "removed_brake_seconds": 0.0,
+          "weaker_strong_brake_frames": 0,
+          "stop_changes": 0,
+          "fcw_changes": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "new_events": [],
+          "new_raw_events": [],
+          "worse_debounced_windows": [
+            "022",
+            "024",
+            "025",
+            "028",
+            "029"
+          ],
+          "improved_debounced_windows": [
+            "023",
+            "027"
+          ]
+        },
+        "median": {
+          "extra_brake_frames": 460,
+          "extra_brake_seconds": 9.23973494300185,
+          "removed_brake_frames": 482,
+          "removed_brake_seconds": 9.671244635002722,
+          "weaker_strong_brake_frames": 0,
+          "stop_changes": 0,
+          "fcw_changes": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "new_events": [],
+          "new_raw_events": [],
+          "worse_debounced_windows": [
+            "024",
+            "025",
+            "029"
+          ],
+          "improved_debounced_windows": [
+            "023"
+          ]
+        }
+      }
+    },
+    "risk": {
+      "windows": 6,
+      "seconds": 112.18021292600031,
+      "modes": {
+        "off": {
+          "raw": 15,
+          "debounced": 15,
+          "solver_failures": 0,
+          "conflicts": 0,
+          "events": 0,
+          "raw_events": 0
+        },
+        "brake_dwell": {
+          "raw": 15,
+          "debounced": 15,
+          "solver_failures": 0,
+          "conflicts": 0,
+          "events": 0,
+          "raw_events": 0
+        },
+        "median": {
+          "raw": 15,
+          "debounced": 15,
+          "solver_failures": 0,
+          "conflicts": 0,
+          "events": 0,
+          "raw_events": 0
+        }
+      },
+      "comparisons": {
+        "brake_dwell": {
+          "extra_brake_frames": 0,
+          "extra_brake_seconds": 0.0,
+          "removed_brake_frames": 0,
+          "removed_brake_seconds": 0.0,
+          "weaker_strong_brake_frames": 0,
+          "stop_changes": 0,
+          "fcw_changes": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "new_events": [],
+          "new_raw_events": [],
+          "worse_debounced_windows": [],
+          "improved_debounced_windows": []
+        },
+        "median": {
+          "extra_brake_frames": 0,
+          "extra_brake_seconds": 0.0,
+          "removed_brake_frames": 0,
+          "removed_brake_seconds": 0.0,
+          "weaker_strong_brake_frames": 0,
+          "stop_changes": 0,
+          "fcw_changes": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "new_events": [],
+          "new_raw_events": [],
+          "worse_debounced_windows": [],
+          "improved_debounced_windows": []
+        }
+      }
+    }
+  },
+  "worse_debounced": [
+    {
+      "id": "022",
+      "route": "0000004f--71e3118dbd",
+      "group": "oscillation",
+      "reason": "0.5–1/≥30",
+      "start": 1109.539001449,
+      "end": 1150.176698885,
+      "seconds": 40.635273995000034,
+      "modes": {
+        "off": {
+          "raw": 53,
+          "debounced": 29,
+          "raw_events": [
+            {
+              "start": 1114.539001449,
+              "end": 1145.176698885,
+              "duration": 30.637697436000053,
+              "switches": 53,
+              "switches_per_s": 1.6972554843138672,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 1114.539001449,
+              "end": 1145.176698885,
+              "duration": 30.637697436000053,
+              "switches": 29,
+              "switches_per_s": 0.9139067992459285,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        },
+        "brake_dwell": {
+          "raw": 35,
+          "debounced": 31,
+          "raw_events": [
+            {
+              "start": 1114.539001449,
+              "end": 1145.176698885,
+              "duration": 30.637697436000053,
+              "switches": 35,
+              "switches_per_s": 1.1097439705129133,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 1114.539001449,
+              "end": 1145.176698885,
+              "duration": 30.637697436000053,
+              "switches": 31,
+              "switches_per_s": 0.9791858563349234,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        },
+        "median": {
+          "raw": 39,
+          "debounced": 29,
+          "raw_events": [
+            {
+              "start": 1114.539001449,
+              "end": 1145.176698885,
+              "duration": 30.637697436000053,
+              "switches": 39,
+              "switches_per_s": 1.240302084690903,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 1114.539001449,
+              "end": 1145.176698885,
+              "duration": 30.637697436000053,
+              "switches": 29,
+              "switches_per_s": 0.9139067992459285,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        }
+      },
+      "comparisons": {
+        "brake_dwell": {
+          "accel": {
+            "frames": 2025,
+            "changed": 102,
+            "minimum": -0.04000000000000001,
+            "maximum": 0.010000000000000009,
+            "p95_abs": 0.00799999999999953
+          },
+          "extra_brake_frames": 107,
+          "extra_brake_seconds": 2.1557076060003055,
+          "removed_brake_frames": 0,
+          "removed_brake_seconds": 0.0,
+          "weaker_strong_brake_frames": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "extra_brake_minimum_accel": -0.23,
+          "extra_brake_maximum_accel": -0.2,
+          "control_on_changes": 0,
+          "standstill_changes": 0,
+          "extra_brake_runs": [
+            {
+              "start": 1116.97053275,
+              "end": 1117.0305202499999,
+              "seconds": 0.05998749999980646,
+              "frames": 3
+            },
+            {
+              "start": 1117.09000025,
+              "end": 1117.129543792,
+              "seconds": 0.03954354200004673,
+              "frames": 2
+            },
+            {
+              "start": 1117.572545719,
+              "end": 1117.671127698,
+              "seconds": 0.09858197900007326,
+              "frames": 5
+            },
+            {
+              "start": 1122.472241967,
+              "end": 1122.5316118629999,
+              "seconds": 0.059369895999907385,
+              "frames": 3
+            },
+            {
+              "start": 1122.5712042579999,
+              "end": 1122.631661081,
+              "seconds": 0.06045682300009503,
+              "frames": 3
+            },
+            {
+              "start": 1122.691449258,
+              "end": 1122.832694988,
+              "seconds": 0.14124573000003693,
+              "frames": 7
+            },
+            {
+              "start": 1123.6350022269999,
+              "end": 1123.738139466,
+              "seconds": 0.10313723900003424,
+              "frames": 5
+            },
+            {
+              "start": 1124.439812435,
+              "end": 1124.479850091,
+              "seconds": 0.04003765599986764,
+              "frames": 2
+            },
+            {
+              "start": 1124.679755247,
+              "end": 1124.842176653,
+              "seconds": 0.1624214060000213,
+              "frames": 8
+            },
+            {
+              "start": 1125.624117955,
+              "end": 1125.7842282679999,
+              "seconds": 0.16011031299990464,
+              "frames": 8
+            },
+            {
+              "start": 1126.225067955,
+              "end": 1126.287925351,
+              "seconds": 0.06285739600002671,
+              "frames": 3
+            },
+            {
+              "start": 1126.587832226,
+              "end": 1126.688535403,
+              "seconds": 0.10070317700001397,
+              "frames": 5
+            },
+            {
+              "start": 1127.5309590479999,
+              "end": 1127.631353059,
+              "seconds": 0.10039401100016221,
+              "frames": 5
+            },
+            {
+              "start": 1129.68030035,
+              "end": 1129.7822280579999,
+              "seconds": 0.10192770799994832,
+              "frames": 5
+            },
+            {
+              "start": 1131.929437484,
+              "end": 1132.090002224,
+              "seconds": 0.16056474000015442,
+              "frames": 8
+            },
+            {
+              "start": 1134.0775145139999,
+              "end": 1134.1766742539999,
+              "seconds": 0.0991597400000046,
+              "frames": 5
+            },
+            {
+              "start": 1136.224513993,
+              "end": 1136.325053524,
+              "seconds": 0.10053953099986757,
+              "frames": 5
+            },
+            {
+              "start": 1138.2718319609999,
+              "end": 1138.333626909,
+              "seconds": 0.061794948000169825,
+              "frames": 3
+            },
+            {
+              "start": 1138.673385606,
+              "end": 1138.835564148,
+              "seconds": 0.16217854199999238,
+              "frames": 8
+            },
+            {
+              "start": 1141.022275501,
+              "end": 1141.222130606,
+              "seconds": 0.19985510500009696,
+              "frames": 10
+            },
+            {
+              "start": 1141.383402637,
+              "end": 1141.424180293,
+              "seconds": 0.04077765600004568,
+              "frames": 2
+            },
+            {
+              "start": 1141.584049564,
+              "end": 1141.624112532,
+              "seconds": 0.040062968000029286,
+              "frames": 2
+            }
+          ],
+          "new_events": [],
+          "new_raw_events": [],
+          "plan": {
+            "frames": 813,
+            "changed": 151,
+            "minimum": -0.040000006556510925,
+            "maximum": 0.0005422905087471008,
+            "p95_abs": 0.004756546020507811
+          },
+          "stop_changes": 0,
+          "fcw_changes": 0
+        },
+        "median": {
+          "accel": {
+            "frames": 2025,
+            "changed": 607,
+            "minimum": -0.06,
+            "maximum": 0.04000000000000001,
+            "p95_abs": 0.03
+          },
+          "extra_brake_frames": 62,
+          "extra_brake_seconds": 1.2469979160000548,
+          "removed_brake_frames": 56,
+          "removed_brake_seconds": 1.1269355710005584,
+          "weaker_strong_brake_frames": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "extra_brake_minimum_accel": -0.23,
+          "extra_brake_maximum_accel": -0.2,
+          "control_on_changes": 0,
+          "standstill_changes": 0,
+          "extra_brake_runs": [
+            {
+              "start": 1117.572545719,
+              "end": 1117.671127698,
+              "seconds": 0.09858197900007326,
+              "frames": 5
+            },
+            {
+              "start": 1123.6350022269999,
+              "end": 1123.738139466,
+              "seconds": 0.10313723900003424,
+              "frames": 5
+            },
+            {
+              "start": 1124.679755247,
+              "end": 1124.780457435,
+              "seconds": 0.10070218800001385,
+              "frames": 5
+            },
+            {
+              "start": 1125.624117955,
+              "end": 1125.723984049,
+              "seconds": 0.0998660939999354,
+              "frames": 5
+            },
+            {
+              "start": 1126.587832226,
+              "end": 1126.688535403,
+              "seconds": 0.10070317700001397,
+              "frames": 5
+            },
+            {
+              "start": 1127.5309590479999,
+              "end": 1127.631353059,
+              "seconds": 0.10039401100016221,
+              "frames": 5
+            },
+            {
+              "start": 1129.68030035,
+              "end": 1129.7822280579999,
+              "seconds": 0.10192770799994832,
+              "frames": 5
+            },
+            {
+              "start": 1131.929437484,
+              "end": 1132.0294437339999,
+              "seconds": 0.10000624999997854,
+              "frames": 5
+            },
+            {
+              "start": 1134.0775145139999,
+              "end": 1134.1766742539999,
+              "seconds": 0.0991597400000046,
+              "frames": 5
+            },
+            {
+              "start": 1136.224513993,
+              "end": 1136.325053524,
+              "seconds": 0.10053953099986757,
+              "frames": 5
+            },
+            {
+              "start": 1138.673385606,
+              "end": 1138.773529356,
+              "seconds": 0.1001437499999156,
+              "frames": 5
+            },
+            {
+              "start": 1141.383402637,
+              "end": 1141.424180293,
+              "seconds": 0.04077765600004568,
+              "frames": 2
+            },
+            {
+              "start": 1141.584049564,
+              "end": 1141.685108157,
+              "seconds": 0.10105859300006159,
+              "frames": 5
+            }
+          ],
+          "new_events": [],
+          "new_raw_events": [],
+          "plan": {
+            "frames": 813,
+            "changed": 444,
+            "minimum": -0.05316352844238281,
+            "maximum": 0.033664703369140625,
+            "p95_abs": 0.02993354797363281
+          },
+          "stop_changes": 0,
+          "fcw_changes": 0
+        }
+      }
+    },
+    {
+      "id": "024",
+      "route": "00000050--076fbccae6",
+      "group": "oscillation",
+      "reason": "1–2/5–15",
+      "start": 1933.143614259,
+      "end": 1954.028531391,
+      "seconds": 20.865106554000022,
+      "modes": {
+        "off": {
+          "raw": 38,
+          "debounced": 20,
+          "raw_events": [
+            {
+              "start": 1936.636186187,
+              "end": 1949.028531391,
+              "duration": 12.392345203999866,
+              "switches": 38,
+              "switches_per_s": 2.9857141155216964,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 1938.143614259,
+              "end": 1949.028531391,
+              "duration": 10.884917131999828,
+              "switches": 20,
+              "switches_per_s": 1.7455346485039553,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        },
+        "brake_dwell": {
+          "raw": 36,
+          "debounced": 22,
+          "raw_events": [
+            {
+              "start": 1936.636186187,
+              "end": 1949.028531391,
+              "duration": 12.392345203999866,
+              "switches": 36,
+              "switches_per_s": 2.8243241633313345,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 1936.636186187,
+              "end": 1949.028531391,
+              "duration": 12.392345203999866,
+              "switches": 22,
+              "switches_per_s": 1.6945944979988008,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        },
+        "median": {
+          "raw": 36,
+          "debounced": 22,
+          "raw_events": [
+            {
+              "start": 1936.736763426,
+              "end": 1949.028531391,
+              "duration": 12.291767964999963,
+              "switches": 36,
+              "switches_per_s": 2.847434160786333,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 1936.736763426,
+              "end": 1949.028531391,
+              "duration": 12.291767964999963,
+              "switches": 22,
+              "switches_per_s": 1.7084604964717998,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        }
+      },
+      "comparisons": {
+        "brake_dwell": {
+          "accel": {
+            "frames": 1040,
+            "changed": 16,
+            "minimum": -0.03,
+            "maximum": 0.0,
+            "p95_abs": 0.0
+          },
+          "extra_brake_frames": 16,
+          "extra_brake_seconds": 0.32033869800011416,
+          "removed_brake_frames": 0,
+          "removed_brake_seconds": 0.0,
+          "weaker_strong_brake_frames": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "extra_brake_minimum_accel": -0.21,
+          "extra_brake_maximum_accel": -0.2,
+          "control_on_changes": 0,
+          "standstill_changes": 0,
+          "extra_brake_runs": [
+            {
+              "start": 1936.776275301,
+              "end": 1936.8360865509999,
+              "seconds": 0.05981124999993881,
+              "frames": 3
+            },
+            {
+              "start": 1936.877510406,
+              "end": 1937.038041708,
+              "seconds": 0.16053130199998122,
+              "frames": 8
+            },
+            {
+              "start": 1938.644326082,
+              "end": 1938.744322228,
+              "seconds": 0.09999614600019413,
+              "frames": 5
+            }
+          ],
+          "new_events": [],
+          "new_raw_events": [],
+          "plan": {
+            "frames": 418,
+            "changed": 6,
+            "minimum": -0.03264617919921875,
+            "maximum": 0.0,
+            "p95_abs": 0.0
+          },
+          "stop_changes": 0,
+          "fcw_changes": 0
+        },
+        "median": {
+          "accel": {
+            "frames": 1040,
+            "changed": 124,
+            "minimum": -0.03,
+            "maximum": 0.03,
+            "p95_abs": 0.01999999999999999
+          },
+          "extra_brake_frames": 11,
+          "extra_brake_seconds": 0.22054041600017626,
+          "removed_brake_frames": 10,
+          "removed_brake_seconds": 0.20004197899993414,
+          "weaker_strong_brake_frames": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "extra_brake_minimum_accel": -0.21,
+          "extra_brake_maximum_accel": -0.2,
+          "control_on_changes": 0,
+          "standstill_changes": 0,
+          "extra_brake_runs": [
+            {
+              "start": 1936.776275301,
+              "end": 1936.8360865509999,
+              "seconds": 0.05981124999993881,
+              "frames": 3
+            },
+            {
+              "start": 1936.877510406,
+              "end": 1936.938243426,
+              "seconds": 0.060733020000043325,
+              "frames": 3
+            },
+            {
+              "start": 1938.644326082,
+              "end": 1938.744322228,
+              "seconds": 0.09999614600019413,
+              "frames": 5
+            }
+          ],
+          "new_events": [],
+          "new_raw_events": [],
+          "plan": {
+            "frames": 418,
+            "changed": 59,
+            "minimum": -0.03398323059082031,
+            "maximum": 0.029451370239257812,
+            "p95_abs": 0.017677307128906233
+          },
+          "stop_changes": 0,
+          "fcw_changes": 0
+        }
+      }
+    },
+    {
+      "id": "025",
+      "route": "00000050--076fbccae6",
+      "group": "oscillation",
+      "reason": "0.5–1/5–15",
+      "start": 2003.8319457950001,
+      "end": 2025.7798564670002,
+      "seconds": 21.927445563999754,
+      "modes": {
+        "off": {
+          "raw": 24,
+          "debounced": 8,
+          "raw_events": [
+            {
+              "start": 2008.7322789189998,
+              "end": 2020.7798564670002,
+              "duration": 12.04757754800039,
+              "switches": 24,
+              "switches_per_s": 1.9090974852299207,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 2008.9323039709998,
+              "end": 2020.7798564670002,
+              "duration": 11.84755249600039,
+              "switches": 8,
+              "switches_per_s": 0.5908393317829254,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        },
+        "brake_dwell": {
+          "raw": 14,
+          "debounced": 12,
+          "raw_events": [
+            {
+              "start": 2008.7322789189998,
+              "end": 2020.839845374,
+              "duration": 12.107566455000324,
+              "switches": 14,
+              "switches_per_s": 1.0737087463708372,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 2008.7322789189998,
+              "end": 2020.839845374,
+              "duration": 12.107566455000324,
+              "switches": 12,
+              "switches_per_s": 0.9085227853907084,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        },
+        "median": {
+          "raw": 10,
+          "debounced": 10,
+          "raw_events": [
+            {
+              "start": 2008.9323039709998,
+              "end": 2020.8800564150001,
+              "duration": 11.947752444000344,
+              "switches": 10,
+              "switches_per_s": 0.7532797521695739,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 2008.9323039709998,
+              "end": 2020.8800564150001,
+              "duration": 11.947752444000344,
+              "switches": 10,
+              "switches_per_s": 0.7532797521695739,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        }
+      },
+      "comparisons": {
+        "brake_dwell": {
+          "accel": {
+            "frames": 1093,
+            "changed": 43,
+            "minimum": -0.04000000000000001,
+            "maximum": 0.0,
+            "p95_abs": 0.0
+          },
+          "extra_brake_frames": 56,
+          "extra_brake_seconds": 1.124561822999567,
+          "removed_brake_frames": 0,
+          "removed_brake_seconds": 0.0,
+          "weaker_strong_brake_frames": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "extra_brake_minimum_accel": -0.22,
+          "extra_brake_maximum_accel": -0.2,
+          "control_on_changes": 0,
+          "standstill_changes": 0,
+          "extra_brake_runs": [
+            {
+              "start": 2008.7928099609999,
+              "end": 2008.8319457950001,
+              "seconds": 0.03913583400026255,
+              "frames": 2
+            },
+            {
+              "start": 2008.8925925140002,
+              "end": 2008.9323039709998,
+              "seconds": 0.03971145699961198,
+              "frames": 2
+            },
+            {
+              "start": 2009.132683763,
+              "end": 2009.2333320970001,
+              "seconds": 0.10064833400019779,
+              "frames": 5
+            },
+            {
+              "start": 2011.5838917830001,
+              "end": 2011.74648819,
+              "seconds": 0.16259640699990996,
+              "frames": 8
+            },
+            {
+              "start": 2013.4325359489999,
+              "end": 2013.531510533,
+              "seconds": 0.09897458400018877,
+              "frames": 5
+            },
+            {
+              "start": 2015.4783258960001,
+              "end": 2015.5377300619998,
+              "seconds": 0.05940416599969467,
+              "frames": 3
+            },
+            {
+              "start": 2015.5983797499998,
+              "end": 2015.638736209,
+              "seconds": 0.04035645900012241,
+              "frames": 2
+            },
+            {
+              "start": 2015.7802057909998,
+              "end": 2015.879363292,
+              "seconds": 0.09915750100026344,
+              "frames": 5
+            },
+            {
+              "start": 2017.6461705830002,
+              "end": 2017.8874215189999,
+              "seconds": 0.2412509359996875,
+              "frames": 12
+            },
+            {
+              "start": 2018.088043447,
+              "end": 2018.1290764669998,
+              "seconds": 0.041033019999758835,
+              "frames": 2
+            },
+            {
+              "start": 2018.1881991770001,
+              "end": 2018.330503395,
+              "seconds": 0.14230421799993564,
+              "frames": 7
+            },
+            {
+              "start": 2020.7798564670002,
+              "end": 2020.839845374,
+              "seconds": 0.05998890699993353,
+              "frames": 3
+            }
+          ],
+          "new_events": [],
+          "new_raw_events": [],
+          "plan": {
+            "frames": 439,
+            "changed": 23,
+            "minimum": -0.040000006556510925,
+            "maximum": 0.0,
+            "p95_abs": 0.0038320541381835762
+          },
+          "stop_changes": 0,
+          "fcw_changes": 0
+        },
+        "median": {
+          "accel": {
+            "frames": 1093,
+            "changed": 451,
+            "minimum": -0.06,
+            "maximum": 0.03,
+            "p95_abs": 0.03
+          },
+          "extra_brake_frames": 29,
+          "extra_brake_seconds": 0.5822131260001697,
+          "removed_brake_frames": 31,
+          "removed_brake_seconds": 0.6194821370013415,
+          "weaker_strong_brake_frames": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "extra_brake_minimum_accel": -0.22,
+          "extra_brake_maximum_accel": -0.2,
+          "control_on_changes": 0,
+          "standstill_changes": 0,
+          "extra_brake_runs": [
+            {
+              "start": 2009.132683763,
+              "end": 2009.2333320970001,
+              "seconds": 0.10064833400019779,
+              "frames": 5
+            },
+            {
+              "start": 2013.4325359489999,
+              "end": 2013.531510533,
+              "seconds": 0.09897458400018877,
+              "frames": 5
+            },
+            {
+              "start": 2015.4783258960001,
+              "end": 2015.5377300619998,
+              "seconds": 0.05940416599969467,
+              "frames": 3
+            },
+            {
+              "start": 2015.5983797499998,
+              "end": 2015.638736209,
+              "seconds": 0.04035645900012241,
+              "frames": 2
+            },
+            {
+              "start": 2015.7802057909998,
+              "end": 2015.879363292,
+              "seconds": 0.09915750100026344,
+              "frames": 5
+            },
+            {
+              "start": 2018.088043447,
+              "end": 2018.1290764669998,
+              "seconds": 0.041033019999758835,
+              "frames": 2
+            },
+            {
+              "start": 2018.1881991770001,
+              "end": 2018.230638291,
+              "seconds": 0.042439113999989786,
+              "frames": 2
+            },
+            {
+              "start": 2020.7798564670002,
+              "end": 2020.8800564150001,
+              "seconds": 0.10019994799995402,
+              "frames": 5
+            }
+          ],
+          "new_events": [],
+          "new_raw_events": [],
+          "plan": {
+            "frames": 439,
+            "changed": 288,
+            "minimum": -0.06000000238418579,
+            "maximum": 0.02553558349609375,
+            "p95_abs": 0.02281646728515615
+          },
+          "stop_changes": 0,
+          "fcw_changes": 0
+        }
+      }
+    },
+    {
+      "id": "028",
+      "route": "00000050--076fbccae6",
+      "group": "oscillation",
+      "reason": "1–2/15–30",
+      "start": 4256.072756394001,
+      "end": 4290.036011541,
+      "seconds": 33.96016285099995,
+      "modes": {
+        "off": {
+          "raw": 44,
+          "debounced": 20,
+          "raw_events": [
+            {
+              "start": 4260.911154207,
+              "end": 4271.4292902960005,
+              "duration": 10.518136089000109,
+              "switches": 40,
+              "switches_per_s": 3.707881289041914,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 4261.072756394001,
+              "end": 4271.4292902960005,
+              "duration": 10.356533901999683,
+              "switches": 16,
+              "switches_per_s": 1.4483610194240506,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        },
+        "brake_dwell": {
+          "raw": 24,
+          "debounced": 22,
+          "raw_events": [
+            {
+              "start": 4260.911154207,
+              "end": 4271.469047848001,
+              "duration": 10.557893641000192,
+              "switches": 20,
+              "switches_per_s": 1.7996013831978757,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 4260.911154207,
+              "end": 4271.469047848001,
+              "duration": 10.557893641000192,
+              "switches": 18,
+              "switches_per_s": 1.6101696586507308,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        },
+        "median": {
+          "raw": 24,
+          "debounced": 20,
+          "raw_events": [
+            {
+              "start": 4261.131932955001,
+              "end": 4271.469047848001,
+              "duration": 10.337114893000034,
+              "switches": 20,
+              "switches_per_s": 1.8380370341889298,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 4261.131932955001,
+              "end": 4271.469047848001,
+              "duration": 10.337114893000034,
+              "switches": 16,
+              "switches_per_s": 1.4510818690965235,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        }
+      },
+      "comparisons": {
+        "brake_dwell": {
+          "accel": {
+            "frames": 1693,
+            "changed": 85,
+            "minimum": -0.04000000000000001,
+            "maximum": 0.0,
+            "p95_abs": 0.003999999999998628
+          },
+          "extra_brake_frames": 90,
+          "extra_brake_seconds": 1.8011175050023667,
+          "removed_brake_frames": 0,
+          "removed_brake_seconds": 0.0,
+          "weaker_strong_brake_frames": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "extra_brake_minimum_accel": -0.22,
+          "extra_brake_maximum_accel": -0.2,
+          "control_on_changes": 0,
+          "standstill_changes": 0,
+          "extra_brake_runs": [
+            {
+              "start": 4260.971079259,
+              "end": 4261.072756394001,
+              "seconds": 0.10167713500050013,
+              "frames": 5
+            },
+            {
+              "start": 4261.273255196001,
+              "end": 4261.431952383001,
+              "seconds": 0.15869718700014346,
+              "frames": 8
+            },
+            {
+              "start": 4263.1782250900005,
+              "end": 4263.219849831001,
+              "seconds": 0.04162474100030522,
+              "frames": 2
+            },
+            {
+              "start": 4263.2838839450005,
+              "end": 4263.3207898830005,
+              "seconds": 0.03690593800001807,
+              "frames": 2
+            },
+            {
+              "start": 4263.580638840001,
+              "end": 4263.621199935001,
+              "seconds": 0.040561095000157366,
+              "frames": 2
+            },
+            {
+              "start": 4264.5844750900005,
+              "end": 4264.723797486001,
+              "seconds": 0.13932239600035246,
+              "frames": 7
+            },
+            {
+              "start": 4265.287957017001,
+              "end": 4265.367411288001,
+              "seconds": 0.07945427100003144,
+              "frames": 4
+            },
+            {
+              "start": 4265.427765142001,
+              "end": 4265.487596601,
+              "seconds": 0.05983145899972442,
+              "frames": 3
+            },
+            {
+              "start": 4265.527036965001,
+              "end": 4265.66719384,
+              "seconds": 0.14015687499977503,
+              "frames": 7
+            },
+            {
+              "start": 4266.228542382,
+              "end": 4266.370325663001,
+              "seconds": 0.14178328100024373,
+              "frames": 7
+            },
+            {
+              "start": 4267.274785871001,
+              "end": 4267.433647850001,
+              "seconds": 0.15886197899999388,
+              "frames": 8
+            },
+            {
+              "start": 4268.076697173001,
+              "end": 4268.116423578001,
+              "seconds": 0.03972640499978297,
+              "frames": 2
+            },
+            {
+              "start": 4268.1755423800005,
+              "end": 4268.215663006001,
+              "seconds": 0.040120626000316406,
+              "frames": 2
+            },
+            {
+              "start": 4268.2790930050005,
+              "end": 4268.3183747250005,
+              "seconds": 0.03928171999996266,
+              "frames": 2
+            },
+            {
+              "start": 4268.377890817001,
+              "end": 4268.417670037001,
+              "seconds": 0.03977922000012768,
+              "frames": 2
+            },
+            {
+              "start": 4268.477567641001,
+              "end": 4268.517702902001,
+              "seconds": 0.04013526099970477,
+              "frames": 2
+            },
+            {
+              "start": 4268.577577797,
+              "end": 4268.717926808001,
+              "seconds": 0.1403490110005805,
+              "frames": 7
+            },
+            {
+              "start": 4269.019687224,
+              "end": 4269.079918005001,
+              "seconds": 0.06023078100042767,
+              "frames": 3
+            },
+            {
+              "start": 4269.622225245001,
+              "end": 4269.785080661,
+              "seconds": 0.1628554159997293,
+              "frames": 8
+            },
+            {
+              "start": 4270.526257745,
+              "end": 4270.626262901001,
+              "seconds": 0.10000515600040671,
+              "frames": 5
+            },
+            {
+              "start": 4271.4292902960005,
+              "end": 4271.469047848001,
+              "seconds": 0.039757552000082796,
+              "frames": 2
+            }
+          ],
+          "new_events": [],
+          "new_raw_events": [],
+          "plan": {
+            "frames": 679,
+            "changed": 38,
+            "minimum": -0.040000006556510925,
+            "maximum": 0.0,
+            "p95_abs": 0.009873390197753932
+          },
+          "stop_changes": 0,
+          "fcw_changes": 0
+        },
+        "median": {
+          "accel": {
+            "frames": 1693,
+            "changed": 326,
+            "minimum": -0.06000000000000001,
+            "maximum": 0.05000000000000002,
+            "p95_abs": 0.03
+          },
+          "extra_brake_frames": 41,
+          "extra_brake_seconds": 0.8182910410005206,
+          "removed_brake_frames": 53,
+          "removed_brake_seconds": 1.0623179169997456,
+          "weaker_strong_brake_frames": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "extra_brake_minimum_accel": -0.24,
+          "extra_brake_maximum_accel": -0.2,
+          "control_on_changes": 0,
+          "standstill_changes": 0,
+          "extra_brake_runs": [
+            {
+              "start": 4261.273255196001,
+              "end": 4261.372568373001,
+              "seconds": 0.09931317700011277,
+              "frames": 5
+            },
+            {
+              "start": 4263.1782250900005,
+              "end": 4263.219849831001,
+              "seconds": 0.04162474100030522,
+              "frames": 2
+            },
+            {
+              "start": 4263.2838839450005,
+              "end": 4263.3207898830005,
+              "seconds": 0.03690593800001807,
+              "frames": 2
+            },
+            {
+              "start": 4263.580638840001,
+              "end": 4263.680821341,
+              "seconds": 0.10018250099983561,
+              "frames": 5
+            },
+            {
+              "start": 4264.5844750900005,
+              "end": 4264.683789726,
+              "seconds": 0.09931463599968993,
+              "frames": 5
+            },
+            {
+              "start": 4266.228542382,
+              "end": 4266.329837433001,
+              "seconds": 0.10129505100030656,
+              "frames": 5
+            },
+            {
+              "start": 4267.274785871001,
+              "end": 4267.373994203001,
+              "seconds": 0.09920833199976187,
+              "frames": 5
+            },
+            {
+              "start": 4269.622225245001,
+              "end": 4269.722909202001,
+              "seconds": 0.1006839570000011,
+              "frames": 5
+            },
+            {
+              "start": 4270.526257745,
+              "end": 4270.626262901001,
+              "seconds": 0.10000515600040671,
+              "frames": 5
+            },
+            {
+              "start": 4271.4292902960005,
+              "end": 4271.469047848001,
+              "seconds": 0.039757552000082796,
+              "frames": 2
+            }
+          ],
+          "new_events": [],
+          "new_raw_events": [],
+          "plan": {
+            "frames": 679,
+            "changed": 187,
+            "minimum": -0.0551910400390625,
+            "maximum": 0.04751014709472656,
+            "p95_abs": 0.024211311340332033
+          },
+          "stop_changes": 0,
+          "fcw_changes": 0
+        }
+      }
+    },
+    {
+      "id": "029",
+      "route": "00000051--4c602a02a6",
+      "group": "oscillation",
+      "reason": "1–2/≥30",
+      "start": 2641.4677001359996,
+      "end": 2688.7496807469997,
+      "seconds": 47.26013920100013,
+      "modes": {
+        "off": {
+          "raw": 92,
+          "debounced": 50,
+          "raw_events": [
+            {
+              "start": 2643.5560333139997,
+              "end": 2682.4064488719996,
+              "duration": 38.850415557999895,
+              "switches": 92,
+              "switches_per_s": 2.3423172878072784,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 2646.4677001359996,
+              "end": 2682.4064488719996,
+              "duration": 35.93874873599998,
+              "switches": 50,
+              "switches_per_s": 1.3634308851414327,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        },
+        "brake_dwell": {
+          "raw": 66,
+          "debounced": 54,
+          "raw_events": [
+            {
+              "start": 2643.5560333139997,
+              "end": 2682.444126737,
+              "duration": 38.8880934230001,
+              "switches": 66,
+              "switches_per_s": 1.6714627609271322,
+              "block": 0
+            }
+          ],
+          "events": [
+            {
+              "start": 2646.4677001359996,
+              "end": 2682.444126737,
+              "duration": 35.976426601000185,
+              "switches": 54,
+              "switches_per_s": 1.4731868895096585,
+              "block": 0
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        },
+        "median": {
+          "raw": 71,
+          "debounced": 55,
+          "raw_events": [
+            {
+              "start": 2643.5560333139997,
+              "end": 2659.3960338809998,
+              "duration": 15.840000567000061,
+              "switches": 28,
+              "switches_per_s": 1.7045453935304709,
+              "block": 0
+            },
+            {
+              "start": 2660.602036381,
+              "end": 2682.5050788199997,
+              "duration": 21.90304243899982,
+              "switches": 43,
+              "switches_per_s": 1.9175418262997206,
+              "block": 1
+            }
+          ],
+          "events": [
+            {
+              "start": 2646.4677001359996,
+              "end": 2659.3960338809998,
+              "duration": 12.928333745000145,
+              "switches": 16,
+              "switches_per_s": 1.1602423247930957,
+              "block": 0
+            },
+            {
+              "start": 2660.602036381,
+              "end": 2682.5050788199997,
+              "duration": 21.90304243899982,
+              "switches": 39,
+              "switches_per_s": 1.7349187952235567,
+              "block": 1
+            }
+          ],
+          "solver_failures": 0,
+          "conflicts": 0
+        }
+      },
+      "comparisons": {
+        "brake_dwell": {
+          "accel": {
+            "frames": 2355,
+            "changed": 187,
+            "minimum": -0.04000000000000001,
+            "maximum": 0.0,
+            "p95_abs": 0.01999999999999999
+          },
+          "extra_brake_frames": 221,
+          "extra_brake_seconds": 4.4323667689986905,
+          "removed_brake_frames": 0,
+          "removed_brake_seconds": 0.0,
+          "weaker_strong_brake_frames": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "extra_brake_minimum_accel": -0.22,
+          "extra_brake_maximum_accel": -0.2,
+          "control_on_changes": 0,
+          "standstill_changes": 0,
+          "extra_brake_runs": [
+            {
+              "start": 2649.639242583,
+              "end": 2649.8997759159997,
+              "seconds": 0.26053333299978476,
+              "frames": 13
+            },
+            {
+              "start": 2650.803812738,
+              "end": 2650.903894145,
+              "seconds": 0.10008140699983414,
+              "frames": 5
+            },
+            {
+              "start": 2654.1987845599997,
+              "end": 2654.256881279,
+              "seconds": 0.05809671900033209,
+              "frames": 3
+            },
+            {
+              "start": 2654.297221175,
+              "end": 2654.337736175,
+              "seconds": 0.0405150000001413,
+              "frames": 2
+            },
+            {
+              "start": 2654.659747893,
+              "end": 2654.800218206,
+              "seconds": 0.14047031300015078,
+              "frames": 7
+            },
+            {
+              "start": 2655.805063205,
+              "end": 2655.9041571109997,
+              "seconds": 0.09909390599977996,
+              "frames": 5
+            },
+            {
+              "start": 2655.944449351,
+              "end": 2656.105737163,
+              "seconds": 0.161287811999955,
+              "frames": 8
+            },
+            {
+              "start": 2656.40602232,
+              "end": 2656.5472898199996,
+              "seconds": 0.14126749999968524,
+              "frames": 7
+            },
+            {
+              "start": 2657.348913257,
+              "end": 2657.512497632,
+              "seconds": 0.16358437500002765,
+              "frames": 8
+            },
+            {
+              "start": 2658.1527091939997,
+              "end": 2658.2921930479997,
+              "seconds": 0.13948385399999097,
+              "frames": 7
+            },
+            {
+              "start": 2658.654405235,
+              "end": 2658.8540849749998,
+              "seconds": 0.19967973999973765,
+              "frames": 10
+            },
+            {
+              "start": 2660.2003177869997,
+              "end": 2660.299404349,
+              "seconds": 0.09908656200013866,
+              "frames": 5
+            },
+            {
+              "start": 2660.440939401,
+              "end": 2660.4999021099998,
+              "seconds": 0.058962708999843016,
+              "frames": 3
+            },
+            {
+              "start": 2660.542266485,
+              "end": 2660.7017422659997,
+              "seconds": 0.1594757809998555,
+              "frames": 8
+            },
+            {
+              "start": 2661.103194193,
+              "end": 2661.2440383069998,
+              "seconds": 0.1408441139997194,
+              "frames": 7
+            },
+            {
+              "start": 2662.107652422,
+              "end": 2662.247423411,
+              "seconds": 0.1397709890002261,
+              "frames": 7
+            },
+            {
+              "start": 2662.709060442,
+              "end": 2662.749863098,
+              "seconds": 0.040802655999868875,
+              "frames": 2
+            },
+            {
+              "start": 2662.9092843999997,
+              "end": 2663.0512162229998,
+              "seconds": 0.14193182300004992,
+              "frames": 7
+            },
+            {
+              "start": 2663.0910786709997,
+              "end": 2663.1911513799996,
+              "seconds": 0.10007270899996001,
+              "frames": 5
+            },
+            {
+              "start": 2663.5533583059996,
+              "end": 2663.6930295559996,
+              "seconds": 0.13967124999999214,
+              "frames": 7
+            },
+            {
+              "start": 2664.556560181,
+              "end": 2664.696898462,
+              "seconds": 0.14033828099991297,
+              "frames": 7
+            },
+            {
+              "start": 2665.0588842429997,
+              "end": 2665.098699243,
+              "seconds": 0.03981500000008964,
+              "frames": 2
+            },
+            {
+              "start": 2668.050777524,
+              "end": 2668.1495987209996,
+              "seconds": 0.0988211969997792,
+              "frames": 5
+            },
+            {
+              "start": 2668.2498905959997,
+              "end": 2668.4093986169996,
+              "seconds": 0.15950802099996508,
+              "frames": 8
+            },
+            {
+              "start": 2669.4929149709997,
+              "end": 2669.6576930439996,
+              "seconds": 0.16477807299997949,
+              "frames": 8
+            },
+            {
+              "start": 2670.7620083039997,
+              "end": 2670.899561377,
+              "seconds": 0.13755307300016284,
+              "frames": 7
+            },
+            {
+              "start": 2672.1063224699997,
+              "end": 2672.206597782,
+              "seconds": 0.10027531200012163,
+              "frames": 5
+            },
+            {
+              "start": 2673.509190074,
+              "end": 2673.6504666879996,
+              "seconds": 0.14127661399970748,
+              "frames": 7
+            },
+            {
+              "start": 2674.55346075,
+              "end": 2674.6967974169997,
+              "seconds": 0.1433366669998577,
+              "frames": 7
+            },
+            {
+              "start": 2675.940844291,
+              "end": 2676.101835593,
+              "seconds": 0.16099130200018408,
+              "frames": 8
+            },
+            {
+              "start": 2677.105891791,
+              "end": 2677.245124395,
+              "seconds": 0.13923260399997162,
+              "frames": 7
+            },
+            {
+              "start": 2678.14862877,
+              "end": 2678.3101179359996,
+              "seconds": 0.16148916599968288,
+              "frames": 8
+            },
+            {
+              "start": 2679.29324554,
+              "end": 2679.352989082,
+              "seconds": 0.059743541999978333,
+              "frames": 3
+            },
+            {
+              "start": 2679.492663352,
+              "end": 2679.656097623,
+              "seconds": 0.1634342709999146,
+              "frames": 8
+            },
+            {
+              "start": 2680.397222154,
+              "end": 2680.456605383,
+              "seconds": 0.05938322900010462,
+              "frames": 3
+            },
+            {
+              "start": 2682.4064488719996,
+              "end": 2682.444126737,
+              "seconds": 0.0376778650002052,
+              "frames": 2
+            }
+          ],
+          "new_events": [],
+          "new_raw_events": [],
+          "plan": {
+            "frames": 946,
+            "changed": 89,
+            "minimum": -0.040000006556510925,
+            "maximum": 0.0,
+            "p95_abs": 0.017559051513671875
+          },
+          "stop_changes": 0,
+          "fcw_changes": 0
+        },
+        "median": {
+          "accel": {
+            "frames": 2355,
+            "changed": 886,
+            "minimum": -0.06,
+            "maximum": 0.06,
+            "p95_abs": 0.03
+          },
+          "extra_brake_frames": 115,
+          "extra_brake_seconds": 2.3115529149990834,
+          "removed_brake_frames": 132,
+          "removed_brake_seconds": 2.653029425002387,
+          "weaker_strong_brake_frames": 0,
+          "maximum_strong_brake_reduction": 0.0,
+          "extra_brake_minimum_accel": -0.24,
+          "extra_brake_maximum_accel": -0.2,
+          "control_on_changes": 0,
+          "standstill_changes": 0,
+          "extra_brake_runs": [
+            {
+              "start": 2650.803812738,
+              "end": 2650.903894145,
+              "seconds": 0.10008140699983414,
+              "frames": 5
+            },
+            {
+              "start": 2654.297221175,
+              "end": 2654.337736175,
+              "seconds": 0.0405150000001413,
+              "frames": 2
+            },
+            {
+              "start": 2654.659747893,
+              "end": 2654.7400196639996,
+              "seconds": 0.08027177099984328,
+              "frames": 4
+            },
+            {
+              "start": 2656.40602232,
+              "end": 2656.5082588819996,
+              "seconds": 0.102236561999689,
+              "frames": 5
+            },
+            {
+              "start": 2657.348913257,
+              "end": 2657.44766185,
+              "seconds": 0.09874859299998207,
+              "frames": 5
+            },
+            {
+              "start": 2658.1527091939997,
+              "end": 2658.2518710169998,
+              "seconds": 0.09916182300003129,
+              "frames": 5
+            },
+            {
+              "start": 2660.440939401,
+              "end": 2660.4999021099998,
+              "seconds": 0.058962708999843016,
+              "frames": 3
+            },
+            {
+              "start": 2660.542266485,
+              "end": 2660.602036381,
+              "seconds": 0.05976989600003435,
+              "frames": 3
+            },
+            {
+              "start": 2661.103194193,
+              "end": 2661.2035454949996,
+              "seconds": 0.10035130199958076,
+              "frames": 5
+            },
+            {
+              "start": 2662.107652422,
+              "end": 2662.1890955989998,
+              "seconds": 0.08144317699998282,
+              "frames": 4
+            },
+            {
+              "start": 2662.9092843999997,
+              "end": 2663.0095543999996,
+              "seconds": 0.10026999999990949,
+              "frames": 5
+            },
+            {
+              "start": 2663.5533583059996,
+              "end": 2663.6530194519996,
+              "seconds": 0.09966114600001674,
+              "frames": 5
+            },
+            {
+              "start": 2664.556560181,
+              "end": 2664.656853619,
+              "seconds": 0.10029343799988055,
+              "frames": 5
+            },
+            {
+              "start": 2668.050777524,
+              "end": 2668.1495987209996,
+              "seconds": 0.0988211969997792,
+              "frames": 5
+            },
+            {
+              "start": 2669.4929149709997,
+              "end": 2669.596447731,
+              "seconds": 0.1035327600002347,
+              "frames": 5
+            },
+            {
+              "start": 2670.7620083039997,
+              "end": 2670.862466012,
+              "seconds": 0.10045770800024911,
+              "frames": 5
+            },
+            {
+              "start": 2672.1063224699997,
+              "end": 2672.206597782,
+              "seconds": 0.10027531200012163,
+              "frames": 5
+            },
+            {
+              "start": 2673.509190074,
+              "end": 2673.592138771,
+              "seconds": 0.08294869700011986,
+              "frames": 4
+            },
+            {
+              "start": 2674.55346075,
+              "end": 2674.6553414269997,
+              "seconds": 0.10188067699982639,
+              "frames": 5
+            },
+            {
+              "start": 2675.940844291,
+              "end": 2676.039891166,
+              "seconds": 0.09904687500011278,
+              "frames": 5
+            },
+            {
+              "start": 2677.105891791,
+              "end": 2677.205302155,
+              "seconds": 0.09941036400005032,
+              "frames": 5
+            },
+            {
+              "start": 2678.14862877,
+              "end": 2678.249408718,
+              "seconds": 0.1007799479998539,
+              "frames": 5
+            },
+            {
+              "start": 2679.492663352,
+              "end": 2679.596347415,
+              "seconds": 0.10368406299994604,
+              "frames": 5
+            },
+            {
+              "start": 2680.397222154,
+              "end": 2680.4975406959998,
+              "seconds": 0.10031854199996815,
+              "frames": 5
+            },
+            {
+              "start": 2682.4064488719996,
+              "end": 2682.5050788199997,
+              "seconds": 0.09862994800005254,
+              "frames": 5
+            }
+          ],
+          "new_events": [],
+          "new_raw_events": [],
+          "plan": {
+            "frames": 946,
+            "changed": 454,
+            "minimum": -0.06000000238418579,
+            "maximum": 0.055206298828125,
+            "p95_abs": 0.031737327575683594
+          },
+          "stop_changes": 0,
+          "fcw_changes": 0
+        }
+      }
+    }
+  ],
+  "reason_revised": "Unconfirmed short brake noise was lengthened past the debounce gate; final implementation first confirms actual input braking"
+}

@@ -1,0 +1,1178 @@
+[
+  {
+    "id": "000",
+    "directory": "sensitivity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 400,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 400,
+          "changed": 159,
+          "minimum": -0.016624003648757935,
+          "maximum": 0.00031620264053344727,
+          "p95_abs": 0.0002829194068908689
+        }
+      },
+      "control": {
+        "frames": 1992,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 1992,
+          "changed": 791,
+          "minimum": -0.016624003648757935,
+          "maximum": 0.00031620264053344727,
+          "p95_abs": 0.00028264522552490234
+        }
+      },
+      "can": {
+        "frames": 996,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 996,
+          "changed": 10,
+          "minimum": -0.020000000000000018,
+          "maximum": 0.010000000000000009,
+          "p95_abs": 0.0
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 0
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 400,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 996,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 400,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 996,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "001",
+    "directory": "sensitivity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 400,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 400,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "control": {
+        "frames": 1992,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 1992,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "can": {
+        "frames": 996,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 996,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 0
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 400,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 996,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 400,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 996,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "002",
+    "directory": "sensitivity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 400,
+        "changed": 122,
+        "minimum": -0.0003325939178466797,
+        "maximum": 0.008254706859588623,
+        "p95_abs": 0.0002696424722671506,
+        "warmup_delta": {
+          "frames": 400,
+          "changed": 172,
+          "minimum": -0.09017500281333923,
+          "maximum": 0.006689667701721191,
+          "p95_abs": 0.005938670039176939
+        }
+      },
+      "control": {
+        "frames": 1993,
+        "changed": 609,
+        "minimum": -0.0003325939178466797,
+        "maximum": 0.008254706859588623,
+        "p95_abs": 0.00027208328247070216,
+        "warmup_delta": {
+          "frames": 1993,
+          "changed": 858,
+          "minimum": -0.09017500281333923,
+          "maximum": 0.006689667701721191,
+          "p95_abs": 0.005978703498840332
+        }
+      },
+      "can": {
+        "frames": 997,
+        "changed": 10,
+        "minimum": -0.010000000000000009,
+        "maximum": 0.010000000000000009,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 997,
+          "changed": 70,
+          "minimum": -0.09,
+          "maximum": 0.010000000000000231,
+          "p95_abs": 0.010000000000000009
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 0
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 400,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 997,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 400,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 997,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "007",
+    "directory": "sensitivity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 1500,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 1500,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "control": {
+        "frames": 7471,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 7471,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "can": {
+        "frames": 3735,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 3735,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 0
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 1500,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 3735,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 1500,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 3735,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "011",
+    "directory": "sensitivity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 1800,
+        "changed": 0,
+        "minimum": -2.9802322387695312e-08,
+        "maximum": 5.960464477539063e-08,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 1800,
+          "changed": 0,
+          "minimum": -5.960464477539063e-08,
+          "maximum": 2.9802322387695312e-08,
+          "p95_abs": 0.0
+        }
+      },
+      "control": {
+        "frames": 8967,
+        "changed": 0,
+        "minimum": -2.9802322387695312e-08,
+        "maximum": 5.960464477539063e-08,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 8967,
+          "changed": 0,
+          "minimum": -5.960464477539063e-08,
+          "maximum": 2.9802322387695312e-08,
+          "p95_abs": 0.0
+        }
+      },
+      "can": {
+        "frames": 4483,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 4483,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 0
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 1800,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 4483,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 1800,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 4483,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "023",
+    "directory": "sensitivity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 899,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 899,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "control": {
+        "frames": 4476,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 4476,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "can": {
+        "frames": 2238,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 2238,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 0
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 899,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 2238,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 899,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 2238,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "025",
+    "directory": "sensitivity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 439,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 439,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "control": {
+        "frames": 2185,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 2185,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "can": {
+        "frames": 1093,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 1093,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 0
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 439,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 1093,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 439,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 1093,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "029",
+    "directory": "sensitivity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 946,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 946,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "control": {
+        "frames": 4710,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 4710,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "can": {
+        "frames": 2355,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 2355,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 0
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 946,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 2355,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 946,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 2355,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "032",
+    "directory": "sensitivity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 300,
+        "changed": 2,
+        "minimum": -2.0742416381835938e-05,
+        "maximum": 4.482269287109375e-05,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 300,
+          "changed": 2,
+          "minimum": -5.9604644775390625e-05,
+          "maximum": 2.2411346435546875e-05,
+          "p95_abs": 0.0
+        }
+      },
+      "control": {
+        "frames": 1494,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 1494,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "can": {
+        "frames": 747,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 747,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 0
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 300,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 747,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 300,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 747,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "006",
+    "directory": "warmup-fidelity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 500,
+        "changed": 0,
+        "minimum": -2.2351741790771484e-08,
+        "maximum": 1.1920928955078125e-07,
+        "p95_abs": 5.238689482211961e-09,
+        "warmup_delta": {
+          "frames": 500,
+          "changed": 28,
+          "minimum": -0.0001232624053955078,
+          "maximum": 2.1338462829589844e-05,
+          "p95_abs": 2.05785036087036e-06
+        }
+      },
+      "control": {
+        "frames": 2488,
+        "changed": 0,
+        "minimum": -1.4901161193847656e-08,
+        "maximum": 1.1920928955078125e-07,
+        "p95_abs": 1.862645149230957e-09,
+        "warmup_delta": {
+          "frames": 2488,
+          "changed": 1269,
+          "minimum": -0.0001232624053955078,
+          "maximum": 2.1338462829589844e-05,
+          "p95_abs": 2.5033950805664062e-06
+        }
+      },
+      "can": {
+        "frames": 1245,
+        "changed": 0,
+        "minimum": 0.0,
+        "maximum": 0.0,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 1245,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 0
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 500,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 1245,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 500,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 1245,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "020",
+    "directory": "warmup-fidelity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 217,
+        "changed": 58,
+        "minimum": -0.001036614179611206,
+        "maximum": 0.021728187799453735,
+        "p95_abs": 0.001032295823097229,
+        "warmup_delta": {
+          "frames": 217,
+          "changed": 59,
+          "minimum": -0.0015683472156524658,
+          "maximum": 0.0315416157245636,
+          "p95_abs": 0.0015648394823074342
+        }
+      },
+      "control": {
+        "frames": 1080,
+        "changed": 288,
+        "minimum": -0.001036614179611206,
+        "maximum": 0.021728187799453735,
+        "p95_abs": 0.0010319471359252928,
+        "warmup_delta": {
+          "frames": 1080,
+          "changed": 293,
+          "minimum": -0.0015683472156524658,
+          "maximum": 0.0315416157245636,
+          "p95_abs": 0.0015646316111087798
+        }
+      },
+      "can": {
+        "frames": 540,
+        "changed": 23,
+        "minimum": -0.010000000000000009,
+        "maximum": 0.03,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 540,
+          "changed": 33,
+          "minimum": -0.010000000000000009,
+          "maximum": 0.030000000000000027,
+          "p95_abs": 0.010000000000000009
+        },
+        "full_brake_changes": 2,
+        "full_gas_changes": 84
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 217,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 540,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 217,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 540,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "022",
+    "directory": "warmup-fidelity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 813,
+        "changed": 4,
+        "minimum": -1.1324882507324219e-06,
+        "maximum": 0.04032599925994873,
+        "p95_abs": 3.695487976074212e-07,
+        "warmup_delta": {
+          "frames": 813,
+          "changed": 21,
+          "minimum": -1.5124678611755371e-06,
+          "maximum": 0.05033844709396362,
+          "p95_abs": 4.887580871582024e-07
+        }
+      },
+      "control": {
+        "frames": 4048,
+        "changed": 20,
+        "minimum": -1.1324882507324219e-06,
+        "maximum": 0.04032599925994873,
+        "p95_abs": 3.8743019104003906e-07,
+        "warmup_delta": {
+          "frames": 4048,
+          "changed": 105,
+          "minimum": -1.5124678611755371e-06,
+          "maximum": 0.05033844709396362,
+          "p95_abs": 5.066394805908203e-07
+        }
+      },
+      "can": {
+        "frames": 2025,
+        "changed": 6,
+        "minimum": 0.0,
+        "maximum": 0.04000000000000001,
+        "p95_abs": 0.0,
+        "warmup_delta": {
+          "frames": 2025,
+          "changed": 6,
+          "minimum": 0.0,
+          "maximum": 0.04999999999999999,
+          "p95_abs": 0.0
+        },
+        "full_brake_changes": 0,
+        "full_gas_changes": 6
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 813,
+          "changed": 0,
+          "minimum": -1.1920928955078125e-07,
+          "maximum": 1.1920928955078125e-07,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 2025,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 813,
+          "changed": 0,
+          "minimum": -1.1920928955078125e-07,
+          "maximum": 1.1920928955078125e-07,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 2025,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "026",
+    "directory": "warmup-fidelity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 611,
+        "changed": 131,
+        "minimum": -0.008725762367248535,
+        "maximum": 0.002489447593688965,
+        "p95_abs": 0.008643373847007751,
+        "warmup_delta": {
+          "frames": 611,
+          "changed": 138,
+          "minimum": -0.09506405889987946,
+          "maximum": 0.023405909538269043,
+          "p95_abs": 0.0862068384885788
+        }
+      },
+      "control": {
+        "frames": 3044,
+        "changed": 652,
+        "minimum": -0.008725762367248535,
+        "maximum": 0.002489447593688965,
+        "p95_abs": 0.008643373847007751,
+        "warmup_delta": {
+          "frames": 3044,
+          "changed": 686,
+          "minimum": -0.09506405889987946,
+          "maximum": 0.023405909538269043,
+          "p95_abs": 0.09244370460510254
+        }
+      },
+      "can": {
+        "frames": 1523,
+        "changed": 117,
+        "minimum": -0.010000000000000009,
+        "maximum": 0.010000000000000009,
+        "p95_abs": 0.010000000000000009,
+        "warmup_delta": {
+          "frames": 1523,
+          "changed": 281,
+          "minimum": -0.10000000000000003,
+          "maximum": 0.030000000000000027,
+          "p95_abs": 0.09
+        },
+        "full_brake_changes": 5,
+        "full_gas_changes": 53
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 611,
+          "changed": 1,
+          "minimum": -1.4007091522216797e-06,
+          "maximum": 2.384185791015625e-07,
+          "p95_abs": 2.9802322387695312e-08
+        },
+        "can": {
+          "frames": 1523,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 611,
+          "changed": 0,
+          "minimum": -5.662441253662109e-07,
+          "maximum": 2.384185791015625e-07,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 1523,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  },
+  {
+    "id": "031",
+    "directory": "warmup-fidelity",
+    "continuous_comparison": {
+      "plan": {
+        "frames": 400,
+        "changed": 107,
+        "minimum": -0.008490681648254395,
+        "maximum": 0.09500128030776978,
+        "p95_abs": 0.008141851425170897,
+        "warmup_delta": {
+          "frames": 400,
+          "changed": 110,
+          "minimum": -0.014616608619689941,
+          "maximum": 0.1738613098859787,
+          "p95_abs": 0.014192092418670654
+        }
+      },
+      "control": {
+        "frames": 1992,
+        "changed": 529,
+        "minimum": -0.008490681648254395,
+        "maximum": 0.09500128030776978,
+        "p95_abs": 0.008140802383422852,
+        "warmup_delta": {
+          "frames": 1992,
+          "changed": 544,
+          "minimum": -0.014616608619689941,
+          "maximum": 0.1738613098859787,
+          "p95_abs": 0.01419079303741455
+        }
+      },
+      "can": {
+        "frames": 996,
+        "changed": 106,
+        "minimum": -0.010000000000000009,
+        "maximum": 0.1,
+        "p95_abs": 0.010000000000000009,
+        "warmup_delta": {
+          "frames": 996,
+          "changed": 148,
+          "minimum": -0.020000000000000018,
+          "maximum": 0.18000000000000002,
+          "p95_abs": 0.020000000000000018
+        },
+        "full_brake_changes": 32,
+        "full_gas_changes": 32
+      }
+    },
+    "effect_sensitivity": {
+      "brake_dwell": {
+        "plan": {
+          "frames": 400,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 996,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      },
+      "median": {
+        "plan": {
+          "frames": 400,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        },
+        "can": {
+          "frames": 996,
+          "changed": 0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "p95_abs": 0.0
+        }
+      }
+    }
+  }
+]
