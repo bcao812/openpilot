@@ -220,6 +220,7 @@ def evaluate_route(record, audit, arm_roots, manifest_hash):
       analyses = {key: switch_analysis(times, values['can_brake'], values['can_gas'], selected, dwell)
                   for key, dwell in [('raw', 0.0), ('debounced', 0.15)]}
       result['metrics'][scope][name] = {'raw': len(analyses['raw']['changes']), 'debounced': len(analyses['debounced']['changes']),
+                                       'raw_events': describe_events(analyses['raw']['events'], native),
                                        'events': describe_events(analyses['debounced']['events'], native),
                                        'conflicts': int(np.sum(selected & (values['can_brake'] == 1) & (values['can_gas'] > 0))),
                                        'outside_accel_limits': int(np.sum(selected & ((values['can_accel'] < -3.5) | (values['can_accel'] > 2.0))))}
@@ -227,6 +228,8 @@ def evaluate_route(record, audit, arm_roots, manifest_hash):
       comparison = compare_can(can[before], can[after], times, selected)
       comparison['new_events'] = unmatched_events(result['metrics'][scope][after]['events'], result['metrics'][scope][before]['events'])
       comparison['resolved_events'] = unmatched_events(result['metrics'][scope][before]['events'], result['metrics'][scope][after]['events'])
+      comparison['new_raw_events'] = unmatched_events(result['metrics'][scope][after]['raw_events'], result['metrics'][scope][before]['raw_events'])
+      comparison['resolved_raw_events'] = unmatched_events(result['metrics'][scope][before]['raw_events'], result['metrics'][scope][after]['raw_events'])
       result['comparisons'][f'{scope}/{title}'] = comparison
   strata = {
     'speed_lt10kph': native['v_ego'] * 3.6 < 10,
@@ -311,6 +314,7 @@ def aggregate(results):
       metrics = [result['metrics'][scope][name] for result in results]
       totals['metrics'][scope][name] = {key: sum(metric[key] for metric in metrics) for key in ('raw', 'debounced', 'conflicts', 'outside_accel_limits')}
       totals['metrics'][scope][name]['events'] = sum(len(metric['events']) for metric in metrics)
+      totals['metrics'][scope][name]['raw_events'] = sum(len(metric['raw_events']) for metric in metrics)
   totals['negative_routes'] = [result['route'] for result in results if result['original_events'] == 0
                               and result['native_enabled_s'].get('selfdriveState', 0) > 0]
   totals['negative_route_metrics'] = {}
@@ -328,7 +332,7 @@ def aggregate(results):
     totals['comparisons'][title] = {field: sum(metric[field] for metric in metrics) for field in
                                    ('extra_brake_frames', 'extra_brake_seconds', 'removed_brake_frames', 'removed_brake_seconds',
                                     'weaker_strong_brake_frames', 'control_on_changes', 'standstill_changes')}
-    for field in ('new_events', 'resolved_events'):
+    for field in ('new_events', 'resolved_events', 'new_raw_events', 'resolved_raw_events'):
       totals['comparisons'][title][field] = [dict(event, route=result['route']) for result in results for event in result['comparisons'][title][field]]
     totals['comparisons'][title]['maximum_strong_brake_reduction'] = max(metric['maximum_strong_brake_reduction'] for metric in metrics)
   totals['strata'] = {}

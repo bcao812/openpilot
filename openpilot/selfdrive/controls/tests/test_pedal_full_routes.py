@@ -104,6 +104,20 @@ def test_new_oscillation_in_previously_stable_data_is_detected():
   assert unmatched_events(candidate['events'], stable['events']) == candidate['events']
 
 
+def test_short_pulses_remain_raw_release_failures_after_debouncing():
+  sides = np.r_[np.full(10, -1), np.repeat([1, -1] * 3, 2), np.full(10, -1)]
+  times = np.arange(len(sides)) * 0.02
+  clean = np.ones(len(sides), dtype=bool)
+  gas = np.where(sides == 1, 7, -30000)
+  stable = switch_analysis(times, np.ones(len(sides)), np.full(len(sides), -30000), clean, dwell=0.0)
+  raw = switch_analysis(times, sides == -1, gas, clean, dwell=0.0)
+  debounced = switch_analysis(times, sides == -1, gas, clean)
+  assert debounced['events'] == []
+  assert len(raw['events']) == 1
+  assert raw['events'][0]['switches'] == 6
+  assert unmatched_events(raw['events'], stable['events']) == raw['events']
+
+
 @pytest.mark.parametrize('boundary', ['override', 'gap', 'neutral', 'conflict'])
 def test_bursts_never_rejoin_across_separate_eligible_blocks(boundary):
   sides = np.repeat([1, -1, 1, 1, -1, 1], 12)
