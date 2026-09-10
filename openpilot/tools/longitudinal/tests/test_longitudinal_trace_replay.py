@@ -4,9 +4,9 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from openpilot.selfdrive.controls.tests import replay_longitudinal_trace as replay
-from openpilot.selfdrive.controls.tests.replay_pedal_full_routes import ROW_FIELDS, NATIVE_FIELDS
-from openpilot.selfdrive.controls.tests.replay_pedal_switches import save_json, sha256
+from openpilot.tools.longitudinal import replay_longitudinal_trace as replay
+from openpilot.tools.longitudinal.replay_pedal_full_routes import ROW_FIELDS, NATIVE_FIELDS
+from openpilot.tools.longitudinal.replay_pedal_switches import save_json, sha256
 
 
 def prepare_results(root):

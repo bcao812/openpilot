@@ -10,8 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
-from openpilot.selfdrive.controls.tests.replay_pedal_full_routes import NATIVE_FIELDS, ROW_FIELDS
-from openpilot.selfdrive.controls.tests.replay_pedal_switches import save_json, sha256
+from openpilot.tools.longitudinal.replay_pedal_full_routes import NATIVE_FIELDS, ROW_FIELDS
+from openpilot.tools.longitudinal.replay_pedal_switches import save_json, sha256
 
 
 def columns(values, fields):

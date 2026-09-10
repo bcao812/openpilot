@@ -3,7 +3,7 @@ import json
 import pytest
 
 from openpilot.selfdrive.controls.lib.longitudinal_trace import TRACE_EVENT, TRACE_FIELDS, TRACE_SCHEMA
-from openpilot.selfdrive.controls.tests.extract_longitudinal_trace import decode_trace
+from openpilot.tools.longitudinal.extract_longitudinal_trace import decode_trace
 
 
 def record():

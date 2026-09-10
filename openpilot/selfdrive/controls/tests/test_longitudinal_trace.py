@@ -330,7 +330,7 @@ def test_instrumentation_has_identical_planner_state(condition):
 @pytest.mark.parametrize('scenario', ['steady', 'lead_brake', 'cut_in', 'override', 'flicker', 'no_lead'])
 def test_closed_loop_with_real_mpc_control_and_honda_can_is_identical(scenario):
   options = {'scenario': scenario, 'duration': 42.0, 'delay': 0.5, 'noise': 0.02}
-  baseline = simulate_lead_cruise(False, **options)
+  baseline = simulate_lead_cruise(**options)
   recorder = LongitudinalTrace(capacity=2, batch_size=1)
   original = LongitudinalPlanner.update
 
@@ -341,7 +341,7 @@ def test_closed_loop_with_real_mpc_control_and_honda_can_is_identical(scenario):
     recorder.publish(recorder.sequence + 1)
 
   with patch.object(LongitudinalPlanner, 'update', new=observed_update):
-    actual = simulate_lead_cruise(False, **options)
+    actual = simulate_lead_cruise(**options)
   assert actual == baseline
   assert not recorder.disabled
   assert recorder.dropped > 0

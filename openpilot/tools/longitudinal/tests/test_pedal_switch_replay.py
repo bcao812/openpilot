@@ -1,6 +1,11 @@
 import pytest
 
-from openpilot.selfdrive.controls.tests.replay_pedal_switches import switch_metrics
+from openpilot.tools.longitudinal.replay_pedal_switches import replay_window, switch_metrics
+
+
+def test_legacy_positional_experiment_switch_is_rejected():
+  with pytest.raises(TypeError):
+    replay_window(None, {}, True)
 
 
 def pedal_rows(sides, interval=0.02, offset=0.0):

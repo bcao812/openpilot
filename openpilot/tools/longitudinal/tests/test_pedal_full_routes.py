@@ -3,11 +3,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from openpilot.selfdrive.controls.tests.replay_pedal_full_routes import (
+from openpilot.tools.longitudinal.replay_pedal_full_routes import (
   NumericSink, ROW_FIELDS, contiguous_blocks, ordered_segment_messages, block_messages, preload_parameters,
 )
-from openpilot.selfdrive.controls.tests.replay_pedal_switches import paired_messages
-from openpilot.selfdrive.controls.tests.evaluate_pedal_full_routes import exact_alignment, normal_mask, switch_analysis, unmatched_events, reentry_mask
+from openpilot.tools.longitudinal.replay_pedal_switches import paired_messages
+from openpilot.tools.longitudinal.evaluate_pedal_full_routes import exact_alignment, normal_mask, switch_analysis, unmatched_events, reentry_mask
 
 
 def message(service, timestamp):
@@ -159,7 +159,7 @@ def test_reentry_exposure_uses_recorded_activation_only():
 def test_cached_readers_do_not_retain_entire_segment_buffers(tmp_path):
   import openpilot.cereal.messaging as messaging
   from openpilot.tools.lib.logreader import save_log
-  from openpilot.selfdrive.controls.tests.replay_pedal_switches import sha256
+  from openpilot.tools.longitudinal.replay_pedal_switches import sha256
 
   source = messaging.new_message('carState')
   source.logMonoTime = int(1e9)
@@ -178,7 +178,7 @@ def test_cached_readers_do_not_retain_entire_segment_buffers(tmp_path):
 def test_late_configuration_requires_identical_recorded_parameters(tmp_path, changed):
   import openpilot.cereal.messaging as messaging
   from openpilot.tools.lib.logreader import save_log
-  from openpilot.selfdrive.controls.tests.replay_pedal_switches import sha256
+  from openpilot.tools.longitudinal.replay_pedal_switches import sha256
 
   blocks = []
   for segment in range(2):

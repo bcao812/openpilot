@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from openpilot.selfdrive.controls.tests.replay_pedal_switches import save_json, sha256, switch_metrics
+from openpilot.tools.longitudinal.replay_pedal_switches import save_json, sha256, switch_metrics
 
 
 def quantiles(values):

@@ -23,7 +23,7 @@ import numpy as np
 import zstandard
 
 from openpilot.selfdrive.controls.lib import longitudinal_planner as planner_module
-from openpilot.selfdrive.controls.tests import replay_pedal_switches as replay
+from openpilot.tools.longitudinal import replay_pedal_switches as replay
 from openpilot.tools.lib.logreader import LogReader
 
 
@@ -224,7 +224,7 @@ def preload_parameters(corpus, block, messages):
 
 
 def run_one(arguments):
-  corpus, output, route, experimental, recorded_plan, *options = arguments
+  corpus, output, route, recorded_plan, *options = arguments
   preload = bool(options and options[0])
   sources = {'planner_sha256': replay.sha256(Path(planner_module.__file__)),
              'replayer_sha256': replay.sha256(Path(replay.__file__)), 'helper_sha256': replay.sha256(Path(__file__))}
@@ -236,13 +236,13 @@ def run_one(arguments):
     messages = block_messages(corpus, segments, sink)
     if preload:
       messages = preload_parameters(corpus, segments, messages)
-    result = replay.replay_window(None, window, experimental, recorded_plan, messages=messages, row_sink=sink, strict=False)
+    result = replay.replay_window(None, window, recorded_plan=recorded_plan, messages=messages, row_sink=sink, strict=False)
     for key in ('plan_rows', 'control_rows', 'can_rows', 'planner_error', 'switches'):
       result.pop(key)
     blocks.append(result)
   sink.flush()
   result = {'schema': SCHEMA, 'route': route['route'], 'blocks': blocks, 'chunks': sink.chunks,
-            'fields': ROW_FIELDS, 'experimental': experimental, 'recorded_plan': recorded_plan, 'preloaded_parameters': preload,
+            'fields': ROW_FIELDS, 'experimental': False, 'recorded_plan': recorded_plan, 'preloaded_parameters': preload,
             'manifest_sha256': replay.sha256(corpus / 'manifest.json'), **sources}
   for key, path in [('planner_sha256', Path(planner_module.__file__)), ('replayer_sha256', Path(replay.__file__)), ('helper_sha256', Path(__file__))]:
     if replay.sha256(path) != sources[key]:
@@ -252,16 +252,16 @@ def run_one(arguments):
   gc.collect()
 
 
-def run(corpus, output, workers, route_filter, commit_filter, experimental, recorded_plan, preload=False):
+def run(corpus, output, workers, route_filter, commit_filter, *, recorded_plan=False, preload=False):
   manifest = json.loads((corpus / 'manifest.json').read_text())
   if manifest['schema'] != SCHEMA:
     raise ValueError('Unsupported full-route schema')
   output.mkdir(parents=True, exist_ok=True)
-  jobs = [(corpus, output, route, experimental, recorded_plan, preload) for route in manifest['routes']
+  jobs = [(corpus, output, route, recorded_plan, preload) for route in manifest['routes']
           if (route_filter is None or route['route'].startswith(route_filter)) and (commit_filter is None or route['commit'].startswith(commit_filter))]
   with ProcessPoolExecutor(max_workers=workers) as pool:
     list(pool.map(run_one, jobs))
-  replay.save_json(output / 'run.json', {'routes': [job[2]['route'] for job in jobs], 'experimental': experimental,
+  replay.save_json(output / 'run.json', {'routes': [job[2]['route'] for job in jobs], 'experimental': False,
                                        'recorded_plan': recorded_plan, 'preloaded_parameters': preload, 'fields': ROW_FIELDS,
                                        'planner_file': inspect.getfile(planner_module), 'corpus': str(corpus)})
 
@@ -276,7 +276,6 @@ def main():
   runner.add_argument('--corpus', type=Path, required=True)
   runner.add_argument('--route')
   runner.add_argument('--commit')
-  runner.add_argument('--experimental-coast-with-lead', action='store_true')
   runner.add_argument('--recorded-plan', action='store_true')
   runner.add_argument('--preload-parameters', action='store_true')
   for command in (preparer, runner):
@@ -287,7 +286,7 @@ def main():
     prepare(arguments.logs, arguments.audit, arguments.output, arguments.workers)
   else:
     run(arguments.corpus, arguments.output, arguments.workers, arguments.route, arguments.commit,
-        arguments.experimental_coast_with_lead, arguments.recorded_plan, arguments.preload_parameters)
+        recorded_plan=arguments.recorded_plan, preload=arguments.preload_parameters)
 
 
 if __name__ == '__main__':

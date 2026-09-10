@@ -14,19 +14,18 @@ from opendbc.car.honda.values import CAR, DBC
 from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
-from openpilot.selfdrive.controls.tests.replay_pedal_switches import switch_metrics
+from openpilot.tools.longitudinal.replay_pedal_switches import switch_metrics
 from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import cruise_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource
 
 
-def simulate_lead_cruise(extension, offset=0.25, noise=0.0, delay=0.5, scenario='steady', speed_target=20.0, duration=80.0,
-                         response_time=0.4, smoothing='off'):
+def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady', speed_target=20.0, duration=80.0,
+                         response_time=0.4):
   params = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
   params.openpilotLongitudinalControl = True
   params_sp = CarInterface.get_non_essential_params_sp(params, CAR.HONDA_ACCORD)
   speed, acceleration = speed_target + 0.2, 0.0
-  planner = LongitudinalPlanner(params, params_sp, init_v=speed, experimental_coast_with_lead=extension,
-                               experimental_cruise_smoothing=smoothing)
+  planner = LongitudinalPlanner(params, params_sp, init_v=speed)
   longitudinal = LongControl(params, params_sp)
   controller = CarController({Bus.pt: DBC[params.carFingerprint][Bus.pt]}, params, params_sp)
   parser = CANParser(DBC[params.carFingerprint][Bus.pt], [('ACC_CONTROL', 50)], CanBus(params).pt)
@@ -117,38 +116,23 @@ def simulate_lead_cruise(extension, offset=0.25, noise=0.0, delay=0.5, scenario=
 ])
 def test_closed_loop_cruise_bounds(offset, noise, delay, scenario, speed_target):
   arguments = {'offset': offset, 'noise': noise, 'delay': delay, 'scenario': scenario, 'speed_target': speed_target}
-  before = simulate_lead_cruise(False, **arguments)
-  after = simulate_lead_cruise(True, **arguments)
-  assert abs(after['speed_error_kph']) <= 1.1
-  assert abs(after['speed_error_kph'] - before['speed_error_kph']) <= 0.25
-  assert after['speed_range_kph'] <= max(0.4, before['speed_range_kph'] + 0.2)
-  assert after['minimum_command'] >= -3.5
-  assert after['maximum_command'] <= 2.0
-  assert after['conflicts'] == 0
-  if scenario == 'no_lead':
-    assert before == after
+  result = simulate_lead_cruise(**arguments)
+  assert abs(result['speed_error_kph']) <= 1.1
+  assert result['speed_range_kph'] <= 0.4
+  assert result['minimum_command'] >= -3.5
+  assert result['maximum_command'] <= 2.0
+  assert result['conflicts'] == 0
 
 
 @pytest.mark.parametrize('scenario', ['cut_in', 'lead_brake'])
 def test_closed_loop_risk_response(scenario):
-  before = simulate_lead_cruise(False, scenario=scenario, duration=55.0, delay=0.3, response_time=0.2)
-  after = simulate_lead_cruise(True, scenario=scenario, duration=55.0, delay=0.3, response_time=0.2)
-  assert after['minimum_gap'] > 2.0
-  assert after['minimum_gap'] >= before['minimum_gap'] - 0.1
-  assert after['brake_response'] <= before['brake_response'] + DT_MDL + 1e-6
-  assert after['conflicts'] == 0
+  result = simulate_lead_cruise(scenario=scenario, duration=55.0, delay=0.3, response_time=0.2)
+  assert result['minimum_gap'] > 2.0
+  assert result['brake_response'] is not None
+  assert result['conflicts'] == 0
 
 
-@pytest.mark.xfail(strict=True, reason='Experimental lead shaping introduces a limit cycle with long unmodelled actuator delay')
-@pytest.mark.parametrize('offset,delay', [(0.254545, 0.8), (0.25, 0.5), (0.254545, 0.5)])
-def test_experimental_lead_extension_release_gate(offset, delay):
-  before = simulate_lead_cruise(False, offset=offset, noise=0.02, delay=delay)
-  after = simulate_lead_cruise(True, offset=offset, noise=0.02, delay=delay)
-  assert after['switches']['debounced'] <= before['switches']['debounced']
-
-
-@pytest.mark.xfail(strict=True, reason='Both default and experimental control exceed the stop gap under excessive actuator lag')
+@pytest.mark.xfail(strict=True, reason='Default control exceeds the stop gap under excessive actuator lag')
 def test_long_actuator_lag_collision_release_gate():
-  for enabled in (False, True):
-    result = simulate_lead_cruise(enabled, scenario='lead_brake', duration=55.0, delay=0.5, response_time=0.4)
-    assert result['minimum_gap'] > 2.0
+  result = simulate_lead_cruise(scenario='lead_brake', duration=55.0, delay=0.5, response_time=0.4)
+  assert result['minimum_gap'] > 2.0

@@ -11,7 +11,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (CRUISE_COAST_ACCEL, LongitudinalPlanner,
                                                                  LongitudinalPlanSource, get_cruise_coast_accel)
 from openpilot.selfdrive.controls.tests.test_longitudinal_planner_state import braking_planner, braking_state
-from openpilot.selfdrive.controls.tests.replay_longitudinal_regressions import debounced_flips
+from openpilot.tools.longitudinal.replay_longitudinal_regressions import debounced_flips
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource as PlanSourceSP
 
 
@@ -86,6 +86,12 @@ def test_any_lead_bypasses_coasting(lead_name):
   state = cruise_state()
   getattr(state['radarState'], lead_name).present = True
   assert update_cruise(planner, state) == -0.23
+
+
+def test_default_planner_does_not_allocate_experimental_controllers():
+  planner = cruise_planner()
+  assert not hasattr(planner, 'experimental_coast_with_lead')
+  assert not hasattr(planner, 'cruise_smoother')
 
 
 @pytest.mark.parametrize('platform', [CAR.HONDA_CIVIC, CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CRV_HYBRID])

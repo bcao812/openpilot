@@ -2,6 +2,7 @@
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor
+import inspect
 import json
 from pathlib import Path
 import time
@@ -11,10 +12,10 @@ import numpy as np
 
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace, TRACE_EVENT
-from openpilot.selfdrive.controls.tests.evaluate_pedal_full_routes import native_clean, exact_alignment, columns, compare_can
-from openpilot.selfdrive.controls.tests.replay_cruise_smoothing import load_window, window_messages
-from openpilot.selfdrive.controls.tests.replay_pedal_full_routes import NumericSink, ROW_FIELDS, NATIVE_FIELDS
-from openpilot.selfdrive.controls.tests.replay_pedal_switches import replay_window, save_json, sha256
+from openpilot.tools.longitudinal.evaluate_pedal_full_routes import native_clean, exact_alignment, columns, compare_can
+from openpilot.tools.longitudinal.window_replay import load_window, window_messages
+from openpilot.tools.longitudinal.replay_pedal_full_routes import NumericSink, ROW_FIELDS, NATIVE_FIELDS
+from openpilot.tools.longitudinal.replay_pedal_switches import replay_window, save_json, sha256
 
 
 def run_window(arguments):
@@ -28,8 +29,9 @@ def run_window(arguments):
   source_files = [
     Path(__file__),
     Path(__file__).with_name('replay_pedal_switches.py'),
-    Path(__file__).parents[1] / 'lib' / 'longitudinal_trace.py',
-    Path(__file__).parents[1] / 'lib' / 'longitudinal_planner.py',
+    Path(__file__).with_name('window_replay.py'),
+    Path(inspect.getfile(LongitudinalTrace)),
+    Path(inspect.getfile(LongitudinalPlanner)),
   ]
   source_hashes = {path.name: sha256(path) for path in source_files}
 

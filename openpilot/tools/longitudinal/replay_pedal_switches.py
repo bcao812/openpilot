@@ -7,7 +7,6 @@ scheduling stay fixed; command differences are not changes in vehicle motion.
 
 import argparse
 import hashlib
-import inspect
 import json
 import warnings
 from concurrent.futures import ProcessPoolExecutor
@@ -27,7 +26,7 @@ from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, DBC
 from openpilot.selfdrive.controls.lib import longitudinal_planner as planner_module
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
-from openpilot.selfdrive.controls.tests.replay_longitudinal_regressions import ReplayState, SERVICES
+from openpilot.tools.longitudinal.replay_longitudinal_regressions import ReplayState, SERVICES
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 from openpilot.tools.lib.logreader import LogReader
 
@@ -191,10 +190,7 @@ def paired_messages(messages, maximum_delay=0.25, maximum_messages=512):
   yield from ((buffered, None) for buffered in pending)
 
 
-def replay_window(cache, window, experimental_coast_with_lead=False, recorded_plan=False, *, messages=None, row_sink=None, strict=True,
-                  experimental_cruise_smoothing='off'):
-  if experimental_coast_with_lead and experimental_cruise_smoothing != 'off':
-    raise ValueError('Lead cruise experiments must be replayed separately')
+def replay_window(cache, window, *, recorded_plan=False, messages=None, row_sink=None, strict=True):
   if messages is None:
     messages = LogReader([str(cache)], sort_by_time=True)
   latest, valid, stamps, models, generated = {}, {}, {}, {}, {}
@@ -261,12 +257,7 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
       if planner is None and params is not None and params_sp is not None:
         if params.carFingerprint != CAR.HONDA_ACCORD or not params.openpilotLongitudinalControl:
           raise ValueError('This replay requires Accord openpilot longitudinal')
-        planner_options = {'experimental_cruise_smoothing': experimental_cruise_smoothing} if experimental_cruise_smoothing != 'off' else {}
-        planner = planner_module.LongitudinalPlanner(params, params_sp, **planner_options)
-        if experimental_coast_with_lead:
-          if not hasattr(planner, 'experimental_coast_with_lead'):
-            raise ValueError('Planner does not implement the experimental lead gate')
-          planner.experimental_coast_with_lead = True
+        planner = planner_module.LongitudinalPlanner(params, params_sp)
         controller_params_sp = structs.CarParamsSP()
         for name in ('flags', 'safetyParam', 'enableGasInterceptor'):
           setattr(controller_params_sp, name, getattr(params_sp, name))
@@ -400,12 +391,12 @@ def replay_window(cache, window, experimental_coast_with_lead=False, recorded_pl
 
 
 def run_one(arguments):
-  corpus, output, index, window, experimental_coast_with_lead, recorded_plan = arguments
+  corpus, output, index, window, recorded_plan = arguments
   cache = corpus / window['cache']
   if sha256(cache) != window['sha256']:
     raise ValueError(f'Changed replay cache: {cache}')
-  result = replay_window(cache, window, experimental_coast_with_lead, recorded_plan)
-  result['experimental_coast_with_lead'] = experimental_coast_with_lead
+  result = replay_window(cache, window, recorded_plan=recorded_plan)
+  result['experimental_coast_with_lead'] = False
   result['recorded_plan'] = recorded_plan
   result['planner_sha256'] = sha256(Path(planner_module.__file__))
   result['replayer_sha256'] = sha256(Path(__file__))
@@ -420,12 +411,12 @@ def run_one(arguments):
   print(f'{index:03d} {window["route"]} {result["coverage"]} error={result["planner_error"]} switches={result["switches"]["debounced"]}', flush=True)
 
 
-def run(corpus, output, commit=None, window_index=None, workers=1, experimental_coast_with_lead=False, recorded_plan=False):
+def run(corpus, output, commit=None, window_index=None, workers=1, *, recorded_plan=False):
   manifest = json.loads((corpus / 'manifest.json').read_text())
   if manifest['schema'] != SCHEMA:
     raise ValueError('Unsupported corpus schema')
   output.mkdir(parents=True, exist_ok=True)
-  jobs = [(corpus, output, index, window, experimental_coast_with_lead, recorded_plan) for index, window in enumerate(manifest['windows'])
+  jobs = [(corpus, output, index, window, recorded_plan) for index, window in enumerate(manifest['windows'])
           if (commit is None or window['commit'].startswith(commit)) and (window_index is None or index == window_index)]
   if workers == 1:
     for job in jobs:
@@ -451,39 +442,12 @@ def main():
   run_parser.add_argument('--commit')
   run_parser.add_argument('--window', type=int)
   run_parser.add_argument('--workers', type=int, default=1)
-  run_parser.add_argument('--experimental-coast-with-lead', action='store_true')
   run_parser.add_argument('--recorded-plan', action='store_true')
-  verify_parser = commands.add_parser('verify-leads')
-  verify_parser.add_argument('--corpus', type=Path, required=True)
-  verify_parser.add_argument('--output', type=Path, required=True)
   arguments = parser.parse_args()
   if arguments.command == 'prepare':
     prepare(arguments.logs, arguments.audit, arguments.output, arguments.all_events, arguments.workers, arguments.events_file)
-  elif arguments.command == 'run':
-    run(arguments.corpus, arguments.output, arguments.commit, arguments.window, arguments.workers,
-        arguments.experimental_coast_with_lead, arguments.recorded_plan)
   else:
-    verify_leads(arguments.corpus, arguments.output)
-
-
-def verify_leads(corpus, output):
-  manifest = json.loads((corpus / 'manifest.json').read_text())
-  checked, invalid = 0, []
-  for window in manifest['windows']:
-    for message in LogReader([str(corpus / window['cache'])]):
-      if message.which() != 'radarState':
-        continue
-      for name in ('leadOne', 'leadTwo'):
-        lead = getattr(message.radarState, name)
-        if lead.present:
-          checked += 1
-          if not np.isfinite(lead.aLeadTau) or lead.aLeadTau <= 0:
-            invalid.append({'cache': window['cache'], 'mono': message.logMonoTime, 'lead': name})
-  result = {'checked': checked, 'invalid': invalid, 'manifest_sha256': sha256(corpus / 'manifest.json'),
-            'helper_sha256': hashlib.sha256(inspect.getsource(planner_module.cruise_coast_leads_clear).encode()).hexdigest()}
-  save_json(output, result)
-  if invalid:
-    raise ValueError(f'{len(invalid)} invalid lead time constants require re-evaluation')
+    run(arguments.corpus, arguments.output, arguments.commit, arguments.window, arguments.workers, recorded_plan=arguments.recorded_plan)
 
 
 if __name__ == '__main__':

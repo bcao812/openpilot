@@ -7,11 +7,11 @@ from pathlib import Path
 
 import numpy as np
 
-from openpilot.selfdrive.controls.tests.evaluate_pedal_full_routes import (
+from openpilot.tools.longitudinal.evaluate_pedal_full_routes import (
   columns, delta_stats, exact_alignment, intervals, load_arm, native_clean, normal_mask, switch_analysis,
 )
-from openpilot.selfdrive.controls.tests.replay_pedal_full_routes import NATIVE_FIELDS
-from openpilot.selfdrive.controls.tests.replay_pedal_switches import save_json, sha256
+from openpilot.tools.longitudinal.replay_pedal_full_routes import NATIVE_FIELDS
+from openpilot.tools.longitudinal.replay_pedal_switches import save_json, sha256
 
 
 def evaluate_recorded(record, audit, recorded, manifest_hash):

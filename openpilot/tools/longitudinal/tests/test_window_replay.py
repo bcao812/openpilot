@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 
 from openpilot.cereal import messaging
-from openpilot.selfdrive.controls.tests import replay_cruise_smoothing as replay
-from openpilot.selfdrive.controls.tests.replay_pedal_full_routes import ROW_FIELDS
-from openpilot.selfdrive.controls.tests.replay_pedal_switches import save_json, sha256
+from openpilot.tools.longitudinal import window_replay as replay
+from openpilot.tools.longitudinal.replay_pedal_full_routes import ROW_FIELDS
+from openpilot.tools.longitudinal.replay_pedal_switches import save_json, sha256
 
 
 def message(service, timestamp):
@@ -34,17 +34,6 @@ def test_parameter_preload_respects_arrival_and_warmup(tmp_path, condition):
     else:
       with pytest.raises(ValueError):
         list(replay.window_messages(tmp_path, window, None))
-
-
-@pytest.mark.parametrize('warmup', [-1.0, float('nan'), float('inf')])
-def test_invalid_warmup_is_rejected_before_reading_logs(tmp_path, warmup):
-  with pytest.raises(ValueError, match='warmup'):
-    replay.run_window((tmp_path, tmp_path, {}, 'off', warmup))
-
-
-def test_unknown_mode_is_rejected_before_reading_logs(tmp_path):
-  with pytest.raises(ValueError, match='mode'):
-    replay.run_window((tmp_path, tmp_path, {}, 'unknown', None))
 
 
 @pytest.mark.parametrize('condition', ['valid', 'schema', 'identity', 'coverage', 'hash', 'shape', 'rows'])
