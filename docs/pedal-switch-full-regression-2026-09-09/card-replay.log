@@ -1,8 +1,0 @@
-.                                                                        [100%]
-=============================== warnings summary ===============================
-openpilot/selfdrive/controls/tests/test_leads.py::TestLeads::test_radar_fault
-  /home/bcao/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/multiprocessing/popen_fork.py:66: DeprecationWarning: This process (pid=8) is multi-threaded, use of fork() may lead to deadlocks in the child.
-    self.pid = os.fork()
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-1 passed, 1 warning in 1.95s

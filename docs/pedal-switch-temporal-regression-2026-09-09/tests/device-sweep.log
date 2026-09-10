@@ -1,6 +1,0 @@
-scanning tracked shared objects in /home/bcao/SourceCode/openpilot-3xl-0817 ...
-
-note: panda/board/obj/ is tracked here. It is cross-compiled ARM (arm-none-eabi-gcc)
-      and is committed deliberately when opendbc/safety/** changes. Not a leak.
-
-scanned 14 tracked shared objects, 0 leak(s).
