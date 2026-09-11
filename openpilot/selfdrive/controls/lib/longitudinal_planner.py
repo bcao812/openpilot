@@ -10,7 +10,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, LongitudinalMpc, LongitudinalPlanSource
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T
@@ -42,6 +42,8 @@ CREEP_FOLLOW_MIN_ACCEL = -0.3
 CREEP_FOLLOW_MODEL_MARGIN = 0.1
 CREEP_FOLLOW_MIN_LEAD_SPEED = 0.5
 CREEP_FOLLOW_MAX_CLOSING_SPEED = 0.5
+LEAD_BRAKING_DEMAND_BP = [1.5, 3.0]
+LEAD_BRAKING_MIN_CHANGE_SCALE = 0.5
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -107,6 +109,30 @@ def constrain_lead_braking_speed(v_desired: float, v_ego: float, a_target: float
     closing_weight = float(np.interp(lead.vRel, [-1.0, 0.0], [1.0, 0.0]))
     lead_weight = max(lead_weight, gap_weight * closing_weight)
   return v_desired + braking_weight * speed_weight * lead_weight * correction
+
+
+def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuator_delay: float) -> float:
+  if not all(math.isfinite(value) for value in (v_ego, a_target, actuator_delay)):
+    return 0.0
+  if v_ego <= CLOSE_LEAD_STATE_SPEED_BP[0] or a_target >= CLOSE_LEAD_STATE_ACCEL_BP[-1] or not 0.0 <= actuator_delay <= 1.0:
+    return 0.0
+  braking_weight = float(np.interp(a_target, CLOSE_LEAD_STATE_ACCEL_BP, [1.0, 0.0]))
+  speed_weight = float(np.interp(v_ego, CLOSE_LEAD_STATE_SPEED_BP, [0.0, 1.0]))
+  urgency = 0.0
+  for lead in (radar_state.leadOne, radar_state.leadTwo):
+    values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb)
+    if not lead.present or not all(math.isfinite(value) for value in values):
+      continue
+    if (lead.dRel <= 0.0 or not 0.95 <= lead.modelProb <= 1.0 or lead.vLead < -0.5
+        or lead.vRel >= -1.0 or abs(lead.vLead - v_ego - lead.vRel) > 1.0):
+      continue
+    closing_speed = -lead.vRel
+    available_gap = max(lead.dRel - STOP_DISTANCE - closing_speed * (actuator_delay + DT_MDL), 0.5)
+    required_decel = max(-lead.aLeadK, 0.0) + closing_speed ** 2 / (2.0 * available_gap)
+    demand_weight = float(np.interp(required_decel, LEAD_BRAKING_DEMAND_BP, [0.0, 1.0]))
+    closing_weight = float(np.interp(closing_speed, [1.0, 3.0], [0.0, 1.0]))
+    urgency = max(urgency, demand_weight * closing_weight)
+  return braking_weight * speed_weight * urgency
 
 
 # Long enough that no single hill is mistaken for the mount, short enough to settle inside one
@@ -260,7 +286,16 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # Get new v_cruise and a_target from Smart Cruise Control and Speed Limit Assist
     v_cruise, self.output_a_target = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.output_a_target, v_cruise)
 
-    self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality)
+    braking_urgency = 0.0
+    if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
+        and sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
+        and not sm['carControl'].cruiseControl.override
+        and not sm['carState'].gasPressed and not sm['carState'].brakePressed and not sm['controlsState'].forceDecel
+        and self.source == LongitudinalPlanSourceSP.cruise
+        and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState'])):
+      braking_urgency = get_lead_braking_urgency(v_ego, self.output_a_target, sm['radarState'], self.CP.longitudinalActuatorDelay)
+    self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality,
+                         a_change_scale=1.0 - (1.0 - LEAD_BRAKING_MIN_CHANGE_SCALE) * braking_urgency)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.output_a_target)
     if self.trace is not None:
       self.trace.begin(self, sm, reset_state, v_cruise, accel_coast)
