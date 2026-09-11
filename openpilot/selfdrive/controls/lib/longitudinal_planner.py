@@ -10,7 +10,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T
@@ -34,6 +34,11 @@ CRUISE_COAST_ACCEL = -0.19
 CRUISE_COAST_MIN_SPEED = 10.0
 CRUISE_COAST_MAX_SPEED_ERROR = 1.0 * CV.KPH_TO_MS
 CRUISE_COAST_RISK_ACCEL = -0.5
+CREEP_FOLLOW_MIN_GAP = 5.0
+CREEP_FOLLOW_MIN_ACCEL = -0.3
+CREEP_FOLLOW_MODEL_MARGIN = 0.1
+CREEP_FOLLOW_MIN_LEAD_SPEED = 0.5
+CREEP_FOLLOW_MAX_CLOSING_SPEED = 0.5
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -59,6 +64,26 @@ def get_cruise_coast_accel(a_cruise: float) -> float:
     return a_cruise
   return float(np.interp(a_cruise, CRUISE_COAST_BP,
                          [CRUISE_COAST_BP[0], CRUISE_COAST_ACCEL, CRUISE_COAST_ACCEL, CRUISE_COAST_BP[-1]]))
+
+
+def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float) -> bool:
+  if not (math.isfinite(v_ego) and STOP_SPEED <= v_ego < LOW_SPEED_STATE_BP[0]
+          and math.isfinite(actuator_delay) and 0.0 <= actuator_delay <= 1.0
+          and radar_state.leadOne.present):
+    return False
+  minimum_gap = CREEP_FOLLOW_MIN_GAP + v_ego * (actuator_delay + DT_MDL) + v_ego ** 2 / (2.0 * COMFORT_BRAKE)
+  for lead in (radar_state.leadOne, radar_state.leadTwo):
+    if not lead.present:
+      continue
+    values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb)
+    if not all(math.isfinite(value) for value in values):
+      return False
+    if (lead.dRel < minimum_gap or not 0.95 <= lead.modelProb <= 1.0
+        or lead.vLead < CREEP_FOLLOW_MIN_LEAD_SPEED or lead.vRel < -CREEP_FOLLOW_MAX_CLOSING_SPEED
+        or lead.vLead + min(lead.aLeadK, 0.0) * CREEP_FINISH_T < STOP_SPEED
+        or abs(lead.vLead - v_ego - lead.vRel) > CREEP_FOLLOW_MAX_CLOSING_SPEED):
+      return False
+  return True
 
 
 # Long enough that no single hill is mistaken for the mount, short enough to settle inside one
@@ -148,6 +173,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.creep_v = 0.0
     self.creep_stop = False
     self.creep_total_t = 0.0
+    self.moving_lead_t = 0.0
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -193,6 +219,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.creep_stop = False
       self.creep_total_t = 0.0
       self.stop_latched = False
+      self.moving_lead_t = 0.0
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -297,6 +324,25 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.stop_latched = raw_should_stop and not reset_state
     self.output_should_stop = raw_should_stop or self.stop_latched
 
+    moving_lead = (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl
+                   and (not reset_state or long_control_off)
+                   and sm['controlsState'].longControlState in (LongCtrlState.off, LongCtrlState.pid)
+                   and sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
+                   and not sm['carControl'].cruiseControl.override
+                   and not sm['carState'].gasPressed and not sm['carState'].brakePressed
+                   and not sm['carState'].standstill and not sm['controlsState'].forceDecel
+                   and not self.fcw and self.mpc.solution_status == 0
+                   and not self.output_should_stop and not self.creep_stop and not output_should_stop_e2e
+                   and math.isfinite(output_a_target) and output_a_target >= CREEP_FOLLOW_MIN_ACCEL
+                   and math.isfinite(output_a_target_mpc) and output_a_target_mpc < CREEP_ACCEL
+                   and math.isfinite(output_a_target_e2e) and output_a_target_e2e >= CREEP_FOLLOW_MIN_ACCEL
+                   and output_a_target_e2e >= output_a_target_mpc - CREEP_FOLLOW_MODEL_MARGIN
+                   and self.source == LongitudinalPlanSourceSP.cruise and v_cruise >= CREEP_SPEED
+                   and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState'])
+                   and has_safe_moving_lead(sm['radarState'], v_ego, self.CP.longitudinalActuatorDelay))
+    self.moving_lead_t = min(self.moving_lead_t + self.dt, CREEP_STOP_T) if moving_lead else 0.0
+    following_moving_lead = self.moving_lead_t >= CREEP_STOP_T
+
     # Anti-creep fallback. should_stop() can only latch below STOP_SPEED, but a car whose actuator
     # has a dead band never gets there: Honda Bosch sends gas and clears BRAKE_REQUEST for any accel
     # above -0.2, so as the plan asymptotically converges its accel crosses -0.2 while the car is
@@ -341,7 +387,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # negative accel throughout -- aTarget below CREEP_SPEED has median -0.07 and p90 +0.12 -- so
     # requiring it to be negative costs no latch (31 -> 30 over 83 engaged min, median latch speed
     # 0.68 -> 0.72 m/s) and removes the launches.
-    if v_ego < CREEP_SPEED and output_a_target < CREEP_ACCEL:
+    if v_ego < CREEP_SPEED and output_a_target < CREEP_ACCEL and not following_moving_lead:
       if self.creep_t == 0.0:
         self.creep_v = v_ego
       self.creep_t += self.dt
