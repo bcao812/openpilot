@@ -1,5 +1,6 @@
 import numpy as np
 from opendbc.car.structs import car
+from opendbc.car.honda.values import CAR
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.common.pid import PIDController
@@ -109,6 +110,8 @@ class LongControl:
           output_accel = limit
         else:
           self.starting = False
+      if self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl:
+        output_accel = min(output_accel, limit)
 
     self.last_output_accel = np.clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel
