@@ -190,6 +190,21 @@ def paired_messages(messages, maximum_delay=0.25, maximum_messages=512):
   yield from ((buffered, None) for buffered in pending)
 
 
+def recorded_sp_targets(plan_sp, previous_accel):
+  source = str(plan_sp.longitudinalPlanSource)
+  if source == 'cruise':
+    target_accel = previous_accel
+  elif source == 'sccVision':
+    target_accel = plan_sp.smartCruiseControl.vision.aTarget
+  elif source == 'sccMap':
+    target_accel = plan_sp.smartCruiseControl.map.aTarget
+  elif source == 'speedLimitAssist':
+    target_accel = plan_sp.speedLimit.assist.aTarget
+  else:
+    raise ValueError(f'Unsupported recorded SP source: {source}')
+  return plan_sp.vTarget, target_accel
+
+
 def replay_window(cache, window, *, recorded_plan=False, messages=None, row_sink=None, strict=True):
   if messages is None:
     messages = LogReader([str(cache)], sort_by_time=True)
@@ -223,8 +238,7 @@ def replay_window(cache, window, *, recorded_plan=False, messages=None, row_sink
 
   def update_targets(instance, state, v_ego, a_ego, v_cruise):
     instance.source = current['sp'].longitudinalPlanSource
-    target_accel = a_ego if str(instance.source) == 'cruise' else current['sp'].aTarget
-    return current['sp'].vTarget, target_accel
+    return recorded_sp_targets(current['sp'], a_ego)
 
   def is_e2e(instance, state):
     dec = current['sp'].dec

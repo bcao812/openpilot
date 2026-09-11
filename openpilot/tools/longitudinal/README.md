@@ -41,3 +41,9 @@ working tree.
 
 Recorded motion is fixed in open-loop replay. Command equivalence is not proof
 of delivered acceleration, stopping distance or on-car safety/comfort.
+
+For frozen SP decisions, replay reads acceleration from the selected nested
+vision/map/speed-limit controller. The top-level `longitudinalPlanSP.aTarget`
+is published after base-planner arbitration overwrites the shared output; it
+is not the upstream SP acceleration input. Cruise retains the replay planner's
+own recursive acceleration state.
