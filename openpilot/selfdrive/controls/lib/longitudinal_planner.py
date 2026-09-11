@@ -29,6 +29,9 @@ ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
 LOW_SPEED_STATE_ERROR = 0.2
 LOW_SPEED_STATE_BP = [2.0, 5.0]
+CLOSE_LEAD_STATE_SPEED_BP = [5.0, 10.0]
+CLOSE_LEAD_STATE_T_GAP_BP = [1.0, 2.0]
+CLOSE_LEAD_STATE_ACCEL_BP = [-1.0, -0.5]
 CRUISE_COAST_BP = [-0.3, -0.25, -0.15, -0.1]
 CRUISE_COAST_ACCEL = -0.19
 CRUISE_COAST_MIN_SPEED = 10.0
@@ -84,6 +87,26 @@ def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float) -> bo
         or abs(lead.vLead - v_ego - lead.vRel) > CREEP_FOLLOW_MAX_CLOSING_SPEED):
       return False
   return True
+
+
+def constrain_lead_braking_speed(v_desired: float, v_ego: float, a_target: float, radar_state) -> float:
+  if not all(math.isfinite(value) for value in (v_desired, v_ego, a_target)) or a_target >= CLOSE_LEAD_STATE_ACCEL_BP[-1]:
+    return v_desired
+  braking_weight = float(np.interp(a_target, CLOSE_LEAD_STATE_ACCEL_BP, [1.0, 0.0]))
+  speed_weight = float(np.interp(v_ego, CLOSE_LEAD_STATE_SPEED_BP, [0.0, 1.0]))
+  correction = max(v_ego - LOW_SPEED_STATE_ERROR - v_desired, 0.0)
+  if speed_weight == 0.0 or correction == 0.0:
+    return v_desired
+  lead_weight = 0.0
+  for lead in (radar_state.leadOne, radar_state.leadTwo):
+    if not lead.present or not all(math.isfinite(value) for value in (lead.dRel, lead.vRel, lead.modelProb)):
+      continue
+    if lead.dRel < 0.0 or not 0.95 <= lead.modelProb <= 1.0:
+      continue
+    gap_weight = float(np.interp(lead.dRel / v_ego, CLOSE_LEAD_STATE_T_GAP_BP, [1.0, 0.0]))
+    closing_weight = float(np.interp(lead.vRel, [-1.0, 0.0], [1.0, 0.0]))
+    lead_weight = max(lead_weight, gap_weight * closing_weight)
+  return v_desired + braking_weight * speed_weight * lead_weight * correction
 
 
 # Long enough that no single hill is mistaken for the mount, short enough to settle inside one
@@ -226,6 +249,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
         and not sm['carState'].gasPressed and not sm['carState'].brakePressed and not sm['carControl'].cruiseControl.override):
       self.v_desired_filter.x = constrain_braking_speed(self.v_desired_filter.x, v_ego, self.output_a_target)
+      if (sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
+          and not sm['controlsState'].forceDecel
+          and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState'])):
+        self.v_desired_filter.x = constrain_lead_braking_speed(self.v_desired_filter.x, v_ego, self.output_a_target, sm['radarState'])
 
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
