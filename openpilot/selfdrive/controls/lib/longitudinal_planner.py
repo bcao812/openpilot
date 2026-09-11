@@ -9,12 +9,13 @@ from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
-from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL, STOP_SPEED
+from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -44,6 +45,7 @@ CREEP_FOLLOW_MIN_LEAD_SPEED = 0.5
 CREEP_FOLLOW_MAX_CLOSING_SPEED = 0.5
 LEAD_BRAKING_DEMAND_BP = [1.5, 3.0]
 LEAD_BRAKING_MIN_CHANGE_SCALE = 0.5
+LEAD_STOP_MIN_CLEARANCE = 2.0
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -135,6 +137,26 @@ def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuato
   return braking_weight * speed_weight * urgency
 
 
+def should_stop_for_close_lead(v_ego: float, a_target: float, radar_state, actuator_delay: float) -> bool:
+  if not all(math.isfinite(value) for value in (v_ego, a_target, actuator_delay)):
+    return False
+  if not (STOP_SPEED <= v_ego < CLOSE_LEAD_STOP_SPEED and ROLLING_STOP_ACCEL < a_target < CREEP_ACCEL
+          and 0.0 <= actuator_delay <= 1.0):
+    return False
+  ramp_time = (a_target - ROLLING_STOP_ACCEL) / STOPPING_DECEL_RATE
+  stopping_budget = (LEAD_STOP_MIN_CLEARANCE + v_ego * (actuator_delay + DT_MDL + ramp_time)
+                     + v_ego ** 2 / (-2.0 * ROLLING_STOP_ACCEL))
+  for lead in (radar_state.leadOne, radar_state.leadTwo):
+    values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.yRel, lead.modelProb)
+    if not lead.present or not all(math.isfinite(value) for value in values):
+      continue
+    if (0.0 < lead.dRel <= stopping_budget and 0.98 <= lead.modelProb <= 1.0
+        and abs(lead.vLead) <= STOP_SPEED and lead.vRel < -0.2 and lead.aLeadK <= 0.2
+        and abs(lead.yRel) <= 1.8 and abs(lead.vLead - v_ego - lead.vRel) <= 0.5):
+      return True
+  return False
+
+
 # Long enough that no single hill is mistaken for the mount, short enough to settle inside one
 # drive. With initialized=False the filter takes its first sample whole, so this is not a warmup
 # cost -- it is how hard a sustained grade has to work to drag the estimate.
@@ -223,6 +245,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.creep_stop = False
     self.creep_total_t = 0.0
     self.moving_lead_t = 0.0
+    self.close_lead_stop = False
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -269,6 +292,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.creep_total_t = 0.0
       self.stop_latched = False
       self.moving_lead_t = 0.0
+      self.close_lead_stop = False
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -467,6 +491,22 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.creep_stop = False
       self.creep_total_t = 0.0
     self.output_should_stop = self.output_should_stop or self.creep_stop
+
+    close_lead_stop_allowed = (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
+                              and math.isfinite(v_ego) and math.isfinite(output_a_target)
+                              and math.isfinite(self.CP.longitudinalActuatorDelay) and 0.0 <= self.CP.longitudinalActuatorDelay <= 1.0
+                              and sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
+                              and not sm['carControl'].cruiseControl.override
+                              and not sm['carState'].gasPressed and not sm['carState'].brakePressed
+                              and not sm['controlsState'].forceDecel and self.mpc.solution_status == 0
+                              and self.source == LongitudinalPlanSourceSP.cruise
+                              and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState']))
+    if (not close_lead_stop_allowed or v_ego >= CLOSE_LEAD_STOP_SPEED
+        or output_a_target >= STOP_RELEASE_ACCEL or output_a_target <= ROLLING_STOP_ACCEL):
+      self.close_lead_stop = False
+    elif not self.close_lead_stop and not self.output_should_stop:
+      self.close_lead_stop = should_stop_for_close_lead(v_ego, output_a_target, sm['radarState'], self.CP.longitudinalActuatorDelay)
+    self.output_should_stop = self.output_should_stop or self.close_lead_stop
 
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 

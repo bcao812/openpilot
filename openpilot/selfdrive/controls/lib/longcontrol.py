@@ -2,7 +2,7 @@ import numpy as np
 from opendbc.car.structs import car
 from opendbc.car.honda.values import CAR
 from openpilot.common.realtime import DT_CTRL
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
+from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED, CONTROL_N, STOP_SPEED
 from openpilot.common.pid import PIDController
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
@@ -89,6 +89,9 @@ class LongControl:
       if output_accel > stop_accel:
         output_accel = min(output_accel, 0.0)
         output_accel -= STOPPING_DECEL_RATE * DT_CTRL
+      if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not CS.standstill
+          and STOP_SPEED <= CS.vEgo < CLOSE_LEAD_STOP_SPEED and np.isfinite(a_target)):
+        output_accel = min(output_accel, a_target)
       self.reset()
       # Whatever the ramp reached is where the next pid frame has to climb out from.
       self.starting = True

@@ -21,6 +21,7 @@ CREEP_ACCEL = 0.0       # m/s^2, plan must be asking for LESS than this for a cr
 CREEP_STOP_T = 0.5      # s, window the creep band is judged over
 CREEP_FINISH_T = 2.0    # s, how much longer a stop in the creep band may still need
 CREEP_MAX_T = 1.0       # s, total time in the band before it is a creep whatever the window says
+CLOSE_LEAD_STOP_SPEED = 2.0
 
 
 def should_stop(v_ego: float, a_target: float) -> bool:
