@@ -935,6 +935,7 @@ class CurvatureSteeringSafetyTest(VehicleSpeedSafetyTest):
 
 class SafetyTest(SafetyTestBase):
   TX_MSGS: list[list[int]] = []
+  TX_MSGS_ALL_MODES: list[list[int]] | None = None
   TX_MSGS_LENGTHS: dict[tuple[int, int], int] = {}
   SCANNED_ADDRS = [*range(0x800),                      # Entire 11-bit CAN address space
                    *range(0x18DA00F1, 0x18DB00F1, 0x100),   # 29-bit UDS physical addressing
@@ -942,6 +943,10 @@ class SafetyTest(SafetyTestBase):
                    *range(0x3300, 0x3400)]                  # Honda
   FWD_BLACKLISTED_ADDRS: dict[int, list[int]] = {}  # {bus: [addr]}
   FWD_BUS_LOOKUP: dict[int, int] = {0: 2, 2: 0}
+
+  @classmethod
+  def get_all_mode_tx_msgs(cls):
+    return cls.TX_MSGS if cls.TX_MSGS_ALL_MODES is None else cls.TX_MSGS_ALL_MODES
 
   @classmethod
   def setUpClass(cls):
@@ -996,7 +1001,7 @@ class SafetyTest(SafetyTestBase):
       for attr in dir(test):
         tc = getattr(test, attr)
         if isinstance(tc, type) and issubclass(tc, SafetyTest) and attr != current_test:
-          tx = tc.TX_MSGS
+          tx = tc.get_all_mode_tx_msgs()
           if tx is not None and not attr.endswith('Base'):
             # No point in comparing different Tesla safety modes
             if 'Tesla' in attr and 'Tesla' in current_test:

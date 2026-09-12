@@ -27,7 +27,8 @@ class HCAMitigation:
     if apply_torque != 0 and apply_torque_last == apply_torque:
       self._same_torque_frames += 1
       if self._same_torque_frames > self._max_same_torque_frames:
-        apply_torque -= (self._torque_reduction, -self._torque_reduction)[apply_torque < 0]
+        reduction = min(abs(apply_torque), self._torque_reduction)
+        apply_torque -= reduction if apply_torque > 0 else -reduction
         self._same_torque_frames = 0
     else:
       self._same_torque_frames = 0

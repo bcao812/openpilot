@@ -116,7 +116,7 @@ class ModelState(ModelStateBase):
     ModelStateBase.__init__(self)
 
     env_pkl = os.environ.get('COMBINED_MODEL_PKL')
-    if env_pkl and os.path.exists(env_pkl):
+    if env_pkl and _pkl_exists(env_pkl):
       model_bundle = None
     else:
       model_bundle = get_active_bundle(chestnut=chestnut)

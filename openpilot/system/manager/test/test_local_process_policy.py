@@ -44,7 +44,8 @@ class TestLocalProcessPolicy(OpenpilotTestCase):
     items = [
       node.value for node in ast.walk(module)
       if isinstance(node, ast.Assign) and any(
-        isinstance(target, ast.Attribute) and target.attr == "items" for target in node.targets
+        (isinstance(target, ast.Attribute) and target.attr == "items") or
+        (isinstance(target, ast.Name) and target.id == "items") for target in node.targets
       )
     ]
     self.assertTrue(any(

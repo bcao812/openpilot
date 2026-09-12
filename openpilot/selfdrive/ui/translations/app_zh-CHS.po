@@ -2820,9 +2820,6 @@ msgstr "小模型"
 msgid "Big Model"
 msgstr "大模型"
 
-msgid "Model Status"
-msgstr "模型状态"
-
 msgid "Cancel Verification"
 msgstr "取消校验"
 
@@ -2882,4 +2879,3 @@ msgstr "准备中"
 
 msgid "unavailable"
 msgstr "不可用"
-

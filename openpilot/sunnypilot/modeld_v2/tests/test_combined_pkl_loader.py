@@ -228,6 +228,51 @@ class TestModelStateCombinedInit(OpenpilotTestCase):
     with mock.patch.dict(os.environ, {'COMBINED_MODEL_PKL': ''}), self.assertRaisesRegex(AssertionError, "No driving pkl found"):
       ModelState(cam_w=CAM_W, cam_h=CAM_H)
 
+  @parameterized.expand(['missing', 'directory'], names=['override_kind'])
+  def test_unusable_override_keeps_active_bundle(self, override_kind, tmp_path, monkeypatch, patch_modeld):
+    archetype = ARCHETYPES['vision_policy_split']
+    tests_helpers.write_pkl(tmp_path, archetype)
+    bundle = DummyBundle(models=archetype.model_stubs, is_20hz=True, generation=12)
+    patch_modeld(bundle)
+    monkeypatch.setattr(hw.Paths, 'model_root', staticmethod(lambda: str(tmp_path)))
+    monkeypatch.setattr(stock_helpers, 'MODELS_DIR', tmp_path / 'no-bundled-model')
+    monkeypatch.setattr(modeld_module, 'COMMA_HARDWARE', False)
+    override = tmp_path / 'override.pkl'
+    if override_kind == 'directory':
+      override.mkdir()
+    with mock.patch.dict(os.environ, {'COMBINED_MODEL_PKL': str(override)}), \
+         mock.patch.object(modeld_module, 'get_active_bundle', return_value=bundle) as get_active_bundle:
+      state = ModelState(CAM_W, CAM_H)
+    get_active_bundle.assert_called_once_with(chestnut=False)
+    assert state.generation == 12
+    assert state.LAT_SMOOTH_SECONDS == 0.1
+    assert state.LONG_SMOOTH_SECONDS == 0.3
+    assert type(state.constants) is archetype.expected_constants_class
+
+  @parameterized.expand([False, True], names=['chunked'])
+  def test_usable_override_discards_active_bundle_metadata(self, chunked, tmp_path, monkeypatch, patch_modeld):
+    active_archetype = ARCHETYPES['vision_policy_split']
+    active_root = tmp_path / 'active'
+    active_root.mkdir()
+    tests_helpers.write_pkl(active_root, active_archetype)
+    bundle = DummyBundle(models=active_archetype.model_stubs, is_20hz=True, generation=12)
+    patch_modeld(bundle)
+    monkeypatch.setattr(hw.Paths, 'model_root', staticmethod(lambda: str(active_root)))
+    monkeypatch.setattr(modeld_module, 'COMMA_HARDWARE', False)
+    override_archetype = ARCHETYPES['supercombo_non20hz']
+    override = tests_helpers.write_pkl(tmp_path, override_archetype).rename(tmp_path / 'override.pkl')
+    if chunked:
+      chunk_file(override, get_chunk_targets(override, override.stat().st_size))
+    with mock.patch.dict(os.environ, {'COMBINED_MODEL_PKL': str(override)}), \
+         mock.patch.object(modeld_module, 'get_active_bundle', return_value=bundle) as get_active_bundle:
+      state = ModelState(CAM_W, CAM_H)
+    get_active_bundle.assert_not_called()
+    assert state.generation is None
+    assert state.LAT_SMOOTH_SECONDS == 0.0
+    assert state.LONG_SMOOTH_SECONDS == 0.0
+    assert state._combined_model_type == override_archetype.expected_model_type
+    assert type(state.constants) is override_archetype.expected_constants_class
+
 
 class TestStockEquivalence(OpenpilotTestCase):
 

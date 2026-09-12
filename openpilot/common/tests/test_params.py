@@ -146,11 +146,11 @@ class TestParams(OpenpilotTestCase):
     assert self.params.get("InstallDate") == now
 
   def test_live_streaming_is_not_cleared_on_ignition(self):
-    assert b"IsLiveStreaming" in self.params.all_keys(ParamKeyFlag.CLEAR_ON_MANAGER_START)
-    assert b"IsLiveStreaming" not in self.params.all_keys(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
     self.params.put_bool("IsLiveStreaming", True, block=True)
     self.params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
     assert self.params.get_bool("IsLiveStreaming")
+    self.params.clear_all(ParamKeyFlag.CLEAR_ON_MANAGER_START)
+    assert not self.params.get_bool("IsLiveStreaming")
 
   def test_remote_map_deletion_is_not_registered(self):
     assert b"Mapd_ClearCache" not in self.params.all_keys()

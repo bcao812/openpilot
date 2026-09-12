@@ -29,6 +29,21 @@ class TestVolkswagenHCAMitigation(unittest.TestCase):
         expected_torque = actuator_value - (1, -1)[actuator_value < 0] if should_nudge else actuator_value
         assert hca_mitigation.update(actuator_value, actuator_value) == expected_torque, f"{frame=}"
 
+  def test_reduction_never_reverses_or_increases_torque(self):
+    for torque_reduction in (1, 3):
+      for actuator_value in range(-CCP.STEER_MAX, CCP.STEER_MAX + 1):
+        with self.subTest(torque_reduction=torque_reduction, actuator_value=actuator_value):
+          mitigation = HCAMitigation(CCP, torque_reduction=torque_reduction)
+          for _ in range(self.STUCK_TORQUE_FRAMES):
+            self.assertEqual(mitigation.update(actuator_value, actuator_value), actuator_value)
+
+          actual_torque = mitigation.update(actuator_value, actuator_value)
+          expected_torque = max(0, actuator_value - torque_reduction) if actuator_value >= 0 else min(0, actuator_value + torque_reduction)
+          self.assertEqual(actual_torque, expected_torque)
+          self.assertGreaterEqual(actual_torque * actuator_value, 0)
+          self.assertLessEqual(abs(actual_torque), abs(actuator_value))
+          self.assertEqual(mitigation.update(actuator_value, actuator_value), actuator_value)
+
 class TestVolkswagenPlatformConfigs(unittest.TestCase):
   def test_spare_part_fw_pattern(self):
     # Relied on for determining if a FW is likely VW
