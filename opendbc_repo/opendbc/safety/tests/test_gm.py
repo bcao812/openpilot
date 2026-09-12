@@ -257,8 +257,8 @@ class TestGmIgnition(unittest.TestCase):
     self.safety.init_tests()
     self.packer = CANPackerSafety("gm_global_a_powertrain_generated")
 
-  def _msg(self, mode):
-    return self.packer.make_can_msg_safety("BCMGeneralPlatformStatus", 0, {"SystemPowerMode": mode})
+  def _msg(self, mode, bus=0):
+    return self.packer.make_can_msg_safety("BCMGeneralPlatformStatus", bus, {"SystemPowerMode": mode})
 
   # SystemPowerMode 2=Run, 3=Crank Request
   def test_ignition_on(self):
@@ -270,6 +270,24 @@ class TestGmIgnition(unittest.TestCase):
     self.assertTrue(self.safety.get_ignition_can())
     self.safety.ignition_can_hook(self._msg(0))
     self.assertFalse(self.safety.get_ignition_can())
+
+  def test_bus_zero_power_modes(self):
+    for initial_state in (False, True):
+      for mode in range(4):
+        with self.subTest(initial_state=initial_state, mode=mode):
+          self.safety.set_ignition_can(initial_state)
+          self.safety.ignition_can_hook(self._msg(mode))
+          self.assertEqual(self.safety.get_ignition_can(), mode in (2, 3))
+
+  def test_bus_two_run_does_not_turn_ignition_on(self):
+    self.safety.set_ignition_can(False)
+    self.safety.ignition_can_hook(self._msg(2, bus=2))
+    self.assertFalse(self.safety.get_ignition_can())
+
+  def test_bus_two_off_does_not_turn_ignition_off(self):
+    self.safety.set_ignition_can(True)
+    self.safety.ignition_can_hook(self._msg(0, bus=2))
+    self.assertTrue(self.safety.get_ignition_can())
 
 
 if __name__ == "__main__":

@@ -5,11 +5,18 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+import os
+from pathlib import Path
+from unittest import mock
+
+from openpilot.common.file_chunker import chunk_file, get_chunk_name, get_chunk_targets, get_manifest_path
+from openpilot.common.hardware import hw
 from openpilot.common.parameterized import parameterized
 
+import openpilot.selfdrive.modeld.helpers as stock_helpers
 import openpilot.sunnypilot.models.helpers as helpers
 import openpilot.sunnypilot.modeld_v2.modeld as modeld_module
-from openpilot.sunnypilot.modeld_v2.modeld import _find_driving_pkl
+from openpilot.sunnypilot.modeld_v2.modeld import _find_driving_pkl, _pkl_exists
 from openpilot.sunnypilot.modeld_v2.tests import helpers as tests_helpers
 from openpilot.sunnypilot.modeld_v2.tests.helpers import DummyModel, DummyBundle, ARCHETYPES, CAM_W, CAM_H, \
   SPLIT_VISION_INPUT_SHAPES, SPLIT_POLICY_INPUT_SHAPES
@@ -23,35 +30,170 @@ model_state_factory = tests_helpers.model_state_factory
 ModelState = modeld_module.ModelState
 
 
+def pkl_roots(tmp_path, monkeypatch):
+  bundled_root = tmp_path / 'bundled'
+  download_root = tmp_path / 'downloads'
+  bundled_root.mkdir()
+  download_root.mkdir()
+  monkeypatch.setattr(stock_helpers, 'MODELS_DIR', bundled_root)
+  monkeypatch.setattr(hw.Paths, 'model_root', staticmethod(lambda: str(download_root)))
+  return bundled_root, download_root
+
+
+def write_chunks(path, num_chunks=2, missing=()):
+  Path(get_manifest_path(path)).write_text(str(num_chunks))
+  for chunk_index in range(num_chunks):
+    if chunk_index not in missing:
+      Path(get_chunk_name(path, chunk_index, num_chunks)).write_bytes(b'chunk')
+
+
+class TestPklExists(OpenpilotTestCase):
+  def test_missing_pkl_is_not_available(self, tmp_path):
+    assert not _pkl_exists(tmp_path / 'model.pkl')
+
+  def test_complete_pkl_is_available(self, tmp_path):
+    path = tmp_path / 'model.pkl'
+    path.write_bytes(b'complete')
+    assert _pkl_exists(path)
+
+  def test_directory_is_not_a_pkl(self, tmp_path):
+    path = tmp_path / 'model.pkl'
+    path.mkdir()
+    assert not _pkl_exists(path)
+
+  def test_manifest_only_is_not_available(self, tmp_path):
+    path = tmp_path / 'model.pkl'
+    Path(get_manifest_path(path)).write_text('2')
+    assert not _pkl_exists(path)
+
+  @parameterized.expand([0, 1, 2], names=['missing_chunk'])
+  def test_missing_chunk_is_not_available(self, missing_chunk, tmp_path):
+    path = tmp_path / 'model.pkl'
+    write_chunks(path, num_chunks=3, missing=(missing_chunk,))
+    assert not _pkl_exists(path)
+
+  @parameterized.expand([1, 3], names=['num_chunks'])
+  def test_all_chunks_are_available(self, num_chunks, tmp_path):
+    path = tmp_path / 'model.pkl'
+    write_chunks(path, num_chunks=num_chunks)
+    assert _pkl_exists(path)
+
+  def test_directory_is_not_a_chunk(self, tmp_path):
+    path = tmp_path / 'model.pkl'
+    write_chunks(path, missing=(1,))
+    Path(get_chunk_name(path, 1, 2)).mkdir()
+    assert not _pkl_exists(path)
+
+  @parameterized.expand([b'', b'0', b'-2', b'two', b'2.0', b'1\n2', b'\xff'], names=['contents'])
+  def test_invalid_manifest_is_not_available(self, contents, tmp_path):
+    path = tmp_path / 'model.pkl'
+    Path(get_manifest_path(path)).write_bytes(contents)
+    assert not _pkl_exists(path)
+
+
 # Pkl discovery
 
 class TestFindDrivingPkl(OpenpilotTestCase):
-  def test_returns_none_when_no_bundle(self):
+  def setUp(self):
+    super().setUp()
+    self.enterContext(mock.patch.dict(os.environ, {'COMBINED_MODEL_PKL': ''}))
+
+  @parameterized.expand([False, True], names=['chestnut'])
+  def test_returns_none_when_no_bundle_or_bundled_pkl(self, chestnut, pkl_roots):
+    assert _find_driving_pkl(None, chestnut=chestnut) is None
+
+  @parameterized.expand([False, True], names=['chestnut'])
+  def test_uses_bundled_pkl_when_no_bundle(self, chestnut, pkl_roots):
+    bundled_root, _ = pkl_roots
+    for filename in ('driving_tinygrad.pkl', 'big_driving_tinygrad.pkl'):
+      (bundled_root / filename).write_bytes(b'complete')
+    expected = stock_helpers.modeld_pkl_path(chestnut)
+    assert _find_driving_pkl(None, chestnut=chestnut) == str(expected)
+
+  def test_bundled_manifest_only_is_not_available(self, pkl_roots):
+    bundled = stock_helpers.modeld_pkl_path(False)
+    Path(get_manifest_path(bundled)).write_text('2')
     assert _find_driving_pkl(None) is None
 
-  def test_returns_none_when_no_models(self):
+  def test_bundled_missing_chunk_is_not_available(self, pkl_roots):
+    bundled = stock_helpers.modeld_pkl_path(False)
+    write_chunks(bundled, missing=(1,))
+    assert _find_driving_pkl(None) is None
+
+  @parameterized.expand([False, True], names=['chestnut'])
+  def test_uses_complete_bundled_chunks(self, chestnut, pkl_roots):
+    bundled = stock_helpers.modeld_pkl_path(chestnut)
+    write_chunks(bundled)
+    assert _find_driving_pkl(None, chestnut=chestnut) == str(bundled)
+
+  def test_returns_none_when_no_models(self, pkl_roots):
+    stock_helpers.modeld_pkl_path(False).write_bytes(b'complete')
     bundle = DummyBundle(models=[])
     assert _find_driving_pkl(bundle) is None
 
-  def test_returns_none_when_pkl_not_on_disk(self):
+  def test_returns_none_when_selected_pkl_not_on_disk(self, pkl_roots):
+    stock_helpers.modeld_pkl_path(False).write_bytes(b'complete')
     bundle = DummyBundle(models=[
       DummyModel('vision', 'driving_fof_tinygrad.pkl'),
       DummyModel('policy', 'driving_fof_tinygrad.pkl'),
     ])
     assert _find_driving_pkl(bundle) is None
 
-  def test_finds_pkl_by_artifact_name(self, tmp_path, monkeypatch):
-    (tmp_path / 'driving_fof_tinygrad.pkl').write_bytes(b'fake')
-    from openpilot.common.hardware import hw
-    monkeypatch.setattr(hw.Paths, 'model_root', staticmethod(lambda: str(tmp_path)))
-
+  def test_finds_pkl_by_artifact_name(self, pkl_roots):
+    _, download_root = pkl_roots
+    expected = download_root / 'driving_fof_tinygrad.pkl'
+    expected.write_bytes(b'complete')
     bundle = DummyBundle(models=[
       DummyModel('vision', 'driving_fof_tinygrad.pkl'),
       DummyModel('policy', 'driving_fof_tinygrad.pkl'),
     ])
-    result = _find_driving_pkl(bundle)
-    assert result is not None
-    assert 'driving_fof_tinygrad.pkl' in result
+    assert _find_driving_pkl(bundle) == str(expected)
+
+  @parameterized.expand([[], [0], [1], [0, 1]], names=['missing_chunks'])
+  def test_selected_pkl_requires_complete_chunks(self, missing_chunks, pkl_roots):
+    _, download_root = pkl_roots
+    selected = download_root / 'selected.pkl'
+    write_chunks(selected, missing=missing_chunks)
+    bundle = DummyBundle(models=[DummyModel('supercombo', selected.name)])
+    expected = None if missing_chunks else str(selected)
+    assert _find_driving_pkl(bundle) == expected
+
+  @parameterized.expand([False, True], names=['has_bundle'])
+  def test_override_precedes_selected_or_bundled_pkl(self, has_bundle, pkl_roots):
+    bundled_root, download_root = pkl_roots
+    stock_helpers.modeld_pkl_path(False).write_bytes(b'bundled')
+    selected = download_root / 'selected.pkl'
+    selected.write_bytes(b'selected')
+    override = bundled_root.parent / 'override.pkl'
+    override.write_bytes(b'override')
+    bundle = DummyBundle(models=[DummyModel('supercombo', selected.name)]) if has_bundle else None
+    with mock.patch.dict(os.environ, {'COMBINED_MODEL_PKL': str(override)}):
+      assert _find_driving_pkl(bundle) == str(override)
+
+  def test_complete_chunked_override_precedes_bundle(self, pkl_roots):
+    bundled_root, download_root = pkl_roots
+    selected = download_root / 'selected.pkl'
+    selected.write_bytes(b'selected')
+    override = bundled_root.parent / 'override.pkl'
+    write_chunks(override)
+    bundle = DummyBundle(models=[DummyModel('supercombo', selected.name)])
+    with mock.patch.dict(os.environ, {'COMBINED_MODEL_PKL': str(override)}):
+      assert _find_driving_pkl(bundle) == str(override)
+
+  @parameterized.expand([(False, False), (False, True), (True, False), (True, True)],
+                        names=['has_bundle', 'has_manifest'])
+  def test_unavailable_override_does_not_hide_available_pkl(self, has_bundle, has_manifest, pkl_roots):
+    bundled_root, download_root = pkl_roots
+    bundled = stock_helpers.modeld_pkl_path(False)
+    bundled.write_bytes(b'bundled')
+    selected = download_root / 'selected.pkl'
+    selected.write_bytes(b'selected')
+    override = bundled_root.parent / 'override.pkl'
+    if has_manifest:
+      write_chunks(override, missing=(1,))
+    bundle = DummyBundle(models=[DummyModel('supercombo', selected.name)]) if has_bundle else None
+    with mock.patch.dict(os.environ, {'COMBINED_MODEL_PKL': str(override)}):
+      assert _find_driving_pkl(bundle) == str(selected if has_bundle else bundled)
 
 
 # Init — assertion guard
@@ -62,6 +204,28 @@ class TestModelStateCombinedInit(OpenpilotTestCase):
     monkeypatch.setattr(helpers, 'get_active_bundle', lambda params=None, *, chestnut=None: bundle)
     monkeypatch.setattr(modeld_module, 'get_active_bundle', lambda params=None, *, chestnut=None: bundle)
     with self.assertRaisesRegex(AssertionError, "No driving pkl found"):
+      ModelState(cam_w=CAM_W, cam_h=CAM_H)
+
+  @parameterized.expand([False, True], names=['chunked'])
+  def test_initializes_bundled_default_without_active_bundle(self, chunked, tmp_path, monkeypatch, patch_modeld):
+    archetype = ARCHETYPES['vision_policy_split']
+    bundled = tests_helpers.write_pkl(tmp_path, archetype).rename(tmp_path / 'driving_tinygrad.pkl')
+    if chunked:
+      chunk_file(bundled, get_chunk_targets(bundled, bundled.stat().st_size))
+    monkeypatch.setattr(stock_helpers, 'MODELS_DIR', tmp_path)
+    monkeypatch.setattr(modeld_module, 'COMMA_HARDWARE', False)
+    patch_modeld(None)
+    with mock.patch.dict(os.environ, {'COMBINED_MODEL_PKL': ''}):
+      state = ModelState(cam_w=CAM_W, cam_h=CAM_H)
+    assert state._combined_model_type == archetype.expected_model_type
+    assert type(state.constants) is archetype.expected_constants_class
+    assert state.generation is None
+
+  def test_rejects_incomplete_bundled_default(self, tmp_path, monkeypatch, patch_modeld):
+    monkeypatch.setattr(stock_helpers, 'MODELS_DIR', tmp_path)
+    write_chunks(stock_helpers.modeld_pkl_path(False), missing=(1,))
+    patch_modeld(None)
+    with mock.patch.dict(os.environ, {'COMBINED_MODEL_PKL': ''}), self.assertRaisesRegex(AssertionError, "No driving pkl found"):
       ModelState(cam_w=CAM_W, cam_h=CAM_H)
 
 

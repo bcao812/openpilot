@@ -21,11 +21,11 @@ class CarInterface(CarInterfaceBase):
       self.pcm_follow_distance = 0
       self.press_gac_button = False
 
-  def apply(self, CC, now_nanos):
+  def apply(self, CC, CC_SP, now_nanos=None):
     self.lat_active = CC.latActive
     hud_control = CC.hudControl
     self.current_personality = hud_control.leadDistanceBars
-    return super().apply(CC, now_nanos)
+    return super().apply(CC, CC_SP, now_nanos)
 
   def update(self, can_packets):
     cp = self.can_parsers[Bus.main]

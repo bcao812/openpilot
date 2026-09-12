@@ -663,8 +663,8 @@ class Panda:
 
   # ******************* configuration *******************
 
-  def set_alternative_experience(self, alternative_experience):
-    self._handle.controlWrite(Panda.REQUEST_OUT, 0xdf, int(alternative_experience), 0, b'')
+  def set_alternative_experience(self, alternative_experience, safety_param_sp=0):
+    self._handle.controlWrite(Panda.REQUEST_OUT, 0xdf, int(alternative_experience), int(safety_param_sp), b'')
 
   def set_power_save(self, power_save_enabled=0):
     self._handle.controlWrite(Panda.REQUEST_OUT, 0xe7, int(power_save_enabled), 0, b'')
@@ -772,8 +772,8 @@ class Panda:
       ret += self._handle.bulkWrite(2, struct.pack("B", port_number) + ln[i:i + 0x20])
     return ret
 
-  def send_heartbeat(self, engaged=True):
-    self._handle.controlWrite(Panda.REQUEST_OUT, 0xf3, engaged, 0, b'')
+  def send_heartbeat(self, engaged=True, engaged_mads=True):
+    self._handle.controlWrite(Panda.REQUEST_OUT, 0xf3, engaged, engaged_mads, b'')
 
   # disable heartbeat checks for use outside of openpilot
   # sending a heartbeat will reenable the checks

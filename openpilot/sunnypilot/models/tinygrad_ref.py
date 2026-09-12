@@ -1,26 +1,30 @@
-import os
+import json
+import re
+import subprocess
+from pathlib import Path
 
 from openpilot.common.basedir import BASEDIR
 
 
 def get_tinygrad_ref():
-  repo_path = os.path.join(BASEDIR, "tinygrad_repo")
-  git_path = os.path.join(repo_path, ".git")
+  repo_path = Path(BASEDIR) / "tinygrad_repo"
   try:
-    if os.path.isdir(git_path):
-      git_dir = git_path
-    else:
-      with open(git_path) as f:
-        line = f.read().strip()
-      git_dir = os.path.join(repo_path, line[8:])
-    with open(os.path.join(git_dir, "HEAD")) as f:
-      ref = f.read().strip()
-    if ref.startswith("ref:"):
-      with open(os.path.join(git_dir, ref.split(" ", 1)[1])) as f:
-        return f.read().strip()
-    return ref
-  except Exception as e:
-    print(f"Error getting tinygrad_repo ref: {e}")
+    if (repo_path / ".git").exists():
+      return subprocess.check_output(
+        ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
+        text=True, stderr=subprocess.DEVNULL, timeout=5,
+      ).strip()
+
+    metadata_path = Path(BASEDIR) / "openpilot/sunnypilot/models/tinygrad_vendor.json"
+    metadata = json.loads(metadata_path.read_text())
+    if not all(re.fullmatch(r"[0-9a-f]{40}", metadata[key]) for key in ("commit", "tree")):
+      return None
+    tree = subprocess.check_output(
+      ["git", "-C", str(BASEDIR), "rev-parse", "HEAD:tinygrad_repo"],
+      text=True, stderr=subprocess.DEVNULL, timeout=5,
+    ).strip()
+    return metadata["commit"] if tree == metadata["tree"] else None
+  except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
     return None
 
 

@@ -62,16 +62,17 @@ def _pkl_exists(path):
   # a bare chunkmanifest is written eagerly for every model in the catalog, so it
   # must NOT be treated as downloaded - require the pkl or every chunk file
   from openpilot.common.file_chunker import get_chunk_name, get_manifest_path
-  if os.path.exists(path):
+  if os.path.isfile(path):
     return True
   manifest_path = get_manifest_path(path)
-  if not os.path.exists(manifest_path):
+  if not os.path.isfile(manifest_path):
     return False
   try:
-    num_chunks = int(open(manifest_path).read().strip())
-  except Exception:
+    with open(manifest_path) as manifest:
+      num_chunks = int(manifest.read().strip())
+  except (OSError, ValueError):
     return False
-  return all(os.path.exists(get_chunk_name(path, i, num_chunks)) for i in range(num_chunks))
+  return num_chunks > 0 and all(os.path.isfile(get_chunk_name(path, index, num_chunks)) for index in range(num_chunks))
 
 
 def _find_driving_pkl(bundle, chestnut: bool = False):

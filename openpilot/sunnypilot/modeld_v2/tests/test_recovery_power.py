@@ -1,4 +1,5 @@
 from typing import Any
+from unittest import mock
 
 import numpy as np
 
@@ -39,8 +40,6 @@ class TestRecoveryPower(OpenpilotTestCase):
       recorded_curv_plans.append(plan.copy())
       return 0.0
 
-    modeld.get_accel_from_plan = mock_accel  # ty: ignore[invalid-assignment]
-    modeld.get_curvature_from_output = mock_curvature  # ty: ignore[invalid-assignment]
     plan = np.random.default_rng(0).random((1, 100, 15)).astype(np.float32)
     planplus = np.random.default_rng(1).random((1, 100, 15)).astype(np.float32)
     merged_plan = plan + planplus
@@ -60,15 +59,16 @@ class TestRecoveryPower(OpenpilotTestCase):
       (0.8, 25.1),
     ]
 
-    for control, v_ego in test_cases:
-      state.PLANPLUS_CONTROL = control
-      recorded_vel.clear()
-      recorded_curv_plans.clear()
-      ModelState.get_action_from_model(state, model_output, prev_action, 0.0, 0.0, v_ego)  # type: ignore[arg-type]
+    with mock.patch.object(modeld, 'get_accel_from_plan', mock_accel), \
+         mock.patch.object(modeld, 'get_curvature_from_output', mock_curvature):
+      for control, v_ego in test_cases:
+        state.PLANPLUS_CONTROL = control
+        recorded_vel.clear()
+        recorded_curv_plans.clear()
+        ModelState.get_action_from_model(state, model_output, prev_action, 0.0, 0.0, v_ego)
 
-      expected_accel_plan_vel = plan[0, :, Plan.VELOCITY][:, 0] + planplus[0, :, Plan.VELOCITY][:, 0]
-      np.testing.assert_allclose(recorded_vel[0], expected_accel_plan_vel, rtol=1e-5, atol=1e-6)
+        expected_accel_plan_vel = plan[0, :, Plan.VELOCITY][:, 0] + planplus[0, :, Plan.VELOCITY][:, 0]
+        np.testing.assert_allclose(recorded_vel[0], expected_accel_plan_vel, rtol=1e-5, atol=1e-6)
 
-      # For the below, yes, I know this isn't the same slicing as fillmodlmsg. This is to show that the values are only scaled on curv
-      expected_curv_plan_vel = plan[0, :, Plan.VELOCITY][:, 0] + control * planplus[0, :, Plan.VELOCITY][:, 0]
-      np.testing.assert_allclose(recorded_curv_plans[0][:, Plan.VELOCITY][:, 0], expected_curv_plan_vel, rtol=1e-5, atol=1e-6)
+        expected_curv_plan_vel = plan[0, :, Plan.VELOCITY][:, 0] + control * planplus[0, :, Plan.VELOCITY][:, 0]
+        np.testing.assert_allclose(recorded_curv_plans[0][:, Plan.VELOCITY][:, 0], expected_curv_plan_vel, rtol=1e-5, atol=1e-6)
