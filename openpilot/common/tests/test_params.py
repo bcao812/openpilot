@@ -5,7 +5,7 @@ import time
 import uuid
 
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.common.params import Params, ParamKeyFlag, UnknownKeyName
+from openpilot.common.params import Params, ParamKeyFlag, ParamKeyType, UnknownKeyName
 
 class TestParams(OpenpilotTestCase):
   def setup_method(self):
@@ -144,3 +144,34 @@ class TestParams(OpenpilotTestCase):
     now = datetime.datetime.now(datetime.UTC)
     self.params.put("InstallDate", now, block=True)
     assert self.params.get("InstallDate") == now
+
+  def test_live_streaming_is_not_cleared_on_ignition(self):
+    assert b"IsLiveStreaming" in self.params.all_keys(ParamKeyFlag.CLEAR_ON_MANAGER_START)
+    assert b"IsLiveStreaming" not in self.params.all_keys(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
+    self.params.put_bool("IsLiveStreaming", True, block=True)
+    self.params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
+    assert self.params.get_bool("IsLiveStreaming")
+
+  def test_remote_map_deletion_is_not_registered(self):
+    assert b"Mapd_ClearCache" not in self.params.all_keys()
+    with self.assertRaises(UnknownKeyName):
+      self.params.get("Mapd_ClearCache")
+
+  def test_selected_model_keys_and_local_recording_key(self):
+    expected_types = {
+      "ModelManager_DownloadRef": ParamKeyType.STRING,
+      "ModelManager_ActiveJson": ParamKeyType.JSON,
+      "ModelManager_ActiveBundleChestnut": ParamKeyType.JSON,
+      "ChestnutModelError": ParamKeyType.BOOL,
+      "RecordRoadCameras": ParamKeyType.BOOL,
+    }
+    for key, expected_type in expected_types.items():
+      with self.subTest(key=key):
+        assert self.params.get_type(key) == expected_type
+    self.params.put("ModelManager_DownloadRef", "model-ref", block=True)
+    self.params.put("ModelManager_ActiveJson", {"version": 19}, block=True)
+    self.params.put("ModelManager_ActiveBundleChestnut", {"ref": "big-model-ref"}, block=True)
+    assert self.params.get("ModelManager_DownloadRef") == "model-ref"
+    assert self.params.get("ModelManager_ActiveJson") == {"version": 19}
+    assert self.params.get("ModelManager_ActiveBundleChestnut") == {"ref": "big-model-ref"}
+    assert not self.params.get_bool("RecordRoadCameras")

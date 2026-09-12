@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus, gen_empty_fingerprint, structs
+from opendbc.car.gwm import gwmcan
 from opendbc.car.gwm.interface import CarInterface as GwmInterface
 from opendbc.car.gwm.values import CAR as GWM_CAR, GwmSafetyFlags
 from opendbc.car.mg.interface import CarInterface as MgInterface
@@ -60,6 +61,72 @@ class InterfaceHarness:
 
 
 class TestGwmMgInterfaces(unittest.TestCase):
+  def test_gwm_cancel_command_never_forwards_enable(self):
+    for alpha_long, stock_enable in itertools.product((False, True), (0, 1)):
+      with self.subTest(alpha_long=alpha_long, stock_enable=stock_enable):
+        harness = InterfaceHarness(GwmInterface, GWM_CAR.GWM_HAVAL_H6, alpha_long)
+        other_buttons = {
+          "AP_DECREASE_SPEED_COMMAND": 1,
+          "AP_INCREASE_SPEED_COMMAND": 1,
+          "AP_REDUCE_DISTANCE_COMMAND": 1,
+          "AP_INCREASE_DISTANCE_COMMAND": 1,
+        }
+        harness.values[(Bus.main, "STEER_AND_AP_STALK")] = {"AP_ENABLE_COMMAND": stock_enable, **other_buttons}
+        _, _, now_nanos = harness.update()
+        stock_values = harness.interface.CS.steer_and_ap_stalk_msg.copy()
+        control = structs.CarControl()
+        control.cruiseControl.cancel = True
+        _, can_sends = harness.interface.apply(control.as_reader(), structs.CarControlSP(), now_nanos)
+        cancel_messages = [message for message in can_sends if message[0] == 0xA1]
+        self.assertEqual(len(cancel_messages), 1)
+        message = cancel_messages[0]
+        self.assertEqual(message[2], 2)
+        self.assertEqual(len(message[1]), 8)
+        parser = CANParser(harness.packer.dbc.name, [("STEER_AND_AP_STALK", 100)], 2)
+        parser.update([(now_nanos, [message])])
+        values = parser.vl["STEER_AND_AP_STALK"]
+        self.assertEqual(values["AP_ENABLE_COMMAND"], 0)
+        self.assertEqual(values["AP_CANCEL_COMMAND"], 1)
+        self.assertEqual(values["COUNTER"], (stock_values["COUNTER"] + 1) % 16)
+        for name, value in other_buttons.items():
+          self.assertEqual(values[name], value)
+        self.assertEqual(message[1][0], gwmcan.checksum(message[1][1:8], 0x2D))
+        self.assertEqual(harness.interface.CS.steer_and_ap_stalk_msg, stock_values)
+
+  def test_gwm_valid_press_enables_only_on_release(self):
+    for alpha_long in (False, True):
+      with self.subTest(alpha_long=alpha_long):
+        harness = InterfaceHarness(GwmInterface, GWM_CAR.GWM_HAVAL_H6, alpha_long)
+        sequence = ((False, False), (True, False), (True, False), (False, True), (False, True))
+        for enable, expected in sequence:
+          harness.values[(Bus.main, "STEER_AND_AP_STALK")] = {"AP_ENABLE_COMMAND": int(enable)}
+          state, _, _ = harness.update()
+          self.assertEqual(state.cruiseState.enabled, expected)
+          self.assertEqual(state.cruiseState.available, expected)
+
+  def test_gwm_cancel_and_brake_invalidate_enable_press(self):
+    patterns = {
+      "release": ((True, False, False), (False, True, False), (False, False, False)),
+      "held": ((True, False, False), (True, True, False), (True, False, False), (False, False, False)),
+      "initial_press": ((True, True, False), (True, False, False), (False, False, False)),
+      "held_through_release": ((True, False, False), (True, True, False), (False, True, False), (False, False, False)),
+      "already_enabled": (
+        (True, False, False), (False, False, True), (True, False, True),
+        (True, True, False), (True, False, False), (False, False, False),
+      ),
+    }
+    for alpha_long, interruption, (name, sequence) in itertools.product((False, True), ("cancel", "brake"), patterns.items()):
+      with self.subTest(alpha_long=alpha_long, interruption=interruption, scenario=name):
+        harness = InterfaceHarness(GwmInterface, GWM_CAR.GWM_HAVAL_H6, alpha_long)
+        for enable, interrupted, expected in (*sequence, (True, False, False), (False, False, True)):
+          cancel = interruption == "cancel" and interrupted
+          brake = interruption == "brake" and interrupted
+          harness.values[(Bus.main, "STEER_AND_AP_STALK")] = {"AP_ENABLE_COMMAND": int(enable), "AP_CANCEL_COMMAND": int(cancel)}
+          harness.values[(Bus.main, "BRAKE2")] = {"PEDAL_BRAKE_PRESSED": int(brake)}
+          state, _, _ = harness.update()
+          self.assertEqual(state.cruiseState.enabled, expected)
+          self.assertEqual(state.cruiseState.available, expected)
+
   def test_gwm_alpha_long_gate(self):
     for alpha_long in (False, True):
       with self.subTest(alpha_long=alpha_long):
@@ -95,6 +162,7 @@ class TestGwmMgInterfaces(unittest.TestCase):
           control.actuators.torque = 0.3
           control.actuators.accel = accel
           control.actuators.longControlState = "stopping" if accel < 0 else "pid"
+          control.cruiseControl.cancel = False
           control.hudControl.leadDistanceBars = 2
           if as_reader:
             control = control.as_reader()

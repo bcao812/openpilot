@@ -20,6 +20,7 @@ class CarState(CarStateBase):
 
     self.is_activation_lever_pulled = False
     self.prev_activation_lever_pulled = False
+    self.activation_lever_armed = False
     self.main_on = False
     self.steer_fault_temporary_counter = 0
 
@@ -81,11 +82,16 @@ class CarState(CarStateBase):
     ret.leftBlindspot = bool(cp.vl["RADAR_BEHIND"]["BSM_LEFT"] > 0)
     ret.rightBlindspot = bool(cp.vl["RADAR_BEHIND"]["BSM_RIGHT"] > 0)
 
+    self.is_activation_lever_pulled = bool(cp.vl["STEER_AND_AP_STALK"]["AP_ENABLE_COMMAND"])
     if cp.vl["STEER_AND_AP_STALK"]["AP_CANCEL_COMMAND"] or ret.brakePressed:
       self.main_on = False
-    self.is_activation_lever_pulled = bool(cp.vl["STEER_AND_AP_STALK"]["AP_ENABLE_COMMAND"])
-    if not self.is_activation_lever_pulled and self.prev_activation_lever_pulled and not self.main_on:
-      self.main_on = True
+      self.activation_lever_armed = False
+    elif self.is_activation_lever_pulled and not self.prev_activation_lever_pulled:
+      self.activation_lever_armed = True
+    elif not self.is_activation_lever_pulled and self.prev_activation_lever_pulled:
+      if self.activation_lever_armed:
+        self.main_on = True
+      self.activation_lever_armed = False
     self.prev_activation_lever_pulled = self.is_activation_lever_pulled
 
     ret.cruiseState.available = self.main_on

@@ -133,6 +133,8 @@ def create_buttons_command(packer, CAN: CanBus, counter, stock_msg, cancel_comma
     "AP_CANCEL_COMMAND":  stock_msg["AP_CANCEL_COMMAND"] or cancel_command,
     "COUNTER": counter,
   }
+  if values["AP_CANCEL_COMMAND"]:
+    values["AP_ENABLE_COMMAND"] = 0
 
   data = packer.make_can_msg("STEER_AND_AP_STALK", 0, values)[1]
   values["CRC_X2D"] = checksum(data[1:8], 0x2D)

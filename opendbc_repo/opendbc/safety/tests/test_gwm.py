@@ -1,6 +1,8 @@
 import unittest
 
+from opendbc.car import gen_empty_fingerprint
 from opendbc.car.crc import CRC8J1850, mk_crc8_fun
+from opendbc.car.gwm import gwmcan
 from opendbc.car.gwm.values import GwmSafetyFlags
 from opendbc.car.structs import CarParams
 from opendbc.safety.tests import common
@@ -205,18 +207,23 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest):
   def test_gas_command_limits(self):
     for flags in (0, GwmSafetyFlags.LONG_CONTROL):
       self._set_mode(flags)
-      self._generic_limit_safety_check(
-        self._longitudinal_msg, self.MIN_GAS, self.MAX_GAS, -192, 8000, 1,
-        msg_allowed=bool(flags & GwmSafetyFlags.LONG_CONTROL),
-      )
+      for enabled in (False, True):
+        self.safety.set_controls_allowed(enabled)
+        for gas in range(-192, 8000):
+          expected = bool(flags & GwmSafetyFlags.LONG_CONTROL) and (
+            (enabled and self.MIN_GAS <= gas <= self.MAX_GAS) or gas == 0
+          )
+          self.assertEqual(self._tx(self._longitudinal_msg(gas=gas)), expected, (flags, enabled, gas))
 
   def test_brake_command_limits(self):
     for flags in (0, GwmSafetyFlags.LONG_CONTROL):
       self._set_mode(flags)
-      self._generic_limit_safety_check(
-        lambda brake: self._longitudinal_msg(brake=brake), 0, self.MAX_BRAKE, 0, 182, 1,
-        msg_allowed=bool(flags & GwmSafetyFlags.LONG_CONTROL),
-      )
+      for enabled in (False, True):
+        self.safety.set_controls_allowed(enabled)
+        for raw_byte in range(256):
+          brake = 181 - raw_byte
+          expected = bool(flags & GwmSafetyFlags.LONG_CONTROL) and ((enabled and 0 <= brake <= self.MAX_BRAKE) or brake == 0)
+          self.assertEqual(self._tx(self._longitudinal_msg(brake=brake)), expected, (flags, enabled, raw_byte))
 
   def test_negative_brake_command_rejected(self):
     self._set_mode(GwmSafetyFlags.LONG_CONTROL)
@@ -256,6 +263,52 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest):
           self.safety.set_controls_allowed(enabled)
           self.assertFalse(self._tx(self._button_msg(enable=True, cancel=cancel, bus=2)))
     self.assertTrue(self._tx(self._button_msg(cancel=True, bus=2)))
+
+  def test_host_cancel_command_is_admitted(self):
+    can_bus = gwmcan.CanBus(fingerprint=gen_empty_fingerprint())
+    stock = {
+      "STEERING_ANGLE": 10,
+      "STEERING_DIRECTION": 0,
+      "STEERING_RATE": 2,
+      "RATE_DIRECTION": 0,
+      "AP_ENABLE_COMMAND": 0,
+      "AP_CANCEL_COMMAND": 0,
+      "AP_DECREASE_SPEED_COMMAND": 0,
+      "AP_INCREASE_SPEED_COMMAND": 0,
+      "AP_REDUCE_DISTANCE_COMMAND": 0,
+      "AP_INCREASE_DISTANCE_COMMAND": 0,
+    }
+    for flags in (0, GwmSafetyFlags.LONG_CONTROL):
+      for enabled in (False, True):
+        for stock_enable in (False, True):
+          with self.subTest(flags=flags, enabled=enabled, stock_enable=stock_enable):
+            self._set_mode(flags)
+            self.safety.set_controls_allowed(enabled)
+            stock["AP_ENABLE_COMMAND"] = stock_enable
+            original_stock = stock.copy()
+            address, payload, bus = gwmcan.create_buttons_command(self.packer, can_bus, 1, stock, cancel_command=True)
+            self.assertEqual(stock, original_stock)
+            self.assertEqual((address, bus), (0xA1, 2))
+            self.assertFalse(payload[5] & 0x80)
+            self.assertTrue(payload[5] & 0x40)
+            self.assertEqual(payload[0], gwm_crcs[0xA1](payload[1:8]))
+            self.assertTrue(self._tx(common.make_msg(bus, address, dat=payload)))
+
+  def test_host_longitudinal_output_is_admitted(self):
+    can_bus = gwmcan.CanBus(fingerprint=gen_empty_fingerprint())
+    stock = dict.fromkeys((
+      "BYPASSME_1", "SPEED_REAL", "COUNTER_BRAKE", "BYPASSME_2", "BYPASS_ACC1", "BYPASS_ACC2",
+      "COUNTER_ACC", "BRAKE_OR_GAS_REQ", "STANDSTILL_1", "STANDSTILL_2", "STANDSTILL_3",
+    ), 0)
+    self._set_mode(GwmSafetyFlags.LONG_CONTROL)
+    for active in (False, True):
+      for standstill in (False, True):
+        for accel in (-1.0, -0.5, -0.01, 0.0, 0.25, 0.5, 1.0):
+          with self.subTest(active=active, standstill=standstill, accel=accel):
+            self.safety.set_controls_allowed(active)
+            address, payload, bus = gwmcan.create_longitudinal_command(self.packer, can_bus, stock, accel, active, standstill)
+            self.assertEqual((address, bus), (0x143, 0))
+            self.assertTrue(self._tx(common.make_msg(bus, address, dat=payload)))
 
 
 class TestGwmMgReleaseSafety(unittest.TestCase):

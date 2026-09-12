@@ -132,6 +132,10 @@ static bool gwm_tx_hook(const CANPacket_t *msg) {
   bool tx = true;
   bool violation = false;
 
+  if ((msg->bus == GWM_CAMERA_BUS) && (msg->addr == GWM_ADAS_ACTIVATION)) {
+    violation |= GET_BIT(msg, 47U);
+  }
+
   if (msg->bus == GWM_MAIN_BUS) {
     if (msg->addr == GWM_STEER_CMD) {
       int desired_torque = (((msg->data[12] & 0x7FU) << 3) | ((msg->data[13] & 0xE0U) >> 5));
@@ -143,6 +147,7 @@ static bool gwm_tx_hook(const CANPacket_t *msg) {
     if (msg->addr == GWM_LONG_CONTROL) {
       int brake_raw = msg->data[13];
       brake_raw = 181 - brake_raw;
+      violation |= brake_raw < 0;
       violation |= longitudinal_brake_checks(brake_raw, GWM_LONG_LIMITS);
 
       int gas_raw = ((msg->data[27] & 0x1FU) << 8) | (msg->data[28]);
