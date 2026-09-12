@@ -183,6 +183,26 @@ class TestManagerDownload(ManagerDownloadTestBase):
       assert artifact.fileName not in self.manager._download_start_times
     self.run_with_server(body)
 
+  def test_cached_chunk_is_reverified_after_partial_download(self):
+    def body():
+      artifact = self.make_artifact(chunked=True)
+      base_path = os.path.join(self.dest, artifact.fileName)
+      cached_path = get_chunk_name(base_path, 0, len(CHUNK_BODIES))
+      with open(cached_path, 'wb') as cached:
+        cached.write(CHUNK_BODIES[0])
+      original_get = self.manager._get
+
+      def get_and_tamper(*args, **kwargs):
+        with open(cached_path, 'wb') as cached:
+          cached.write(b'tampered cached chunk')
+        return original_get(*args, **kwargs)
+
+      with mock.patch.object(self.manager, '_get', side_effect=get_and_tamper):
+        with self.assertRaisesRegex(ValueError, "Hash validation failed for chunk 1"):
+          asyncio.run(self.manager._process_artifact(artifact, self.dest))
+      self.assert_no_partials(base_path)
+    self.run_with_server(body)
+
   def test_progress_is_monotonic_and_bounded(self):
     def body():
       artifact = self.make_artifact(chunked=True)
