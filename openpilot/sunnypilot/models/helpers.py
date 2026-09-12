@@ -7,7 +7,6 @@ See the LICENSE.md file in the root directory for more details.
 
 import hashlib
 import os
-import numpy as np
 
 from openpilot.cereal import custom
 from openpilot.common.params import Params
@@ -222,7 +221,7 @@ def _get_model():
 # The following method(s) are modeld helper methods
 def plan_x_idxs_helper(constants, plan, model_output) -> list[float]:
   # times at X_IDXS according to plan.
-  LINE_T_IDXS = [np.nan] * constants.IDX_N
+  LINE_T_IDXS = [float('nan')] * constants.IDX_N
   LINE_T_IDXS[0] = 0.0
   plan_x = model_output['plan'][0, :, plan.POSITION][:, 0].tolist()
   for xidx in range(1, constants.IDX_N):
