@@ -25,6 +25,7 @@ def checksum(message):
 
 class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest):
   TX_MSGS = [[0xA1, 2], [0x147, 2], [0x12B, 0], [0x23D, 0]]
+  TX_MSGS_LENGTHS = {(0xA1, 2): 8, (0x147, 2): 64, (0x12B, 0): 64, (0x23D, 0): 64}
   RELAY_MALFUNCTION_ADDRS = {0: (0x12B, 0x23D), 2: (0x147,)}
   FWD_BLACKLISTED_ADDRS = {0: [0x147], 2: [0x12B, 0x23D]}
   MAX_TORQUE_LOOKUP = [0], [253]
@@ -170,6 +171,12 @@ class TestGwmSafety(common.CarSafetyTest, common.MotorTorqueSteeringSafetyTest):
         with self.subTest(address=address, length=length):
           data = payload[:length].ljust(length, b"\x00")
           self.assertEqual(self._tx(common.make_msg(expected_bus, address, dat=data)), length == expected_length)
+
+  def test_cross_mode_message_lengths_match_dbc(self):
+    for (address, bus), length in self.TX_MSGS_LENGTHS.items():
+      with self.subTest(address=address, bus=bus):
+        self.assertIn([address, bus], self.TX_MSGS)
+        self.assertEqual(self.packer.dbc.addr_to_msg[address].size, length)
 
   def test_bad_checksum_disengages(self):
     for maker in (self._speed_msg, self._pcm_status_msg):

@@ -935,6 +935,7 @@ class CurvatureSteeringSafetyTest(VehicleSpeedSafetyTest):
 
 class SafetyTest(SafetyTestBase):
   TX_MSGS: list[list[int]] = []
+  TX_MSGS_LENGTHS: dict[tuple[int, int], int] = {}
   SCANNED_ADDRS = [*range(0x800),                      # Entire 11-bit CAN address space
                    *range(0x18DA00F1, 0x18DB00F1, 0x100),   # 29-bit UDS physical addressing
                    *range(0x18DB00F1, 0x18DC00F1, 0x100),   # 29-bit UDS functional addressing
@@ -1053,14 +1054,17 @@ class SafetyTest(SafetyTestBase):
             if attr.startswith('TestHyundaiLongitudinal'):
               # exceptions for common msgs across different Hyundai CAN platforms
               tx = list(filter(lambda m: m[0] not in [0x420, 0x50A, 0x389, 0x4A2], tx))
-            all_tx.append([[m[0], m[1], attr] for m in tx])
+            all_tx.append([
+              [message[0], message[1], attr, tc.TX_MSGS_LENGTHS.get((message[0], message[1]), 8)]
+              for message in tx
+            ])
 
     # make sure we got all the msgs
     self.assertTrue(len(all_tx) >= len(test_files)-1)
 
     for tx_msgs in all_tx:
-      for addr, bus, test_name in tx_msgs:
-        msg = make_msg(bus, addr)
+      for addr, bus, test_name, length in tx_msgs:
+        msg = make_msg(bus, addr, length)
         self.safety.set_controls_allowed(1)
         # TODO: this should be blocked
         if current_test in ["TestNissanSafety", "TestNissanSafetyAltEpsBus", "TestNissanLeafSafety"] and [addr, bus] in self.TX_MSGS:
