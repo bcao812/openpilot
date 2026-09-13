@@ -342,7 +342,6 @@ def build_mici_script(pm: PubMaster, main_layout, script: Script) -> None:
 
   settings_cases: Cases = [
     lambda: scroll_through_cases(toggle_cases),
-    None,  # sunnylink (just open and close)
     None,  # models (just open and close)
     lambda: scroll_through_cases(network_cases),
     lambda: scroll_through_cases(device_cases),
@@ -387,6 +386,13 @@ def build_mici_script(pm: PubMaster, main_layout, script: Script) -> None:
 
 def build_tizi_script(pm: PubMaster, main_layout, script: Script) -> None:
   """Build the replay script for the tizi layout."""
+
+  def select_settings_panel(panel_name: str) -> None:
+    def setup():
+      from openpilot.selfdrive.ui.layouts.settings.settings import PanelType
+      main_layout.open_settings(PanelType[panel_name])
+
+    script.setup(setup)
 
   def make_home_refresh_setup(fn: Callable) -> Callable:
     """Return setup function that calls the given function to modify state and forces an immediate refresh on the home layout."""
@@ -464,7 +470,7 @@ def build_tizi_script(pm: PubMaster, main_layout, script: Script) -> None:
   script.click(2000, 970)  # OK
 
   # === Settings - Network ===
-  script.click(278, 450)
+  select_settings_panel("NETWORK")
   # TODO: mock networks
   script.click(1880, 100)  # advanced network settings
 
@@ -480,12 +486,12 @@ def build_tizi_script(pm: PubMaster, main_layout, script: Script) -> None:
   script.click(630, 80)  # back from advanced network
 
   # === Settings - Toggles ===
-  script.click(278, 600)
+  select_settings_panel("TOGGLES")
   script.click(1200, 280)  # expand experimental mode description
 
   # === Settings - Software ===
   script.setup(lambda: setup_update_available(False), wait_after=0)  # start with no update available
-  script.click(278, 720)  # software
+  select_settings_panel("SOFTWARE")
   script.setup(lambda: set_updater_state("checking..."))  # updater mid-check
   script.setup(lambda: set_updater_state("downloading..."))  # updater mid-download
   script.setup(lambda: set_updater_state("idle"), wait_after=0)
@@ -501,11 +507,11 @@ def build_tizi_script(pm: PubMaster, main_layout, script: Script) -> None:
   script.click(650, 750)  # cancel uninstall
 
   # === Settings - Firehose ===
-  script.click(278, 845)
+  select_settings_panel("FIREHOSE")
 
   # === Settings - Developer (set CarParamsPersistent first) ===
   script.setup(setup_developer_params, wait_after=0)
-  script.click(278, 950)
+  select_settings_panel("DEVELOPER")
   script.click(1930, 470)  # SSH keys (keyboard)
   script.click(1930, 115)  # click cancel on keyboard
   script.click(2000, 960)  # toggle alpha long

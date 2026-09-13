@@ -11,7 +11,6 @@ from opendbc.car.structs import car
 from openpilot.common.params import Params
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.display import OnroadBrightness
 from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_active_source
-from openpilot.sunnypilot.sunnylink.sunnylink_state import SunnylinkState
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.sunnypilot.widgets.screen_saver import ScreenSaverSP
 
@@ -34,11 +33,9 @@ class UIStateSP:
     self.has_icbm: bool = False
     self.is_sp_release: bool = self.params.get_bool("IsReleaseSpBranch")
     self.sm_services_ext = [
-      "modelManagerSP", "selfdriveStateSP", "longitudinalPlanSP", "backupManagerSP",
+      "modelManagerSP", "selfdriveStateSP", "longitudinalPlanSP",
       "gpsLocation", "lateralTorqueParameters", "carStateSP", "liveMapDataSP", "carParamsSP", "lateralDelay"
     ]
-
-    self.sunnylink_state = SunnylinkState()
 
     self.screensaver = ScreenSaverSP(params=self.params)
     self.screensaver_enabled: bool = False
@@ -58,18 +55,11 @@ class UIStateSP:
     self.rocket_fuel: bool = False
     self.speed_limit_mode = None
     self.standstill_timer: bool = False
-    self.sunnylink_enabled: bool = False
     self.torque_bar: bool = False
     self.enforce_torque_control: bool = False
     self.custom_torque_params: bool = False
     self.torque_override_enabled: bool = False
     self._sp_initialized: bool = False
-
-  def update(self) -> None:
-    if self.sunnylink_enabled:
-      self.sunnylink_state.start()
-    else:
-      self.sunnylink_state.stop()
 
   def onroad_brightness_handle_alerts(self, _ui_state, alert):
     if _ui_state.sm.recv_frame["carState"] < _ui_state.started_frame:
@@ -171,7 +161,6 @@ class UIStateSP:
     self.rocket_fuel = self.params.get_bool("RocketFuel")
     self.speed_limit_mode = self.params.get("SpeedLimitMode", return_default=True)
     self.standstill_timer = self.params.get_bool("StandstillTimer")
-    self.sunnylink_enabled = self.params.get_bool("SunnylinkEnabled")
     self.torque_bar = self.params.get_bool("TorqueBar")
     self.enforce_torque_control = self.params.get_bool("EnforceTorqueControl")
     self.custom_torque_params = self.params.get_bool("CustomTorqueParams")

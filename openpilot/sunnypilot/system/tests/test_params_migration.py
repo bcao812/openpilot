@@ -5,9 +5,24 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+import json
+from pathlib import Path
+
 from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.sunnypilot.system.params_migration import _migrate_model_bundle_slots
+from openpilot.sunnypilot.system.params_migration import CAR_LIST_JSON_OUT, _migrate_car_platform_bundle, _migrate_model_bundle_slots
+
+
+class TestCarPlatformMigration(OpenpilotTestCase):
+  def test_legacy_platform_uses_local_vehicle_catalogue(self):
+    params = Params()
+    params.put("CarPlatformBundle", {"platform": "HONDA ACCORD 2018 HYBRID TOURING", "model": "Accord"}, block=True)
+    _migrate_car_platform_bundle(params)
+    bundle = params.get("CarPlatformBundle")
+    self.assertEqual(bundle["platform"], "HONDA_ACCORD")
+    self.assertEqual(bundle["brand"], "honda")
+    catalogue = json.loads(Path(CAR_LIST_JSON_OUT).read_text())
+    self.assertEqual(bundle, {**catalogue[bundle["name"]], "name": bundle["name"]})
 
 
 class TestModelBundleSlotMigration(OpenpilotTestCase):

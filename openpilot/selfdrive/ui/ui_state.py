@@ -148,7 +148,6 @@ class UIState(UIStateSP):
     self._update_status()
     self._update_chestnut_state()
     device.update()
-    UIStateSP.update(self)
 
   def _params_refresh_worker(self):
     drop_realtime()
