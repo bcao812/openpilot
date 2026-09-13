@@ -190,10 +190,10 @@ def paired_messages(messages, maximum_delay=0.25, maximum_messages=512):
   yield from ((buffered, None) for buffered in pending)
 
 
-def recorded_sp_targets(plan_sp, previous_accel):
+def recorded_sp_targets(plan_sp, previous_accel, cruise_speed):
   source = str(plan_sp.longitudinalPlanSource)
   if source == 'cruise':
-    target_accel = previous_accel
+    return cruise_speed, previous_accel
   elif source == 'sccVision':
     target_accel = plan_sp.smartCruiseControl.vision.aTarget
   elif source == 'sccMap':
@@ -238,7 +238,7 @@ def replay_window(cache, window, *, recorded_plan=False, messages=None, row_sink
 
   def update_targets(instance, state, v_ego, a_ego, v_cruise):
     instance.source = current['sp'].longitudinalPlanSource
-    return recorded_sp_targets(current['sp'], a_ego)
+    return recorded_sp_targets(current['sp'], a_ego, v_cruise)
 
   def is_e2e(instance, state):
     dec = current['sp'].dec

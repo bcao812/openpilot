@@ -46,4 +46,12 @@ For frozen SP decisions, replay reads acceleration from the selected nested
 vision/map/speed-limit controller. The top-level `longitudinalPlanSP.aTarget`
 is published after base-planner arbitration overwrites the shared output; it
 is not the upstream SP acceleration input. Cruise retains the replay planner's
-own recursive acceleration state.
+own recursive acceleration state and the exact `v_cruise` passed to its SP
+callback, including upstream clipping and forced-deceleration handling. The
+Float32 published `longitudinalPlanSP.vTarget` is not a lossless replacement
+for that internal cruise input.
+
+Timestamp alignment alone does not prove which control message the vehicle
+controller consumed. Exact historical CAN fidelity needs independently
+identified consumed inputs and loaded-source provenance; numerical agreement
+at the recorded-input boundary does not supply either missing identity.

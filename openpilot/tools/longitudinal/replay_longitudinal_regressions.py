@@ -121,7 +121,7 @@ def replay(logs, route, start, end):
 
   def update_targets(instance, state, v_ego, a_ego, v_cruise):
     instance.source = current['sp'].longitudinalPlanSource
-    return current['sp'].vTarget, a_ego
+    return v_cruise, a_ego
 
   def is_e2e(instance, state):
     dec = current['sp'].dec
