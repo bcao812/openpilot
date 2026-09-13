@@ -154,10 +154,12 @@ class ModelFetcher:
       for source, (_, suffix) in self.MODEL_SOURCES.items()
     }
     self._refetched: set[str] = set()
-    self.params.put("ModelManager_ActiveJson", {
+    active_json = {
       "qcom": self.MODEL_URL,
       "chestnut": self.MODEL_URL_CHESTNUT,
-    }, block=True)
+    }
+    if self.params.get("ModelManager_ActiveJson") != active_json:
+      self.params.put("ModelManager_ActiveJson", active_json, block=True)
 
   @staticmethod
   def active_source(chestnut_present: bool) -> str:
