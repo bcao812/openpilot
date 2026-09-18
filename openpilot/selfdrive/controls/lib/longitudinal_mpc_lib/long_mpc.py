@@ -250,15 +250,18 @@ def gen_long_ocp():
   ocp.constraints.uh = 1e4*np.ones(CONSTR_DIM)
   ocp.constraints.idxsh = np.arange(CONSTR_DIM)
 
-  # The HPIPM solver can give decent solutions even when it is stopped early
-  # Which is critical for our purpose where compute time is strictly bounded
-  # We use HPIPM in the SPEED_ABS mode, which ensures fastest runtime. This
-  # does not cause issues since the problem is well bounded.
+  # Typed reference stages can have a semidefinite state Hessian: position
+  # has no tracking cost and the one-sided lead cost can be inactive. The
+  # square-root Riccati algorithms require a positive definite full/state
+  # Hessian. Classical Riccati only needs the reduced control Hessian to be
+  # positive definite, supplied here by the unchanged jerk cost.
   ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM'
   ocp.solver_options.hessian_approx = 'GAUSS_NEWTON'
   ocp.solver_options.integrator_type = 'ERK'
   ocp.solver_options.nlp_solver_type = ACADOS_SOLVER_TYPE
   ocp.solver_options.qp_solver_cond_N = 1
+  ocp.solver_options.qp_solver_ric_alg = 0
+  ocp.solver_options.qp_solver_cond_ric_alg = 0
 
   # More iterations take too much time and less lead to inaccurate convergence in
   # some situations. Ideally we would run just 1 iteration to ensure fixed runtime.
