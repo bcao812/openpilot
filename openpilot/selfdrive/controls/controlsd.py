@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import math
+import time
 from numbers import Number
 
 from openpilot.cereal import log
 from opendbc.car.structs import car
 import openpilot.cereal.messaging as messaging
 from openpilot.common.constants import CV
+from openpilot.common.longitudinal_logging import observe
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
 from openpilot.sunnypilot.common.phase_timer import PhaseTimer
@@ -13,13 +15,17 @@ from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
+from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from openpilot.selfdrive.controls.lib.control_observation import ControlObservation
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
+from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent
 from openpilot.selfdrive.modeld.constants import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
@@ -57,7 +63,11 @@ class Controls(ControlsExt):
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
 
-    self.LoC = LongControl(self.CP, self.CP_SP)
+    longitudinal_mode = resolve_longitudinal_mode(self.CP, self.CP_SP)
+    self.LoC = LongControl(self.CP, self.CP_SP, unified=longitudinal_mode == LongitudinalMode.UNIFIED,
+                          supervised=longitudinal_mode == LongitudinalMode.SUPERVISED)
+    self.longitudinal_observation = ControlObservation.create(self.CP, self.CP_SP)
+    self.longitudinal_mode_mismatch = False
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
@@ -73,13 +83,18 @@ class Controls(ControlsExt):
 
   def update(self):
     self.sm.update(15)
+    longitudinal_observation = getattr(self, "longitudinal_observation", None)
     if self.sm.updated["extrinsicsCalibration"]:
       self.pose_calibrator.feed_extrinsics_calibration(self.sm['extrinsicsCalibration'])
+      observe(longitudinal_observation, "calibration_updated", self.sm, self.pose_calibrator)
     if self.sm.updated["deviceMotion"]:
       device_motion = Pose.from_device_motion(self.sm['deviceMotion'])
       self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_motion)
+      observe(longitudinal_observation, "pose_updated", self.sm, self.pose_calibrator, self.calibrated_pose)
 
   def state_control(self):
+    longitudinal_observation = getattr(self, "longitudinal_observation", None)
+    observe(longitudinal_observation, "begin", self.sm, self.calibrated_pose)
     CS = self.sm['carState']
 
     # Update VehicleModel
@@ -120,6 +135,21 @@ class Controls(ControlsExt):
                    (not standstill or self.CP.steerAtStandstill)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and \
                     (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
+    expected_version = MOTION_INTENT_VERSION if self.LoC.unified else 0
+    self.longitudinal_mode_mismatch = (long_plan.motionIntent.version != expected_version
+                                      or long_plan.motionIntent.mode != int(self.LoC.longitudinal_mode))
+    if self.longitudinal_mode_mismatch and not self.LoC.motion_owner_established:
+      CC.longActive = False
+    if self.LoC.unified or long_plan.solverStatus != 0:
+      CC.longActive = CC.longActive and not CS.gasPressed and not CS.brakePressed
+    motion_intent = MotionIntent.from_message(long_plan.motionIntent) if self.LoC.unified else None
+    if (self.LoC.unified and self.LoC.can_standby and not motion_intent.ready and long_plan.solverStatus == 0
+        and self.sm.all_checks(['longitudinalPlan', 'carState'])):
+      CC.longActive = False
+    standby_input = bool(self.LoC.unified and self.LoC.can_standby and not self.longitudinal_mode_mismatch
+                         and motion_intent.is_standby_valid() and long_plan.solverStatus == 0
+                         and self.sm.all_checks(['longitudinalPlan', 'carState']) and CS.canValid
+                         and math.isfinite(CS.vEgo) and math.isfinite(CS.aEgo) and CS.vCruise == V_CRUISE_UNSET)
 
     actuators = CC.actuators
 
@@ -135,7 +165,27 @@ class Controls(ControlsExt):
 
     # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, self.CP_SP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
-    actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
+    motion_input = {}
+    if self.LoC.unified:
+      motion_input = {
+        'intent': motion_intent,
+        'plan_time_ns': int(self.sm.logMonoTime['longitudinalPlan']),
+        'model_time_ns': int(long_plan.modelMonoTime),
+        'now_ns': time.monotonic_ns(),
+        'standby_input': standby_input,
+        'plan_valid': (not self.longitudinal_mode_mismatch and self.sm.all_checks(['longitudinalPlan', 'carState'])
+                       and math.isfinite(CS.vCruise) and CS.vCruise != V_CRUISE_UNSET),
+        'braking_plan_valid': (not self.longitudinal_mode_mismatch and self.sm.valid.get('carState') is True and CS.canValid
+                               and all(getattr(self.sm, health).get(service) is True for service in ('carState', 'longitudinalPlan')
+                                       for health in ('seen', 'alive', 'freq_ok'))
+                               and math.isfinite(CS.vCruise) and CS.vCruise != V_CRUISE_UNSET),
+      }
+    observe(longitudinal_observation, "controller_input", self.LoC, long_plan, pid_accel_limits, CC.longActive, motion_input,
+            mode_mismatch=self.longitudinal_mode_mismatch)
+    controller_accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits,
+                                            solver_status=int(long_plan.solverStatus), **motion_input))
+    actuators.accel = controller_accel
+    observe(longitudinal_observation, "controller_output", self.LoC, controller_accel)
     # After update(), not before: LoC.update() runs the state transition itself, so publishing the
     # state first pairs this frame's accel with last frame's state. Anything reading the log for
     # where a stop began or ended -- or for the step out of one -- lands one frame off, on the
@@ -169,7 +219,9 @@ class Controls(ControlsExt):
       if not math.isfinite(attr):
         cloudlog.error(f"actuators.{p} not finite {actuators.to_dict()}")
         setattr(actuators, p, 0.0)
+        observe(longitudinal_observation, "sanitized")
 
+    observe(longitudinal_observation, "end")
     return CC, lac_log
 
   def publish(self, CC, lac_log):
@@ -184,7 +236,10 @@ class Controls(ControlsExt):
 
     CC.cruiseControl.override = CC.enabled and not CC.longActive and (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
     CC.cruiseControl.cancel = CS.cruiseState.enabled and (not CC.enabled or not self.CP.pcmCruise)
-    CC.cruiseControl.resume = CC.enabled and CS.cruiseState.standstill and not self.sm['longitudinalPlan'].shouldStop
+    resolved_stop = self.LoC.resolved_should_stop if self.LoC.unified else self.sm['longitudinalPlan'].shouldStop
+    CC.cruiseControl.resume = (CC.enabled and CS.cruiseState.standstill and not resolved_stop
+                              and (not self.LoC.unified or CC.longActive and not self.LoC.motion_input_constrained)
+                              and not self.longitudinal_mode_mismatch and self.sm['longitudinalPlan'].solverStatus == 0)
 
     hudControl = CC.hudControl
     hudControl.setSpeed = float(CS.vCruiseCluster * CV.KPH_TO_MS)
@@ -226,6 +281,18 @@ class Controls(ControlsExt):
     cs.ufAccelCmd = float(self.LoC.pid.f)
     cs.forceDecel = bool(self.sm['driverMonitoringState'].noResponseForceDecel or
                          (self.sm['selfdriveState'].state == State.softDisabling))
+    if self.LoC.unified or self.longitudinal_mode_mismatch:
+      motion = cs.motionState
+      motion.version = MOTION_INTENT_VERSION
+      motion.planningMode = int(self.LoC.longitudinal_mode)
+      motion.enabled = self.LoC.unified
+      motion.phase = self.LoC.motion_phase.text
+      motion.reasons = int(self.LoC.motion_reasons)
+      motion.resolvedStop = bool(self.LoC.resolved_should_stop)
+      motion.degraded = bool(self.LoC.motion_degraded or self.longitudinal_mode_mismatch)
+      motion.waitingForFreshInput = bool(self.LoC.motion_waiting_for_fresh_input)
+      motion.planMonoTime = int(self.sm.logMonoTime['longitudinalPlan'])
+      motion.modelMonoTime = int(self.sm['longitudinalPlan'].modelMonoTime)
 
     # trigger the car's stock driver monitoring escalation
     CC.driverMonitoringEscalation = cs.forceDecel
@@ -240,12 +307,12 @@ class Controls(ControlsExt):
     elif lat_tuning == 'torque':
       cs.lateralControlState.torqueState = lac_log
 
-    self.pm.send('controlsState', dat)
-
-    # carControl
     cc_send = messaging.new_message('carControl')
     cc_send.valid = CS.canValid
     cc_send.carControl = CC
+    observe(getattr(self, "longitudinal_observation", None), "publish", cs, cc_send, self.sm)
+
+    self.pm.send('controlsState', dat)
     self.pm.send('carControl', cc_send)
 
   def run(self):

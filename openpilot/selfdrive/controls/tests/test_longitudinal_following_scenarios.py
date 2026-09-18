@@ -12,22 +12,51 @@ from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, DBC
 from openpilot.common.realtime import DT_CTRL, DT_MDL
+from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
+from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import cruise_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource
 from openpilot.tools.longitudinal.replay_pedal_switches import switch_metrics
 
 
+def rate_limit_evidence(raw_commands, wire_commands, automatic_pairs, rate_limit=8.0):
+  """Check raw control-request rate, then propagate Float32 serialization.
+
+  For an increasing pair, the wire delta exceeds the raw delta by at most
+  half the previous value's upward Float32 spacing plus half the current
+  value's downward spacing. This per-pair bound does not change 8 m/s^3.
+  Request rate here is not measured vehicle body jerk.
+  """
+  raw = np.asarray(raw_commands, dtype=np.float64)
+  wire = np.asarray(wire_commands, dtype=np.float64)
+  raw_delta, wire_delta = np.diff(raw), np.diff(wire)
+  increment = rate_limit * DT_CTRL
+  # Bound arithmetic rounding of the raw addition and subsequent subtraction.
+  arithmetic = np.finfo(np.float64).eps * (np.abs(raw[1:]) + np.abs(raw[:-1]) + abs(increment))
+  previous_up = np.nextafter(wire[:-1].astype(np.float32), np.float32(np.inf)).astype(np.float64) - wire[:-1]
+  current_down = wire[1:] - np.nextafter(wire[1:].astype(np.float32), np.float32(-np.inf)).astype(np.float64)
+  serialization = (previous_up + current_down) / 2.0
+  return {
+    'wire_is_float32_raw': bool(np.array_equal(wire, raw.astype(np.float32).astype(np.float64))),
+    'maximum_raw_jerk_up': float(np.max(raw_delta[automatic_pairs]) / DT_CTRL),
+    'raw_rate_violations': int(np.count_nonzero((raw_delta > increment + arithmetic)[automatic_pairs])),
+    'wire_rate_violations': int(np.count_nonzero((wire_delta > increment + arithmetic + serialization)[automatic_pairs])),
+    'maximum_wire_rounding_jerk_bound': float(np.max(serialization[automatic_pairs]) / DT_CTRL),
+  }
+
+
 def simulate_following(
-  *, scenario='moving', delay=0.5, response_time=0.4, duration=25.0, initial_speed=1.1, lead_speed=0.8, initial_gap=7.0, offset=0.0, noise=0.0, diagnostics=None
+  *, scenario='moving', delay=0.5, response_time=0.4, duration=25.0, initial_speed=1.1, lead_speed=0.8, initial_gap=7.0,
+  offset=0.0, noise=0.0, diagnostics=None, unified=False
 ):
   """Ideal acceleration/lag plant, not a calibrated Honda or rollback model."""
   params = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
   params.openpilotLongitudinalControl = True
   params_sp = CarInterface.get_non_essential_params_sp(params, CAR.HONDA_ACCORD)
-  planner = LongitudinalPlanner(params, params_sp, init_v=initial_speed)
-  longitudinal = LongControl(params, params_sp)
+  planner = LongitudinalPlanner(params, params_sp, init_v=initial_speed, unified=unified)
+  longitudinal = LongControl(params, params_sp, unified=unified)
   controller = CarController({Bus.pt: DBC[params.carFingerprint][Bus.pt]}, params, params_sp)
   parser = CANParser(DBC[params.carFingerprint][Bus.pt], [('ACC_CONTROL', 50)], CanBus(params).pt)
   wrapper = SimpleNamespace(v_cruise_factor=1.0, is_metric=False, acc_hud={}, lkas_hud={}, stock_brake={})
@@ -38,7 +67,7 @@ def simulate_following(
   state['carState'].cruiseState.available = True
   delayed = deque([0.0] * max(1, round(delay / DT_CTRL)))
   speed, acceleration, gap = initial_speed, 0.0, initial_gap
-  history, can_rows = [], []
+  history, can_rows, raw_commands = [], [], []
   control_sp = structs.CarControlSP()
   command = 0.0
 
@@ -53,6 +82,7 @@ def simulate_following(
   ):
     for frame in range(round(duration / DT_CTRL)):
       timestamp = frame * DT_CTRL
+      now_ns = round((timestamp + 1.0) * 1e9)
       active = not (scenario == 'override' and 5.0 <= timestamp < 6.0)
       measured_speed = max(0.0, speed + noise * np.sin(2.0 * np.pi * 1.1 * timestamp))
       state['carState'].vEgo = float(measured_speed)
@@ -63,6 +93,14 @@ def simulate_following(
       state['controlsState'].longControlState = longitudinal.long_control_state
       state['modelV2'].action.shouldStop = scenario == 'model_stop' and timestamp >= 5.0
       state['modelV2'].action.desiredAcceleration = -1.0 if state['modelV2'].action.shouldStop else 0.2
+      if unified:
+        state['controlsState'].motionState.version = MOTION_INTENT_VERSION
+        state['controlsState'].motionState.planningMode = int(longitudinal.longitudinal_mode)
+        state['controlsState'].motionState.enabled = True
+        state['modelV2'].velocity.x = [float(speed + 0.5)] * len(ModelConstants.T_IDXS)
+        state['modelV2'].position.x = [float((speed + 0.5) * sample) for sample in ModelConstants.T_IDXS]
+        state['modelV2'].acceleration.x = [0.0] * len(ModelConstants.T_IDXS)
+        state['modelV2'].orientationRate.z = [0.001] * len(ModelConstants.T_IDXS)
       if scenario == 'cut_in' and frame == round(5.0 / DT_CTRL):
         gap, lead_speed = 4.0, 0.0
       lead_accel = -min(3.0, lead_speed / DT_CTRL) if scenario == 'lead_stop' and timestamp >= 5.0 else 0.0
@@ -78,8 +116,8 @@ def simulate_following(
         lead.modelProb = 0.999
       if frame % round(DT_MDL / DT_CTRL) == 0:
         for service in state.logMonoTime:
-          state.logMonoTime[service] = round((timestamp + 1.0) * 1e9)
-        planner.update(state)
+          state.logMonoTime[service] = now_ns
+        planner.update(state, now_ns=now_ns)
         assert planner.mpc.solution_status == 0
         command = float(np.float32(planner.output_a_target))
         if diagnostics is not None:
@@ -90,8 +128,11 @@ def simulate_following(
               'gap': gap,
               'target': command,
               'stop': bool(planner.output_should_stop),
-              'creep': bool(planner.creep_stop),
-              'latched': bool(planner.stop_latched),
+              'creep': bool(getattr(planner, 'creep_stop', False)),
+              'latched': bool(getattr(planner, 'stop_latched', False)),
+              'motion_phase': longitudinal.motion_phase.text,
+              'resolved_stop': longitudinal.resolved_should_stop,
+              'intent_version': planner.motion_intent.version if unified else 0,
               'state': str(longitudinal.long_control_state),
               'moving_lead_t': getattr(planner, 'moving_lead_t', 0.0),
               'mpc_v': float(planner.mpc.x0[1]),
@@ -99,7 +140,18 @@ def simulate_following(
           )
       limits = CarInterface.get_pid_accel_limits(params, params_sp, measured_speed, state['carState'].vCruise / 3.6)
       control = state['carControl'].as_reader().as_builder()
-      control.actuators.accel = float(longitudinal.update(active, state['carState'], command, planner.output_should_stop, limits))
+      motion_input = {}
+      if unified:
+        motion_input = {
+          'intent': planner.motion_intent,
+          'plan_time_ns': int(state.logMonoTime['modelV2']),
+          'model_time_ns': int(state.logMonoTime['modelV2']),
+          'now_ns': now_ns,
+          'plan_valid': planner.motion_intent.valid,
+        }
+      raw_command = float(longitudinal.update(active, state['carState'], command, planner.output_should_stop, limits, **motion_input))
+      raw_commands.append(raw_command)
+      control.actuators.accel = raw_command
       control.actuators.longControlState = longitudinal.long_control_state
       wrapper.out = state['carState']
       _, messages = controller.update(control.as_reader(), control_sp, wrapper, round(timestamp * 1e9))
@@ -140,6 +192,7 @@ def simulate_following(
     'minimum_command': float(np.min(values[:, 4])),
     'maximum_command': float(np.max(values[:, 4])),
     'maximum_jerk_up': float(np.max(jerk)),
+    **rate_limit_evidence(raw_commands, values[:, 4], automatic_pairs),
     'minimum_jerk_down': float(np.min(jerk)),
     'brake_response': float(braking[0] - 5.0) if len(braking) else None,
     'switches': switch_metrics(can_rows),
@@ -163,7 +216,9 @@ def test_following_bypass_does_not_prevent_a_real_stop_or_override(scenario):
   assert result['minimum_gap'] > 2.0
   assert result['minimum_command'] >= -3.5
   assert result['maximum_command'] <= 2.0
-  assert result['maximum_jerk_up'] <= 8.0 + 1e-5
+  assert result['wire_is_float32_raw']
+  assert result['raw_rate_violations'] == 0
+  assert result['wire_rate_violations'] == 0
   assert result['conflicts'] == 0
   if scenario in ('lead_stop', 'cut_in', 'model_stop'):
     assert result['final_speed'] == 0.0

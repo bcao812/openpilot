@@ -3,6 +3,14 @@ from collections.abc import Sequence
 
 Gain = int | float | tuple[Sequence[float], Sequence[float]] | list[list[float]]
 
+
+def _clip(value, lower, upper):
+  # Other types retain np.clip's conversion and custom array dispatch.
+  if type(value) is np.float64 and type(lower) in (int, float, np.float64) and type(upper) in (int, float, np.float64):
+    return value.clip(lower, upper)
+  return np.clip(value, lower, upper)
+
+
 class PIDController:
   def __init__(self, k_p: Gain, k_i: Gain, k_d: Gain = 0., pos_limit=1e308, neg_limit=-1e308, rate=100):
     self._k_p = ([0], [k_p]) if isinstance(k_p, (int, float)) else k_p
@@ -52,8 +60,8 @@ class PIDController:
       test_control = self.p + i + self.d + self.f
       i_upperbound = self.i if test_control > self.pos_limit else self.pos_limit
       i_lowerbound = self.i if test_control < self.neg_limit else self.neg_limit
-      self.i = np.clip(i, i_lowerbound, i_upperbound)
+      self.i = _clip(i, i_lowerbound, i_upperbound)
 
     control = self.p + self.i + self.d + self.f
-    self.control = np.clip(control, self.neg_limit, self.pos_limit)
+    self.control = _clip(control, self.neg_limit, self.pos_limit)
     return self.control

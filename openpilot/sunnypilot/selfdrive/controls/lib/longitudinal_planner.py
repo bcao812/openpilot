@@ -5,6 +5,8 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+from dataclasses import dataclass
+
 from openpilot.cereal import messaging, custom
 from opendbc.car import structs
 from openpilot.common.constants import CV
@@ -21,6 +23,13 @@ DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimen
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
 
 
+@dataclass(frozen=True)
+class CruiseTarget:
+  source: object
+  speed: float
+  acceleration: float
+
+
 class LongitudinalPlannerSP:
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP, mpc):
     self.events_sp = EventsSP()
@@ -35,6 +44,7 @@ class LongitudinalPlannerSP:
 
     self.output_v_target = 0.
     self.output_a_target = 0.
+    self.cruise_target = CruiseTarget(self.source, 0.0, 0.0)
 
   def is_e2e(self, sm: messaging.SubMaster) -> bool:
     experimental_mode = sm['selfdriveState'].experimentalMode
@@ -70,23 +80,29 @@ class LongitudinalPlannerSP:
     }
 
     self.source = min(targets, key=lambda k: targets[k][0])
-    self.output_v_target, self.output_a_target = targets[self.source]
-    return self.output_v_target, self.output_a_target
+    speed, acceleration = targets[self.source]
+    self.cruise_target = CruiseTarget(self.source, float(speed), float(acceleration))
+    self.output_v_target = speed
+    if not getattr(self, 'unified', False):
+      self.output_a_target = acceleration
+    return speed, acceleration
 
   def update(self, sm: messaging.SubMaster) -> None:
     self.events_sp.clear()
     self.dec.update(sm)
     self.e2e_alerts_helper.update(sm, self.events_sp)
 
-  def publish_longitudinal_plan_sp(self, sm: messaging.SubMaster, pm: messaging.PubMaster) -> None:
+  def publish_longitudinal_plan_sp(self, sm: messaging.SubMaster, pm: messaging.PubMaster, parent_plan_mono_time=0) -> None:
     plan_sp_send = messaging.new_message('longitudinalPlanSP')
 
-    plan_sp_send.valid = sm.all_checks(service_list=['carState', 'controlsState'])
+    plan_sp_send.valid = (sm.all_checks(service_list=['carState', 'controlsState'])
+                         and (not getattr(self, 'motion_enabled', False) or self.motion_intent.valid or self.reference_planner.standby))
 
     longitudinalPlanSP = plan_sp_send.longitudinalPlanSP
+    longitudinalPlanSP.longitudinalPlanMonoTime = parent_plan_mono_time
     longitudinalPlanSP.longitudinalPlanSource = self.source
     longitudinalPlanSP.vTarget = float(self.output_v_target)
-    longitudinalPlanSP.aTarget = float(self.output_a_target)
+    longitudinalPlanSP.aTarget = float(self.cruise_target.acceleration if getattr(self, 'unified', False) else self.output_a_target)
     longitudinalPlanSP.events = self.events_sp.to_msg()
 
     # Dynamic Experimental Control

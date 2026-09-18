@@ -821,6 +821,7 @@ struct SelfdriveState {
   # configurable driving settings
   experimentalMode @10 :Bool;
   personality @11 :LongitudinalPersonality;
+  longitudinalDiagnostics @14 :LongitudinalSelfdriveDiagnostics;
 
   enum AudibleAlert {
     none @0;
@@ -866,6 +867,247 @@ struct SelfdriveState {
   }
 }
 
+struct LongitudinalPlanDiagnostics {
+  context @0 :Car.LongitudinalLoggingContext;
+  inputs @1 :List(Car.LongitudinalLogInput);
+  unified @2 :Bool;
+  updateCompleted @3 :Bool;
+  outcome @4 :Text;
+  mpcUpdated @5 :Bool;
+  solverAttempted @6 :Bool;
+  solverCalls @7 :UInt64;
+  solverResets @8 :UInt64;
+  solutionStatus @9 :Int32;
+  solverReturnKnown @10 :Bool;
+  solverReturnStatus @11 :Int32;
+  initialStateKnown @12 :Bool;
+  initialSpeed @13 :Float64;
+  initialAccel @14 :Float64;
+  previousRequest @15 :Float64;
+  sampledAccelKnown @16 :Bool;
+  sampledAccel @17 :Float64;
+  policyTargetKnown @18 :Bool;
+  policySpeed @19 :Float64;
+  policyAccel @20 :Float64;
+  constraintKnown @21 :Bool;
+  constraintAccel @22 :Float64;
+  actionHorizonKnown @23 :Bool;
+  actionHorizon @24 :Float64;
+  pitchSnapshotKnown @25 :Bool;
+  pitchBiasBefore @26 :Float64;
+  pitchBiasAfter @27 :Float64;
+  pitchCalls @28 :UInt64;
+  pitchLearnCalls @29 :UInt64;
+  pitchCalled @30 :Bool;
+  pitchLearned @31 :Bool;
+  coastAccelKnown @32 :Bool;
+  coastAccel @33 :Float64;
+  modelAdmissionKnown @34 :Bool;
+  e2eAllowed @35 :Bool;
+  detailedTraceEnabled @36 :Bool;
+  traceSequence @37 :UInt64;
+  traceDropped @38 :UInt64;
+  traceFailures @39 :UInt64;
+  detailedTraceDisabled @40 :Bool;
+  traceWriterFailures @41 :UInt64;
+  traceSerializationFailures @42 :UInt64;
+  traceTransportFailures @43 :UInt64;
+  traceCaptureFailures @44 :UInt64;
+  traceStartupFailures @45 :UInt64;
+  traceStatusKnown @46 :Bool;
+  traceSerializationDropped @47 :UInt64;
+  traceTransportDropped @48 :UInt64;
+  traceDisabledDropped @49 :UInt64;
+  traceQueueDepth @50 :UInt32;
+  traceAcceptedSamples @51 :UInt64;
+  traceUnpublished @52 :UInt64;
+  traceCloseTimeouts @53 :UInt64;
+  traceDisabledAttempts @54 :UInt64;
+  traceClosed @55 :Bool;
+  analysis @56 :LongitudinalPlanAnalysis;
+}
+
+# Read-only analysis version 1. An absent version (0) means unknown; these
+# snapshots do not change or grant authority under MotionIntent version 3.
+struct LongitudinalPassiveSnapshot {
+  known @0 :Bool;
+  consumerMonoTime @1 :UInt64;
+  carStateMonoTime @2 :UInt64;
+  carControlMonoTime @3 :UInt64;
+  pitchInitialized @4 :Bool;
+  pitchFilterValue @5 :Float64;
+}
+
+struct LongitudinalReferenceCandidates {
+  known @0 :Bool;
+  mpcAccel @1 :Float64;
+  mpcSource @2 :LongitudinalPlan.LongitudinalPlanSource;
+  mpcShouldStop @3 :Bool;
+  cruiseRawAccel @4 :Float64;
+  cruiseAccel @5 :Float64;
+  cruiseShouldStop @6 :Bool;
+  e2eAccel @7 :Float64;
+  e2eShouldStop @8 :Bool;
+  e2eAdmitted @9 :Bool;
+  coastTransformApplied @10 :Bool;
+}
+
+struct LongitudinalDepartureAnalysis {
+  known @0 :Bool;
+  forwardReference @1 :Bool;
+  terminalMpcSpeed @2 :Float64;
+  trajectoryDeparture @3 :Bool;
+  leadDeparture @4 :Bool;
+  qualified @5 :Bool;
+  noModelRisk @6 :Bool;
+}
+
+struct LongitudinalObstacleSummary {
+  known @0 :Bool;
+  # Exactly N+1 (currently 13) existing solver parameter nodes, never a new solve.
+  times @1 :List(Float64);
+  sources @2 :List(LongitudinalPlan.LongitudinalPlanSource);
+  distances @3 :List(Float64);
+  sourceRule @4 :Text;
+}
+
+struct LongitudinalPlanAnalysis {
+  version @0 :UInt16;
+  planningMode @1 :UInt8;
+  decisionMonoTimeKnown @2 :Bool;
+  decisionMonoTime @3 :UInt64;
+  passiveApiVersion @4 :UInt8;
+  passiveAttempted @5 :Bool;
+  passiveCompleted @6 :Bool;
+  passiveReasonKnown @7 :Bool;
+  passiveReason @8 :Text;
+  passiveBefore @9 :LongitudinalPassiveSnapshot;
+  passiveAfter @10 :LongitudinalPassiveSnapshot;
+  referenceCandidates @11 :LongitudinalReferenceCandidates;
+  departure @12 :LongitudinalDepartureAnalysis;
+  obstacleSummary @13 :LongitudinalObstacleSummary;
+}
+
+struct LongitudinalCreepSnapshot {
+  known @0 :Bool;
+  sourceMonoTimes @1 :List(UInt64);
+  measuredSpeed @2 :Float64;
+  reset @3 :Bool;
+}
+
+struct LongitudinalSupervisorSnapshot {
+  known @0 :Bool;
+  phase @1 :Text;
+  reasons @2 :UInt32;
+  degraded @3 :Bool;
+  waitingForFreshInput @4 :Bool;
+  resolvedStop @5 :Bool;
+  creepT @6 :Float64;
+  creepTotalT @7 :Float64;
+  creepV @8 :Float64;
+  creepWindowNs @9 :UInt64;
+  creepTotalNs @10 :UInt64;
+  creepOffCreditNs @11 :UInt64;
+  creepWindowOffCreditNs @12 :UInt64;
+  creepAutoStartSpeed @13 :Float64;
+  movingLeadT @14 :Float64;
+  releaseLeadT @15 :Float64;
+  requireNewInput @16 :Bool;
+  rearmAfterFault @17 :Bool;
+  ids @18 :List(Car.LongitudinalLogInput);
+  lastCreepSample @19 :LongitudinalCreepSnapshot;
+  independentCreepSample @20 :LongitudinalCreepSnapshot;
+  pendingOffCreep @21 :LongitudinalCreepSnapshot;
+}
+
+struct LongitudinalPoseSnapshot {
+  known @0 :Bool;
+  # Latched at the actual pose build, not the current subscriber values.
+  inputs @1 :List(Car.LongitudinalLogInput);
+  calibrationKnown @2 :Bool;
+  calibrationValid @3 :Bool;
+  calibrationStatusKnown @4 :Bool;
+  calibrationStatus @5 :ExtrinsicsCalibration.Status;
+  deviceHealthKnown @6 :Bool;
+  inputsOK @7 :Bool;
+  posenetOK @8 :Bool;
+  sensorsOK @9 :Bool;
+  orientationValid @10 :Bool;
+  velocityValid @11 :Bool;
+  accelerationValid @12 :Bool;
+  angularVelocityValid @13 :Bool;
+  deviceTimestamp @14 :UInt64;
+  deviceTimestampKnown @15 :Bool;
+}
+
+struct LongitudinalControlAnalysis {
+  version @0 :UInt16;
+  motionInputsKnown @1 :Bool;
+  planValid @2 :Bool;
+  brakingPlanValid @3 :Bool;
+  standbyInput @4 :Bool;
+  modeMismatch @5 :Bool;
+  motionBefore @6 :LongitudinalSupervisorSnapshot;
+  motionAfter @7 :LongitudinalSupervisorSnapshot;
+  pose @8 :LongitudinalPoseSnapshot;
+  forceDecelKnown @9 :Bool;
+  driverMonitoringForceDecel @10 :Bool;
+  selfdriveSoftDisabling @11 :Bool;
+  forceDecel @12 :Bool;
+}
+
+struct LongitudinalSelfdriveDiagnostics {
+  context @0 :Car.LongitudinalLoggingContext;
+  inputs @1 :List(Car.LongitudinalLogInput);
+  version @2 :UInt16;
+  carStateReused @3 :Bool;
+  stateMachineInputKnown @4 :Bool;
+  stateMachineCalled @5 :Bool;
+  stateBefore @6 :SelfdriveState.OpenpilotState;
+  stateAfter @7 :SelfdriveState.OpenpilotState;
+  enabledBefore @8 :Bool;
+  activeBefore @9 :Bool;
+  enabledAfter @10 :Bool;
+  activeAfter @11 :Bool;
+  softDisableTimerBefore @12 :UInt32;
+  softDisableTimerAfter @13 :UInt32;
+  events @14 :List(UInt16);
+  eventsSP @15 :List(UInt16);
+  currentAlertTypes @16 :List(Text);
+  motionCheckKnown @17 :Bool;
+  motionVersion @18 :UInt16;
+  motionDegraded @19 :Bool;
+  motionWaitingForFreshInput @20 :Bool;
+  motionCommIssueAdded @21 :Bool;
+  controlsForceDecel @22 :Bool;
+  controlsForceDecelKnown @23 :Bool;
+  statePublished @24 :SelfdriveState.OpenpilotState;
+  enabledPublished @25 :Bool;
+  activePublished @26 :Bool;
+}
+
+struct LongitudinalControlDiagnostics {
+  context @0 :Car.LongitudinalLoggingContext;
+  inputs @1 :List(Car.LongitudinalLogInput);
+  carControlMonoTime @2 :UInt64;
+  controllerCalled @3 :Bool;
+  targetAccel @4 :Float64;
+  controllerAccel @5 :Float64;
+  publishedAccel @6 :Float64;
+  accelMin @7 :Float64;
+  accelMax @8 :Float64;
+  stateBefore @9 :Car.CarControl.Actuators.LongControlState;
+  stateAfter @10 :Car.CarControl.Actuators.LongControlState;
+  longActiveAtController @11 :Bool;
+  longActivePublished @12 :Bool;
+  resumePublished @13 :Bool;
+  nonfiniteActuators @14 :Bool;
+  unified @15 :Bool;
+  decisionMonoTime @16 :UInt64;
+  decisionMonoTimeKnown @17 :Bool;
+  analysis @18 :LongitudinalControlAnalysis;
+}
+
 struct ControlsState @0x97ff69c53601abf1 {
   longitudinalPlanMonoTime @28 :UInt64;
   lateralPlanMonoTime @50 :UInt64;
@@ -877,6 +1119,8 @@ struct ControlsState @0x97ff69c53601abf1 {
   curvature @37 :Float32;  # path curvature from vehicle model
   desiredCurvature @61 :Float32;  # lag adjusted curvatures used by lateral controllers
   forceDecel @51 :Bool;
+  motionState @67 :LongitudinalMotionState;
+  longitudinalDiagnostics @68 :LongitudinalControlDiagnostics;
 
   lateralControlState :union {
     pidState @53 :LateralPIDState;
@@ -1237,6 +1481,10 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   shouldStop @37: Bool;
   allowThrottle @38: Bool;
   allowBrake @39: Bool;
+  motionIntent @40 :LongitudinalMotionIntent;
+  reference @41 :LongitudinalReference;
+  solverStatus @42 :Int32;
+  diagnostics @43 :LongitudinalPlanDiagnostics;
 
 
   solverExecutionTime @35 :Float32;
@@ -1280,6 +1528,49 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
     personality @36 :LongitudinalPersonality;
   }
 }
+struct LongitudinalMotionIntent {
+  version @0 :UInt8;
+  reasons @1 :UInt32;
+  movingLead @2 :Bool;
+  releaseAllowed @3 :Bool;
+  allowCreep @4 :Bool;
+  valid @5 :Bool;
+  ready @6 :Bool = true;
+  mode @7 :UInt8;
+  brakingValid @8 :Bool;
+  brakingAccel @9 :Float32;
+  # Version 3 SUPERVISED raw snapshot. Missing evidence is not a normal plan.
+  # Fixed source order: carState, radarState, modelV2, controlsState,
+  # carControl, selfdriveState, vehicleParameters; each retains its own lease.
+  creepEvidenceValid @10 :Bool;
+  creepSourceMonoTimes @11 :List(UInt64);
+  creepMeasuredSpeed @12 :Float32;
+  creepReset @13 :Bool;
+}
+
+struct LongitudinalReference {
+  accel @0 :Float32;
+  constraintAccel @1 :Float32;
+  overridden @2 :Bool;
+  source @3 :LongitudinalPlan.LongitudinalPlanSource;
+  constraintSource @4 :LongitudinalPlan.LongitudinalPlanSource;
+}
+
+struct LongitudinalMotionState {
+  version @0 :UInt8;
+  phase @1 :Text;
+  reasons @2 :UInt32;
+  resolvedStop @3 :Bool;
+  degraded @4 :Bool;
+  planMonoTime @5 :UInt64;
+  modelMonoTime @6 :UInt64;
+  enabled @7 :Bool;
+  planningMode @8 :UInt8;
+  # Healthy input remains constrained until both producer identities advance.
+  # Read-only status, not a fault or a grant of actuation/release authority.
+  waitingForFreshInput @9 :Bool;
+}
+
 struct UiPlan {
   frameId @2 :UInt32;
   position @0 :XYZTData;

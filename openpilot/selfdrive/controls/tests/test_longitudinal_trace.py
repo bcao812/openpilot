@@ -100,7 +100,8 @@ def test_publish_happens_after_control_messages():
     assert not planner.trace.queue
     observed.append((service, message.logMonoTime))
 
-  def send_sp(state, publisher):
+  def send_sp(state, publisher, parent_plan_mono_time=0):
+    assert parent_plan_mono_time == observed[0][1]
     publisher.send('longitudinalPlanSP', messaging.new_message('longitudinalPlanSP'))
 
   with patch.object(planner, 'publish_longitudinal_plan_sp', side_effect=send_sp):
@@ -136,6 +137,12 @@ def test_snapshot_failure_disables_trace_not_controller():
   assert planner.trace.disabled
   assert planner.trace.failures == 1
   planner.trace.publish(20_000)
+  assert planner.trace.unpublished == 1
+  previous = planner.trace.queue.popleft()
+  previous_values = dict(zip(TRACE_FIELDS, previous, strict=True))
+  assert previous_values['sequence'] == 1
+  assert previous_values['plan_mono'] is None
+  assert previous.detail['plan_mono'] is None
   assert not planner.trace.queue
   assert update_cruise(planner, state, a_mpc=-2.0) == -2.0
 

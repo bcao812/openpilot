@@ -457,6 +457,68 @@ struct CarOutput {
   # the CarController are reflected in actuatorsOutput
   # and matches what is sent to the car
   actuatorsOutput @0 :CarControl.Actuators;
+  longitudinalDiagnostics @1 :LongitudinalApplyDiagnostics;
+}
+
+struct LongitudinalLoggingContext {
+  version @0 :UInt16;
+  producer @1 :Text;
+  session @2 :UInt64;
+  sequence @3 :UInt64;
+  frame @4 :UInt64;
+  frameKnown @5 :Bool;
+  startMonoTime @6 :UInt64;
+  endMonoTime @7 :UInt64;
+  errors @8 :UInt32;
+  identity @9 :Text;
+  manifest @10 :Text;
+}
+
+struct LongitudinalLogInput {
+  service @0 :Text;
+  monoTime @1 :UInt64;
+  idKnown @2 :Bool;
+  knownFlags @3 :UInt16;
+  flags @4 :UInt16;
+  kind @5 :Kind;
+
+  enum Kind {
+    unknown @0;
+    consumerSnapshot @1;
+    localPublished @2;
+  }
+}
+
+struct LongitudinalApplyDiagnostics {
+  context @0 :LongitudinalLoggingContext;
+  hasApply @1 :Bool;
+  applySequence @2 :UInt64;
+  applyFrame @3 :UInt64;
+  controllerFrame @4 :UInt64;
+  controllerFrameKnown @5 :Bool;
+  carControlMonoTime @6 :UInt64;
+  carControlSPMonoTime @7 :UInt64;
+  carStateMonoTime @8 :UInt64;
+  applyStartMonoTime @9 :UInt64;
+  applyEndMonoTime @10 :UInt64;
+  sendcanMonoTime @11 :UInt64;
+  canCount @12 :UInt32;
+  canDigest @13 :Text;
+  requestedAccel @14 :Float64;
+  appliedAccel @15 :Float64;
+  requestedLongActive @16 :Bool;
+  appliedLongActive @17 :Bool;
+  requestedResume @18 :Bool;
+  appliedResume @19 :Bool;
+  authorityRestricted @20 :Bool;
+  authorityReason @21 :Text;
+  appliedLongControlState @22 :CarControl.Actuators.LongControlState;
+  inputs @23 :List(LongitudinalLogInput);
+  lastDisposition @24 :Text;
+  dispositionFrame @25 :UInt64;
+  dispositionMonoTime @26 :UInt64;
+  initialized @27 :Bool;
+  passive @28 :Bool;
 }
 
 # ****** car param ******

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import math
+from numbers import Integral
+import time
 import numpy as np
 
 import openpilot.cereal.messaging as messaging
@@ -7,11 +9,14 @@ from opendbc.car.honda.values import CAR
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
+from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
-from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
+from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL, ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
+from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
+from openpilot.selfdrive.controls.lib.longitudinal_observation import PlannerObservation, observe_trace
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL, STOP_SPEED
@@ -164,6 +169,12 @@ PITCH_BIAS_TAU = 300.0
 # The only guard against learning a hill as bias. Measured residual on the device this was written
 # for is +2.2 deg, so 3 deg leaves headroom without letting a long climb be cancelled outright.
 MAX_PITCH_BIAS = math.radians(3.0)
+# Passive sampling is a separate contract from motion-intent readiness. The two
+# inputs are produced at 100 Hz; this matches their existing ten-period alive
+# window without depending on unrelated services or execution authorization.
+PASSIVE_PITCH_VERSION = 1
+PASSIVE_PITCH_MAX_AGE_NS = 100_000_000
+PASSIVE_PITCH_INPUTS = ('carState', 'carControl')
 
 
 class PitchBiasEstimator:
@@ -196,13 +207,21 @@ class PitchBiasEstimator:
     # initialized=False: the first sample is taken whole rather than dragged up from zero
     self.filter = FirstOrderFilter(0.0, PITCH_BIAS_TAU, dt, initialized=False)
     self.min_learn_speed = min_learn_speed
+    self.diagnostic_calls = 0
+    self.diagnostic_learn_calls = 0
+
+  @property
+  def value(self):
+    return float(np.clip(self.filter.x, -MAX_PITCH_BIAS, MAX_PITCH_BIAS))
 
   def update(self, pitch, v_ego):
+    self.diagnostic_calls += 1
     # Standstill is excluded on purpose: parking on a slope is a real pitch reading and a wrong
     # bias sample, and it is exactly the reading a car dwells on.
     if v_ego > self.min_learn_speed and math.isfinite(pitch):
+      self.diagnostic_learn_calls += 1
       self.filter.update(pitch)
-    return float(np.clip(self.filter.x, -MAX_PITCH_BIAS, MAX_PITCH_BIAS))
+    return self.value
 
 def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle):
   max_accel = ACCEL_MAX if e2e else get_max_accel(v_ego)
@@ -225,7 +244,7 @@ def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, 
 
 
 class LongitudinalPlanner(LongitudinalPlannerSP):
-  def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, trace=None):
+  def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, trace=None, unified=None, supervised=None, diagnostics=None):
     self.CP = CP
     self.mpc = LongitudinalMpc(dt=dt)
     LongitudinalPlannerSP.__init__(self, self.CP, CP_SP, self.mpc)
@@ -233,25 +252,125 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.dt = dt
     self.allow_throttle = True
     self.trace = trace
+    self.mpc.diagnostic_details_enabled = trace is not None
+    self.observation = PlannerObservation.create(CP, CP_SP, enabled=diagnostics)
+    self.observation_attempt = None
+    self.observation_result = None
+    self.longitudinal_mode = resolve_longitudinal_mode(CP, CP_SP, unified=unified, supervised=supervised)
+    self.unified = self.longitudinal_mode == LongitudinalMode.UNIFIED
+    self.motion_enabled = self.longitudinal_mode != LongitudinalMode.LEGACY
 
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
     self.pitch_bias = PitchBiasEstimator(self.dt)
+    self._passive_input_times = dict.fromkeys(PASSIVE_PITCH_INPUTS, 0)
+    self._passive_now_ns = 0
+    self.last_passive_reason = 'not_updated'
     self.a_cruise = init_a
     self.output_a_target = init_a
     self.output_should_stop = False
-    self.stop_latched = False
-    self.creep_t = 0.0
-    self.creep_v = 0.0
-    self.creep_stop = False
-    self.creep_total_t = 0.0
-    self.moving_lead_t = 0.0
-    self.close_lead_stop = False
+    if not self.motion_enabled:
+      self.stop_latched = False
+      self.creep_t = 0.0
+      self.creep_v = 0.0
+      self.creep_stop = False
+      self.creep_total_t = 0.0
+      self.moving_lead_t = 0.0
+      self.close_lead_stop = False
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
+    if self.motion_enabled:
+      from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import SupervisedLongitudinalPlanner, UnifiedLongitudinalPlanner
+      self.reference_planner = UnifiedLongitudinalPlanner(self) if self.unified else SupervisedLongitudinalPlanner(self)
 
-  def update(self, sm):
+  def update(self, sm, *, now_ns=None):
+    # Native execution samples its own monotonic clock. Replays must provide the
+    # recorded consumer time explicitly; input timestamps cannot date themselves.
+    if now_ns is None:
+      now_ns = time.monotonic_ns()
+    self.observation_result = None
+    self.observation_attempt = observe(self.observation, "begin", self, sm, now_ns=now_ns, passive_version=PASSIVE_PITCH_VERSION)
+    observe_trace(self.trace, "begin_attempt", self, sm)
+    completed = False
+    try:
+      result = self._update(sm, now_ns=now_ns)
+      completed = True
+      return result
+    finally:
+      self.observation_result = observe(self.observation, "finish", self.observation_attempt, self, completed)
+      observe_trace(self.trace, "finish_attempt", self)
+
+  def _observe(self, **values):
+    observe(self.observation, "record", self.observation_attempt, **values)
+
+  @staticmethod
+  def _passive_timestamp_valid(value):
+    return isinstance(value, Integral) and not isinstance(value, bool) and 0 < value < (1 << 64)
+
+  def update_passive_state(self, sm, *, now_ns):
+    """Consume one identified pitch/speed pair without granting motion authority.
+
+    Return whether the pair reached the existing estimator. Its speed gate and
+    fixed sample step remain unchanged. Recording each observed nonfuture input
+    identity before field validation prevents an invalid or altered packet from
+    being repaired in place and learned again. Future IDs cannot poison recovery.
+    """
+    self.last_passive_reason = 'legacy_reference_owner'
+    if not self.motion_enabled:
+      return False
+    self.last_passive_reason = 'invalid_consumer_time'
+    if not self._passive_timestamp_valid(now_ns):
+      return False
+    self.last_passive_reason = 'nonmonotonic_consumer_time'
+    if now_ns <= self._passive_now_ns:
+      return False
+    self._passive_now_ns = int(now_ns)
+
+    times = {service: getattr(sm, 'logMonoTime', {}).get(service) for service in PASSIVE_PITCH_INPUTS}
+    timestamps_valid = all(self._passive_timestamp_valid(value) for value in times.values())
+    causal = timestamps_valid and all(value <= now_ns for value in times.values())
+    new_pair = causal and all(value > self._passive_input_times[service] for service, value in times.items())
+    for service, value in times.items():
+      if self._passive_timestamp_valid(value) and value <= now_ns:
+        self._passive_input_times[service] = max(self._passive_input_times[service], int(value))
+    self.last_passive_reason = 'invalid_measurement_id'
+    if not timestamps_valid:
+      return False
+    self.last_passive_reason = 'future_measurement'
+    if not causal:
+      return False
+    self.last_passive_reason = 'repeated_or_out_of_order_measurement'
+    if not new_pair:
+      return False
+    self.last_passive_reason = 'expired_measurement'
+    if any(now_ns - value >= PASSIVE_PITCH_MAX_AGE_NS for value in times.values()):
+      return False
+    self.last_passive_reason = 'invalid_measurement'
+    if any(getattr(sm, 'valid', {}).get(service) is not True for service in PASSIVE_PITCH_INPUTS):
+      return False
+    orientation = sm['carControl'].orientationNED
+    speed = sm['carState'].vEgo
+    if len(orientation) != 3 or not math.isfinite(speed) or speed < 0.0 or not math.isfinite(orientation[1]):
+      return False
+    self.pitch_bias.update(orientation[1], speed)
+    self.last_passive_reason = 'accepted'
+    return True
+
+  def _update(self, sm, *, now_ns):
+    if self.motion_enabled:
+      observe(self.observation, "record_analysis", self.observation_attempt, passiveAttempted=True)
+      self.update_passive_state(sm, now_ns=now_ns)
+      observe(self.observation, "record_analysis", self.observation_attempt, passiveCompleted=True)
+    if self.unified:
+      self.reference_planner.update(sm, now_ns=now_ns)
+      return
+    if self.motion_enabled and self.reference_planner.prepare(sm) is None:
+      return
+    return self._update_legacy_reference(sm)
+
+  def _update_legacy_reference(self, sm):
+    previous_target = self.output_a_target
     LongitudinalPlannerSP.update(self, sm)
 
     v_ego = sm['carState'].vEgo
@@ -260,9 +379,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       # Road grade, not raw pitch: the field carries a static mount residual that would otherwise
       # read as a permanent hill. See PitchBiasEstimator.
       pitch = sm['carControl'].orientationNED[1]
-      accel_coast = get_coast_accel(pitch - self.pitch_bias.update(pitch, v_ego))
+      bias = self.pitch_bias.value if self.motion_enabled else self.pitch_bias.update(pitch, v_ego)
+      accel_coast = get_coast_accel(pitch - bias)
     else:
       accel_coast = ACCEL_MAX
+    self._observe(coastAccelKnown=True, coastAccel=float(accel_coast))
 
     v_cruise_kph = min(sm['carState'].vCruise, V_CRUISE_MAX)
     v_cruise = v_cruise_kph * CV.KPH_TO_MS
@@ -287,12 +408,13 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.v_desired_filter.x = v_ego
       self.output_a_target = np.clip(sm['carState'].aEgo, ACCEL_MIN, ACCEL_MAX)
       self.a_cruise = self.output_a_target
-      self.creep_t = 0.0
-      self.creep_stop = False
-      self.creep_total_t = 0.0
-      self.stop_latched = False
-      self.moving_lead_t = 0.0
-      self.close_lead_stop = False
+      if not self.motion_enabled:
+        self.creep_t = 0.0
+        self.creep_stop = False
+        self.creep_total_t = 0.0
+        self.stop_latched = False
+        self.moving_lead_t = 0.0
+        self.close_lead_stop = False
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -309,6 +431,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     # Get new v_cruise and a_target from Smart Cruise Control and Speed Limit Assist
     v_cruise, self.output_a_target = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.output_a_target, v_cruise)
+    self._observe(policyTargetKnown=True, policySpeed=float(v_cruise), policyAccel=float(self.output_a_target))
 
     braking_urgency = 0.0
     if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
@@ -322,12 +445,35 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                          a_change_scale=1.0 - (1.0 - LEAD_BRAKING_MIN_CHANGE_SCALE) * braking_urgency)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.output_a_target)
     if self.trace is not None:
-      self.trace.begin(self, sm, reset_state, v_cruise, accel_coast)
+      observe_trace(self.trace, "begin", self, sm, reset_state, v_cruise, accel_coast)
+    observe(self.observation, "mpc_started", self.observation_attempt, self.mpc)
     self.mpc.update(sm['radarState'], personality=sm['selfdriveState'].personality)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
     self.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC[:-1], self.mpc.j_solution)
+    if self.mpc.solution_status != 0:
+      self._observe(outcome="mpc_" + self.mpc.failure_reason)
+      previous_target = previous_target if math.isfinite(previous_target) else MPC_FAILURE_ACCEL
+      failure_target = min(previous_target, MPC_FAILURE_ACCEL)
+      failure_e2e_allowed = self.is_e2e(sm)
+      self._observe(modelAdmissionKnown=True, e2eAllowed=bool(failure_e2e_allowed))
+      if failure_e2e_allowed and sm.all_checks(service_list=['modelV2']) and math.isfinite(sm['modelV2'].action.desiredAcceleration):
+        failure_target = min(failure_target, sm['modelV2'].action.desiredAcceleration)
+      self.output_a_target = float(np.clip(failure_target, ACCEL_MIN, ACCEL_MAX))
+      if self.motion_enabled:
+        self.reference_planner.fail_mpc(sm, v_ego, previous_target)
+      else:
+        self.stop_latched = self.stop_latched or should_stop(v_ego, self.output_a_target)
+        self.output_should_stop = self.output_should_stop or self.stop_latched or sm['carState'].standstill
+        self.close_lead_stop = False
+        self.moving_lead_t = 0.0
+      self.fcw = False
+      self.v_desired_filter.x = max(0.0, v_ego) if math.isfinite(v_ego) else 0.0
+      if self.trace is not None and not self.motion_enabled:
+        observe_trace(self.trace, "finish", self,
+                      [(float('nan'), self.mpc.source, False), (float('nan'), LongitudinalPlanSource.cruise, False)], self.is_e2e(sm))
+      return
 
     # TODO counter is only needed because radar is glitchy, remove once radar is gone
     self.fcw = self.mpc.crash_cnt > 2 and not sm['carState'].standstill
@@ -338,19 +484,23 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     a_prev = self.output_a_target
 
     action_t =  self.CP.longitudinalActuatorDelay + DT_MDL
+    self._observe(actionHorizonKnown=True, actionHorizon=float(action_t))
     output_a_target_mpc = get_accel_from_plan(self.v_desired_trajectory, self.a_desired_trajectory, CONTROL_N_T_IDX,
                                               action_t=action_t)
+    self._observe(sampledAccelKnown=True, sampledAccel=float(output_a_target_mpc))
     output_should_stop_mpc = should_stop(v_ego, output_a_target_mpc)
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
     output_should_stop_e2e = sm['modelV2'].action.shouldStop
 
     is_e2e = self.is_e2e(sm)
+    self._observe(modelAdmissionKnown=True, e2eAllowed=bool(is_e2e))
 
     self.a_cruise = get_cruise_accel(is_e2e, v_cruise, v_ego,
                                      self.a_cruise, steer_angle_without_offset, self.CP, self.dt,
                                      accel_coast, self.allow_throttle)
     cruise_should_stop = should_stop(v_ego, self.a_cruise)
     output_a_cruise = self.a_cruise
+    coast_transform_applied = False
     if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
         and sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
         and not sm['carControl'].cruiseControl.override
@@ -364,14 +514,25 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState'])
         and not (sm['radarState'].leadOne.present or sm['radarState'].leadTwo.present)):
       output_a_cruise = get_cruise_coast_accel(self.a_cruise)
+      coast_transform_applied = True
 
     candidates = [(output_a_target_mpc, self.mpc.source, output_should_stop_mpc),
                   (output_a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
     if is_e2e:
       candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
 
+    observe(self.observation, "reference_candidates", self.observation_attempt, candidates, self.a_cruise,
+            output_a_target_e2e, output_should_stop_e2e, is_e2e, coast_transform_applied)
+
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     raw_should_stop = any(should_stop for _, _, should_stop in candidates)
+    if self.motion_enabled:
+      self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
+      self.reference_planner.finish_reference(sm, candidates, v_cruise, reset_state)
+      self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
+      if self.trace is not None:
+        observe_trace(self.trace, "finish_unified", self, is_e2e, candidates)
+      return
 
     # Hysteresis on the release side. should_stop() is a bare threshold, `v_ego < STOP_SPEED and
     # a_target < STOP_ACCEL`, and at launch a_target climbs across STOP_ACCEL from underneath while
@@ -512,17 +673,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
     if self.trace is not None:
-      self.trace.finish(self, candidates, is_e2e)
+      observe_trace(self.trace, "finish", self, candidates, is_e2e)
 
   def publish(self, sm, pm):
     plan_send = messaging.new_message('longitudinalPlan')
 
-    plan_send.valid = sm.all_checks()
+    plan_send.valid = (sm.all_checks() and self.mpc.solution_status == 0
+                       and (not self.motion_enabled or self.motion_intent.valid or self.reference_planner.standby))
 
     longitudinalPlan = plan_send.longitudinalPlan
     longitudinalPlan.modelMonoTime = sm.logMonoTime['modelV2']
-    longitudinalPlan.processingDelay = (plan_send.logMonoTime / 1e9) - sm.logMonoTime['modelV2']
+    longitudinalPlan.processingDelay = (plan_send.logMonoTime - sm.logMonoTime['modelV2']) / 1e9
     longitudinalPlan.solverExecutionTime = self.mpc.solve_time
+    longitudinalPlan.solverStatus = int(self.mpc.solution_status)
 
     longitudinalPlan.speeds = self.v_desired_trajectory.tolist()
     longitudinalPlan.accels = self.a_desired_trajectory.tolist()
@@ -536,9 +699,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
     longitudinalPlan.allowBrake = True
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)
+    if self.motion_enabled:
+      self.reference_planner.publish(longitudinalPlan)
+    observe(self.observation, "publish", self.observation_result, longitudinalPlan, self)
 
     pm.send('longitudinalPlan', plan_send)
 
-    self.publish_longitudinal_plan_sp(sm, pm)
+    self.publish_longitudinal_plan_sp(sm, pm, parent_plan_mono_time=plan_send.logMonoTime)
     if self.trace is not None:
-      self.trace.publish(plan_send.logMonoTime)
+      observe_trace(self.trace, "publish", plan_send.logMonoTime)

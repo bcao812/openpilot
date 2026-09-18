@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os
 import time
+from dataclasses import dataclass
+from numbers import Integral
 import numpy as np
 from openpilot.cereal import log
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
@@ -56,6 +58,29 @@ T_DIFFS = np.diff(T_IDXS, prepend=[0.])
 COMFORT_BRAKE = 2.5
 STOP_DISTANCE = 6.0
 MIN_X_LEAD_FACTOR = 0.5
+MPC_INVALID_INPUT = -1
+MPC_INVALID_SOLUTION = -2
+MPC_SOLVER_ERROR = -3
+
+
+@dataclass(frozen=True)
+class MpcReference:
+  cruise_speed: float | np.ndarray
+  accel_min: float | np.ndarray = ACCEL_MIN
+  accel_max: float | np.ndarray = ACCEL_MAX
+  cruise_min_accel: float | np.ndarray = -1.2
+  model_position: np.ndarray | None = None
+  model_velocity: np.ndarray | None = None
+  model_acceleration: np.ndarray | None = None
+
+  def __post_init__(self):
+    for field in ('cruise_speed', 'accel_min', 'accel_max', 'cruise_min_accel', 'model_position', 'model_velocity', 'model_acceleration'):
+      values = getattr(self, field)
+      if values is not None and not np.isscalar(values):
+        immutable_values = np.array(values, dtype=float, copy=True)
+        immutable_values.setflags(write=False)
+        object.__setattr__(self, field, immutable_values)
+
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
@@ -215,10 +240,25 @@ class LongitudinalMpc:
   def __init__(self, dt=DT_MDL):
     self.dt = dt
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
+    self.diagnostic_solve_calls = 0
+    self.diagnostic_reset_calls = 0
+    self.diagnostic_last_solver_return = None
+    self.diagnostic_last_x0 = None
+    self.diagnostic_details_enabled = False
+    self.diagnostic_last_parameters = None
+    self.diagnostic_last_yref = None
+    self.diagnostic_last_a_prev = None
+    self.diagnostic_obstacles_enabled = False
+    self.diagnostic_last_obstacle_summary = None
+    self.diagnostic_obstacle_failures = 0
+    # UNIFIED dates its reference with the consumer clock. Keep the clock high
+    # water across solver resets; reset buffers must not admit a replayed epoch.
+    self._reference_clock_ns = 0
     self.reset()
     self.source = LongitudinalPlanSource.cruise
 
   def reset(self):
+    self.diagnostic_reset_calls += 1
     self.solver.reset()
 
     self.x_sol = np.zeros((N+1, X_DIM))
@@ -227,6 +267,10 @@ class LongitudinalMpc:
     self.a_solution = np.zeros(N+1)
     self.j_solution = np.zeros(N)
     self.a_prev = np.array(self.a_solution)
+    # Zero-filled reset buffers are not a previous solved trajectory. Callers
+    # choose whether that history may constrain their next reference.
+    self.previous_solution_valid = False
+    self.invalidate_reference_history()
     self.yref = np.zeros((N+1, COST_DIM))
 
     for i in range(N):
@@ -240,17 +284,73 @@ class LongitudinalMpc:
     self.last_cloudlog_t = 0
     self.crash_cnt = 0.0
     self.solution_status = 0
+    self.last_solver_status = 0
+    self.failure_reason = ''
     # timers
     self.solve_time = 0.0
     self.x0 = np.zeros(X_DIM)
     self.set_weights()
+
+  @staticmethod
+  def accel_change_cost_scale(times):
+    return np.interp(times, [0.0, 1.0, 2.0], [1.0, 1.0, 0.0])
+
+  def invalidate_reference_history(self):
+    """Drop UNIFIED reference provenance without moving the consumer clock."""
+    self._reference_epoch_ns = None
+    self._reference_acceleration = None
+    self._reference_pending_ns = None
+    self._reference_pending_solved = False
+
+  def prepare_reference_history(self, now_ns, *, valid):
+    """Align one preceding native reference with this consumer's real epoch.
+
+    This is a smoothing reference, never an allocated or pending actuator
+    request. LEGACY/SUPERVISED continue to use run()'s original fixed-dt history.
+    A new epoch is committed only after the caller accepts a successful output.
+    """
+    epoch_ns = self._reference_epoch_ns
+    acceleration = self._reference_acceleration
+    self.invalidate_reference_history()
+    self.a_prev = np.zeros_like(self.a_solution)
+    if (not isinstance(now_ns, Integral) or isinstance(now_ns, bool)
+        or not 0 < now_ns < (1 << 64) or now_ns <= self._reference_clock_ns):
+      return False
+    now_ns = int(now_ns)
+    self._reference_clock_ns = now_ns
+    self._reference_pending_ns = now_ns
+    if not valid or not self.previous_solution_valid or epoch_ns is None or acceleration is None:
+      return False
+    elapsed = (now_ns - epoch_ns) / 1e9
+    # Only stages carrying a nonzero history cost need support from the old
+    # trajectory. Do not give extrapolated terminal values a smoothing penalty.
+    weighted_times = T_IDXS[self.accel_change_cost_scale(T_IDXS) > 0.0]
+    if (not 0.0 < elapsed or weighted_times[-1] + elapsed > T_IDXS[-1]
+        or acceleration.shape != T_IDXS.shape or not np.all(np.isfinite(acceleration))):
+      return False
+    self.a_prev = np.interp(T_IDXS + elapsed, T_IDXS, acceleration)
+    return True
+
+  def mark_reference_history(self, *, valid):
+    """Commit the native reference only after a qualified UNIFIED output."""
+    epoch_ns = self._reference_pending_ns
+    solved = self._reference_pending_solved
+    self.invalidate_reference_history()
+    if (not valid or epoch_ns is None or not solved or not self.previous_solution_valid or self.solution_status != 0
+        or self.a_solution.shape != T_IDXS.shape or not np.all(np.isfinite(self.a_solution))):
+      return False
+    self._reference_epoch_ns = epoch_ns
+    # The next native solve overwrites x_sol, which backs a_solution. Preserve
+    # this accepted reference rather than dating a later/failed solve as it.
+    self._reference_acceleration = self.a_solution.copy()
+    return True
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
     W = np.asfortranarray(np.diag(cost_weights))
     for i in range(N):
       # TODO don't hardcode A_CHANGE_COST idx
       # reduce the cost on (a-a_prev) later in the horizon.
-      W[4,4] = cost_weights[4] * np.interp(T_IDXS[i], [0.0, 1.0, 2.0], [1.0, 1.0, 0.0])
+      W[4,4] = cost_weights[4] * self.accel_change_cost_scale(T_IDXS[i])
       self.solver.cost_set(i, 'W', W)
     # Setting the slice without the copy make the array not contiguous,
     # causing issues with the C interface.
@@ -273,6 +373,8 @@ class LongitudinalMpc:
     v_prev = self.x0[1]
     self.x0[1] = v
     self.x0[2] = a
+    if not np.all(np.isfinite(self.x0)):
+      return
     if abs(v_prev - v) > 2.:  # probably only helps if v < v_prev
       for i in range(N+1):
         self.solver.set(i, 'x', self.x0)
@@ -308,11 +410,54 @@ class LongitudinalMpc:
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 
-  def update(self, radarstate, personality=log.LongitudinalPersonality.standard):
-    t_follow = get_T_FOLLOW(personality)
+  def reference_obstacles(self, reference, t_follow):
+    cruise_speed = np.broadcast_to(np.asarray(reference.cruise_speed, dtype=float), (N+1,))
+    accel_min = np.broadcast_to(np.asarray(reference.accel_min, dtype=float), (N+1,))
+    accel_max = np.broadcast_to(np.asarray(reference.accel_max, dtype=float), (N+1,))
+    cruise_min_accel = np.broadcast_to(np.asarray(reference.cruise_min_accel, dtype=float), (N+1,))
+    if (not np.all(np.isfinite([cruise_speed, accel_min, accel_max, cruise_min_accel]))
+        or np.any(cruise_speed < 0.0) or np.any(cruise_min_accel > 0.0)
+        or np.any(accel_min > accel_max) or np.any(accel_min > ACCEL_MAX) or np.any(accel_max < ACCEL_MIN)):
+      raise ValueError("Invalid cruise reference")
 
-    lead_xv_0 = self.process_lead(radarstate.leadOne)
-    lead_xv_1 = self.process_lead(radarstate.leadTwo)
+    accel_min = np.clip(accel_min, ACCEL_MIN, ACCEL_MAX)
+    accel_max = np.clip(accel_max, ACCEL_MIN, ACCEL_MAX)
+    cruise_min_accel = np.clip(cruise_min_accel, accel_min, accel_max)
+    lower_speed = np.maximum(0.0, self.x0[1] + np.cumsum(T_DIFFS * cruise_min_accel))
+    upper_speed = np.maximum(0.0, self.x0[1] + np.cumsum(T_DIFFS * accel_max))
+    cruise_velocity = np.clip(cruise_speed, lower_speed, upper_speed)
+    cruise_position = np.cumsum(T_DIFFS * cruise_velocity)
+    obstacles = [cruise_position + get_safe_obstacle_distance(cruise_velocity, t_follow)]
+    sources = [LongitudinalPlanSource.cruise]
+
+    model_reference = (reference.model_position, reference.model_velocity, reference.model_acceleration)
+    if any(values is not None for values in model_reference):
+      if any(values is None for values in model_reference):
+        raise ValueError("Incomplete model reference")
+      model_position, model_velocity, model_acceleration = (np.asarray(values, dtype=float) for values in model_reference)
+      if (any(values.shape != (N+1,) for values in (model_position, model_velocity, model_acceleration))
+          or not np.all(np.isfinite([model_position, model_velocity, model_acceleration]))
+          or np.any(model_velocity < 0.0) or np.any(np.diff(model_position) < 0.0)):
+        raise ValueError("Invalid model reference")
+      obstacles.append(model_position - model_position[0] + get_safe_obstacle_distance(model_velocity, t_follow))
+      sources.append(LongitudinalPlanSource.e2e)
+    return obstacles, sources, accel_min, accel_max
+
+  def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None):
+    self.diagnostic_last_obstacle_summary = None
+    t_follow = get_T_FOLLOW(personality)
+    self.solve_time = 0.0
+
+    if not np.all(np.isfinite(self.x0)):
+      self.fail(MPC_INVALID_INPUT)
+      return
+    for lead in (radarstate.leadOne, radarstate.leadTwo):
+      if lead.present and not np.all(np.isfinite([lead.dRel, lead.vLead, lead.aLeadK, lead.aLeadTau])):
+        self.fail(MPC_INVALID_INPUT)
+        return
+    with np.errstate(over='ignore', invalid='ignore'):
+      lead_xv_0 = self.process_lead(radarstate.leadOne)
+      lead_xv_1 = self.process_lead(radarstate.leadTwo)
 
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
@@ -320,54 +465,132 @@ class LongitudinalMpc:
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
-    x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle])
-    self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
+    obstacles = [lead_0_obstacle, lead_1_obstacle]
+    sources = list(MPC_SOURCES)
+    accel_min, accel_max = ACCEL_MIN, ACCEL_MAX
+    if reference is not None:
+      try:
+        with np.errstate(over='ignore', invalid='ignore'):
+          reference_obstacles, reference_sources, accel_min, accel_max = self.reference_obstacles(reference, t_follow)
+      except (TypeError, ValueError, FloatingPointError):
+        self.fail(MPC_INVALID_INPUT)
+        return
+      for lead_index, lead in enumerate((radarstate.leadOne, radarstate.leadTwo)):
+        if not lead.present:
+          obstacles[lead_index] = np.full(N+1, np.inf)
+      obstacles.extend(reference_obstacles)
+      sources.extend(reference_sources)
+    x_obstacles = np.column_stack(obstacles)
+    self.source = sources[np.argmin(x_obstacles[1 if reference is not None else 0])]
 
     self.yref[:,:] = 0.0
     for i in range(N):
       self.solver.set(i, "yref", self.yref[i])
     self.solver.set(N, "yref", self.yref[N][:COST_E_DIM])
 
-    self.params[:,0] = ACCEL_MIN
-    self.params[:,1] = ACCEL_MAX
+    self.params[:,0] = accel_min
+    self.params[:,1] = accel_max
     self.params[:,2] = np.min(x_obstacles, axis=1)
     self.params[:,3] = np.copy(self.a_prev)
     self.params[:,4] = t_follow
     self.params[:,5] = LEAD_DANGER_FACTOR
 
+    try:
+      self.observe_obstacles(x_obstacles, sources)
+    except Exception:
+      self.diagnostic_obstacle_failures += 1
+
     self.run()
-    if (np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
+    if self.solution_status != 0:
+      return
+    if (radarstate.leadOne.present and np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
             radarstate.leadOne.modelProb > 0.9):
       self.crash_cnt += 1
     else:
       self.crash_cnt = 0
 
+  def observe_obstacles(self, obstacles, sources):
+    """Copy a bounded constraint summary; never rebuild a reference or solve."""
+    if not self.diagnostic_obstacles_enabled:
+      return
+    if obstacles.shape != (N+1, len(sources)) or not 2 <= len(sources) <= 4:
+      raise ValueError("Unexpected obstacle summary shape")
+    selected = np.argmin(obstacles, axis=1)
+    source_names = {value: name for name, value in LongitudinalPlanSource.schema.enumerants.items()}
+    self.diagnostic_last_obstacle_summary = {
+      'known': True,
+      'times': tuple(float(value) for value in T_IDXS),
+      'sources': tuple(source_names[sources[index]] for index in selected),
+      'distances': tuple(float(value) for value in self.params[:,2]),
+      'sourceRule': 'first_minimum_by_mpc_source_order',
+    }
+
+  def fail(self, status):
+    solve_time = self.solve_time
+    last_cloudlog_t = self.last_cloudlog_t
+    timestamp = time.monotonic()
+    if timestamp > last_cloudlog_t + 5.0:
+      last_cloudlog_t = timestamp
+      cloudlog.warning(f"Long mpc reset, solution_status: {status}")
+    self.reset()
+    self.solution_status = status
+    self.last_solver_status = status
+    self.failure_reason = {MPC_INVALID_INPUT: 'invalid_input', MPC_INVALID_SOLUTION: 'nonfinite_solution',
+                           MPC_SOLVER_ERROR: 'solver_exception'}.get(status, 'solver_status')
+    self.last_cloudlog_t = last_cloudlog_t
+    self.solve_time = solve_time if np.isfinite(solve_time) else 0.0
+    self.source = LongitudinalPlanSource.cruise
+
   def run(self):
+    try:
+      self.diagnostic_last_x0 = tuple(float(value) for value in self.x0)
+      if self.diagnostic_details_enabled:
+        self.diagnostic_last_parameters = self.params.tolist()
+        self.diagnostic_last_yref = self.yref.tolist()
+        self.diagnostic_last_a_prev = self.a_prev.tolist()
+    except Exception:
+      pass
+    if not np.all(np.isfinite(self.params)) or not np.all(np.isfinite(self.yref)) or not np.all(np.isfinite(self.x0)):
+      self.fail(MPC_INVALID_INPUT)
+      return
     for i in range(N+1):
       self.solver.set(i, 'p', self.params[i])
     self.solver.constraints_set(0, "lbx", self.x0)
     self.solver.constraints_set(0, "ubx", self.x0)
 
-    self.solution_status = self.solver.solve()
-    self.solve_time = float(self.solver.get_stats('time_tot')[0])
-
-    for i in range(N+1):
-      self.x_sol[i] = self.solver.get(i, 'x')
-    for i in range(N):
-      self.u_sol[i] = self.solver.get(i, 'u')
+    solve_started_t = time.monotonic()
+    try:
+      self.diagnostic_last_solver_return = None
+      self.diagnostic_solve_calls += 1
+      self.solution_status = int(self.solver.solve())
+      self.diagnostic_last_solver_return = self.solution_status
+      self.last_solver_status = self.solution_status
+      if self.solution_status != 0:
+        self.solve_time = time.monotonic() - solve_started_t
+        self.fail(self.solution_status)
+        return
+      self.solve_time = float(self.solver.get_stats('time_tot')[0])
+      for i in range(N+1):
+        self.x_sol[i] = self.solver.get(i, 'x')
+      for i in range(N):
+        self.u_sol[i] = self.solver.get(i, 'u')
+    except RuntimeError:
+      self.solve_time = time.monotonic() - solve_started_t
+      self.fail(MPC_SOLVER_ERROR)
+      return
+    if not np.all(np.isfinite(self.x_sol)) or not np.all(np.isfinite(self.u_sol)):
+      self.fail(MPC_INVALID_SOLUTION)
+      return
+    self.failure_reason = ''
 
     self.v_solution = self.x_sol[:,1]
     self.a_solution = self.x_sol[:,2]
     self.j_solution = self.u_sol[:,0]
 
     self.a_prev = np.interp(T_IDXS + self.dt, T_IDXS, self.a_solution)
-
-    t = time.monotonic()
-    if self.solution_status != 0:
-      if t > self.last_cloudlog_t + 5.0:
-        self.last_cloudlog_t = t
-        cloudlog.warning(f"Long mpc reset, solution_status: {self.solution_status}")
-      self.reset()
+    self.previous_solution_valid = True
+    if self._reference_pending_ns is not None:
+      self._reference_pending_solved = True
 
 
 if __name__ == "__main__":

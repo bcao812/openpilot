@@ -9,6 +9,7 @@ from openpilot.cereal import log, custom
 from opendbc.car.structs import car
 
 from openpilot.common.params import Params
+from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
 from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
@@ -21,7 +22,9 @@ from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
+from openpilot.selfdrive.car.actuation_observation import ActuationObservation
 from openpilot.selfdrive.car.helpers import convert_carControlSP, convert_to_capnp
+from openpilot.selfdrive.car.longitudinal_authority import restrict_longitudinal_authority
 
 from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_car_specific_params
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
@@ -184,6 +187,7 @@ class Car:
     # Write CarParamsSP for controls
     # convert to pycapnp representation for caching and logging
     self.CP_SP_capnp = convert_to_capnp(self.CP_SP)
+    self.longitudinal_observation = ActuationObservation.create(self.CP, self.CP_SP_capnp)
     cp_sp_bytes = self.CP_SP_capnp.to_bytes()
     self.params.put("CarParamsSP", cp_sp_bytes, block=True)
     self.params.put("CarParamsSPCache", cp_sp_bytes)
@@ -272,6 +276,7 @@ class Car:
     co_send = messaging.new_message('carOutput')
     co_send.valid = self.sm.all_checks(['carControl'])
     co_send.carOutput.actuatorsOutput = self.last_actuators_output
+    observe(getattr(self, "longitudinal_observation", None), "publish", co_send.carOutput, self.sm.frame)
     self.pm.send('carOutput', co_send)
 
     # kick off controlsd step while we actuate the latest carControl packet
@@ -281,6 +286,7 @@ class Car:
     cs_send.carState.canErrorCounter = self.can_rcv_cum_timeout_counter
     cs_send.carState.cumLagMs = -self.rk.remaining * 1000.
     self.pm.send('carState', cs_send)
+    observe(getattr(self, "longitudinal_observation", None), "state_published", cs_send.logMonoTime, cs_send.valid, self.sm.frame)
 
     if RD is not None:
       tracks_msg = messaging.new_message('radarTracks')
@@ -302,6 +308,7 @@ class Car:
 
   def controls_update(self, CS: car.CarState, CC: car.CarControl, CC_SP: custom.CarControlSP):
     """control update loop, driven by carControl"""
+    longitudinal_observation = getattr(self, "longitudinal_observation", None)
 
     if not self.initialized_prev:
       # Initialize CarInterface, once controls are ready
@@ -311,12 +318,24 @@ class Car:
       self.params.put_bool("ControlsReady", True)
 
     if self.sm.all_alive(['carControl']):
+      requested_control = CC
+      CC = restrict_longitudinal_authority(self.CP, self.CP_SP, CS, CC)
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
-      self.last_actuators_output, can_sends = self.CI.apply(CC, convert_carControlSP(CC_SP), now_nanos)
-      self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
+      control_sp = convert_carControlSP(CC_SP)
+      observe(longitudinal_observation, "disposition", "applying", self.sm.frame, initialized=True, passive=self.CP.passive)
+      apply_attempt = observe(longitudinal_observation, "begin_apply", self.sm, self.CI, CS, requested_control, CC)
+      self.last_actuators_output, can_sends = self.CI.apply(CC, control_sp, now_nanos)
+      completed_apply = observe(longitudinal_observation, "end_apply", apply_attempt)
+      observe(longitudinal_observation, "disposition", "sendcanPending", self.sm.frame, initialized=True, passive=self.CP.passive)
+      sendcan_mono_time = int(time.monotonic() * 1e9)
+      self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid, log_mono_time=sendcan_mono_time))
+      observe(longitudinal_observation, "sent", completed_apply, can_sends, sendcan_mono_time)
+      observe(longitudinal_observation, "disposition", "sendcanPublished", self.sm.frame, initialized=True, passive=self.CP.passive)
 
       self.CC_prev = CC
+    else:
+      observe(longitudinal_observation, "disposition", "staleCarControl", self.sm.frame, initialized=True, passive=self.CP.passive)
 
   def step(self):
     if self.prof:
@@ -331,6 +350,9 @@ class Car:
                    self.sm.seen['onroadEvents'])
     if not self.CP.passive and initialized:
       self.controls_update(CS, self.sm['carControl'], self.sm['carControlSP'])
+    else:
+      observe(getattr(self, "longitudinal_observation", None), "disposition", "passive" if self.CP.passive else "uninitialized",
+              self.sm.frame, initialized=initialized, passive=self.CP.passive)
     # CI.apply() and the sendcan publish. This is the actuator command -- the phase worth
     # knowing the cost of, and the reason this file's instrumentation goes past safety-reviewer.
     if self.prof:

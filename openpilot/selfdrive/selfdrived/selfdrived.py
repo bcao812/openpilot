@@ -12,15 +12,18 @@ from msgq.visionipc import VisionIpcClient
 
 
 from openpilot.common.params import Params
+from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper, DT_CTRL
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_events import CarEvents
+from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
+from openpilot.selfdrive.selfdrived.longitudinal_observation import SelfdriveObservation
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
 
@@ -92,6 +95,7 @@ class SelfdriveD(CruiseHelper):
     else:
       self.CP_SP = CP_SP
 
+    self.longitudinal_observation = SelfdriveObservation.create(self.CP, self.CP_SP)
     self.car_events = CarEvents(self.CP)
 
     # CarParams fields that update_events reads on every frame, lifted to plain Python here.
@@ -586,6 +590,11 @@ class SelfdriveD(CruiseHelper):
       self.last_steering_pressed_frame = self.sm.frame
     recent_steer_pressed = (self.sm.frame - self.last_steering_pressed_frame)*DT_CTRL < 2.0
     controlstate = self.sm['controlsState']
+    observe(getattr(self, "longitudinal_observation", None), "motion_check", controlstate)
+    if (self.CP.openpilotLongitudinalControl and controlstate.motionState.version == MOTION_INTENT_VERSION
+        and controlstate.motionState.degraded):
+      self.events.add(EventName.commIssue)
+      observe(getattr(self, "longitudinal_observation", None), "motion_comm_issue_added")
     lac = getattr(controlstate.lateralControlState, controlstate.lateralControlState.which())
     if lac.active and not recent_steer_pressed and not self.cp_not_car:
       clipped_speed = max(CS.vEgo, 0.3)
@@ -644,6 +653,7 @@ class SelfdriveD(CruiseHelper):
     CS = _car_state.carState if _car_state else self.CS_prev
 
     self.sm.update(0)
+    observe(getattr(self, "longitudinal_observation", None), "begin", self.sm, _car_state, CS)
     if self.prof:
       self.prof.mark("sm_update")
 
@@ -725,6 +735,7 @@ class SelfdriveD(CruiseHelper):
     ss.alertSound = self.AM.current_alert.audible_alert
     ss.alertHudVisual = self.AM.current_alert.visual_alert
 
+    observe(getattr(self, "longitudinal_observation", None), "publish", ss)
     self.pm.send('selfdriveState', ss_msg)
 
     # onroadEvents - logged every second or on change
@@ -771,8 +782,10 @@ class SelfdriveD(CruiseHelper):
     self.update_events(CS)
     if self.prof:
       self.prof.mark("update_events")
+    observe(getattr(self, "longitudinal_observation", None), "state_machine_input", self)
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
+      observe(getattr(self, "longitudinal_observation", None), "state_machine_output", self)
     if self.prof:
       self.prof.mark("state_machine")
     if not self.CP.notCar:

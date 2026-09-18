@@ -8,6 +8,7 @@ from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.lib.ldw import LaneDepartureWarning
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
+from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace, TRACE_MARKER
 import openpilot.cereal.messaging as messaging
 
@@ -54,50 +55,53 @@ def main():
 
   ldw = LaneDepartureWarning()
   trace = LongitudinalTrace.create(CP)
-  if trace is not None:
-    cloudlog.warning("plannerd: longitudinal trace ENABLED by %s", TRACE_MARKER)
-  longitudinal_planner = LongitudinalPlanner(CP, CP_SP, trace=trace)
-  pm = messaging.PubMaster(['longitudinalPlan', 'driverAssistance', 'longitudinalPlanSP'])
-  sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'vehicleParameters', 'radarState', 'modelV2', 'selfdriveState',
-                            'liveMapDataSP', 'carStateSP', 'selfdriveStateSP', gps_location_service],
-                           poll='modelV2', ignore_alive=ignore_services, ignore_avg_freq=ignore_services, ignore_valid=ignore_services)
+  try:
+    if trace is not None:
+      cloudlog.warning("plannerd: longitudinal trace %s by %s", "DISABLED after startup failure" if trace.disabled else "ENABLED", TRACE_MARKER)
+    longitudinal_planner = LongitudinalPlanner(CP, CP_SP, trace=trace)
+    pm = messaging.PubMaster(['longitudinalPlan', 'driverAssistance', 'longitudinalPlanSP'])
+    sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'vehicleParameters', 'radarState', 'modelV2', 'selfdriveState',
+                              'liveMapDataSP', 'carStateSP', 'selfdriveStateSP', gps_location_service],
+                             poll='modelV2', ignore_alive=ignore_services, ignore_avg_freq=ignore_services, ignore_valid=ignore_services)
 
-  # None unless /data/plannerd_profile exists at process start. plannerd is FIFO 51 on core 7
-  # with modeld; the writer drops to SCHED_OTHER and moves to the little cluster.
-  prof = PhaseTimer.create(PHASE_TIMER_MARKER, PHASE_TIMER_EVENT, PHASES, PHASE_TIMER_PERIOD)
-  if prof:
-    prof.start()
-    cloudlog.warning("plannerd: phase timing ENABLED by %s", PHASE_TIMER_MARKER)
+    # None unless /data/plannerd_profile exists at process start. plannerd is FIFO 51 on core 7
+    # with modeld; the writer drops to SCHED_OTHER and moves to the little cluster.
+    prof = PhaseTimer.create(PHASE_TIMER_MARKER, PHASE_TIMER_EVENT, PHASES, PHASE_TIMER_PERIOD)
+    if prof:
+      prof.start()
+      cloudlog.warning("plannerd: phase timing ENABLED by %s", PHASE_TIMER_MARKER)
 
-  while True:
-    if prof:
-      prof.begin()
-    sm.update()
-    if prof:
-      prof.mark("sm_update")
-    longitudinal_planner.sla.update_buttons(sm['selfdriveStateSP'].buttonsReleaseToggle)
-    if prof:
-      prof.mark("sla_buttons")
-    if sm.updated['modelV2']:
-      longitudinal_planner.update(sm)
+    while True:
       if prof:
-        prof.mark("long_update")
-      longitudinal_planner.publish(sm, pm)
+        prof.begin()
+      sm.update()
       if prof:
-        prof.mark("long_publish")
+        prof.mark("sm_update")
+      longitudinal_planner.sla.update_buttons(sm['selfdriveStateSP'].buttonsReleaseToggle)
+      if prof:
+        prof.mark("sla_buttons")
+      if sm.updated['modelV2']:
+        longitudinal_planner.update(sm)
+        if prof:
+          prof.mark("long_update")
+        longitudinal_planner.publish(sm, pm)
+        if prof:
+          prof.mark("long_publish")
 
-      ldw.update(sm.frame, sm['modelV2'], sm['carState'], sm['carControl'])
-      msg = messaging.new_message('driverAssistance')
-      msg.valid = sm.all_checks()
-      msg.driverAssistance.leftLaneDeparture = ldw.left
-      msg.driverAssistance.rightLaneDeparture = ldw.right
-      pm.send('driverAssistance', msg)
-    # ldw and the driverAssistance publish are one phase: both are gated on modelV2 and the
-    # publish is three field writes. loop_rest also absorbs the frames where modelV2 did not
-    # arrive, which is 2 of every 3 at 60 Hz sm.update -- those are the CONDITIONAL frames.
-    if prof:
-      prof.mark("ldw_publish")
-      prof.end_frame()
+        ldw.update(sm.frame, sm['modelV2'], sm['carState'], sm['carControl'])
+        msg = messaging.new_message('driverAssistance')
+        msg.valid = sm.all_checks()
+        msg.driverAssistance.leftLaneDeparture = ldw.left
+        msg.driverAssistance.rightLaneDeparture = ldw.right
+        pm.send('driverAssistance', msg)
+      # ldw and the driverAssistance publish are one phase: both are gated on modelV2 and the
+      # publish is three field writes. loop_rest also absorbs the frames where modelV2 did not
+      # arrive, which is 2 of every 3 at 60 Hz sm.update -- those are the CONDITIONAL frames.
+      if prof:
+        prof.mark("ldw_publish")
+        prof.end_frame()
+  finally:
+    observe_trace(trace, "close")
 
 
 if __name__ == "__main__":

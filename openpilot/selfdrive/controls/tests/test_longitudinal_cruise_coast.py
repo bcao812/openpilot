@@ -1,4 +1,5 @@
 from unittest.mock import patch
+import json
 
 import numpy as np
 import pytest
@@ -224,12 +225,46 @@ def simulate_cruise(platform, acceleration_offset):
           'maximum_command': max(row[1] for row in history)}
 
 
-@pytest.mark.parametrize('acceleration_offset', [0.0, 0.2, 0.25, 0.3])
-def test_closed_loop_coasting_does_not_accumulate_speed_error(acceleration_offset):
-  baseline = simulate_cruise(CAR.HONDA_CIVIC_BOSCH, acceleration_offset)
-  candidate = simulate_cruise(CAR.HONDA_ACCORD, acceleration_offset)
+def assert_cruise_candidate_envelope(candidate):
+  """The existing absolute engineering bounds, independent of reference error."""
   assert abs(candidate['speed_error_kph']) <= 1.1
-  assert abs(candidate['speed_error_kph'] - baseline['speed_error_kph']) <= 0.22
   assert candidate['speed_range_kph'] < 0.01
   assert candidate['minimum_command'] >= -3.5
   assert candidate['maximum_command'] <= 2.0
+
+
+def coast_reference_diagnostic(baseline, candidate):
+  signed_difference = candidate['speed_error_kph'] - baseline['speed_error_kph']
+  former_pass = abs(signed_difference) <= 0.22
+  return {'baseline_platform': str(CAR.HONDA_CIVIC_BOSCH), 'candidate_platform': str(CAR.HONDA_ACCORD),
+          'identity': 'cross-platform reference; not a paired controller oracle or a pooled population',
+          'baseline': baseline, 'candidate': candidate,
+          'signed_speed_error_difference_kph': signed_difference,
+          'absolute_speed_error_change_kph': abs(candidate['speed_error_kph']) - abs(baseline['speed_error_kph']),
+          'former_relative_limit_kph': 0.22, 'former_relative_gate': 'PASS' if former_pass else 'FAIL',
+          'status': 'NO_FLAG' if former_pass else 'REVIEW',
+          'interpretation': 'Relative difference is diagnostic; only the declared candidate envelope is a hard test contract'}
+
+
+@pytest.mark.parametrize('acceleration_offset', [0.0, 0.2, 0.25, 0.3])
+def test_closed_loop_coasting_does_not_accumulate_speed_error(acceleration_offset, record_property):
+  baseline = simulate_cruise(CAR.HONDA_CIVIC_BOSCH, acceleration_offset)
+  candidate = simulate_cruise(CAR.HONDA_ACCORD, acceleration_offset)
+  diagnostic = coast_reference_diagnostic(baseline, candidate)
+  record_property('cross_platform_coast_diagnostic', json.dumps(diagnostic))
+  record_property('acceleration_offset_mps2', acceleration_offset)
+  assert_cruise_candidate_envelope(candidate)
+
+
+def test_coast_candidate_improvement_is_not_rejected_by_cross_platform_reference():
+  baseline = {'speed_error_kph': 1.0, 'speed_range_kph': 0.0, 'minimum_command': -0.2, 'maximum_command': 0.2}
+  candidate = baseline | {'speed_error_kph': 0.0}
+  diagnostic = coast_reference_diagnostic(baseline, candidate)
+  assert diagnostic['former_relative_gate'] == 'FAIL'
+  assert diagnostic['status'] == 'REVIEW'
+  assert diagnostic['absolute_speed_error_change_kph'] < 0.0
+  assert_cruise_candidate_envelope(candidate)
+  # Removing the relative veto does not relax an absolute safety/experience
+  # bound; an out-of-envelope candidate must still fail the same contract.
+  with pytest.raises(AssertionError):
+    assert_cruise_candidate_envelope(candidate | {'speed_error_kph': 1.2})

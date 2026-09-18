@@ -26,20 +26,22 @@ def _get_writer_fields(schema):
   return _cached_writer_fields
 
 
-def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True):
+def can_list_to_can_capnp(can_msgs, msgtype='can', valid=True, *, log_mono_time=None):
   """Convert list of CAN messages to Cap'n Proto serialized bytes.
 
   Args:
     can_msgs: List of tuples [(address, data_bytes, src), ...]
     msgtype: 'can' or 'sendcan'
     valid: Whether the event is valid
+    log_mono_time: Explicit envelope creation timestamp, or the current monotonic time
 
   Returns:
     Cap'n Proto serialized bytes
   """
   global _cached_writer_fields
 
-  dat = log.Event.new_message(valid=valid, logMonoTime=int(time.monotonic() * 1e9))
+  timestamp = int(time.monotonic() * 1e9) if log_mono_time is None else log_mono_time
+  dat = log.Event.new_message(valid=valid, logMonoTime=timestamp)
   can_data = dat.init(msgtype, len(can_msgs))
 
   # Cache schema fields on first call
