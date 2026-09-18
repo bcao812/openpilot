@@ -20,7 +20,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import Lon
 
 
 def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady', speed_target=20.0, duration=80.0,
-                         response_time=0.4):
+                         response_time=0.4, lead_braking_duration=None, lead_slot='leadOne'):
   params = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
   params.openpilotLongitudinalControl = True
   params_sp = CarInterface.get_non_essential_params_sp(params, CAR.HONDA_ACCORD)
@@ -61,9 +61,10 @@ def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady'
       state['carControl'].cruiseControl.override = not active
       if scenario == 'cut_in' and frame == round(25.0 / DT_CTRL):
         gap, lead_speed = 45.0, 12.0
-      lead_accel = -3.0 if scenario == 'lead_brake' and 25 <= timestamp < 25 + speed_target / 3 else 0.0
+      braking_duration = speed_target / 3 if lead_braking_duration is None else lead_braking_duration
+      lead_accel = -3.0 if scenario == 'lead_brake' and 25 <= timestamp < 25 + braking_duration else 0.0
       lead_speed = max(0.0, lead_speed + lead_accel * DT_CTRL)
-      lead = state['radarState'].leadOne
+      lead = getattr(state['radarState'], lead_slot)
       lead.present = scenario != 'no_lead' and (scenario != 'flicker' or int(timestamp * 2) % 2 == 0)
       lead.dRel = float(gap)
       lead.vLead = float(lead_speed)
@@ -95,6 +96,7 @@ def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady'
   steady = values[values[:, 0] >= duration - 20.0]
   braking = values[(values[:, 0] >= 25.0) & (values[:, 2] < -1.0), 0]
   return {'speed_error_kph': float((np.mean(steady[:, 1]) - speed_target) * 3.6),
+          'minimum_speed': float(np.min(values[:, 1])),
           'speed_range_kph': float(np.ptp(steady[:, 1]) * 3.6), 'minimum_gap': float(np.min(values[:, 3])),
           'minimum_gap_time': float(values[np.argmin(values[:, 3]), 0]),
           'minimum_command': float(np.min(values[:, 2])), 'maximum_command': float(np.max(values[:, 2])),
@@ -132,7 +134,17 @@ def test_closed_loop_risk_response(scenario):
   assert result['conflicts'] == 0
 
 
-@pytest.mark.xfail(strict=True, reason='Default control exceeds the stop gap under excessive actuator lag')
 def test_long_actuator_lag_collision_release_gate():
   result = simulate_lead_cruise(scenario='lead_brake', duration=55.0, delay=0.5, response_time=0.4)
   assert result['minimum_gap'] > 2.0
+
+
+@pytest.mark.parametrize('lead_slot', ['leadOne', 'leadTwo'])
+def test_short_lead_braking_keeps_clearance_without_an_unnecessary_stop(lead_slot):
+  result = simulate_lead_cruise(scenario='lead_brake', duration=45.0, delay=0.5, response_time=0.4,
+                                lead_braking_duration=0.5, lead_slot=lead_slot)
+  assert result['minimum_gap'] > 2.0
+  assert result['minimum_speed'] > 1.0
+  assert result['minimum_command'] >= -3.5
+  assert result['maximum_command'] <= 2.0
+  assert result['conflicts'] == 0

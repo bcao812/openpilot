@@ -261,6 +261,9 @@ def test_future_rest_native_problem_prevents_the_recorded_between_node_reverse_m
   mpc.update(radar_state(), reference=typed_reference(raw, speed))
   assert mpc.rest_goal.native_node == node
   assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == mpc.solution_status == 0
+  # SQP_RTI can return native 0 after QP MAXITER. These fixed convergence
+  # counterexamples must finish the inner QP as well as pass physical checks.
+  assert mpc.solver.get_stats('statistics')[1, -1] == 0
   assert mpc.rest_goal_state == 'satisfied'
   assert mpc.diagnostic_rest_goal['minimumContinuousVelocity'] >= -REST_STATE_TOL
   assert mpc.diagnostic_rest_goal['maximumRestStateError'] <= REST_STATE_TOL

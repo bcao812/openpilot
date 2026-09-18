@@ -272,9 +272,10 @@ def gen_long_ocp():
   ocp.solver_options.qp_solver_ric_alg = 0
   ocp.solver_options.qp_solver_cond_ric_alg = 0
 
-  # More iterations take too much time and less lead to inaccurate convergence in
-  # some situations. Ideally we would run just 1 iteration to ensure fixed runtime.
-  ocp.solver_options.qp_solver_iter_max = 10
+  # Bound the QP work inside one SQP_RTI call. The continuous-speed certificate
+  # adds hard inequalities; ten iterations can return MAXITER with an invalid
+  # cold-start primal. Keep a fixed budget and the independent solution checks.
+  ocp.solver_options.qp_solver_iter_max = 20
   ocp.solver_options.qp_tol = 1e-3
   ocp.solver_options.qp_solver_tol_eq = QP_FEASIBILITY_TOL
   ocp.solver_options.qp_solver_tol_ineq = QP_FEASIBILITY_TOL
@@ -729,7 +730,9 @@ class LongitudinalMpc:
         return None
       if jerk > 0.0:
         extremum = -acceleration / jerk
-        if 0.0 < extremum < duration and velocity + acceleration * extremum + 0.5 * jerk * extremum**2 < 0.0:
+        # The expanded polynomial cancels nearly equal terms at a tangency.
+        # Use its algebraic extremum value, matching the upward-ULP jerk above.
+        if 0.0 < extremum < duration and velocity - acceleration**2 / (2.0 * jerk) < 0.0:
           return None
       states[stage+1] = (position + velocity * duration + 0.5 * acceleration * duration**2 + jerk * duration**3 / 6.0,
                          next_velocity, next_acceleration)

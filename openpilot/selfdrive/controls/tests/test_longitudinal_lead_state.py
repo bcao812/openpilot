@@ -5,7 +5,8 @@ import pytest
 
 from opendbc.car.honda.values import CAR
 from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.controls.lib.longitudinal_planner import constrain_lead_braking_speed
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalPlanSource
+from openpilot.selfdrive.controls.lib.longitudinal_planner import constrain_lead_braking_speed, has_selected_lead_braking_risk
 from openpilot.selfdrive.controls.tests.test_longitudinal_planner_state import braking_planner, braking_state
 
 
@@ -111,6 +112,110 @@ def test_real_mpc_receives_bounded_speed_without_rewriting_the_lead():
   assert planner.mpc.solution_status == 0
   assert planner.mpc.x0[1] == pytest.approx(19.8)
   assert state['radarState'].to_dict() == before
+
+
+def delayed_braking_state():
+  state = closing_state(20.0, 70.0, -12.0)
+  state['carState'].aEgo = -0.65
+  lead = state['radarState'].leadOne
+  lead.aLeadK, lead.aLeadTau, lead.modelProb = -3.0, 1.5, 0.0
+  return state
+
+
+def selected_risk(state, source=LongitudinalPlanSource.lead0, target=-1.6):
+  return has_selected_lead_braking_risk(state['carState'].vEgo, state['carState'].aEgo, target,
+                                        state['radarState'], source, 0.5)
+
+
+@pytest.mark.parametrize('source', [LongitudinalPlanSource.cruise, LongitudinalPlanSource.e2e])
+def test_unselected_lead_does_not_replace_the_current_state(source):
+  assert not selected_risk(delayed_braking_state(), source=source)
+
+
+@pytest.mark.parametrize('field,value', [
+  ('present', False), ('dRel', 0.0), ('dRel', -1.0), ('dRel', float('nan')),
+  ('vRel', 0.0), ('vRel', float('nan')), ('vLead', -0.6), ('vLead', 25.0),
+  ('aLeadK', float('nan')), ('aLeadTau', -0.1), ('aLeadTau', float('nan')),
+  ('modelProb', -0.1), ('modelProb', 1.01), ('modelProb', float('nan')),
+  ('yRel', 2.0), ('yRel', float('nan')),
+])
+def test_invalid_inconsistent_or_adjacent_selected_lead_cannot_anchor_state(field, value):
+  state = delayed_braking_state()
+  setattr(state['radarState'].leadOne, field, value)
+  assert not selected_risk(state)
+
+
+@pytest.mark.parametrize('target', [-0.5, -0.2, 0.0, 0.5, float('nan')])
+def test_a_lead_must_already_have_supplied_a_braking_request(target):
+  assert not selected_risk(delayed_braking_state(), target=target)
+
+
+@pytest.mark.parametrize('acceleration', [-4.0, 2.1, float('nan'), float('inf')])
+def test_unknown_or_out_of_model_measured_acceleration_does_not_anchor_state(acceleration):
+  state = delayed_braking_state()
+  state['carState'].aEgo = acceleration
+  assert not selected_risk(state)
+
+
+def test_distant_mild_closure_keeps_the_existing_state():
+  assert not selected_risk(closing_state(20.0, 150.0, -3.0))
+
+
+@pytest.mark.parametrize('lead_slot,source', [('leadOne', LongitudinalPlanSource.lead0), ('leadTwo', LongitudinalPlanSource.lead1)])
+@pytest.mark.parametrize('probability', [0.0, 0.999])
+def test_selected_lead_uses_measured_initial_motion_without_erasing_native_history(lead_slot, source, probability):
+  planner, state = closing_planner(), delayed_braking_state()
+  state['radarState'].leadOne.modelProb = probability
+  if lead_slot == 'leadTwo':
+    state['radarState'].leadTwo = state['radarState'].leadOne.as_reader()
+    state['radarState'].leadOne.present = False
+  planner.output_a_target = -1.6
+  planner.update(state)
+  assert planner.mpc.solution_status == 0 and planner.mpc.source == source
+  assert planner.output_a_target < -0.5
+  accepted_history = planner.mpc.a_prev.copy()
+  before_leads = deepcopy(state['radarState'].to_dict())
+  planner.update(state)
+  assert planner.mpc.solution_status == 0
+  assert planner.mpc.x0[1] == state['carState'].vEgo
+  assert planner.mpc.x0[2] == state['carState'].aEgo
+  np.testing.assert_array_equal(planner.mpc.params[:, 3], accepted_history)
+  assert state['radarState'].to_dict() == before_leads
+
+
+@pytest.mark.parametrize('condition', [
+  'gas', 'brake', 'override', 'inactive', 'disabled', 'control_disabled', 'force_decel', 'unhealthy', 'stock_long', 'other_platform',
+  'solver_failed',
+])
+def test_state_anchoring_keeps_driver_mode_and_health_guards_after_a_real_lead_solution(condition):
+  planner, state = closing_planner(), delayed_braking_state()
+  planner.output_a_target = -1.6
+  planner.update(state)
+  assert planner.mpc.source == LongitudinalPlanSource.lead0
+  state['carState'].aEgo = 1.5
+  if condition in ('gas', 'brake'):
+    setattr(state['carState'], condition + 'Pressed', True)
+  elif condition == 'override':
+    state['carControl'].cruiseControl.override = True
+  elif condition == 'inactive':
+    state['carControl'].longActive = False
+  elif condition == 'disabled':
+    state['selfdriveState'] = state['selfdriveState'].as_builder()
+    state['selfdriveState'].enabled = False
+  elif condition == 'control_disabled':
+    state['carControl'].enabled = False
+  elif condition == 'force_decel':
+    state['controlsState'].forceDecel = True
+  elif condition == 'unhealthy':
+    state.all_checks = lambda service_list=None: False
+  elif condition == 'stock_long':
+    planner.CP.openpilotLongitudinalControl = False
+  elif condition == 'other_platform':
+    planner.CP.carFingerprint = CAR.HONDA_CIVIC_BOSCH
+  elif condition == 'solver_failed':
+    planner.mpc.solution_status = 1
+  planner.update(state)
+  assert planner.mpc.x0[2] != state['carState'].aEgo
 
 
 @pytest.mark.parametrize(
