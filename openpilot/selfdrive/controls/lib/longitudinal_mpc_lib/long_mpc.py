@@ -50,6 +50,7 @@ CRASH_DISTANCE = .25
 LEAD_DANGER_FACTOR = 0.75
 LIMIT_COST = 1e6
 ACADOS_SOLVER_TYPE = 'SQP_RTI'
+QP_MAX_ITER = 24
 
 # Fewer timestamps don't hurt performance and lead to
 # much better convergence of the MPC with low iterations
@@ -272,10 +273,10 @@ def gen_long_ocp():
   ocp.solver_options.qp_solver_ric_alg = 0
   ocp.solver_options.qp_solver_cond_ric_alg = 0
 
-  # Bound the QP work inside one SQP_RTI call. The continuous-speed certificate
-  # adds hard inequalities; ten iterations can return MAXITER with an invalid
-  # cold-start primal. Keep a fixed budget and the independent solution checks.
-  ocp.solver_options.qp_solver_iter_max = 20
+  # Bound the QP work inside one SQP_RTI call. Cold rest boundary cases
+  # need 21 inner iterations. Keep a fixed budget and independent checks;
+  # this does not add another native solve or change convergence tolerances.
+  ocp.solver_options.qp_solver_iter_max = QP_MAX_ITER
   ocp.solver_options.qp_tol = 1e-3
 
   # set prediction horizon

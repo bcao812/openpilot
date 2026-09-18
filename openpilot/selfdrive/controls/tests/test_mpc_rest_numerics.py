@@ -1,5 +1,7 @@
 """Numerical rest repair must preserve dynamics, physical bounds and fault braking."""
 
+import json
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -8,7 +10,7 @@ import pytest
 from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  MODEL_A_REF, MODEL_V_REF, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, QP_FEASIBILITY_TOL, REFERENCE_BOUND, REST_STATE_TOL, T_IDXS,
+  MODEL_A_REF, MODEL_V_REF, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, QP_FEASIBILITY_TOL, QP_MAX_ITER, REFERENCE_BOUND, REST_STATE_TOL, T_IDXS,
   LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.tests.test_due_rest_reference import NEAR_ZERO_STATES, typed_due_reference
@@ -23,6 +25,16 @@ from openpilot.selfdrive.controls.tests.test_unified_startup import PLANNER_STEP
 def isolated_params():
   with OpenpilotPrefix():
     yield
+
+
+def test_generated_iteration_budget_preserves_one_rti_and_the_original_tolerances():
+  generated = Path(__file__).resolve().parents[1] / 'lib/longitudinal_mpc_lib/acados_ocp_long.json'
+  options = json.loads(generated.read_text())['solver_options']
+  assert options['qp_solver_iter_max'] == QP_MAX_ITER == 24
+  assert options['nlp_solver_type'] == 'SQP_RTI'
+  for residual in ('comp', 'eq', 'ineq', 'stat'):
+    assert options['qp_solver_tol_' + residual] == 1e-3
+  assert QP_FEASIBILITY_TOL == 1e-9 and REST_STATE_TOL == 1e-3
 
 
 def integrate(initial, jerks):
@@ -155,7 +167,9 @@ def test_longer_future_seed_keeps_the_actual_problem_and_one_converged_native_so
   mpc.update(radar_state(), reference=reference)
   assert observer.solve.call_count == mpc.diagnostic_solve_calls == 1
   assert mpc.diagnostic_last_solver_return == mpc.last_solver_status == mpc.solution_status == 0
-  assert native.get_stats('statistics')[1, -1] == 0
+  statistics = native.get_stats('statistics')
+  assert statistics[1, -1] == 0
+  assert statistics[2, -1] <= QP_MAX_ITER
   assert mpc.rest_goal_state == 'satisfied' and mpc.rest_goal_braking_accel is None
   assert mpc.diagnostic_rest_goal['futurePrimalInitialized']
   assert mpc.rest_goal == reference.typed_model.rest_goal and not reference.typed_model.allows_departure
