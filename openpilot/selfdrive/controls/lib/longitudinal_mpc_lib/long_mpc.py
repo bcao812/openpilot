@@ -685,12 +685,31 @@ class LongitudinalMpc:
     return ''
 
   def schedule_future_rest(self):
-    """Select the first later node with a complete witness; never call solve."""
+    """Select the first later node with a complete template witness; never solve.
+
+    This bounded family can miss other feasible trajectories. Rejecting a
+    template does not prove its node or every later node is unreachable.
+    """
     goal = self.rest_goal
     candidates = []
     self.diagnostic_rest_goal['schedulingCandidates'] = candidates
     for node in range(goal.native_node + 1, N+1):
-      primal = self.future_rest_primal(self.x0, node)
+      interval = None
+      if node in (1, 2):
+        interval = self.future_rest_acceleration_interval(self.x0, node)
+        if interval is None:
+          candidates.append({'node': node, 'reason': 'no_forward_rest_primal'})
+          continue
+        # The interval describes a_1, including when the destination is node
+        # two. Intersect before choosing its midpoint, without inventing an
+        # acceleration just outside this update's real first-node envelope.
+        minimum = max(interval[0], float(self.params[1, 0]))
+        maximum = min(interval[1], float(self.params[1, 1]))
+        if minimum > maximum:
+          candidates.append({'node': node, 'reason': 'scheduled_rest_acceleration_interval_empty'})
+          continue
+        interval = minimum, maximum
+      primal = self.future_rest_primal(self.x0, node, interval=interval)
       if primal is None:
         reason = 'no_forward_rest_primal'
       else:

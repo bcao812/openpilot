@@ -62,6 +62,82 @@ def assert_actual_scheduled_stop(mpc):
   assert np.min(danger) >= -QP_FEASIBILITY_TOL
 
 
+def short_template_scheduler():
+  """A pure scheduling object with no allocated solver or native entry point."""
+  mpc = LongitudinalMpc.__new__(LongitudinalMpc)
+  speed = 73.0 / 150.0
+  mpc.x0 = np.array([0.0, speed, 0.0])
+  mpc.params = np.zeros((N+1, PARAM_DIM))
+  mpc.params[:, 0], mpc.params[:, 1], mpc.params[:, 2] = ACCEL_MIN, ACCEL_MAX, 1000.0
+  mpc.params[:, 4], mpc.params[:, 5] = 1.45, LEAD_DANGER_FACTOR
+  mpc.rest_goal = evidence(stopping_curve(speed, 0.03), speed).rest_goal
+  assert mpc.rest_goal.native_node == 1
+  mpc.diagnostic_rest_goal = {}
+  mpc.effective_rest_node = None
+  return mpc
+
+
+def test_short_schedule_intersects_a1_bounds_before_choosing_the_template():
+  mpc = short_template_scheduler()
+  source, initial, parameters = mpc.rest_goal, mpc.x0.copy(), mpc.params.copy()
+  original = asdict(source)
+  unconstrained_states, _ = mpc.future_rest_primal(mpc.x0, 2)
+  assert unconstrained_states[1, 2] == pytest.approx(-3.500025, abs=1e-12)
+  assert unconstrained_states[1, 2] < mpc.params[1, 0]
+  states, jerks = mpc.schedule_future_rest()
+  assert mpc.effective_rest_node == 2
+  assert ACCEL_MIN <= states[1, 2] <= -3.49605
+  assert 0.0 <= states[2, 1] <= REST_STATE_TOL
+  np.testing.assert_array_equal(states[2:, 2], 0.0)
+  np.testing.assert_array_equal(states[2:, 1], states[2, 1])
+  assert_future_primal_witness(initial, 2, states, jerks)
+  np.testing.assert_array_equal(mpc.x0, initial)
+  np.testing.assert_array_equal(mpc.params, parameters)
+  assert mpc.rest_goal is source and asdict(source) == original
+  assert not hasattr(mpc, 'solver')
+
+
+def test_short_schedule_does_not_clamp_an_empty_a1_intersection_into_a_witness():
+  mpc = short_template_scheduler()
+  mpc.params[:, 0] = -3.4
+  source, initial, parameters = mpc.rest_goal, mpc.x0.copy(), mpc.params.copy()
+  original = asdict(source)
+  states, jerks = mpc.schedule_future_rest()
+  assert mpc.effective_rest_node == 3
+  assert mpc.diagnostic_rest_goal['schedulingCandidates'][0] == {
+    'node': 2, 'reason': 'scheduled_rest_acceleration_interval_empty',
+  }
+  assert np.all(states[:, 2] >= parameters[:, 0])
+  assert_future_primal_witness(initial, 3, states, jerks)
+  np.testing.assert_array_equal(mpc.x0, initial)
+  np.testing.assert_array_equal(mpc.params, parameters)
+  assert mpc.rest_goal is source and asdict(source) == original
+  assert not hasattr(mpc, 'solver')
+
+
+@pytest.mark.parametrize('endpoint', ['lower', 'upper'])
+def test_short_schedule_accepts_a_closed_single_point_a1_intersection(endpoint):
+  mpc = short_template_scheduler()
+  minimum, maximum = mpc.future_rest_acceleration_interval(mpc.x0, 2)
+  point = max(minimum, ACCEL_MIN) if endpoint == 'lower' else min(maximum, ACCEL_MAX)
+  mpc.params[1, :2] = point
+  states, jerks = mpc.schedule_future_rest()
+  assert mpc.effective_rest_node == 2 and states[1, 2] == point
+  assert_future_primal_witness(mpc.x0, 2, states, jerks)
+  assert not hasattr(mpc, 'solver')
+
+
+def test_short_schedule_does_not_fill_a_one_ulp_empty_a1_intersection():
+  mpc = short_template_scheduler()
+  _, maximum = mpc.future_rest_acceleration_interval(mpc.x0, 2)
+  mpc.params[1, 0] = np.nextafter(maximum, np.inf)
+  states, jerks = mpc.schedule_future_rest()
+  assert mpc.effective_rest_node == 3
+  assert mpc.diagnostic_rest_goal['schedulingCandidates'][0]['reason'] == 'scheduled_rest_acceleration_interval_empty'
+  assert_future_primal_witness(mpc.x0, 3, states, jerks)
+  assert not hasattr(mpc, 'solver')
+
+
 def test_original_future_mathematical_contract_requires_explicit_scheduling_opt_in():
   reference = typed_reference(stopping_curve(10.0, 1.0), 10.0)
   assert not reference.allow_future_rest_reschedule
