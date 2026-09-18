@@ -245,7 +245,7 @@ class MotionSupervisor:
     if instance > self._rest_braking_instance_high_ns:
       self._clear_rest_braking()
       self._rest_braking_instance_high_ns = instance
-    # A newly accepted plan can reject a goal using the same still-fresh model.
+    # A newly accepted stop plan can use the same still-fresh model.
     # Confirm its final output once; the separate drive/release rearm rule below
     # still requires both identities to advance after a fault.
     fresh = (plan_time_ns > self._rest_braking_plan_high_ns and model_time_ns >= self._rest_braking_model_high_ns)
@@ -627,8 +627,12 @@ class MotionSupervisor:
     new_input = latest_plan_time == 0 or plan_time_ns > latest_plan_time and model_time_ns > latest_model_time
     self._last_plan_time_ns, self._last_model_time_ns = plan_time_ns, model_time_ns
     self._last_intent, self._last_target = intent, a_target
-    self._observe_rest_braking_identity(intent, plan_time_ns, model_time_ns)
-    if self.mode != LongitudinalMode.UNIFIED or intent.reference_kind != MotionReferenceKind.EXACT_ZERO:
+    fresh_rest_input = self._observe_rest_braking_identity(intent, plan_time_ns, model_time_ns)
+    if (self.mode != LongitudinalMode.UNIFIED
+        or intent.reference_kind not in (MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.REST)
+        or intent.reference_kind == MotionReferenceKind.REST and fresh_rest_input):
+      # A different normal REST ends the old zero chain. Its own executed
+      # negative output may independently establish a new cause below.
       self._clear_rest_braking()
     independent, sample_step_ns = False, None
     if self.mode == LongitudinalMode.SUPERVISED:
@@ -648,6 +652,12 @@ class MotionSupervisor:
     self._rearm_plan_time_ns = self._rearm_model_time_ns = 0
     self.waiting_for_fresh_input = False
     self.degraded = False
+    if (self.mode == LongitudinalMode.UNIFIED and intent.reference_kind == MotionReferenceKind.REST
+        and intent.producer_instance_ns > 0 and fresh_rest_input):
+      # Source semantics and accepted transport are necessary but not an output
+      # acknowledgement. LongControl confirms only its final clipped brake;
+      # this does not add a raw stop reason, a deadline or release permission.
+      self._pending_rest_braking = (intent.producer_instance_ns, plan_time_ns, model_time_ns, now_ns)
     if (intent.reference_kind == MotionReferenceKind.EXACT_ZERO and self._rest_braking_accel is not None
         and intent.producer_instance_ns == self._rest_braking_instance_ns):
       self.rest_braking_accel_limit = self._rest_braking_accel

@@ -178,7 +178,8 @@ class UnifiedLongitudinalPlanner:
     evidence_goal = self.model_evidence.rest_goal if self.model_evidence is not None else None
     goal_rejected = bool(raw_kind == MotionReferenceKind.REST and evidence_goal is not None and planner.mpc.rest_goal == evidence_goal
                          and (planner.mpc.solution_status == MPC_GOAL_INFEASIBLE and planner.mpc.rest_goal_state in ('infeasible', 'unverified')
-                              or planner.mpc.solution_status == MPC_GOAL_UNSATISFIED and planner.mpc.rest_goal_state == 'unsatisfied'))
+                              or planner.mpc.solution_status == MPC_GOAL_UNSATISFIED
+                              and (planner.mpc.rest_goal_state == 'unsatisfied' or planner.mpc.effective_rest_state == 'unsatisfied')))
     planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), allow_creep=False,
                                          valid=False, braking_accel=request, reference_kind=int(raw_kind),
                                          rest_goal_rejected=goal_rejected, producer_instance_ns=self.producer_instance_ns)
@@ -395,7 +396,7 @@ class UnifiedLongitudinalPlanner:
     reference = MpcReference(
       cruise_speed=cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
-      typed_model=self.model_evidence,
+      typed_model=self.model_evidence, allow_future_rest_reschedule=True,
     )
     urgency = 0.0
     if active and healthy and not reset and not forced_decel and planner.source == LongitudinalPlanSourceSP.cruise:

@@ -1,4 +1,4 @@
-"""Rest-rejection braking across the real planner, consumer and Honda CAN path.
+"""Accepted rest braking across the real planner, consumer and Honda CAN path.
 
 These fixed software inputs test command continuity, not vehicle response or
 fulfilment of an unreachable model deadline. The original deadline tests stay
@@ -46,36 +46,40 @@ def publish_curve(harness, curve, *, model_publication_after_state=None):
   return event
 
 
-def failed_stop_then_zero(*, late_zero=False):
+def accepted_stop_then_zero(*, late_zero=False):
   harness = StrictPlanTransportHarness(speed=10.0)
   harness.engage()
-  failed = publish_curve(harness, model_stop_curve(10.0, 1.0))
-  plan = failed.longitudinalPlan
-  assert plan.solverStatus == MPC_GOAL_INFEASIBLE
-  assert plan.motionIntent.restGoalRejected and plan.motionIntent.brakingValid
-  assert not plan.motionIntent.valid and not plan.motionIntent.releaseAllowed
+  stopped = publish_curve(harness, model_stop_curve(10.0, 1.0))
+  plan = stopped.longitudinalPlan
+  assert plan.solverStatus == 0
+  assert not plan.motionIntent.restGoalRejected and not plan.motionIntent.brakingValid
+  assert plan.motionIntent.valid and not plan.motionIntent.releaseAllowed
+  assert plan.motionIntent.referenceKind == MotionReferenceKind.REST
   assert harness.planner.mpc.rest_goal.remaining_time_s > 0.05
   assert harness.planner.mpc.diagnostic_last_solver_return == 0
+  assert harness.planner.mpc.rest_goal_state == 'infeasible'
+  assert harness.planner.mpc.effective_rest_state == 'satisfied'
   # Arming requires the actual consumer output; publication alone is not an ACK.
   first = harness.step()
-  assert first['long_active'] and first['degraded'] and first['phase'] == 'track'
-  assert first['accel'] == pytest.approx(ACCEL_MIN, abs=1e-5)
+  assert first['long_active'] and not first['degraded'] and first['phase'] == 'track'
+  confirmed = harness.controls.LoC.motion_supervisor._rest_braking_accel
+  assert confirmed is not None and confirmed == first['accel'] and confirmed < -0.2
   current = publish_curve(harness, zero_curve(), model_publication_after_state=late_zero)
-  assert any(row['BRAKE_REQUEST'] and row['ACCEL_COMMAND'] <= ACCEL_MIN + 0.01
+  assert any(row['BRAKE_REQUEST'] and row['ACCEL_COMMAND'] <= confirmed + 0.01
              for row in harness.native_commands if first['mono'] < row['mono'] <= current.logMonoTime)
-  return harness, failed, current
+  return harness, stopped, current, confirmed
 
 
 @pytest.mark.parametrize('late_zero', [False, True])
-def test_accepted_failed_rest_braking_survives_fresh_zero_without_reviving_deadline(late_zero):
-  harness, failed, current = failed_stop_then_zero(late_zero=late_zero)
+def test_accepted_normal_rest_braking_survives_fresh_zero_without_reviving_deadline(late_zero):
+  harness, stopped, current, confirmed = accepted_stop_then_zero(late_zero=late_zero)
   rows = []
   for _ in range(30):
     row = harness.step()
     rows.append(row | {'continuity_limit': harness.controls.LoC.motion_supervisor.rest_braking_accel_limit})
   plan = harness.latest['longitudinalPlan'].longitudinalPlan
   evidence = harness.planner.reference_planner.model_evidence
-  assert failed.longitudinalPlan.solverStatus == MPC_GOAL_INFEASIBLE
+  assert stopped.longitudinalPlan.solverStatus == 0
   assert evidence.no_forward and evidence.rest_goal is None
   if late_zero:
     assert evidence.unknown.reason == 'model_proxy_after_initial_state'
@@ -88,27 +92,22 @@ def test_accepted_failed_rest_braking_survives_fresh_zero_without_reviving_deadl
   assert plan.motionIntent.referenceKind == MotionReferenceKind.EXACT_ZERO
   assert not plan.motionIntent.restGoalRejected and not plan.motionIntent.releaseAllowed
   assert plan.motionIntent.producerInstanceMonoTime == plan.reference.producerInstanceMonoTime > 0
-  # The aligned first zero solve actually supplies the weaker request. The
-  # asynchronous solve may itself request full braking; its qualified raw
-  # evidence must still preserve, rather than silently clear, the same cap.
-  if not late_zero:
-    assert current.longitudinalPlan.aTarget > ACCEL_MIN + 0.1
-  assert all(row['continuity_limit'] == pytest.approx(ACCEL_MIN) for row in rows)
+  # The constraint follows the actual accepted stop output. Whether this zero
+  # solve asks for more braking does not change its stored origin or magnitude.
+  assert all(row['continuity_limit'] == pytest.approx(confirmed) for row in rows)
   assert all(row['consumed_plan_mono'] >= current.logMonoTime for row in rows)
-  # The existing selfdrived fault response can legitimately publish FORCE_DECEL
-  # and establish APPROACH; the continuity constraint must not bypass that owner.
-  assert all(row['long_active'] and not row['degraded'] and row['phase'] in ('track', 'approach') for row in rows)
-  assert all(row['accel'] <= ACCEL_MIN + 1e-5 and not row['resume'] for row in rows)
+  assert all(row['long_active'] and not row['degraded'] and row['phase'] == 'track' for row in rows)
+  assert all(row['accel'] <= confirmed + 1e-5 and not row['resume'] for row in rows)
   can_rows = [row for row in harness.native_commands if row['mono'] > rows[0]['mono']]
   # Bosch's moving PID encoding keeps STANDSTILL_RELEASE=1 even when requesting
   # negative acceleration. It is not cruiseControl.resume.
   assert can_rows and all(row['BRAKE_REQUEST'] and row['GAS_COMMAND'] <= 0.0
-                          and row['ACCEL_COMMAND'] <= ACCEL_MIN + 0.01
+                          and row['ACCEL_COMMAND'] <= confirmed + 0.01
                           and row['STANDSTILL_RELEASE'] == 1 for row in can_rows)
 
 
 def test_established_hold_takes_over_the_continuation_with_real_stop_can():
-  harness, _, _ = failed_stop_then_zero()
+  harness, _, _, _ = accepted_stop_then_zero()
   for _ in range(10):
     harness.step()
   assert harness.controls.LoC.motion_supervisor.rest_braking_accel_limit is not None
@@ -139,9 +138,9 @@ def test_isolated_fresh_zero_does_not_create_failed_rest_braking_history():
 
 @pytest.mark.parametrize('interruption', ['negative_no_forward', 'forward'])
 def test_new_nonzero_reference_ends_the_chain_and_later_zero_cannot_revive_it(interruption):
-  harness, _, _ = failed_stop_then_zero()
+  harness, _, _, confirmed = accepted_stop_then_zero()
   rows = [harness.step() for _ in range(10)]
-  assert all(row['accel'] <= ACCEL_MIN + 1e-5 for row in rows)
+  assert all(row['accel'] <= confirmed + 1e-5 for row in rows)
   raw = -np.ones(len(MODEL_TIMES)) if interruption == 'negative_no_forward' else 10.0 + 0.6 * MODEL_TIMES
   event = publish_curve(harness, (np.maximum(raw, 0.0) * MODEL_TIMES, raw, np.gradient(raw, MODEL_TIMES)))
   expected = MotionReferenceKind.NO_FORWARD if interruption == 'negative_no_forward' else MotionReferenceKind.FORWARD
@@ -159,7 +158,7 @@ def test_new_nonzero_reference_ends_the_chain_and_later_zero_cannot_revive_it(in
 
 @pytest.mark.parametrize('interruption', ['gas', 'brake', 'cancel'])
 def test_driver_authority_clears_a_real_braking_continuation_in_the_same_frame(interruption):
-  harness, _, _ = failed_stop_then_zero()
+  harness, _, _, _ = accepted_stop_then_zero()
   for _ in range(10):
     harness.step()
   assert harness.controls.LoC.motion_supervisor.rest_braking_accel_limit is not None
@@ -176,15 +175,20 @@ def test_driver_authority_clears_a_real_braking_continuation_in_the_same_frame(i
 @pytest.mark.parametrize('channel', ['normal', 'braking_only'])
 @pytest.mark.parametrize('bad_instance', ['missing', 'different'])
 def test_reference_instance_disagreement_cannot_use_either_consumer_entry(channel, bad_instance):
-  harness, _, _ = failed_stop_then_zero()
+  harness, _, _, _ = accepted_stop_then_zero()
   for _ in range(10):
     harness.step()
-  curve = zero_curve() if channel == 'normal' else model_stop_curve(10.0, 1.0)
-  published = publish_curve(harness, curve)
+  if channel == 'braking_only':
+    # A fresh source after this short event now states a current due-rest goal.
+    # Unlike future scheduling, that unchanged mathematical failure still takes
+    # the independently health-qualified braking-only consumer entry.
+    publish_curve(harness, model_stop_curve(10.0, 0.001))
+  published = publish_curve(harness, zero_curve())
   candidate = published.as_builder()
   plan = candidate.longitudinalPlan
   assert plan.motionIntent.valid == (channel == 'normal')
   assert plan.motionIntent.brakingValid == (channel == 'braking_only')
+  assert plan.solverStatus == (MPC_GOAL_INFEASIBLE if channel == 'braking_only' else 0)
   original_instance = int(plan.reference.producerInstanceMonoTime)
   assert original_instance == plan.motionIntent.producerInstanceMonoTime > 0
   plan.motionIntent.producerInstanceMonoTime = 0 if bad_instance == 'missing' else original_instance + 1

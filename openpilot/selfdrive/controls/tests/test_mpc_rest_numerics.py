@@ -580,7 +580,7 @@ def test_future_precision_repair_cannot_spend_more_than_the_existing_native_resi
   np.testing.assert_array_equal(mpc.x_sol[2], returned['stage2'])
 
 
-def test_second_node_infeasibility_keeps_braking_through_owner_and_honda_can():
+def test_second_node_nominal_infeasibility_uses_a_verified_later_stop_through_owner_and_honda_can():
   harness = StrictPlanTransportHarness(speed=10.0)
   harness.engage()
   while harness.frame % PLANNER_STEPS:
@@ -597,11 +597,13 @@ def test_second_node_infeasibility_keeps_braking_through_owner_and_honda_can():
   plan = harness.latest['longitudinalPlan'].longitudinalPlan
   assert mpc.rest_goal.native_node == 2 and mpc.diagnostic_last_solver_return == 0
   assert mpc.rest_goal_reason == 'rest_goal_time_below_discrete_lower_bound'
-  assert plan.solverStatus == MPC_GOAL_INFEASIBLE
-  assert plan.motionIntent.brakingValid and not plan.motionIntent.releaseAllowed
-  assert all(row['long_active'] and row['accel'] <= ACCEL_MIN + 1e-5 and not row['resume'] for row in rows)
+  assert mpc.effective_rest_node > 2 and mpc.effective_rest_state == 'satisfied'
+  assert_future_rest_bounds(mpc, mpc.effective_rest_node)
+  assert plan.solverStatus == 0 and plan.motionIntent.valid
+  assert not plan.motionIntent.brakingValid and not plan.motionIntent.restGoalRejected and not plan.motionIntent.releaseAllowed
+  assert all(row['long_active'] and row['accel'] < 0.0 and not row['resume'] and not row['degraded'] for row in rows)
   assert can_rows and all(row['BRAKE_REQUEST'] and row['GAS_COMMAND'] <= 0.0
-                          and row['ACCEL_COMMAND'] <= ACCEL_MIN + 0.01 for row in can_rows)
+                          and row['ACCEL_COMMAND'] < 0.0 for row in can_rows)
 
 
 def test_a_real_future_native_failure_keeps_its_status_and_braking_through_honda_can():

@@ -1,4 +1,4 @@
-"""A confirmed rejected-goal controller output can constrain a qualified zero chain."""
+"""A confirmed stop-controller output can constrain a qualified zero chain."""
 
 from dataclasses import replace
 from unittest.mock import patch
@@ -140,8 +140,12 @@ def test_a_real_continued_goal_takes_precedence_over_its_zero_raw_shape():
   owner.fail_mpc(state, 5.0, -0.5)
   assert planner.motion_intent.rest_goal_rejected
   harness = armed()
-  harness.step(-0.1, zero_intent(reference_kind=int(MotionReferenceKind.REST)))
-  assert harness.control.motion_supervisor._rest_braking_origin is None
+  old_origin = harness.control.motion_supervisor._rest_braking_origin
+  output = harness.step(-0.1, zero_intent(reference_kind=int(MotionReferenceKind.REST)))
+  # A new normal REST retires the rejected-goal origin. Its own final brake
+  # acknowledgement can establish a separate continuation; no old deadline is reused.
+  assert harness.control.motion_supervisor._rest_braking_origin != old_origin
+  assert harness.control.motion_supervisor._rest_braking_accel == output
 
 
 @pytest.mark.parametrize('status,state_name,present,expected', [
@@ -287,7 +291,7 @@ def test_off_observation_retires_an_old_instance_without_arming_new_zero():
   assert supervisor._rest_braking_origin is None and supervisor.degraded_braking_accel is None
 
 
-@pytest.mark.parametrize('kind', [MotionReferenceKind.FORWARD, MotionReferenceKind.REST, MotionReferenceKind.NO_FORWARD, MotionReferenceKind.UNKNOWN,
+@pytest.mark.parametrize('kind', [MotionReferenceKind.FORWARD, MotionReferenceKind.NO_FORWARD, MotionReferenceKind.UNKNOWN,
                                 MotionReferenceKind.MOVING])
 def test_an_accepted_nonzero_source_ends_the_chain_before_a_later_isolated_zero(kind):
   harness = armed()

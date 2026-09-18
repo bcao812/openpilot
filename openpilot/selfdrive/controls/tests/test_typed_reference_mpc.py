@@ -519,7 +519,7 @@ def test_unreachable_one_second_five_meter_goal_is_explicit_and_keeps_real_lead_
   assert np.all(np.isfinite(planner.params)) and np.all(np.isfinite(planner.x_sol))
 
 
-def test_unreachable_goal_braking_intent_reaches_actual_control_and_honda_can():
+def test_future_nominal_miss_keeps_a_verified_stop_trajectory_through_control_and_honda_can():
   harness = StrictPlanTransportHarness(speed=10.0)
   harness.engage()
   while harness.frame % PLANNER_STEPS:
@@ -532,15 +532,19 @@ def test_unreachable_goal_braking_intent_reaches_actual_control_and_honda_can():
   rows = [harness.step() for _ in range(30)]
   can_rows = [command for command in harness.native_commands if command['mono'] > rows[0]['mono']]
   assert harness.planner.mpc.rest_goal_state == 'infeasible'
+  assert harness.planner.mpc.effective_rest_node > harness.planner.mpc.rest_goal.native_node
+  assert harness.planner.mpc.effective_rest_state == 'satisfied'
+  node = harness.planner.mpc.effective_rest_node
+  np.testing.assert_allclose(harness.planner.mpc.x_sol[node:, 1:], 0.0, atol=REST_STATE_TOL, rtol=0.0)
   plan = harness.latest['longitudinalPlan'].longitudinalPlan
-  assert plan.solverStatus == MPC_GOAL_INFEASIBLE
-  assert not plan.motionIntent.valid and plan.motionIntent.brakingValid
-  assert plan.motionIntent.brakingAccel == ACCEL_MIN
+  assert plan.solverStatus == harness.planner.mpc.diagnostic_last_solver_return == 0
+  assert plan.motionIntent.valid and not plan.motionIntent.brakingValid and not plan.motionIntent.restGoalRejected
+  assert not plan.motionIntent.releaseAllowed
   assert harness.controls.sm.freq_ok['longitudinalPlan']
   assert all(row['consumed_plan_mono'] >= first_plan_time and row['long_active'] for row in rows)
-  assert all(row['accel'] <= ACCEL_MIN + 1e-5 and not row['resume'] for row in rows)
+  assert all(row['accel'] < 0.0 and not row['resume'] and not row['degraded'] for row in rows)
   assert can_rows and all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0.0
-                          and command['ACCEL_COMMAND'] <= ACCEL_MIN + 0.01 for command in can_rows)
+                          and command['ACCEL_COMMAND'] < 0.0 for command in can_rows)
 
 
 @pytest.mark.parametrize('lead_index', [0, 1])

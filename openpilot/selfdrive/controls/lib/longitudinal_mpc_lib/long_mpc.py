@@ -87,6 +87,9 @@ class MpcReference:
   model_acceleration: np.ndarray | None = None
   typed_model: ModelReferenceEvidence | None = None
   preference_time_s: float = PREFERENCE_TIME_S
+  # The UNIFIED producer may schedule a witnessed later stop. Direct mathematical
+  # callers keep the original source-goal contract unless they explicitly opt in.
+  allow_future_rest_reschedule: bool = False
 
   def __post_init__(self):
     for field in ('cruise_speed', 'accel_min', 'accel_max', 'cruise_min_accel', 'model_position', 'model_velocity', 'model_acceleration'):
@@ -341,6 +344,9 @@ class LongitudinalMpc:
     self.rest_goal_state = 'none'
     self.rest_goal_reason = ''
     self.rest_goal_braking_accel = None
+    self.effective_rest_node = None
+    self.effective_rest_state = 'none'
+    self.effective_rest_reason = ''
     self.diagnostic_rest_goal = None
     self.diagnostic_reference_weights = None
     self.diagnostic_reference_bounds = None
@@ -645,6 +651,65 @@ class LongitudinalMpc:
     return states, jerks
 
   @classmethod
+  def scheduled_rest_trajectory_error(cls, initial_state, states, jerks, node, parameters, *, tolerance):
+    """Check an entire scheduling witness or actual solution, not just its tail.
+
+    Acceleration and lead-danger rows are normally soft native constraints. A
+    new scheduling branch is admitted only when it satisfies those rows too;
+    this does not make them a separate physical safety guarantee in other modes.
+    """
+    if (not isinstance(node, Integral) or isinstance(node, bool) or not 1 <= node <= N
+        or states.shape != (N+1, X_DIM) or jerks.shape != (N,)
+        or parameters.ndim != 2 or parameters.shape[0] != N+1 or parameters.shape[1] < 6
+        or not np.all(np.isfinite(states)) or not np.all(np.isfinite(jerks))
+        or not np.all(np.isfinite(parameters[:, [0, 1, 2, 4, 5]]))):
+      return 'invalid_scheduled_rest_trajectory'
+    defects = np.array([states[stage+1] - cls.integrate_jerk(states[stage], jerks[stage], duration)
+                        for stage, duration in enumerate(np.diff(T_IDXS))])
+    if max(float(np.max(np.abs(defects))), float(np.max(np.abs(states[0] - initial_state)))) > tolerance:
+      return 'scheduled_rest_dynamics_residual_exceeded'
+    if (np.max(np.abs(states[1:, 1:])) > REFERENCE_BOUND + tolerance
+        or np.max(np.abs(states[node:, 1:])) > REST_STATE_TOL + tolerance
+        or np.max(states[node:, 2]) > tolerance):
+      return 'scheduled_rest_state_bounds_violated'
+    if (cls.trajectory_minimum_velocity(states, jerks) < -tolerance
+        or cls.continuous_rest_bound_violation(initial_state, states, jerks, node) > tolerance):
+      return 'scheduled_rest_continuous_velocity_violated'
+    if (np.any(states[:, 2] < parameters[:, 0] - tolerance)
+        or np.any(states[:, 2] > parameters[:, 1] + tolerance)):
+      return 'scheduled_rest_acceleration_envelope_violated'
+    danger_margin = ((parameters[:, 2] - states[:, 0])
+                     - parameters[:, 5] * get_safe_obstacle_distance(states[:, 1], parameters[:, 4])) / (states[:, 1] + 10.0)
+    if np.any(danger_margin < -tolerance):
+      return 'scheduled_rest_lead_danger_envelope_violated'
+    return ''
+
+  def schedule_future_rest(self):
+    """Select the first later node with a complete witness; never call solve."""
+    goal = self.rest_goal
+    candidates = []
+    self.diagnostic_rest_goal['schedulingCandidates'] = candidates
+    for node in range(goal.native_node + 1, N+1):
+      primal = self.future_rest_primal(self.x0, node)
+      if primal is None:
+        reason = 'no_forward_rest_primal'
+      else:
+        states, jerks = primal
+        arithmetic = self.rest_arithmetic_roundoff(np.concatenate((states.ravel(), jerks)))
+        reason = self.scheduled_rest_trajectory_error(self.x0, states, jerks, node, self.params, tolerance=arithmetic)
+      candidates.append({'node': node, 'reason': reason})
+      if not reason:
+        self.effective_rest_node = node
+        self.effective_rest_state = 'constrained'
+        self.diagnostic_rest_goal.update(
+          effectiveNativeNode=node, effectiveNativeTime=float(T_IDXS[node]), effectiveState='constrained',
+          rescheduleDelay=float(T_IDXS[node] - goal.native_time_s),
+          effectiveLateness=float(T_IDXS[node] - goal.remaining_time_s), scheduledPrimalVerified=True,
+        )
+        return primal
+    return None
+
+  @classmethod
   def continuous_rest_bound_violation(cls, initial_state, states, jerks, node):
     violation = 0.0
     for stage in range(max(0, node - 1)):
@@ -725,7 +790,7 @@ class LongitudinalMpc:
         return None
     return jerks, middle, terminal
 
-  def project_rest_precision(self):
+  def project_rest_precision(self, *, node=None):
     """Remove bounded numerical defects by changing jerk, never clipping x/v/a.
 
     Only a successful native solve reaches this method. The raw
@@ -741,7 +806,7 @@ class LongitudinalMpc:
     maximum_defect = np.maximum(np.max(np.abs(defects), axis=0), np.abs(raw_states[0] - self.x0))
     maximum_violation = float(max(0.0, np.max(lower[1:] - raw_states[1:, 1:]),
                                   np.max(raw_states[1:, 1:] - upper[1:])))
-    node = self.rest_goal.native_node
+    node = self.rest_goal.native_node if node is None else node
     certificate_violation = self.continuous_rest_bound_violation(self.x0, raw_states, raw_jerks, node)
     diagnostics = {'applied': False, 'feasibilityTolerance': QP_FEASIBILITY_TOL,
                    'maximumNativeDynamicsDefect': maximum_defect.tolist(),
@@ -829,12 +894,15 @@ class LongitudinalMpc:
     hence its entire quadratic velocity is nonnegative. This is a conservative
     feasible subset, not a sample-only check or a nonlinear RTI approximation.
     """
-    future = self.rest_goal_state == 'constrained' and self.rest_goal.native_node > 0
+    node = self.effective_rest_node
+    if node is None:
+      node = self.rest_goal.native_node if self.rest_goal is not None else 0
+    future = (self.rest_goal_state == 'constrained' or self.effective_rest_state == 'constrained') and node > 0
     # Future rest ends the entering interval at a<=0. Its velocity is monotone
     # or concave, so the minimum is an endpoint. Later intervals have both
     # accelerations <=0 and are monotone. Node v>=0 certifies these intervals
     # without redundant C rows; exact due-rest keeps its existing separate path.
-    constrained_stages = max(0, self.rest_goal.native_node - 1) if future else 0
+    constrained_stages = max(0, node - 1) if future else 0
     splits = []
     for stage, duration in enumerate(np.diff(T_IDXS)):
       C, D = np.zeros((2, X_DIM)), np.zeros((2, U_DIM))
@@ -912,6 +980,9 @@ class LongitudinalMpc:
     self.rest_goal_state = 'none'
     self.rest_goal_reason = ''
     self.rest_goal_braking_accel = None
+    self.effective_rest_node = None
+    self.effective_rest_state = 'none'
+    self.effective_rest_reason = ''
     self.diagnostic_rest_goal = None
     self.yref[:, :] = 0.0
     self.params[:, MODEL_V_REF:] = 0.0
@@ -999,11 +1070,28 @@ class LongitudinalMpc:
         self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_time_below_discrete_lower_bound'
       else:
         self.rest_goal_state = 'constrained'
-        lower[max(1, goal.native_node):, :] = 0.0
-        upper[max(1, goal.native_node):, :] = 0.0
+
+      if type(reference.allow_future_rest_reschedule) is not bool:
+        raise ValueError('Invalid future rest scheduling selection')
+      scheduled_primal = None
+      if (reference.allow_future_rest_reschedule and qualified and self.rest_goal_state == 'infeasible'
+          and goal.native_node is not None and 0 < goal.native_node < N and goal.remaining_time_s > 0.0):
+        self.diagnostic_rest_goal.update(nominalState=self.rest_goal_state, nominalReason=self.rest_goal_reason)
+        scheduled_primal = self.schedule_future_rest()
+
+      if self.rest_goal_state == 'constrained' or scheduled_primal is not None:
+        node = self.effective_rest_node if scheduled_primal is not None else goal.native_node
+        if scheduled_primal is not None:
+          # These rows were checked by the scheduling witness. Make the
+          # existing acceleration envelope hard for this new branch only;
+          # ordinary mathematically reachable goals retain their prior problem.
+          lower[1:, 1], upper[1:, 1] = self.params[1:, 0], self.params[1:, 1]
+        lower[max(1, node):, :] = 0.0
+        upper[max(1, node):, :] = 0.0
         # A raw zero goal survives the anchored moving preference unchanged.
+        # Rescheduling a constraint does not move the source's desired stop.
         self.params[goal.native_node:, MODEL_V_REF:MODEL_A_REF + 1] = 0.0
-        if goal.native_node == 0:
+        if node == 0:
           # Within the existing rest acceptance precision, exact endpoint
           # v=a=0 is generally unreachable from a nonzero fixed initial state:
           # a_1=0 implies v_1=v_0+a_0*dt/2 for this constant-jerk model.
@@ -1024,11 +1112,15 @@ class LongitudinalMpc:
           # Ideal v/a and the event time stay unchanged. The native box now
           # expresses the existing accepted rest precision, with a<=0 so the
           # entering and later intervals retain a nonnegative-speed proof.
-          lower[goal.native_node:, :] = [0.0, -REST_STATE_TOL]
-          upper[goal.native_node:, :] = [REST_STATE_TOL, 0.0]
+          lower[node:, :] = [0.0, -REST_STATE_TOL]
+          upper[node:, :] = [REST_STATE_TOL, 0.0]
+          if scheduled_primal is not None:
+            lower[node:, 1] = np.maximum(lower[node:, 1], self.params[node:, 0])
+            upper[node:, 1] = np.minimum(upper[node:, 1], self.params[node:, 1])
           self.diagnostic_rest_goal.update(nativeVelocityBounds=[0.0, REST_STATE_TOL],
                                            nativeAccelerationBounds=[-REST_STATE_TOL, 0.0])
-          future_primal = self.future_rest_primal(self.x0, goal.native_node, future_interval if goal.native_node in (1, 2) else None)
+          future_primal = (scheduled_primal if scheduled_primal is not None else
+                          self.future_rest_primal(self.x0, node, future_interval if node in (1, 2) else None))
           self.diagnostic_rest_goal['futurePrimalInitialized'] = future_primal is not None
           if future_primal is not None:
             future_states, future_jerks = future_primal
@@ -1036,7 +1128,7 @@ class LongitudinalMpc:
               self.solver.set(stage, 'x', future_states[stage])
               if stage < N:
                 self.solver.set(stage, 'u', np.array([future_jerks[stage]]))
-      if self.rest_goal_state in ('infeasible', 'unverified'):
+      if self.rest_goal_state in ('infeasible', 'unverified') and scheduled_primal is None:
         # Retain the failed goal while solving the existing lead/cruise risk
         # problem. The caller uses an explicit braking failure intent; it must
         # never publish this relaxed solution as goal satisfaction.
@@ -1054,10 +1146,12 @@ class LongitudinalMpc:
     self.diagnostic_reference_bounds = (lower.copy(), upper.copy())
 
   def check_rest_goal(self):
+    """Judge the original source goal; scheduling never changes this contract."""
     if self.rest_goal is None:
       return
     if self.rest_goal_state in ('infeasible', 'unverified'):
       self.solution_status = MPC_GOAL_INFEASIBLE
+      self.rest_goal_braking_accel = float(np.min(self.params[:, 0]))
     elif self.rest_goal_state == 'constrained':
       node = self.rest_goal.native_node
       error = float(np.max(np.abs(self.x_sol[node:, 1:])))
@@ -1083,12 +1177,47 @@ class LongitudinalMpc:
       self.previous_solution_valid = False
       self.invalidate_reference_history()
 
+  def check_effective_rest_goal(self):
+    """Accept a scheduled native trajectory without claiming the source time met."""
+    if self.effective_rest_node is None:
+      self.check_rest_goal()
+      return
+    node = self.effective_rest_node
+    failure = self.project_rest_precision(node=node)
+    if not failure:
+      failure = self.scheduled_rest_trajectory_error(
+        self.x0, self.x_sol, self.j_solution, node, self.params, tolerance=QP_FEASIBILITY_TOL,
+      )
+    self.effective_rest_state = 'unsatisfied' if failure else 'satisfied'
+    self.effective_rest_reason = failure
+    self.diagnostic_rest_goal.update(
+      state=self.rest_goal_state, reason=self.rest_goal_reason,
+      nominalMaximumRestStateError=float(np.max(np.abs(self.x_sol[self.rest_goal.native_node:, 1:]))),
+      effectiveState=self.effective_rest_state, effectiveReason=failure,
+      effectiveMaximumRestStateError=float(np.max(np.abs(self.x_sol[node:, 1:]))),
+      effectiveMinimumContinuousVelocity=self.trajectory_minimum_velocity(self.x_sol, self.j_solution),
+    )
+    if failure:
+      self.solution_status = MPC_GOAL_UNSATISFIED
+      self.rest_goal_braking_accel = float(np.min(self.params[:, 0]))
+      self.failure_reason = failure
+      self.previous_solution_valid = False
+      self.invalidate_reference_history()
+    else:
+      # run() already established actual native success. Its solved trajectory,
+      # full constraint checks and effective zero-speed destination are retained.
+      self.rest_goal_braking_accel = None
+      self.failure_reason = ''
+
   def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None):
     self.diagnostic_last_obstacle_summary = None
     self.rest_goal = None
     self.rest_goal_state = 'none'
     self.rest_goal_reason = ''
     self.rest_goal_braking_accel = None
+    self.effective_rest_node = None
+    self.effective_rest_state = 'none'
+    self.effective_rest_reason = ''
     self.diagnostic_rest_goal = None
     t_follow = get_T_FOLLOW(personality)
     self.solve_time = 0.0
@@ -1128,18 +1257,19 @@ class LongitudinalMpc:
     x_obstacles = np.column_stack(obstacles)
     self.source = sources[np.argmin(x_obstacles[1 if reference is not None else 0])]
 
-    try:
-      self.set_reference_problem(reference, x_obstacles, sources, accel_min, t_follow)
-    except (TypeError, ValueError, FloatingPointError):
-      self.fail(MPC_INVALID_INPUT)
-      return
-
+    # Scheduling inspects exactly the parameters that this update will solve.
     self.params[:,0] = accel_min
     self.params[:,1] = accel_max
     self.params[:,2] = np.min(x_obstacles, axis=1)
     self.params[:,3] = np.copy(self.a_prev)
     self.params[:,4] = t_follow
     self.params[:,5] = LEAD_DANGER_FACTOR
+
+    try:
+      self.set_reference_problem(reference, x_obstacles, sources, accel_min, t_follow)
+    except (TypeError, ValueError, FloatingPointError):
+      self.fail(MPC_INVALID_INPUT)
+      return
 
     try:
       self.observe_obstacles(x_obstacles, sources)
@@ -1149,7 +1279,7 @@ class LongitudinalMpc:
     self.run()
     if self.solution_status != 0:
       return
-    self.check_rest_goal()
+    self.check_effective_rest_goal()
     if (radarstate.leadOne.present and np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
             radarstate.leadOne.modelProb > 0.9):
       self.crash_cnt += 1
@@ -1174,6 +1304,7 @@ class LongitudinalMpc:
 
   def fail(self, status):
     failed_goal = self.rest_goal
+    effective_node = self.effective_rest_node
     goal_diagnostic = self.diagnostic_rest_goal
     solve_time = self.solve_time
     last_cloudlog_t = self.last_cloudlog_t
@@ -1192,6 +1323,10 @@ class LongitudinalMpc:
       self.rest_goal_braking_accel = ACCEL_MIN
       self.diagnostic_rest_goal = goal_diagnostic or {}
       self.diagnostic_rest_goal.update(state=self.rest_goal_state, reason=self.rest_goal_reason)
+      if effective_node is not None:
+        self.effective_rest_node = effective_node
+        self.effective_rest_state, self.effective_rest_reason = 'solver_failure', self.failure_reason
+        self.diagnostic_rest_goal.update(effectiveState=self.effective_rest_state, effectiveReason=self.failure_reason)
     self.last_cloudlog_t = last_cloudlog_t
     self.solve_time = solve_time if np.isfinite(solve_time) else 0.0
     self.source = LongitudinalPlanSource.cruise
