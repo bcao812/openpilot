@@ -149,16 +149,14 @@ def should_stop_for_close_lead(v_ego: float, a_target: float, radar_state, actua
           and 0.0 <= actuator_delay <= 1.0):
     return False
   # A requested brake is not evidence that the vehicle has already delivered
-  # it. Reserve the ramp from the weaker of requested and measured braking,
-  # and do not assume constant speed while measured acceleration is positive.
+  # it. Reserve the ramp from the weaker of requested and measured braking.
+  # A non-braking measurement warrants the existing full ramp from neutral;
+  # it does not establish persistent positive acceleration during that ramp.
   # This is a conservative trigger budget, not a calibrated stopping-distance
   # model or a guarantee about the remaining physical clearance.
-  ramp_time = (max(a_target, a_ego) - ROLLING_STOP_ACCEL) / STOPPING_DECEL_RATE
+  ramp_time = (max(a_target, min(a_ego, 0.0)) - ROLLING_STOP_ACCEL) / STOPPING_DECEL_RATE
   response_time = actuator_delay + DT_MDL + ramp_time
-  growing_accel = max(a_ego, 0.0)
-  response_speed = v_ego + growing_accel * response_time
-  stopping_budget = (LEAD_STOP_MIN_CLEARANCE + v_ego * response_time + 0.5 * growing_accel * response_time ** 2
-                     + response_speed ** 2 / (-2.0 * ROLLING_STOP_ACCEL))
+  stopping_budget = LEAD_STOP_MIN_CLEARANCE + v_ego * response_time + v_ego ** 2 / (-2.0 * ROLLING_STOP_ACCEL)
   for lead in (radar_state.leadOne, radar_state.leadTwo):
     values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.yRel, lead.modelProb)
     if not lead.present or not all(math.isfinite(value) for value in values):

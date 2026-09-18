@@ -556,6 +556,7 @@ class MotionSupervisor:
 
     raw_reasons = StopReason(intent.reasons)
     stopped_phase = self.phase in (MotionPhase.APPROACH, MotionPhase.HOLD)
+    held_stop = stopped_phase and bool(self.phase == MotionPhase.HOLD or self.reasons & StopReason.HOLD)
     moving_eligible = (intent.moving_lead and not raw_reasons and not stopped_phase and not standstill
                        and STOP_SPEED <= v_ego < CLOSE_LEAD_STOP_SPEED)
     if self.mode == LongitudinalMode.SUPERVISED:
@@ -589,14 +590,17 @@ class MotionSupervisor:
       reasons = StopReason.NONE
       self._reset_creep()
       self._pending_off_creep = None
-    elif stopped_phase and not reasons and (near_standstill or not intent.release_allowed):
+    elif stopped_phase and not reasons and (held_stop or near_standstill or not intent.release_allowed):
       reasons = (self.reasons & ~StopReason.INVALID) or StopReason.HOLD
       if near_standstill:
         reasons |= StopReason.HOLD
 
     if reasons:
       self.phase = MotionPhase.HOLD if standstill else MotionPhase.APPROACH
-      if self.phase == MotionPhase.HOLD:
+      # A held stop does not become a rolling-stop withdrawal merely because
+      # the latest measured speed crosses STOP_SPEED on a cached plan tick.
+      # Keep its ownership until the qualified departure above clears it.
+      if self.phase == MotionPhase.HOLD or held_stop:
         reasons |= StopReason.HOLD
     elif stopped_phase:
       self.phase = MotionPhase.RELEASE

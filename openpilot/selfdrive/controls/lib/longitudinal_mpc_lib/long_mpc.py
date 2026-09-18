@@ -239,6 +239,12 @@ def gen_long_ocp():
   ocp.constraints.idxbx_e = np.array([1, 2])
   ocp.constraints.lbx_e = np.full(2, -REFERENCE_BOUND)
   ocp.constraints.ubx_e = np.full(2, REFERENCE_BOUND)
+  # Two linear Bernstein coefficients can certify each continuous-velocity
+  # interval. They are inactive unless a future typed rest goal is constrained.
+  ocp.constraints.C = np.zeros((2, X_DIM))
+  ocp.constraints.D = np.zeros((2, U_DIM))
+  ocp.constraints.lg = -np.ones(2)
+  ocp.constraints.ug = np.ones(2)
   ocp.parameter_values = np.array([-1.2, 1.2, 0.0, 0.0, get_T_FOLLOW(), LEAD_DANGER_FACTOR, 0.0, 0.0, 0.0, 0.0])
 
 
@@ -545,6 +551,17 @@ class LongitudinalMpc:
       minimum = min(minimum, velocity - acceleration**2 / (2.0 * jerk))
     return float(minimum)
 
+  @staticmethod
+  def trajectory_minimum_velocity(states, jerks):
+    minimum = float(np.min(states[:, 1]))
+    for stage, duration in enumerate(np.diff(T_IDXS)):
+      if jerks[stage] > 0.0:
+        extremum = -states[stage, 2] / jerks[stage]
+        if 0.0 < extremum < duration:
+          minimum = min(minimum, float(states[stage, 1] + states[stage, 2] * extremum
+                                      + 0.5 * jerks[stage] * extremum**2))
+    return minimum
+
   def project_due_rest_precision(self):
     """Remove bounded numerical defects by changing jerk, never clipping x/v/a.
 
@@ -569,6 +586,15 @@ class LongitudinalMpc:
       return 'native_rest_dynamics_residual_exceeded'
     if maximum_violation > QP_FEASIBILITY_TOL:
       return 'native_rest_precision_budget_exceeded'
+
+    # Preserve the existing accepted precision, including sub-tolerance
+    # continuous-speed residuals. A physically accepted native trajectory must
+    # not become a new failure merely because a stricter projection is costly.
+    required = (np.max(np.abs(raw_states[:, 1:])) > REST_STATE_TOL
+                or self.trajectory_minimum_velocity(raw_states, raw_jerks) < -REST_STATE_TOL)
+    diagnostics['required'] = bool(required)
+    if not required:
+      return ''
 
     states, jerks = np.empty_like(raw_states), np.empty_like(raw_jerks)
     states[0] = self.x0
@@ -625,6 +651,48 @@ class LongitudinalMpc:
     # tied to the same corrected trajectory, not its pre-projection version.
     self.a_prev = np.interp(T_IDXS + self.dt, T_IDXS, self.a_solution)
     return ''
+
+  def set_continuous_rest_bounds(self):
+    """Certify future-rest velocity between nodes with linear constraints.
+
+    Split [0,h] at tau. The two quadratic Bernstein middle coefficients are
+    b1=v+a*tau/2 and b2=v+a*(h+tau)/2+j*h*tau/2. Their weighted average
+    v(tau)=(1-tau/h)*b1+(tau/h)*b2 is nonnegative when both are. Together
+    with v(0),v(h)>=0, each subinterval has three nonnegative coefficients,
+    hence its entire quadratic velocity is nonnegative. This is a conservative
+    feasible subset, not a sample-only check or a nonlinear RTI approximation.
+    """
+    future = self.rest_goal_state == 'constrained' and self.rest_goal.native_node > 0
+    # The final interval enters exact v=a=0. Dynamics and v_start>=0 already
+    # give v(t)=v_start*(1-t/h)^2 there; subsequent intervals are zero. Avoid
+    # adding redundant zero inequalities alongside those exact rest bounds.
+    constrained_stages = max(0, self.rest_goal.native_node - 1) if future else 0
+    splits = []
+    for stage, duration in enumerate(np.diff(T_IDXS)):
+      C, D = np.zeros((2, X_DIM)), np.zeros((2, U_DIM))
+      lower, upper = -np.ones(2), np.ones(2)
+      if stage < constrained_stages:
+        split = duration / 2.0
+        if stage == 0 and self.x0[2] < 0.0:
+          # x0 is fixed, so select a first coefficient that is already
+          # nonnegative. The downward ULP avoids a negative rounding residual.
+          split = min(split, np.nextafter(2.0 * self.x0[1] / -self.x0[2], 0.0))
+        C[1] = [0.0, 1.0, (duration + split) / 2.0]
+        D[1, 0] = duration * split / 2.0
+        lower[1], upper[1] = 0.0, REFERENCE_BOUND
+        if stage:
+          C[0] = [0.0, 1.0, split / 2.0]
+          lower[0], upper[0] = 0.0, REFERENCE_BOUND
+        # At stage zero b1 is fixed and was certified by the split choice.
+        # Keeping that row inactive avoids a redundant initial-state equality.
+        splits.append(float(split))
+      self.solver.constraints_set(stage, 'C', C)
+      self.solver.constraints_set(stage, 'D', D)
+      self.solver.constraints_set(stage, 'lg', lower)
+      self.solver.constraints_set(stage, 'ug', upper)
+    if future:
+      self.diagnostic_rest_goal['continuousSpeedCertificate'] = 'quadratic_bernstein'
+      self.diagnostic_rest_goal['continuousSpeedSplitTimes'] = splits
 
   @staticmethod
   def due_rest_primal(initial_state):
@@ -748,6 +816,13 @@ class LongitudinalMpc:
         self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_due_with_nonrest_initial_state'
       elif goal.native_node == 0 and (resting_primal := self.due_rest_primal(self.x0)) is None:
         self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_due_without_nonnegative_rest_trajectory'
+      elif goal.native_node > 0 and self.rest_acceleration_interval(
+        self.x0, T_IDXS[1], np.array([0.0, -REFERENCE_BOUND]), np.full(2, REFERENCE_BOUND),
+      ) is None:
+        # Includes v0=0,a0<0 and tiny speeds that would require a first
+        # acceleration beyond the existing native state box. Do not turn
+        # that impossible or ill-conditioned segment into a native QP error.
+        self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_without_nonnegative_initial_segment'
       elif self.x0[1] + minimum_accel * goal.native_time_s > REST_STATE_TOL:
         self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_time_below_braking_lower_bound'
       elif goal.native_node == 1 and self.rest_acceleration_interval(self.x0, T_IDXS[1], np.zeros(2), np.zeros(2)) is None:
@@ -784,6 +859,8 @@ class LongitudinalMpc:
         # never publish this relaxed solution as goal satisfaction.
         self.rest_goal_braking_accel = minimum_accel
 
+    self.set_continuous_rest_bounds()
+
     for stage in range(N+1):
       self.solver.cost_set(stage, 'W', np.asfortranarray(np.diag(weights[stage, :COST_DIM if stage < N else COST_E_DIM])))
       self.solver.set(stage, 'yref', self.yref[stage, :COST_DIM if stage < N else COST_E_DIM])
@@ -802,13 +879,7 @@ class LongitudinalMpc:
       node = self.rest_goal.native_node
       numerical_failure = self.project_due_rest_precision() if node == 0 else ''
       error = float(np.max(np.abs(self.x_sol[node:, 1:])))
-      minimum_velocity = float(np.min(self.v_solution))
-      for stage, duration in enumerate(np.diff(T_IDXS)):
-        if self.j_solution[stage] > 0.0:
-          extremum = -self.a_solution[stage] / self.j_solution[stage]
-          if 0.0 < extremum < duration:
-            minimum_velocity = min(minimum_velocity, float(self.v_solution[stage]
-                                   + self.a_solution[stage] * extremum + 0.5 * self.j_solution[stage] * extremum**2))
+      minimum_velocity = self.trajectory_minimum_velocity(self.x_sol, self.j_solution)
       self.diagnostic_rest_goal['maximumRestStateError'] = error
       self.diagnostic_rest_goal['minimumContinuousVelocity'] = minimum_velocity
       if numerical_failure or error > REST_STATE_TOL or minimum_velocity < -REST_STATE_TOL:

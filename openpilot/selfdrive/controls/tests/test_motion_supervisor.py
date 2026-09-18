@@ -190,6 +190,28 @@ def test_cached_negative_target_publications_do_not_prepay_departure_confirmatio
     assert harness.step(intent, a_target=0.05, v_ego=0.0, standstill=True, new_plan=new_input, new_model=new_input)
 
 
+@pytest.mark.parametrize('speed', [0.31, 1.3])
+def test_a_held_stop_keeps_its_departure_contract_when_measurements_cross_the_stop_band(speed):
+  harness = MotionHarness()
+  harness.stopped()
+  # A still-published raw stop can be consumed after measured speed leaves
+  # zero. It must not erase the fact that this stop already reached HOLD.
+  assert harness.step(MotionIntent(reasons=StopReason.E2E), a_target=-0.1, v_ego=0.2)
+  intent = MotionIntent(release_allowed=True, allow_creep=False)
+  assert harness.step(intent, a_target=-0.1, v_ego=0.2)
+  assert harness.step(intent, a_target=-0.1, v_ego=speed, new_plan=False, new_model=False)
+  assert harness.supervisor.reasons & StopReason.HOLD
+  assert harness.supervisor.release_lead_t < CREEP_STOP_T
+  for frame in range(40):
+    new_input = frame % 5 == 0
+    assert harness.step(intent, a_target=0.05, v_ego=speed, new_plan=new_input, new_model=new_input)
+  for frame in range(20):
+    new_input = frame % 5 == 0
+    harness.step(intent, a_target=0.05, v_ego=speed, new_plan=new_input, new_model=new_input)
+  assert harness.supervisor.phase == MotionPhase.RELEASE
+  assert not harness.supervisor.reasons
+
+
 def test_withdrawing_movement_permission_restarts_low_target_confirmation():
   harness = MotionHarness()
   harness.stopped()

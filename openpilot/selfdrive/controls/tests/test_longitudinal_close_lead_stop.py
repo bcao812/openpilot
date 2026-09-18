@@ -63,7 +63,7 @@ def test_stopping_budget_accounts_for_actuator_and_ramp_delay():
 def test_requested_braking_cannot_stand_in_for_a_lagging_measured_response():
   state = near_stop_state()
   lead = state['radarState'].leadOne
-  lead.dRel, lead.vLead, lead.vRel = 5.5, 0.0, -1.8
+  lead.dRel, lead.vLead, lead.vRel = 5.0, 0.0, -1.8
   assert not close_stop(state, speed=1.8, acceleration=-1.2, measured_acceleration=-1.2)
   assert close_stop(state, speed=1.8, acceleration=-1.2, measured_acceleration=0.2)
 
@@ -73,6 +73,18 @@ def test_a_more_negative_measurement_does_not_spend_the_requested_braking_reserv
   state['radarState'].leadOne.dRel = 3.3
   assert close_stop(state, acceleration=-0.3, measured_acceleration=-0.3)
   assert close_stop(state, acceleration=-0.3, measured_acceleration=-2.0)
+
+
+@pytest.mark.parametrize('distance,transient_acceleration', [(7.0, 1.0), (15.0, 2.0)])
+def test_a_positive_acceleration_transient_does_not_latch_a_distant_lead(distance, transient_acceleration):
+  planner, state = braking_planner(), near_stop_state()
+  state['radarState'].leadOne.dRel = distance
+  state['carState'].aEgo = transient_acceleration
+  update(planner, state)
+  assert not planner.close_lead_stop and not planner.output_should_stop
+  state['carState'].aEgo = -0.7
+  update(planner, state)
+  assert not planner.close_lead_stop and not planner.output_should_stop
 
 
 @pytest.mark.parametrize('measured_acceleration', [float('nan'), float('inf'), float('-inf')])

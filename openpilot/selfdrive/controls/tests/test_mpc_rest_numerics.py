@@ -8,7 +8,7 @@ import pytest
 from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, QP_FEASIBILITY_TOL, REST_STATE_TOL, T_IDXS, LongitudinalMpc,
+  MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, QP_FEASIBILITY_TOL, REST_STATE_TOL, T_IDXS, LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.tests.test_due_rest_reference import NEAR_ZERO_STATES, typed_due_reference
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, stopping_curve
@@ -106,7 +106,15 @@ def test_a_native_zero_return_cannot_hide_a_defect_outside_the_numerical_budget(
   np.testing.assert_array_equal(mpc.j_solution, returned['jerks'])
 
 
-@pytest.mark.parametrize('speed,acceleration', [(0.005, 0.0), (0.02, -0.2), (0.001, -0.01), (0.0, -0.001)])
+@pytest.mark.parametrize('speed,acceleration', [
+  (0.005, 0.0), (0.02, -0.2), (0.001, -0.01), (0.0, -0.001),
+  # All seven native +4 captures from the four frozen report-20 risk jobs.
+  # Each attempted exact v=a=0 at native node 1 from these measured states.
+  (0.1264825463294983, -0.501275897026062), (0.07988708466291428, -1.2803713083267212),
+  (0.15970134735107422, 0.4808322787284851), (0.10668159276247025, -0.5194023847579956),
+  (0.006117075216025114, -0.6851852536201477), (0.006080630235373974, -0.008811135776340961),
+  (0.020815182477235794, 0.08480892330408096),
+])
 def test_first_node_infeasibility_is_explicit_before_the_one_real_risk_solve(speed, acceleration):
   mpc = LongitudinalMpc()
   mpc.set_weights(prev_accel_constraint=False)
@@ -117,7 +125,9 @@ def test_first_node_infeasibility_is_explicit_before_the_one_real_risk_solve(spe
   mpc.update(radar_state(distance=12.0, speed=0.0), reference=reference)
   assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == mpc.last_solver_status == 0
   assert mpc.solution_status == MPC_GOAL_INFEASIBLE and mpc.rest_goal_state == 'infeasible'
-  assert mpc.rest_goal_reason == 'rest_goal_time_below_discrete_lower_bound'
+  expected_reason = 'rest_goal_without_nonnegative_initial_segment' if speed == 0.0 and acceleration < 0.0 else \
+                    'rest_goal_time_below_discrete_lower_bound'
+  assert mpc.rest_goal_reason == expected_reason
   assert mpc.rest_goal_braking_accel == ACCEL_MIN and not mpc.previous_solution_valid
   assert np.all(np.isfinite(mpc.x_sol))
   # The normal lead-risk problem is still solved, but is not called a stop.
@@ -187,3 +197,110 @@ def test_precision_budget_rejection_keeps_braking_through_owner_and_honda_can():
   assert all(row['long_active'] and row['accel'] <= ACCEL_MIN + 1e-5 and not row['resume'] for row in rows)
   assert can_rows and all(row['BRAKE_REQUEST'] and row['GAS_COMMAND'] <= 0.0
                           and row['ACCEL_COMMAND'] <= ACCEL_MIN + 0.01 for row in can_rows)
+
+
+def test_an_originally_accepted_due_rest_trajectory_is_not_forced_into_a_stricter_projection():
+  """A tiny negative interval value inside the original precision is accepted.
+
+  The first engineering rerun exposed nine false rejections when unconditional
+  projection spent its numerical budget enforcing a stricter zero threshold.
+  This coherent polynomial isolates that distinction from the plant model.
+  """
+  initial = np.array([0.0, 1e-6, -1e-4])
+  jerks = np.zeros(len(T_IDXS) - 1)
+  jerks[0] = 2e-4 / T_IDXS[1]
+  jerks[1] = -1e-4 / (T_IDXS[2] - T_IDXS[1])
+  states = integrate(initial, jerks)
+  assert np.all(states[:, 1] >= 0.0) and np.max(np.abs(states[:, 1:])) < REST_STATE_TOL
+  minimum = LongitudinalMpc.trajectory_minimum_velocity(states, jerks)
+  assert -REST_STATE_TOL < minimum < -100.0 * QP_FEASIBILITY_TOL
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=False)
+  mpc.set_cur_state(*initial[1:])
+  native = mpc.solver
+  solver = Mock(wraps=native)
+
+  def get(stage, field):
+    if field == 'x':
+      return states[stage].copy()
+    if field == 'u':
+      return np.array([jerks[stage]])
+    return native.get(stage, field)
+
+  solver.get.side_effect = get
+  mpc.solver = solver
+  mpc.update(radar_state(), reference=typed_due_reference(initial[1]))
+  assert mpc.diagnostic_last_solver_return == mpc.solution_status == 0
+  assert mpc.rest_goal_state == 'satisfied' and mpc.rest_goal_braking_accel is None
+  assert not mpc.diagnostic_rest_goal['numericalProjection']['required']
+  assert not mpc.diagnostic_rest_goal['numericalProjection']['applied']
+  np.testing.assert_array_equal(mpc.x_sol, states)
+  np.testing.assert_array_equal(mpc.j_solution, jerks)
+
+
+# First continuous-speed failures in the fixed engineering matrix at 8dd36bb8,
+# model_stop_positive_action: d01_t02 t=5.90, d03_t04 t=4.80, uphill t=3.60.
+FUTURE_REST_COUNTEREXAMPLES = [
+  (0.020619023591279984, -0.9352537393569946, 0.020940198052347668, -0.003121203570461617, 11),
+  (0.1138337254524231, -0.6702026724815369, 0.12843246493168956, -0.05869335832326215, 6),
+  (1.3679653406143188, -1.8144984245300293, 1.3873872999131978, -0.36777157004207767, 8),
+]
+
+
+@pytest.mark.parametrize('speed,acceleration,raw_speed,raw_acceleration,node', FUTURE_REST_COUNTEREXAMPLES)
+@pytest.mark.parametrize('previous_accel', [False, True])
+def test_future_rest_native_problem_prevents_the_recorded_between_node_reverse_motion(
+  speed, acceleration, raw_speed, raw_acceleration, node, previous_accel,
+):
+  raw = np.maximum(raw_speed + raw_acceleration * MODEL_TIMES, 0.0)
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=previous_accel)
+  mpc.set_cur_state(speed, acceleration)
+  if previous_accel:
+    mpc.a_prev[:] = acceleration
+  mpc.update(radar_state(), reference=typed_reference(raw, speed))
+  assert mpc.rest_goal.native_node == node
+  assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == mpc.solution_status == 0
+  assert mpc.rest_goal_state == 'satisfied'
+  assert mpc.diagnostic_rest_goal['minimumContinuousVelocity'] >= -REST_STATE_TOL
+  assert mpc.diagnostic_rest_goal['maximumRestStateError'] <= REST_STATE_TOL
+  assert 'numericalProjection' not in mpc.diagnostic_rest_goal
+  assert mpc.diagnostic_rest_goal['continuousSpeedCertificate'] == 'quadratic_bernstein'
+  assert len(mpc.diagnostic_rest_goal['continuousSpeedSplitTimes']) == node - 1
+  np.testing.assert_array_equal(mpc.x0, [0.0, speed, acceleration])
+  np.testing.assert_array_equal(mpc.x_sol, np.array([mpc.solver.get(stage, 'x') for stage in range(len(T_IDXS))]))
+
+
+@pytest.mark.parametrize('replacement', ['untyped', 'moving', 'due_rest'])
+def test_continuous_rest_linear_bounds_are_removed_when_the_future_goal_ends(replacement):
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=False)
+  speed, acceleration, raw_speed, raw_acceleration, _ = FUTURE_REST_COUNTEREXAMPLES[0]
+  mpc.set_cur_state(speed, acceleration)
+  raw = np.maximum(raw_speed + raw_acceleration * MODEL_TIMES, 0.0)
+  mpc.update(radar_state(), reference=typed_reference(raw, speed))
+  assert mpc.solution_status == 0
+  mpc.set_cur_state(0.0, 0.0)
+  reference = {'untyped': MpcReference(20.0), 'moving': typed_reference(0.2 + 0.6 * MODEL_TIMES, 0.0),
+               'due_rest': typed_due_reference(0.0)}[replacement]
+  solver = Mock(wraps=mpc.solver)
+  mpc.solver = solver
+  mpc.update(radar_state(), reference=reference)
+  assert mpc.solution_status == 0
+  for call in solver.constraints_set.call_args_list:
+    if call.args[1] in ('C', 'D'):
+      np.testing.assert_array_equal(call.args[2], 0.0)
+    if call.args[1] == 'lg':
+      assert np.all(call.args[2] < 0.0)
+
+
+@pytest.mark.parametrize('speed', [0.0, 1e-12])
+def test_negative_acceleration_at_zero_or_too_small_speed_cannot_supply_a_continuous_future_rest_solution(speed):
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=False)
+  mpc.set_cur_state(speed, -0.5)
+  mpc.update(radar_state(), reference=typed_reference(stopping_curve(0.1, 2.5), speed))
+  assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == 0
+  assert mpc.solution_status == MPC_GOAL_INFEASIBLE
+  assert mpc.rest_goal_reason == 'rest_goal_without_nonnegative_initial_segment'
+  assert mpc.rest_goal_braking_accel == ACCEL_MIN

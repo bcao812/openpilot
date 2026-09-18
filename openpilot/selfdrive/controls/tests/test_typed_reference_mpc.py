@@ -383,6 +383,40 @@ def test_qualified_departing_lead_is_independent_of_missing_aligned_or_raw_growt
              for command in can_rows)
 
 
+def test_cached_departing_lead_cannot_withdraw_a_held_stop_when_speed_crosses_the_stop_band():
+  harness = StrictPlanTransportHarness(speed=5.0)
+  harness.hold()
+  harness.source_state.cruiseState.standstill = False
+  harness.source_state.vEgo = 0.2
+  harness.source_state.standstill = False
+  harness.model_publication_after_state = True
+  harness.departing_lead_speed = 1.5
+  raw = np.full(len(MODEL_TIMES), 1.0)
+  curve = (raw * MODEL_TIMES, raw, np.zeros(len(raw)))
+  while harness.frame % PLANNER_STEPS:
+    harness.step()
+  crossing_frame = harness.frame + PLANNER_STEPS + 2
+  original_step = harness.step
+
+  def crossing_step(*args, **kwargs):
+    if harness.frame + 1 >= crossing_frame:
+      harness.source_state.vEgo = 0.31
+    row = original_step(*args, **kwargs)
+    return row | {'measured_speed': float(harness.source_state.vEgo)}
+
+  with patch.object(harness, 'step', side_effect=crossing_step):
+    _, plans, rows, can_rows = harness.exercise(curve, action_accel=0.5)
+  first_plan_time = int(plans[0].logMonoTime)
+  assert plans[0].longitudinalPlan.aTarget < 0.0
+  assert plans[0].longitudinalPlan.motionIntent.releaseAllowed
+  cached_rows = [row for row in rows if row['consumed_plan_mono'] == first_plan_time]
+  assert cached_rows[0]['measured_speed'] < 0.3
+  assert any(row['measured_speed'] > 0.3 for row in cached_rows)
+  assert all(row['resolved_stop'] and not row['resume'] for row in rows)
+  assert all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0.0
+             and not command['STANDSTILL_RELEASE'] for command in can_rows)
+
+
 def mutated_model_planner(bad_raw, bad_action, *, solver_status=None):
   planner, _ = make_planner(speed=20.0)
   state = make_state(speed=20.0, target=30.0, experimental=True)
