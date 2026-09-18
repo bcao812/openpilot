@@ -381,6 +381,44 @@ def test_due_now_goal_keeps_required_braking_through_float32_owner_and_honda_can
                           and command['ACCEL_COMMAND'] <= ACCEL_MIN + 0.01 for command in can_rows)
 
 
+@pytest.mark.parametrize('disturbance', ['positive_action', 'departing_lead', 'future_forward'])
+def test_future_precision_goal_then_due_rest_keeps_actual_hold_despite_departure_disturbances(disturbance):
+  harness = StrictPlanTransportHarness(speed=5.0)
+  harness.hold()
+  harness.source_state.cruiseState.standstill = False
+  harness.source_state.standstill = False
+  if disturbance in ('departing_lead', 'future_forward'):
+    harness.departing_lead_speed = 1.5
+  while harness.frame % PLANNER_STEPS:
+    harness.step()
+  harness.source_state.vEgo, harness.source_state.aEgo = 0.001, -0.01
+  harness.model_curve = model_stop_curve(0.001, 0.001)
+  harness.action_accel = 0.5
+  for _ in range(PLANNER_STEPS):
+    harness.step()
+  assert harness.planner.mpc.rest_goal.native_node == 1
+  assert harness.planner.mpc.solution_status == 0
+  # The new source arrives after this qualified future event. Its current
+  # rest veto must survive positive action and independent lead departure.
+  harness.source_state.vEgo, harness.source_state.aEgo = NEAR_ZERO_STATES[0]
+  raw = np.zeros(len(MODEL_TIMES))
+  if disturbance == 'future_forward':
+    raw = np.maximum(0.6 * (MODEL_TIMES - 1.0), 0.0)
+  harness.model_curve = (raw * MODEL_TIMES, raw, np.gradient(raw, MODEL_TIMES))
+  for _ in range(PLANNER_STEPS):
+    harness.step()
+  rows = [harness.step() for _ in range(30)]
+  can_rows = [row for row in harness.native_commands if row['mono'] > rows[0]['mono']]
+  mpc = harness.planner.mpc
+  plan = harness.latest['longitudinalPlan'].longitudinalPlan
+  assert mpc.rest_goal.native_node == 0 and mpc.diagnostic_last_solver_return == mpc.solution_status == 0
+  assert mpc.rest_goal.future_forward == (disturbance == 'future_forward')
+  assert plan.motionIntent.valid and not plan.motionIntent.releaseAllowed
+  assert all(row['long_active'] and not row['resume'] and row['phase'] != 'release' for row in rows)
+  assert can_rows and all(row['BRAKE_REQUEST'] and row['GAS_COMMAND'] <= 0.0 and not row['STANDSTILL_RELEASE']
+                          for row in can_rows)
+
+
 def test_microstate_due_rest_then_forward_restores_owner_release_in_original_point_eight_second_window():
   """A new veto: goal-failure braking must not erase the prior release window.
 

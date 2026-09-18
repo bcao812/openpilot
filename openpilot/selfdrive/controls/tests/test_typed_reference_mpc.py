@@ -162,8 +162,12 @@ def test_measured_ten_raw_nine_point_four_stop_is_enforced_by_native_state_bound
   np.testing.assert_array_equal(planner.yref[node:, 2:4], 0.0)
   np.testing.assert_array_equal(planner.params[node:, MODEL_V_REF:MODEL_A_REF + 1], 0.0)
   lower, upper = planner.diagnostic_reference_bounds
-  np.testing.assert_array_equal(lower[node:], 0.0)
-  np.testing.assert_array_equal(upper[node:], 0.0)
+  # The ideal reference stays exactly zero, while the native feasible set
+  # expresses the unchanged 1e-3 rest contract without positive acceleration.
+  np.testing.assert_array_equal(lower[node:, 0], 0.0)
+  np.testing.assert_array_equal(lower[node:, 1], -REST_STATE_TOL)
+  np.testing.assert_array_equal(upper[node:, 0], REST_STATE_TOL)
+  np.testing.assert_array_equal(upper[node:, 1], 0.0)
   assert planner.diagnostic_rest_goal['physicalPositionBound'] is False
   assert planner.diagnostic_rest_goal['satisfactionScope'] == 'native_prediction_only'
   assert planner.diagnostic_rest_goal['physicalStoppedKnown'] is False
