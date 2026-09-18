@@ -70,6 +70,9 @@ MPC_GOAL_INFEASIBLE = -4
 MPC_GOAL_UNSATISFIED = -5
 REFERENCE_BOUND = 1e4
 REST_STATE_TOL = 1e-3
+# Numerical feasibility is separate from the physical rest acceptance box.
+# Keep equality/inequality residuals six orders below that unchanged box.
+QP_FEASIBILITY_TOL = 1e-9
 
 
 @dataclass(frozen=True)
@@ -267,6 +270,8 @@ def gen_long_ocp():
   # some situations. Ideally we would run just 1 iteration to ensure fixed runtime.
   ocp.solver_options.qp_solver_iter_max = 10
   ocp.solver_options.qp_tol = 1e-3
+  ocp.solver_options.qp_solver_tol_eq = QP_FEASIBILITY_TOL
+  ocp.solver_options.qp_solver_tol_ineq = QP_FEASIBILITY_TOL
 
   # set prediction horizon
   ocp.solver_options.tf = Tf
@@ -506,6 +511,122 @@ class LongitudinalMpc:
     return obstacles, sources, accel_min, accel_max
 
   @staticmethod
+  def integrate_jerk(state, jerk, duration):
+    """Exact constant-jerk dynamics, keeping all three states consistent."""
+    position, velocity, acceleration = state
+    next_acceleration = acceleration + jerk * duration
+    return np.array([position + velocity * duration + (2.0 * acceleration + next_acceleration) * duration**2 / 6.0,
+                     velocity + 0.5 * (acceleration + next_acceleration) * duration,
+                     next_acceleration])
+
+  @staticmethod
+  def rest_acceleration_interval(state, duration, lower, upper):
+    """Next-acceleration interval for one nonnegative constant-jerk segment.
+
+    Endpoint speed is v+(a+a_next)*dt/2. A convex velocity can also have an
+    interior minimum, which endpoint boxes alone do not constrain.
+    """
+    _, velocity, acceleration = state
+    if velocity < 0.0 or (velocity == 0.0 and acceleration < 0.0):
+      return None
+    minimum = max(float(lower[1]), 2.0 * (lower[0] - velocity) / duration - acceleration)
+    maximum = min(float(upper[1]), 2.0 * (upper[0] - velocity) / duration - acceleration)
+    if acceleration < 0.0 and velocity < -0.5 * acceleration * duration:
+      # Here an endpoint-feasible segment must cross from negative to positive
+      # acceleration. Its v_min >= 0 imposes this additional lower bound.
+      minimum = max(minimum, acceleration + acceleration**2 * duration / (2.0 * velocity))
+    return None if minimum > maximum else (minimum, maximum)
+
+  @staticmethod
+  def segment_minimum_velocity(state, jerk, duration):
+    _, velocity, acceleration = state
+    minimum = min(velocity, velocity + acceleration * duration + 0.5 * jerk * duration**2)
+    if jerk > 0.0 and 0.0 < -acceleration / jerk < duration:
+      minimum = min(minimum, velocity - acceleration**2 / (2.0 * jerk))
+    return float(minimum)
+
+  def project_due_rest_precision(self):
+    """Remove bounded numerical defects by changing jerk, never clipping x/v/a.
+
+    Only a successful native due-rest solve reaches this method. The raw
+    iterate must already satisfy the much smaller QP feasibility budget.
+    Corrections are bounded by the jerk effect on endpoint v/a; the resulting
+    x/v/a difference is independently bounded through the linear dynamics.
+    """
+    durations = np.diff(T_IDXS)
+    lower, upper = self.diagnostic_reference_bounds
+    raw_states, raw_jerks = self.x_sol, self.u_sol[:, 0]
+    defects = np.array([raw_states[stage+1] - self.integrate_jerk(raw_states[stage], raw_jerks[stage], duration)
+                        for stage, duration in enumerate(durations)])
+    maximum_defect = np.maximum(np.max(np.abs(defects), axis=0), np.abs(raw_states[0] - self.x0))
+    maximum_violation = float(max(0.0, np.max(lower[1:] - raw_states[1:, 1:]),
+                                  np.max(raw_states[1:, 1:] - upper[1:])))
+    diagnostics = {'applied': False, 'feasibilityTolerance': QP_FEASIBILITY_TOL,
+                   'maximumNativeDynamicsDefect': maximum_defect.tolist(),
+                   'maximumNativeBoundViolation': maximum_violation}
+    self.diagnostic_rest_goal['numericalProjection'] = diagnostics
+    if np.max(maximum_defect) > QP_FEASIBILITY_TOL:
+      return 'native_rest_dynamics_residual_exceeded'
+    if maximum_violation > QP_FEASIBILITY_TOL:
+      return 'native_rest_precision_budget_exceeded'
+
+    states, jerks = np.empty_like(raw_states), np.empty_like(raw_jerks)
+    states[0] = self.x0
+    difference_budget = np.full(3, QP_FEASIBILITY_TOL)
+    largest_budget = difference_budget.copy()
+    largest_jerk_correction = 0.0
+    for stage, duration in enumerate(durations):
+      interval = self.rest_acceleration_interval(states[stage], duration, lower[stage+1], upper[stage+1])
+      if interval is None:
+        return 'rest_precision_no_feasible_numeric_trajectory'
+      minimum, maximum = interval
+      acceleration = states[stage, 2]
+      desired = acceleration + raw_jerks[stage] * duration
+      next_acceleration = min(max(desired, minimum), maximum)
+      jerk = (next_acceleration - acceleration) / duration
+      # Bound arithmetic can round one ULP outside a closed face. Test the
+      # adjacent representable controls as well; the states are always obtained
+      # from dynamics, including the degenerate corner with only one control.
+      candidates = [jerk, np.nextafter(jerk, -np.inf), np.nextafter(jerk, np.inf)]
+      candidates.sort(key=lambda candidate: abs(candidate - raw_jerks[stage]))
+      selected = None
+      for candidate in candidates:
+        next_state = self.integrate_jerk(states[stage], candidate, duration)
+        if (minimum <= next_state[2] <= maximum
+            and np.all(next_state[1:] >= lower[stage+1]) and np.all(next_state[1:] <= upper[stage+1])
+            and self.segment_minimum_velocity(states[stage], candidate, duration) >= 0.0):
+          selected = candidate, next_state
+          break
+      if selected is None:
+        return 'rest_precision_no_feasible_numeric_trajectory'
+      jerks[stage], states[stage+1] = selected
+      # A jerk changes endpoint acceleration by j*dt and velocity by j*dt²/2.
+      # The sum is conservative for an independent epsilon error in each; it
+      # does not borrow the physical 1e-3 rest tolerance as a numerical budget.
+      jerk_budget = QP_FEASIBILITY_TOL * (1.0 / duration + 2.0 / duration**2)
+      correction = abs(jerks[stage] - raw_jerks[stage])
+      if correction > jerk_budget:
+        return 'native_rest_precision_budget_exceeded'
+      largest_jerk_correction = max(largest_jerk_correction, correction)
+      transition = np.array([[1.0, duration, 0.5 * duration**2], [0.0, 1.0, duration], [0.0, 0.0, 1.0]])
+      control = np.array([duration**3 / 6.0, 0.5 * duration**2, duration])
+      difference_budget = transition @ difference_budget + control * jerk_budget + QP_FEASIBILITY_TOL
+      if np.any(np.abs(states[stage+1] - raw_states[stage+1]) > difference_budget):
+        return 'native_rest_precision_budget_exceeded'
+      largest_budget = np.maximum(largest_budget, difference_budget)
+
+    diagnostics.update(applied=bool(np.any(states != raw_states) or np.any(jerks != raw_jerks)),
+                       maximumStateCorrection=np.max(np.abs(states - raw_states), axis=0).tolist(),
+                       maximumStateCorrectionBudget=largest_budget.tolist(),
+                       maximumJerkCorrection=largest_jerk_correction)
+    self.x_sol[:] = states
+    self.u_sol[:, 0] = jerks
+    # These are views established by run(). Keep the next reference's history
+    # tied to the same corrected trajectory, not its pre-projection version.
+    self.a_prev = np.interp(T_IDXS + self.dt, T_IDXS, self.a_solution)
+    return ''
+
+  @staticmethod
   def due_rest_primal(initial_state):
     """Feasible rest-precision nodes with continuous nonnegative velocity.
 
@@ -629,6 +750,11 @@ class LongitudinalMpc:
         self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_due_without_nonnegative_rest_trajectory'
       elif self.x0[1] + minimum_accel * goal.native_time_s > REST_STATE_TOL:
         self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_time_below_braking_lower_bound'
+      elif goal.native_node == 1 and self.rest_acceleration_interval(self.x0, T_IDXS[1], np.zeros(2), np.zeros(2)) is None:
+        # A single constant-jerk segment cannot independently choose v_1 and
+        # a_1. The acceleration-only lower bound above misses this infeasibility.
+        # Check the actual future-goal zero box without changing its meaning.
+        self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_time_below_discrete_lower_bound'
       else:
         self.rest_goal_state = 'constrained'
         lower[max(1, goal.native_node):, :] = 0.0
@@ -674,6 +800,7 @@ class LongitudinalMpc:
       self.solution_status = MPC_GOAL_INFEASIBLE
     elif self.rest_goal_state == 'constrained':
       node = self.rest_goal.native_node
+      numerical_failure = self.project_due_rest_precision() if node == 0 else ''
       error = float(np.max(np.abs(self.x_sol[node:, 1:])))
       minimum_velocity = float(np.min(self.v_solution))
       for stage, duration in enumerate(np.diff(T_IDXS)):
@@ -684,10 +811,10 @@ class LongitudinalMpc:
                                    + self.a_solution[stage] * extremum + 0.5 * self.j_solution[stage] * extremum**2))
       self.diagnostic_rest_goal['maximumRestStateError'] = error
       self.diagnostic_rest_goal['minimumContinuousVelocity'] = minimum_velocity
-      if error > REST_STATE_TOL or minimum_velocity < -REST_STATE_TOL:
+      if numerical_failure or error > REST_STATE_TOL or minimum_velocity < -REST_STATE_TOL:
         self.rest_goal_state = 'unsatisfied'
-        self.rest_goal_reason = ('native_rest_bound_not_satisfied' if error > REST_STATE_TOL
-                                else 'negative_velocity_between_native_nodes')
+        self.rest_goal_reason = numerical_failure or ('native_rest_bound_not_satisfied' if error > REST_STATE_TOL
+                                                     else 'negative_velocity_between_native_nodes')
         self.rest_goal_braking_accel = float(np.min(self.params[:, 0]))
         self.solution_status = MPC_GOAL_UNSATISFIED
       else:
