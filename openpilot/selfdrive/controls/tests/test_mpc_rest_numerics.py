@@ -151,6 +151,109 @@ def test_a_reachable_first_node_keeps_the_original_exact_zero_native_box():
   np.testing.assert_allclose(mpc.x_sol[1:, 1:], 0.0, atol=REST_STATE_TOL, rtol=0.0)
 
 
+@pytest.mark.parametrize('previous_accel', [False, True])
+def test_recorded_second_node_infeasibility_keeps_one_real_risk_solve(previous_accel):
+  # J-45150dd425362f01, native call 1056 at 53e16893: a finite, captured
+  # primal-dual iterate reproduces native +4 with or without observer getters.
+  speed, acceleration = 0.029483791440725327, -0.9772293567657471
+  h0, h1 = np.diff(T_IDXS)[:2]
+  required_a1 = -(2.0 * speed + acceleration * h0) / (h0 + h1)
+  required_v1 = -required_a1 * h1 / 2.0
+  assert required_a1 > 0.0 and required_v1 < -REST_STATE_TOL
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=previous_accel)
+  mpc.set_cur_state(speed, acceleration)
+  if previous_accel:
+    mpc.a_prev[:] = acceleration
+  reference = typed_reference(stopping_curve(speed, 0.2), speed)
+  assert reference.typed_model.rest_goal.native_node == 2
+  mpc.update(radar_state(distance=12.0, speed=0.0), reference=reference)
+  assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == mpc.last_solver_status == 0
+  assert mpc.solver.get_stats('statistics')[1, -1] == 0
+  assert mpc.solution_status == MPC_GOAL_INFEASIBLE and mpc.rest_goal_state == 'infeasible'
+  assert mpc.rest_goal_reason == 'rest_goal_time_below_discrete_lower_bound'
+  assert mpc.rest_goal == reference.typed_model.rest_goal
+  assert mpc.rest_goal_braking_accel == ACCEL_MIN and not mpc.previous_solution_valid
+  np.testing.assert_array_equal(mpc.x0, [0.0, speed, acceleration])
+  assert np.all(np.isfinite(mpc.x_sol))
+  lower, upper = mpc.diagnostic_reference_bounds
+  assert np.all(lower[1:, 1] < -REST_STATE_TOL) and np.all(upper[1:] > REST_STATE_TOL)
+
+
+@pytest.mark.parametrize('speed,acceleration', [
+  (0.04, -0.9772293567657471), (0.03, -0.4), (0.005, -2.0 * 0.005 / T_IDXS[1]),
+])
+def test_a_reachable_second_node_keeps_its_exact_rest_goal(speed, acceleration):
+  h0, h1 = np.diff(T_IDXS)[:2]
+  required_a1 = -(2.0 * speed + acceleration * h0) / (h0 + h1)
+  required_v1 = -required_a1 * h1 / 2.0
+  assert required_a1 <= 0.0 and required_v1 >= 0.0
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=False)
+  mpc.set_cur_state(speed, acceleration)
+  reference = typed_reference(stopping_curve(speed, 0.2), speed)
+  assert reference.typed_model.rest_goal.native_node == 2
+  mpc.update(radar_state(), reference=reference)
+  assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == mpc.solution_status == 0
+  assert mpc.rest_goal_state == 'satisfied'
+  assert mpc.diagnostic_rest_goal['minimumContinuousVelocity'] >= -REST_STATE_TOL
+  lower, upper = mpc.diagnostic_reference_bounds
+  np.testing.assert_array_equal(lower[2:], 0.0)
+  np.testing.assert_array_equal(upper[2:], 0.0)
+  np.testing.assert_allclose(mpc.x_sol[1, 1:], [required_v1, required_a1], atol=REST_STATE_TOL, rtol=0.0)
+  np.testing.assert_allclose(mpc.x_sol[2:, 1:], 0.0, atol=REST_STATE_TOL, rtol=0.0)
+
+
+@pytest.mark.parametrize('numerator', [-1e-12, -1e-8])
+@pytest.mark.parametrize('previous_accel', [False, True])
+def test_second_node_admission_preserves_previously_accepted_numerical_boundaries(numerator, previous_accel):
+  # Both negative neighborhoods were accepted by committed 53e16893. A
+  # strict sign check would turn a sub-tolerance result into full fault braking.
+  speed = 0.001
+  acceleration = (-2.0 * speed + numerator) / T_IDXS[1]
+  assert 2.0 * speed + acceleration * T_IDXS[1] < 0.0
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=previous_accel)
+  mpc.set_cur_state(speed, acceleration)
+  if previous_accel:
+    mpc.a_prev[:] = acceleration
+  reference = typed_reference(stopping_curve(speed, 0.2), speed)
+  assert reference.typed_model.rest_goal.native_node == 2
+  mpc.update(radar_state(distance=12.0, speed=0.0), reference=reference)
+  assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == mpc.solution_status == 0
+  assert mpc.rest_goal_state == 'satisfied' and mpc.rest_goal_braking_accel is None
+  assert mpc.diagnostic_rest_goal['maximumRestStateError'] <= REST_STATE_TOL
+  assert mpc.diagnostic_rest_goal['minimumContinuousVelocity'] >= -REST_STATE_TOL
+  assert 'numericalProjection' not in mpc.diagnostic_rest_goal
+  lower, upper = mpc.diagnostic_reference_bounds
+  np.testing.assert_array_equal(lower[2:], 0.0)
+  np.testing.assert_array_equal(upper[2:], 0.0)
+
+
+def test_second_node_infeasibility_keeps_braking_through_owner_and_honda_can():
+  harness = StrictPlanTransportHarness(speed=10.0)
+  harness.engage()
+  while harness.frame % PLANNER_STEPS:
+    harness.step()
+  speed, acceleration = 0.029483791440725327, -0.9772293567657471
+  harness.source_state.vEgo, harness.source_state.aEgo = speed, acceleration
+  harness.model_curve = model_stop_curve(speed, 0.2)
+  harness.action_accel = 0.5
+  for _ in range(PLANNER_STEPS):
+    harness.step()
+  rows = [harness.step() for _ in range(30)]
+  can_rows = [row for row in harness.native_commands if row['mono'] > rows[0]['mono']]
+  mpc = harness.planner.mpc
+  plan = harness.latest['longitudinalPlan'].longitudinalPlan
+  assert mpc.rest_goal.native_node == 2 and mpc.diagnostic_last_solver_return == 0
+  assert mpc.rest_goal_reason == 'rest_goal_time_below_discrete_lower_bound'
+  assert plan.solverStatus == MPC_GOAL_INFEASIBLE
+  assert plan.motionIntent.brakingValid and not plan.motionIntent.releaseAllowed
+  assert all(row['long_active'] and row['accel'] <= ACCEL_MIN + 1e-5 and not row['resume'] for row in rows)
+  assert can_rows and all(row['BRAKE_REQUEST'] and row['GAS_COMMAND'] <= 0.0
+                          and row['ACCEL_COMMAND'] <= ACCEL_MIN + 0.01 for row in can_rows)
+
+
 def test_continuous_nonnegative_speed_is_part_of_the_first_interval_reachability_check():
   # Endpoint constraints alone admit a_next in this range, but every such
   # parabola crosses below zero before the first node.

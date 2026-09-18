@@ -543,6 +543,21 @@ class LongitudinalMpc:
     return None if minimum > maximum else (minimum, maximum)
 
   @staticmethod
+  def second_node_rest_velocity_upper_bound(state):
+    """Largest intermediate velocity within the original terminal precision.
+
+    Two constant-jerk segments imply
+    v1=h1*(2*v0+a0*h0)/(2*T2)+h0*v2/T2-h0*h1*a2/(2*T2).
+    Maximize over the existing |v2|,|a2|<=REST_STATE_TOL acceptance box;
+    a strict exact-zero test would reject formerly accepted tiny residuals.
+    This admission bound does not change the native exact-zero goal boxes.
+    """
+    h0, h1 = np.diff(T_IDXS[:3])
+    duration = h0 + h1
+    exact_velocity = h1 * (2.0 * state[1] + state[2] * h0) / (2.0 * duration)
+    return exact_velocity + REST_STATE_TOL * h0 / duration + REST_STATE_TOL * h0 * h1 / (2.0 * duration)
+
+  @staticmethod
   def segment_minimum_velocity(state, jerk, duration):
     _, velocity, acceleration = state
     minimum = min(velocity, velocity + acceleration * duration + 0.5 * jerk * duration**2)
@@ -830,6 +845,11 @@ class LongitudinalMpc:
         # A single constant-jerk segment cannot independently choose v_1 and
         # a_1. The acceleration-only lower bound above misses this infeasibility.
         # Check the actual future-goal zero box without changing its meaning.
+        self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_time_below_discrete_lower_bound'
+      elif goal.native_node == 2 and self.second_node_rest_velocity_upper_bound(self.x0) < -REST_STATE_TOL:
+        # Even the original rest precision cannot avoid reversing beyond the
+        # original continuous-speed budget. Check the two segments jointly;
+        # a feasible first segment alone does not prove this rest goal reachable.
         self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_time_below_discrete_lower_bound'
       else:
         self.rest_goal_state = 'constrained'
