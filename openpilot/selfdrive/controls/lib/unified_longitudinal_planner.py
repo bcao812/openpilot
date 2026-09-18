@@ -10,7 +10,9 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_ACCEL, CREEP_SPEED, STOP_SPEED, should_stop, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import MPC_INVALID_INPUT, MpcReference, T_IDXS
+from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, MPC_INVALID_INPUT,
+                                                                        MpcReference, T_IDXS)
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   CONTROL_N_T_IDX, ALLOW_THROTTLE_THRESHOLD, MIN_ALLOW_THROTTLE_SPEED,
@@ -21,7 +23,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_lead_braking_urgency,
   has_safe_moving_lead, should_stop_for_close_lead,
 )
-from openpilot.selfdrive.controls.lib.motion_supervisor import CREEP_INPUT_SERVICES, MOTION_INTENT_VERSION, CreepSample, MotionIntent, StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import (CREEP_INPUT_SERVICES, MOTION_INTENT_VERSION, CreepSample, MotionIntent,
+                                                               MotionReferenceKind, StopReason)
 from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
@@ -142,7 +145,7 @@ class UnifiedLongitudinalPlanner:
     self.entered_rest_goal = False
     planner.mpc.invalidate_reference_history()
     self.standby = False
-    planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), valid=False)
+    planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), valid=False, producer_instance_ns=self.producer_instance_ns)
     self.reference_accel = 0.0
     self.constraint_accel = -0.2
     self.reference_overridden = True
@@ -171,8 +174,14 @@ class UnifiedLongitudinalPlanner:
     if self.e2e_allowed and self.model_reference_mode != 'invalid' and math.isfinite(model_request):
       request = min(request, model_request)
     request = float(np.clip(request, ACCEL_MIN, ACCEL_MAX))
+    raw_kind = self.describe_motion_reference(state)
+    evidence_goal = self.model_evidence.rest_goal if self.model_evidence is not None else None
+    goal_rejected = bool(raw_kind == MotionReferenceKind.REST and evidence_goal is not None and planner.mpc.rest_goal == evidence_goal
+                         and (planner.mpc.solution_status == MPC_GOAL_INFEASIBLE and planner.mpc.rest_goal_state in ('infeasible', 'unverified')
+                              or planner.mpc.solution_status == MPC_GOAL_UNSATISFIED and planner.mpc.rest_goal_state == 'unsatisfied'))
     planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), allow_creep=False,
-                                         valid=False, braking_accel=request)
+                                         valid=False, braking_accel=request, reference_kind=int(raw_kind),
+                                         rest_goal_rejected=goal_rejected, producer_instance_ns=self.producer_instance_ns)
     planner.output_a_target = request
     self.constraint_accel = request
     if self.e2e_allowed and self.model_reference_mode != 'invalid' and model_request <= min(previous, MPC_FAILURE_ACCEL):
@@ -219,7 +228,7 @@ class UnifiedLongitudinalPlanner:
         self.standby = True
         stopped = bool(car_state.standstill or speed < STOP_SPEED)
         planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), reasons=int(StopReason.CRUISE) if stopped else 0,
-                                             allow_creep=False, valid=False, ready=False)
+                                             allow_creep=False, valid=False, ready=False, producer_instance_ns=self.producer_instance_ns)
         planner.output_should_stop = stopped
         planner.v_desired_filter.x = speed
         self.e2e_allowed = False
@@ -232,6 +241,40 @@ class UnifiedLongitudinalPlanner:
       self.cruise_initialized = True
       self.cold_standby_started = False
     return speed, measured_accel, healthy
+
+  @property
+  def producer_instance_ns(self):
+    if self.planner.longitudinal_mode == LongitudinalMode.UNIFIED and self.planner.reference_timing.pending is not None:
+      return self.planner.reference_timing.pending.instance_ns
+    return 0
+
+  def describe_motion_reference(self, state):
+    """Describe this admitted raw source without creating a goal or stop latch."""
+    if self.planner.longitudinal_mode != LongitudinalMode.UNIFIED:
+      return MotionReferenceKind.UNKNOWN
+    evidence = self.model_evidence
+    timing = self.planner.reference_timing.pending
+    if (timing is None or evidence is None
+        or evidence.unknown is not None and evidence.unknown.reason != 'model_proxy_after_initial_state'
+        or evidence.raw_velocity is None or evidence.raw_motion is None or evidence.raw_motion.unknown is not None
+        or evidence.source.model_mono_time_ns != getattr(state, 'logMonoTime', {}).get('modelV2')
+        or evidence.source.anchor_mono_time_ns != timing.epoch_ns or evidence.source.consumed_mono_time_ns != timing.producer_ns):
+      return MotionReferenceKind.UNKNOWN
+    # This one existing alignment gap retains qualified raw source semantics;
+    # it does not move a prediction back to the earlier carState timestamp.
+    raw = evidence.raw_velocity
+    if (raw.shape != (len(ModelConstants.T_IDXS),) or not np.all(np.isfinite(raw))
+        or not np.array_equal(raw, np.asarray(state['modelV2'].velocity.x))):
+      return MotionReferenceKind.UNKNOWN
+    if evidence.has_rest_intent:
+      return MotionReferenceKind.REST
+    if np.all(raw == 0.0):
+      return MotionReferenceKind.EXACT_ZERO
+    if evidence.no_forward:
+      return MotionReferenceKind.NO_FORWARD
+    if evidence.allows_departure:
+      return MotionReferenceKind.FORWARD
+    return MotionReferenceKind.MOVING
 
   @property
   def _reference_consumer_clock_ns(self):
@@ -415,7 +458,7 @@ class UnifiedLongitudinalPlanner:
       planner.output_a_target = request
       self.constraint_accel = request
       planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), allow_creep=False,
-                                           valid=False, braking_accel=request)
+                                           valid=False, braking_accel=request, producer_instance_ns=self.producer_instance_ns)
       planner._observe(constraintKnown=True, constraintAccel=request)
       return
     self.reference_overridden = output != self.reference_accel
@@ -457,6 +500,7 @@ class UnifiedLongitudinalPlanner:
     planner.motion_intent = MotionIntent(
       mode=int(planner.longitudinal_mode), reasons=int(reasons), moving_lead=moving_lead, release_allowed=release_allowed,
       allow_creep=bool(active and healthy), valid=bool(healthy and car_state.vCruise != V_CRUISE_UNSET),
+      reference_kind=int(self.describe_motion_reference(state)), producer_instance_ns=self.producer_instance_ns,
     )
     planner.output_a_target = output
     planner.output_should_stop = bool(reasons)
@@ -480,6 +524,9 @@ class UnifiedLongitudinalPlanner:
     message.motionIntent.brakingValid = intent.braking_accel is not None
     message.motionIntent.brakingAccel = float(intent.braking_accel) if intent.braking_accel is not None else 0.0
     message.motionIntent.creepEvidenceValid = intent.creep_sample is not None
+    message.motionIntent.referenceKind = int(intent.reference_kind)
+    message.motionIntent.restGoalRejected = intent.rest_goal_rejected
+    message.motionIntent.producerInstanceMonoTime = intent.producer_instance_ns
     if intent.creep_sample is not None:
       message.motionIntent.creepSourceMonoTimes = list(intent.creep_sample.source_times_ns)
       message.motionIntent.creepMeasuredSpeed = float(intent.creep_sample.measured_speed)

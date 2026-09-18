@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import math
 import time
+from dataclasses import replace
 from numbers import Number
 
 from openpilot.cereal import log
@@ -157,6 +158,9 @@ class Controls(ControlsExt):
         command_identity=(int(long_plan.modelMonoTime), float(long_plan.aTarget), bool(long_plan.shouldStop),
                           int(long_plan.solverStatus), motion_intent, float(long_plan.reference.accel),
                           float(long_plan.reference.constraintAccel), bool(long_plan.reference.overridden)))
+      if (self.reference_timing_check.valid
+          and (motion_intent.producer_instance_ns <= 0 or motion_intent.producer_instance_ns != self.reference_timing_check.timing.instance_ns)):
+        self.reference_timing_check = replace(self.reference_timing_check, valid=False, reason='intent_reference_instance_mismatch')
       reference_valid = self.reference_timing_check.valid
       if not self.reference_timing_check.clock_valid:
         # An impossible clock must not enter the owner's time high water.

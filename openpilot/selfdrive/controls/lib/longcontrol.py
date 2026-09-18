@@ -275,7 +275,10 @@ class LongControl:
       output_accel = min(output_accel, DEGRADED_ACCEL)
     elif intent.reasons & (StopReason.CRUISE | StopReason.FORCE_DECEL):
       output_accel = min(output_accel, CarControllerParams.BOSCH_GAS_LOOKUP_BP[0])
+    if self.motion_supervisor.rest_braking_accel_limit is not None:
+      output_accel = min(output_accel, self.motion_supervisor.rest_braking_accel_limit)
     self.last_output_accel = float(np.clip(output_accel, accel_limits[0], accel_limits[1]))
+    self.motion_supervisor.confirm_braking_output(self.last_output_accel, accel_limits, now_ns=now_ns)
     if not protocol_hold:
       self.motion_supervisor.complete_release(self.last_output_accel, a_target)
     self.starting = self.motion_phase == MotionPhase.RELEASE

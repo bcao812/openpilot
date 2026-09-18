@@ -928,7 +928,7 @@ struct LongitudinalPlanDiagnostics {
 }
 
 # Read-only analysis version 1. An absent version (0) means unknown; these
-# snapshots do not change or grant authority under MotionIntent version 3.
+# snapshots do not change or grant authority under the MotionIntent protocol.
 struct LongitudinalPassiveSnapshot {
   known @0 :Bool;
   consumerMonoTime @1 :UInt64;
@@ -1546,6 +1546,10 @@ struct LongitudinalMotionIntent {
   creepSourceMonoTimes @11 :List(UInt64);
   creepMeasuredSpeed @12 :Float32;
   creepReset @13 :Bool;
+  # Version 4 descriptions only; the consumer owns braking continuity.
+  referenceKind @14 :UInt8;
+  restGoalRejected @15 :Bool;
+  producerInstanceMonoTime @16 :UInt64;
 }
 
 struct LongitudinalReference {

@@ -119,7 +119,7 @@ class ControlsHarness:
     self.control = control
 
   def step(self, *, new_plan=True, plan_time_ns=None, model_time_ns=None, now_ns=None, raw_source_times=None,
-           reference_source_ns=None, reference_fields=None):
+           reference_source_ns=None, reference_fields=None, intent_fields=None):
     self.now_ns = self.now_ns + CONTROL_STEP_NS if now_ns is None else now_ns
     incoming = []
     for service, event in self.events.items():
@@ -134,6 +134,7 @@ class ControlsHarness:
           self.reference_producer.qualify_source(source_ns, self.car_state.vEgo, self.car_state.aEgo, self.now_ns)
           self.reference_producer.set_initial_state(max(self.car_state.vEgo, 0.0), self.car_state.aEgo)
           self.reference_producer.publish(self.plan.reference)
+          self.plan.motionIntent.producerInstanceMonoTime = self.reference_producer.instance_ns
           for field, value in (reference_fields or {}).items():
             setattr(self.plan.reference, field, value)
           self._reference_plan_time_ns = int(event.logMonoTime)
@@ -143,6 +144,8 @@ class ControlsHarness:
             sources[2] = int(self.plan.modelMonoTime)
           self.plan.motionIntent.creepSourceMonoTimes = sources
           self.plan.motionIntent.creepMeasuredSpeed = float(self.car_state.vEgo)
+        for field, value in (intent_fields or {}).items():
+          setattr(self.plan.motionIntent, field, value)
       else:
         event.logMonoTime = self.now_ns
       incoming.append(serialized(event))

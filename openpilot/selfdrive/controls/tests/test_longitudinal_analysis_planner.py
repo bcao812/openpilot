@@ -302,7 +302,7 @@ def test_missing_analysis_is_unknown_and_does_not_change_motion_protocol_version
   message.motionIntent.version = MOTION_INTENT_VERSION
   encoded = message.to_bytes()
   with log.LongitudinalPlan.from_bytes(encoded) as old:
-    assert old.motionIntent.version == 3
+    assert old.motionIntent.version == MOTION_INTENT_VERSION
     assert old.diagnostics.analysis.version == 0
     assert not old.diagnostics.analysis.passiveBefore.known
     assert not old.diagnostics.analysis.referenceCandidates.known

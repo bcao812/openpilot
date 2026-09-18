@@ -8,7 +8,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_ACCEL, CREEP_F
                                                           CREEP_STOP_T, CLOSE_LEAD_STOP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED)
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 
-MOTION_INTENT_VERSION = 3
+MOTION_INTENT_VERSION = 4
 PLAN_LEASE_NS = 250_000_000
 MODEL_LEASE_NS = 250_000_000
 MAX_CONTROL_GAP_NS = 100_000_000
@@ -18,6 +18,17 @@ DEGRADED_ACCEL = -0.2
 STOPPING_DECEL_RATE = 2.0
 ROLLING_STOP_ACCEL = -1.5
 STARTING_ACCEL_RATE = 8.0
+
+
+class MotionReferenceKind(IntEnum):
+  # REST includes an existing qualified goal continuation. EXACT_ZERO needs
+  # a qualified all-zero raw array and no current RestGoal.
+  UNKNOWN = 0
+  EXACT_ZERO = 1
+  REST = 2
+  FORWARD = 3
+  NO_FORWARD = 4
+  MOVING = 5
 
 
 class StopReason(IntFlag):
@@ -87,6 +98,9 @@ class MotionIntent:
   a held stop still requires a positive target before releasing its brake.
   allow_creep enables anti-creep evaluation, not permission to bypass a stop.
   ready separates initialization readiness from protocol validity.
+  reference_kind and rest_goal_rejected describe this source and failure;
+  they grant no departure permission. producer_instance_ns binds UNIFIED
+  evidence to the separately qualified measured-reference producer.
   """
 
   version: int = MOTION_INTENT_VERSION
@@ -99,6 +113,9 @@ class MotionIntent:
   mode: int = int(LongitudinalMode.UNIFIED)
   braking_accel: float | None = None
   creep_sample: CreepSample | None = None
+  reference_kind: int = int(MotionReferenceKind.UNKNOWN)
+  rest_goal_rejected: bool = False
+  producer_instance_ns: int = 0
 
   @classmethod
   def from_message(cls, message):
@@ -112,7 +129,10 @@ class MotionIntent:
       return cls(version=message.version, reasons=message.reasons, moving_lead=message.movingLead,
                  release_allowed=message.releaseAllowed, allow_creep=message.allowCreep, valid=message.valid,
                  ready=getattr(message, "ready", True), mode=getattr(message, "mode", int(LongitudinalMode.LEGACY)),
-                 braking_accel=message.brakingAccel if braking_valid else None, creep_sample=creep_sample)
+                 braking_accel=message.brakingAccel if braking_valid else None, creep_sample=creep_sample,
+                 reference_kind=getattr(message, 'referenceKind', int(MotionReferenceKind.UNKNOWN)),
+                 rest_goal_rejected=getattr(message, 'restGoalRejected', False),
+                 producer_instance_ns=getattr(message, 'producerInstanceMonoTime', 0))
     except (AttributeError, TypeError):
       return cls(version=0, valid=False)
 
@@ -123,6 +143,18 @@ class MotionIntent:
             and isinstance(self.reasons, int) and not isinstance(self.reasons, bool)
             and self.reasons >= 0 and not self.reasons & ~int(RAW_STOP_REASONS)
             and all(type(value) is bool for value in (self.moving_lead, self.release_allowed, self.allow_creep, self.valid, self.ready))
+            and isinstance(self.reference_kind, int) and not isinstance(self.reference_kind, bool)
+            and self.reference_kind in tuple(MotionReferenceKind)
+            and (self.reference_kind not in (MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.REST, MotionReferenceKind.NO_FORWARD)
+                 or not self.release_allowed and not self.moving_lead)
+            and type(self.rest_goal_rejected) is bool
+            and type(self.producer_instance_ns) is int and 0 <= self.producer_instance_ns < (1 << 64)
+            and (self.reference_kind == MotionReferenceKind.UNKNOWN or self.producer_instance_ns > 0)
+            and (not self.rest_goal_rejected
+                 or self.mode == LongitudinalMode.UNIFIED and self.reference_kind == MotionReferenceKind.REST
+                 and not self.valid and self.braking_accel is not None and self.producer_instance_ns > 0)
+            and (self.mode != LongitudinalMode.SUPERVISED
+                 or self.reference_kind == MotionReferenceKind.UNKNOWN and not self.rest_goal_rejected and self.producer_instance_ns == 0)
             and (self.creep_sample is None
                  or self.mode == LongitudinalMode.SUPERVISED and isinstance(self.creep_sample, CreepSample) and self.creep_sample.is_valid())
             and (self.braking_accel is None
@@ -172,6 +204,9 @@ class MotionSupervisor:
     self._rearm_after_fault = False
     self._rearm_plan_time_ns = 0
     self._rearm_model_time_ns = 0
+    self._rest_braking_instance_high_ns = 0
+    self._rest_braking_plan_high_ns = 0
+    self._rest_braking_model_high_ns = 0
     self.reset()
 
   @property
@@ -195,6 +230,51 @@ class MotionSupervisor:
     self._pending_off_creep = None
     self._last_now_ns = None
     self._require_new_input = bool(self._latest_input_ids()[0])
+    self._clear_rest_braking()
+
+  def _clear_rest_braking(self):
+    # Reset controller-output evidence without erasing retired producer identity.
+    self._rest_braking_accel = None
+    self._rest_braking_instance_ns = 0
+    self._rest_braking_origin = None
+    self._pending_rest_braking = None
+    self.rest_braking_accel_limit = None
+
+  def _observe_rest_braking_identity(self, intent, plan_time_ns, model_time_ns):
+    instance = intent.producer_instance_ns
+    if instance > self._rest_braking_instance_high_ns:
+      self._clear_rest_braking()
+      self._rest_braking_instance_high_ns = instance
+    # A newly accepted plan can reject a goal using the same still-fresh model.
+    # Confirm its final output once; the separate drive/release rearm rule below
+    # still requires both identities to advance after a fault.
+    fresh = (plan_time_ns > self._rest_braking_plan_high_ns and model_time_ns >= self._rest_braking_model_high_ns)
+    self._rest_braking_plan_high_ns = max(self._rest_braking_plan_high_ns, plan_time_ns)
+    self._rest_braking_model_high_ns = max(self._rest_braking_model_high_ns, model_time_ns)
+    return fresh
+
+  def confirm_braking_output(self, output_accel, accel_limits, *, now_ns):
+    """Consume this frame's pending cause after the final controller clip.
+
+    A producer envelope is not the final controller output. This records a
+    clipped command, not delivered deceleration. Repeated calls cannot mint
+    another event, and later zero samples never update the stored magnitude.
+    """
+    pending, self._pending_rest_braking = self._pending_rest_braking, None
+    output_valid = (accel_limits is not None and len(accel_limits) == 2 and self._finite_values(output_accel, *accel_limits)
+                    and CarControllerParams.BOSCH_ACCEL_MIN <= accel_limits[0] <= output_accel <= accel_limits[1]
+                    and accel_limits[1] <= CarControllerParams.BOSCH_ACCEL_MAX and output_accel <= DEGRADED_ACCEL)
+    if self.phase == MotionPhase.HOLD or not output_valid:
+      self._clear_rest_braking()
+      return
+    if pending is not None:
+      instance, _, _, pending_now_ns = pending
+      if now_ns != pending_now_ns or instance != self._rest_braking_instance_high_ns:
+        self._clear_rest_braking()
+        return
+      self._rest_braking_accel = float(output_accel)
+      self._rest_braking_instance_ns = instance
+      self._rest_braking_origin = pending
 
   def _reset_creep(self):
     self.creep_t = 0.0
@@ -252,6 +332,9 @@ class MotionSupervisor:
       return False
     if not (model_time_ns <= plan_time_ns <= now_ns
             and now_ns - plan_time_ns <= PLAN_LEASE_NS and now_ns - model_time_ns <= MODEL_LEASE_NS):
+      return False
+    if self.mode == LongitudinalMode.UNIFIED and (intent.producer_instance_ns < self._rest_braking_instance_high_ns
+                                                 or intent.producer_instance_ns > plan_time_ns):
       return False
     if intent.creep_sample is not None and not self._valid_creep_transport(intent.creep_sample, plan_time_ns, model_time_ns, now_ns):
       return False
@@ -395,6 +478,7 @@ class MotionSupervisor:
         self._rearm_after_fault = True
         self._require_new_input = bool(self._latest_input_ids()[0])
       return
+    self._observe_rest_braking_identity(intent, plan_time_ns, model_time_ns)
     latest_plan_time, latest_model_time = self._latest_input_ids()
     new_input = latest_plan_time == 0 or plan_time_ns > latest_plan_time and model_time_ns > latest_model_time
     independent = False
@@ -497,6 +581,8 @@ class MotionSupervisor:
              plan_time_ns=None, model_time_ns=None, now_ns=None, plan_valid=True, braking_plan_valid=False, solver_status=0,
              standby_input=False):
     self.degraded_braking_accel = None
+    self._pending_rest_braking = None
+    self.rest_braking_accel_limit = None
     if not active:
       self._observe_inactive(v_ego, a_ego, a_target, intent, plan_time_ns, model_time_ns, now_ns, plan_valid, solver_status, standby_input)
       return False
@@ -520,10 +606,19 @@ class MotionSupervisor:
       self._degrade(v_ego, standstill)
       if (braking_plan_valid is True and type(solver_status) is int and solver_status != 0 and clock_valid and vehicle_values_valid
           and self._valid_braking_input(intent, a_target, plan_time_ns, model_time_ns, now_ns)):
+        fresh = self._observe_rest_braking_identity(intent, plan_time_ns, model_time_ns)
+        if (self.mode == LongitudinalMode.UNIFIED and intent.rest_goal_rejected and solver_status in (-4, -5)
+            and intent.producer_instance_ns > 0):
+          if fresh:
+            self._pending_rest_braking = (intent.producer_instance_ns, plan_time_ns, model_time_ns, now_ns)
+        else:
+          self._clear_rest_braking()
         self.degraded_braking_accel = float(intent.braking_accel)
         self._last_braking_plan_time_ns, self._last_braking_model_time_ns = plan_time_ns, model_time_ns
         self._last_braking_intent, self._last_braking_target = intent, a_target
         self._require_new_input = True
+      else:
+        self._clear_rest_braking()
       return self.resolved_should_stop
 
     plan_step = None if self._last_plan_time_ns is None else (plan_time_ns - self._last_plan_time_ns) / 1e9
@@ -532,10 +627,14 @@ class MotionSupervisor:
     new_input = latest_plan_time == 0 or plan_time_ns > latest_plan_time and model_time_ns > latest_model_time
     self._last_plan_time_ns, self._last_model_time_ns = plan_time_ns, model_time_ns
     self._last_intent, self._last_target = intent, a_target
+    self._observe_rest_braking_identity(intent, plan_time_ns, model_time_ns)
+    if self.mode != LongitudinalMode.UNIFIED or intent.reference_kind != MotionReferenceKind.EXACT_ZERO:
+      self._clear_rest_braking()
     independent, sample_step_ns = False, None
     if self.mode == LongitudinalMode.SUPERVISED:
       independent, sample_step_ns = self._observe_creep_sample(intent.creep_sample, new_input)
     if self._require_new_input and not new_input:
+      self._clear_rest_braking()
       self.degraded_braking_accel = min(a_target, DEGRADED_ACCEL)
       retain_off = (self._pending_off_creep == (intent.creep_sample, plan_time_ns, model_time_ns)
                     and self._in_creep_band(measured_v_ego, a_target))
@@ -549,6 +648,9 @@ class MotionSupervisor:
     self._rearm_plan_time_ns = self._rearm_model_time_ns = 0
     self.waiting_for_fresh_input = False
     self.degraded = False
+    if (intent.reference_kind == MotionReferenceKind.EXACT_ZERO and self._rest_braking_accel is not None
+        and intent.producer_instance_ns == self._rest_braking_instance_ns):
+      self.rest_braking_accel_limit = self._rest_braking_accel
 
     if self.phase == MotionPhase.OFF and standstill:
       self.phase = MotionPhase.HOLD
