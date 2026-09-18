@@ -24,8 +24,9 @@ def near_stop_state():
   return state
 
 
-def close_stop(state, speed=1.3, acceleration=-0.7, delay=0.5):
-  return should_stop_for_close_lead(speed, acceleration, state['radarState'], delay)
+def close_stop(state, speed=1.3, acceleration=-0.7, delay=0.5, measured_acceleration=None):
+  measured_acceleration = state['carState'].aEgo if measured_acceleration is None else measured_acceleration
+  return should_stop_for_close_lead(speed, acceleration, state['radarState'], delay, a_ego=measured_acceleration)
 
 
 def update(planner, state, acceleration=-0.7):
@@ -55,8 +56,28 @@ def test_distant_stopped_lead_keeps_the_normal_approach():
 def test_stopping_budget_accounts_for_actuator_and_ramp_delay():
   state = near_stop_state()
   state['radarState'].leadOne.dRel = 3.3
-  assert not close_stop(state, acceleration=-1.4, delay=0.0)
-  assert close_stop(state, acceleration=-0.3, delay=0.5)
+  assert not close_stop(state, acceleration=-1.4, delay=0.0, measured_acceleration=-1.4)
+  assert close_stop(state, acceleration=-0.3, delay=0.5, measured_acceleration=-0.3)
+
+
+def test_requested_braking_cannot_stand_in_for_a_lagging_measured_response():
+  state = near_stop_state()
+  lead = state['radarState'].leadOne
+  lead.dRel, lead.vLead, lead.vRel = 5.5, 0.0, -1.8
+  assert not close_stop(state, speed=1.8, acceleration=-1.2, measured_acceleration=-1.2)
+  assert close_stop(state, speed=1.8, acceleration=-1.2, measured_acceleration=0.2)
+
+
+def test_a_more_negative_measurement_does_not_spend_the_requested_braking_reserve():
+  state = near_stop_state()
+  state['radarState'].leadOne.dRel = 3.3
+  assert close_stop(state, acceleration=-0.3, measured_acceleration=-0.3)
+  assert close_stop(state, acceleration=-0.3, measured_acceleration=-2.0)
+
+
+@pytest.mark.parametrize('measured_acceleration', [float('nan'), float('inf'), float('-inf')])
+def test_invalid_measured_response_cannot_create_a_close_lead_stop(measured_acceleration):
+  assert not close_stop(near_stop_state(), measured_acceleration=measured_acceleration)
 
 
 def test_both_lead_slots_are_supported_without_modifying_perception():

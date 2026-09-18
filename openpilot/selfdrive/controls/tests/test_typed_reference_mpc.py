@@ -375,6 +375,9 @@ def test_qualified_departing_lead_is_independent_of_missing_aligned_or_raw_growt
   assert evidence.moving is None and evidence.raw_motion.kind == 'moving'
   assert not evidence.allows_departure and evidence.allows_external_departure
   assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
+  negative_plan_times = {int(event.logMonoTime) for event in plans if event.longitudinalPlan.aTarget <= 0.0}
+  assert all(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans if int(event.logMonoTime) in negative_plan_times)
+  assert all(row['resolved_stop'] and not row['resume'] for row in rows if row['consumed_plan_mono'] in negative_plan_times)
   assert any(row['phase'] == 'release' and not row['resolved_stop'] for row in rows)
   assert any(command['STANDSTILL_RELEASE'] and not command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0.0
              for command in can_rows)

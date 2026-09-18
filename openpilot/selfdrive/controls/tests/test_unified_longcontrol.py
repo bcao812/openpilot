@@ -352,6 +352,38 @@ def test_movement_permission_confirmation_cannot_delay_stronger_braking():
   assert command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0
 
 
+@pytest.mark.parametrize('supervised', [False, True])
+def test_early_departure_confirmation_preserves_held_braking_and_the_release_rate(supervised):
+  harness = ControlHarness(controller(unified=not supervised, supervised=supervised))
+  harness.state.vEgo = 0.0
+  harness.state.standstill = True
+  for _ in range(150):
+    harness.step(-0.1, harness.normal_intent(reasons=StopReason.MPC))
+  assert harness.control.motion_phase == MotionPhase.HOLD
+  outputs = []
+  intent = None
+  for frame in range(80):
+    new_input = frame % 5 == 0
+    if new_input:
+      intent = harness.normal_intent(release_allowed=True, allow_creep=False)
+    outputs.append(harness.step(-0.1, intent, new_input=new_input))
+    assert harness.control.resolved_should_stop
+    assert harness.control.long_control_state == LongCtrlState.stopping
+  assert all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0 for command in decoded_commands(outputs))
+
+  previous = harness.control.last_output_accel
+  for frame in range(40):
+    new_input = frame % 5 == 0
+    if new_input:
+      intent = harness.normal_intent(release_allowed=True, allow_creep=False)
+    output = harness.step(0.05, intent, new_input=new_input)
+    assert output - previous <= 8.0 * DT_CTRL + 1e-9
+    assert not harness.control.resolved_should_stop
+    previous = output
+  command = decoded_commands([output])[0]
+  assert not command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0
+
+
 def test_stronger_braking_during_release_does_not_require_movement_permission():
   harness = ControlHarness()
   harness.hold()

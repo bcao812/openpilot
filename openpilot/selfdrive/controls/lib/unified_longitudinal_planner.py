@@ -435,7 +435,7 @@ class UnifiedLongitudinalPlanner:
     if cruise_speed <= STOP_SPEED:
       reasons |= StopReason.FORCE_DECEL if forced_decel else StopReason.CRUISE
     qualified = active and healthy and not forced_decel and not planner.fcw and planner.source == LongitudinalPlanSourceSP.cruise
-    if qualified and should_stop_for_close_lead(speed, output, state['radarState'], delay):
+    if qualified and should_stop_for_close_lead(speed, output, state['radarState'], delay, a_ego=car_state.aEgo):
       reasons |= StopReason.CLOSE_LEAD
     model_allows_external_departure = evidence is None or evidence.allows_external_departure
     model_allows_trajectory_departure = evidence is None or evidence.allows_departure
@@ -446,7 +446,10 @@ class UnifiedLongitudinalPlanner:
                        and cruise_speed >= CREEP_SPEED and has_safe_moving_lead(state['radarState'], speed, delay))
     trajectory_departure = (active and healthy and not forced_decel and not planner.fcw and not reasons
                             and forward_reference and model_allows_trajectory_departure)
-    lead_departure = (qualified and not reasons and no_model_risk and output > 0.0
+    # Independent lead departure may be confirmed while the MPC reference is
+    # still unwinding braking history. The owner keeps the held brake until
+    # this evidence is confirmed and the actual target is positive.
+    lead_departure = (qualified and not reasons and no_model_risk
                       and cruise_speed >= CREEP_SPEED and has_departing_lead(state['radarState'], speed, delay))
     observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
             trajectory_departure, lead_departure, qualified, no_model_risk)
@@ -518,7 +521,7 @@ class SupervisedLongitudinalPlanner(UnifiedLongitudinalPlanner):
       reasons |= StopReason.FORCE_DECEL if forced_decel else StopReason.CRUISE
     qualified = (active and healthy and not reset and not forced_decel and not planner.fcw
                  and planner.source == LongitudinalPlanSourceSP.cruise)
-    if qualified and should_stop_for_close_lead(speed, planner.output_a_target, state['radarState'], delay):
+    if qualified and should_stop_for_close_lead(speed, planner.output_a_target, state['radarState'], delay, a_ego=car_state.aEgo):
       reasons |= StopReason.CLOSE_LEAD
     no_model_risk = (not model.action.shouldStop and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL
                      and model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN)
@@ -527,7 +530,7 @@ class SupervisedLongitudinalPlanner(UnifiedLongitudinalPlanner):
                        and planner.output_a_target >= CREEP_FOLLOW_MIN_ACCEL and self.reference_accel < CREEP_ACCEL
                        and cruise_speed >= CREEP_SPEED and has_safe_moving_lead(state['radarState'], speed, delay))
     trajectory_departure = bool(active and healthy and not forced_decel and not planner.fcw and not reasons and forward_reference)
-    lead_departure = bool(qualified and not reasons and no_model_risk and planner.output_a_target > 0.0
+    lead_departure = bool(qualified and not reasons and no_model_risk
                           and cruise_speed >= CREEP_SPEED and has_departing_lead(state['radarState'], speed, delay))
     observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
             trajectory_departure, lead_departure, qualified, no_model_risk)

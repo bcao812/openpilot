@@ -145,6 +145,51 @@ def test_safe_departure_can_release_below_the_old_acceleration_threshold():
   assert not harness.supervisor.resolved_should_stop
 
 
+@pytest.mark.parametrize('a_target', [-3.0, -0.1, 0.0])
+@pytest.mark.parametrize('speed,standstill', [(0.0, True), (0.2, False)])
+def test_departure_evidence_can_be_confirmed_before_a_positive_target_without_releasing(a_target, speed, standstill):
+  harness = MotionHarness()
+  harness.stopped()
+  intent = MotionIntent(release_allowed=True, allow_creep=False)
+  for frame in range(120):
+    new_input = frame % 5 == 0
+    assert harness.step(intent, a_target=a_target, v_ego=speed, standstill=standstill,
+                        new_plan=new_input, new_model=new_input)
+    assert harness.supervisor.phase in (MotionPhase.APPROACH, MotionPhase.HOLD)
+  assert harness.supervisor.release_lead_t == pytest.approx(CREEP_STOP_T)
+  assert not harness.step(intent, a_target=0.05, v_ego=speed, standstill=standstill)
+  assert harness.supervisor.phase == MotionPhase.RELEASE
+
+
+def test_withdrawal_discards_departure_evidence_confirmed_during_negative_targets():
+  harness = MotionHarness()
+  harness.stopped()
+  intent = MotionIntent(release_allowed=True, allow_creep=False)
+  for frame in range(60):
+    new_input = frame % 5 == 0
+    assert harness.step(intent, a_target=-0.1, v_ego=0.0, standstill=True, new_plan=new_input, new_model=new_input)
+  assert harness.supervisor.release_lead_t == pytest.approx(CREEP_STOP_T)
+  assert harness.step(MotionIntent(allow_creep=False), a_target=-0.1, v_ego=0.0, standstill=True)
+  assert harness.supervisor.release_lead_t == 0.0
+  for frame in range(40):
+    new_input = frame % 5 == 0
+    assert harness.step(intent, a_target=0.05, v_ego=0.0, standstill=True, new_plan=new_input, new_model=new_input)
+
+
+def test_cached_negative_target_publications_do_not_prepay_departure_confirmation():
+  harness = MotionHarness()
+  harness.stopped()
+  intent = MotionIntent(release_allowed=True, allow_creep=False)
+  harness.step(intent, a_target=-0.1, v_ego=0.0, standstill=True)
+  for _ in range(24):
+    assert harness.step(intent, a_target=-0.1, v_ego=0.0, standstill=True, new_plan=False, new_model=False)
+  assert harness.supervisor.release_lead_t <= DT_CTRL
+  assert not harness.supervisor.degraded
+  for frame in range(40):
+    new_input = frame % 5 == 0
+    assert harness.step(intent, a_target=0.05, v_ego=0.0, standstill=True, new_plan=new_input, new_model=new_input)
+
+
 def test_withdrawing_movement_permission_restarts_low_target_confirmation():
   harness = MotionHarness()
   harness.stopped()

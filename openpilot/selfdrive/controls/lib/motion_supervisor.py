@@ -83,7 +83,8 @@ class MotionIntent:
 
   reasons accepts RAW_STOP_REASONS only; derived and unknown bits are invalid.
   moving_lead is an unconfirmed qualification, not permission to release a stop.
-  release_allowed is independently qualified reference movement or departure evidence.
+  release_allowed is independently qualified reference movement or departure evidence;
+  a held stop still requires a positive target before releasing its brake.
   allow_creep enables anti-creep evaluation, not permission to bypass a stop.
   ready separates initialization readiness from protocol validity.
   """
@@ -561,7 +562,11 @@ class MotionSupervisor:
       self.moving_lead_t = self._sample_confirmation_time(self.moving_lead_t, moving_eligible, independent, sample_step_ns)
     else:
       self.moving_lead_t = self._confirmation_time(self.moving_lead_t, moving_eligible, new_input, plan_step, model_step)
-    release_eligible = intent.release_allowed and a_target > CREEP_ACCEL and not raw_reasons and stopped_phase
+    # Confirm independent departure evidence while the reference sheds its old
+    # braking history. Waiting for its scalar to cross zero before starting the
+    # same confirmation adds a second delay; a negative target still cannot
+    # release the held stop below.
+    release_eligible = intent.release_allowed and not raw_reasons and stopped_phase
     self.release_lead_t = self._confirmation_time(self.release_lead_t, release_eligible, new_input, plan_step, model_step)
     following_moving_lead = self.moving_lead_t >= CREEP_STOP_T - 1e-9
     if self.mode == LongitudinalMode.SUPERVISED:
@@ -578,7 +583,7 @@ class MotionSupervisor:
       reasons |= StopReason.CLOSE_LEAD
 
     near_standstill = standstill or v_ego < STOP_SPEED
-    release_qualified = (intent.release_allowed and not raw_reasons
+    release_qualified = (intent.release_allowed and a_target > CREEP_ACCEL and not raw_reasons
                          and (a_target >= STOP_RELEASE_ACCEL or self.release_lead_t >= CREEP_STOP_T - 1e-9))
     if release_qualified:
       reasons = StopReason.NONE
