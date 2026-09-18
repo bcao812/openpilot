@@ -70,8 +70,8 @@ MPC_GOAL_INFEASIBLE = -4
 MPC_GOAL_UNSATISFIED = -5
 REFERENCE_BOUND = 1e4
 REST_STATE_TOL = 1e-3
-# Numerical feasibility is separate from the physical rest acceptance box.
-# Keep equality/inequality residuals six orders below that unchanged box.
+# A numerical repair requires observed residuals this small. This is not the
+# native QP request tolerance, nor a change to the physical rest acceptance box.
 QP_FEASIBILITY_TOL = 1e-9
 
 
@@ -277,8 +277,6 @@ def gen_long_ocp():
   # cold-start primal. Keep a fixed budget and the independent solution checks.
   ocp.solver_options.qp_solver_iter_max = 20
   ocp.solver_options.qp_tol = 1e-3
-  ocp.solver_options.qp_solver_tol_eq = QP_FEASIBILITY_TOL
-  ocp.solver_options.qp_solver_tol_ineq = QP_FEASIBILITY_TOL
 
   # set prediction horizon
   ocp.solver_options.tf = Tf

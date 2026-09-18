@@ -142,36 +142,6 @@ def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuato
   return braking_weight * speed_weight * urgency
 
 
-def has_selected_lead_braking_risk(v_ego: float, a_ego: float, a_target: float, radar_state,
-                                   selected_source, actuator_delay: float) -> bool:
-  """Qualify state anchoring for a lead slot already governing braking.
-
-  This neither admits a new lead nor changes confidence-dependent cost scaling.
-  Legacy MPC consumes present leads independently of modelProb;
-  its already-selected constraint must not use requested motion as measured motion.
-  """
-  if (not all(math.isfinite(value) for value in (v_ego, a_ego, a_target, actuator_delay))
-      or v_ego <= CLOSE_LEAD_STATE_SPEED_BP[0] or a_target >= CLOSE_LEAD_STATE_ACCEL_BP[-1]
-      or not ACCEL_MIN <= a_ego <= ACCEL_MAX or not 0.0 <= actuator_delay <= 1.0):
-    return False
-  if selected_source == LongitudinalPlanSource.lead0:
-    lead = radar_state.leadOne
-  elif selected_source == LongitudinalPlanSource.lead1:
-    lead = radar_state.leadTwo
-  else:
-    return False
-  values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.aLeadTau, lead.modelProb, lead.yRel)
-  if (not lead.present or not all(math.isfinite(value) for value in values)
-      or lead.dRel <= 0.0 or lead.vLead < -0.5 or lead.aLeadTau < 0.0
-      or not 0.0 <= lead.modelProb <= 1.0 or abs(lead.yRel) > 1.8
-      or lead.vRel >= -1.0 or abs(lead.vLead - v_ego - lead.vRel) > 1.0):
-    return False
-  closing_speed = -lead.vRel
-  available_gap = max(lead.dRel - STOP_DISTANCE - closing_speed * (actuator_delay + DT_MDL), 0.5)
-  required_decel = max(-lead.aLeadK, 0.0) + closing_speed ** 2 / (2.0 * available_gap)
-  return required_decel >= LEAD_BRAKING_DEMAND_BP[0]
-
-
 def should_stop_for_close_lead(v_ego: float, a_target: float, radar_state, actuator_delay: float, *, a_ego: float) -> bool:
   if not all(math.isfinite(value) for value in (v_ego, a_target, a_ego, actuator_delay)):
     return False
@@ -410,7 +380,6 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
   def _update_legacy_reference(self, sm):
     previous_target = self.output_a_target
-    previous_mpc_source = self.mpc.source
     LongitudinalPlannerSP.update(self, sm)
 
     v_ego = sm['carState'].vEgo
@@ -474,7 +443,6 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self._observe(policyTargetKnown=True, policySpeed=float(v_cruise), policyAccel=float(self.output_a_target))
 
     braking_urgency = 0.0
-    mpc_initial_accel = self.output_a_target
     if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
         and sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
         and not sm['carControl'].cruiseControl.override
@@ -482,17 +450,25 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         and self.source == LongitudinalPlanSourceSP.cruise
         and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState'])):
       braking_urgency = get_lead_braking_urgency(v_ego, self.output_a_target, sm['radarState'], self.CP.longitudinalActuatorDelay)
-      if (self.mpc.solution_status == 0
-          and has_selected_lead_braking_risk(v_ego, sm['carState'].aEgo, previous_target, sm['radarState'], previous_mpc_source,
-                                             self.CP.longitudinalActuatorDelay)):
-        # The acceleration-change reference remains in mpc.a_prev. It must not
-        # double as x0: delayed braking can leave the car faster and braking
-        # less than the integrated request predicts precisely during a hazard.
-        self.v_desired_filter.x = v_ego
-        mpc_initial_accel = sm['carState'].aEgo
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality,
                          a_change_scale=1.0 - (1.0 - LEAD_BRAKING_MIN_CHANGE_SCALE) * braking_urgency)
-    self.mpc.set_cur_state(self.v_desired_filter.x, mpc_initial_accel)
+    mpc_initial_speed, mpc_initial_accel = self.v_desired_filter.x, self.output_a_target
+    if self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl:
+      # One carState observation dates both physical initial-state components.
+      # Lead admission and policy/driver authority do not change that identity.
+      # Keep v_desired_filter for reference policy and mpc.a_prev for smoothing;
+      # neither is a substitute for motion the vehicle has actually reported.
+      measured_accel = sm['carState'].aEgo
+      if sm.all_checks(service_list=['carState']) and all(math.isfinite(value) for value in (v_ego, measured_accel)):
+        mpc_initial_speed = max(0.0, v_ego)
+        mpc_initial_accel = float(np.clip(measured_accel, ACCEL_MIN, ACCEL_MAX))
+        if mpc_initial_speed == 0.0:
+          mpc_initial_accel = max(0.0, mpc_initial_accel)
+      else:
+        # The shared MPC invalid-input sentinel reaches the existing braking
+        # retention path below. Do not solve a fabricated zero/request state.
+        mpc_initial_speed = mpc_initial_accel = float('nan')
+    self.mpc.set_cur_state(mpc_initial_speed, mpc_initial_accel)
     if self.trace is not None:
       observe_trace(self.trace, "begin", self, sm, reset_state, v_cruise, accel_coast)
     observe(self.observation, "mpc_started", self.observation_attempt, self.mpc)

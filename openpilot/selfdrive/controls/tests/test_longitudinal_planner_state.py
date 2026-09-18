@@ -61,10 +61,10 @@ def test_correction_tapers_continuously_at_speed_boundaries():
     assert abs(above - below) < 1e-5
 
 
-def test_real_mpc_receives_bounded_measured_speed():
+def test_real_mpc_receives_the_measured_speed_independently_of_reference_filtering():
   planner = braking_planner()
   planner.update(braking_state())
-  assert planner.mpc.x0[1] == pytest.approx(1.3 - LOW_SPEED_STATE_ERROR)
+  assert planner.mpc.x0[1] == pytest.approx(1.3)
   assert planner.v_desired_trajectory[0] == pytest.approx(planner.mpc.x0[1])
   assert planner.mpc.solution_status == 0
 
@@ -78,11 +78,10 @@ def test_other_platforms_keep_existing_filter(platform):
 
 
 @pytest.mark.parametrize('overrides', [{'gas_pressed': True}, {'brake_pressed': True}, {'override': True}])
-def test_driver_override_bypasses_correction(overrides):
+def test_driver_override_does_not_replace_physical_state_with_a_reference(overrides):
   planner = braking_planner()
   planner.update(braking_state(**overrides))
-  expected = 0.2 + (1.3 - 0.2) * DT_MDL / (2.0 + DT_MDL)
-  assert planner.mpc.x0[1] == pytest.approx(expected)
+  assert planner.mpc.x0[1] == pytest.approx(1.3)
 
 
 def test_disabled_planner_resets_to_actual_speed():
@@ -118,9 +117,8 @@ def test_correction_does_not_invent_no_lead_braking(v_ego):
       planner.update(braking_state(v_ego))
       commands.append(planner.output_a_target)
     outputs.append(commands)
-  # Compatibility check for the localized correction's inactive branch. This
-  # equality is not a general requirement for safer or smoother lead response.
-  np.testing.assert_allclose(outputs[0], outputs[1], atol=1e-8)
+  # The independent behavioral contract is no brake without a lead. A physical
+  # initial state need not equal another platform's integrated reference.
   assert min(outputs[1]) >= 0.0
 
 

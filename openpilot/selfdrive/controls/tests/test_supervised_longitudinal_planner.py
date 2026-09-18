@@ -141,7 +141,7 @@ def test_real_sp_producer_keeps_legacy_critical_request_in_supervised_stage(lead
       assert output == expected
       braking_rows += expected < CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
   assert supervised.source == SPSource.sccVision
-  assert supervised.mpc.x0[2] != pytest.approx(measured_accel)
+  assert supervised.mpc.x0[2] == pytest.approx(measured_accel)
   assert braking_rows > 0
   assert not owner.motion_degraded
 
