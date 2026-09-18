@@ -15,7 +15,8 @@ from openpilot.selfdrive.controls.controlsd import Controls
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.motion_supervisor import CREEP_INPUT_SERVICES, DEGRADED_ACCEL, MOTION_INTENT_VERSION, PLAN_LEASE_NS, StopReason
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import make_planner, make_state
+from openpilot.selfdrive.controls.lib.reference_timing import ReferenceTimingConsumer, ReferenceTimingProducer
+from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import advance, make_planner, make_state
 from openpilot.selfdrive.selfdrived.events import ET, Events
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 from openpilot.selfdrive.selfdrived.state import SOFT_DISABLE_TIME, StateMachine
@@ -95,6 +96,10 @@ class ControlsHarness:
     control.CP_SP = custom.CarParamsSP.new_message()
     control.CI = SimpleNamespace(get_pid_accel_limits=CarInterface.get_pid_accel_limits)
     control.LoC = LongControl(control.CP, control.CP_SP, unified=unified, supervised=supervised)
+    control.reference_timing = ReferenceTimingConsumer()
+    control.reference_timing_check = None
+    self.reference_producer = ReferenceTimingProducer()
+    self._reference_plan_time_ns = None
     self.plan.motionIntent.version = MOTION_INTENT_VERSION if control.LoC.unified else 0
     self.plan.motionIntent.mode = int(control.LoC.longitudinal_mode)
     # This harness explicitly produces healthy raw snapshots. A test can clear
@@ -113,7 +118,8 @@ class ControlsHarness:
     control.calibrated_pose = None
     self.control = control
 
-  def step(self, *, new_plan=True, plan_time_ns=None, model_time_ns=None, now_ns=None, raw_source_times=None):
+  def step(self, *, new_plan=True, plan_time_ns=None, model_time_ns=None, now_ns=None, raw_source_times=None,
+           reference_source_ns=None, reference_fields=None):
     self.now_ns = self.now_ns + CONTROL_STEP_NS if now_ns is None else now_ns
     incoming = []
     for service, event in self.events.items():
@@ -122,6 +128,15 @@ class ControlsHarness:
           continue
         event.logMonoTime = self.now_ns if plan_time_ns is None else plan_time_ns
         self.plan.modelMonoTime = self.now_ns if model_time_ns is None else model_time_ns
+        if (self.control.LoC.longitudinal_mode == LongitudinalMode.UNIFIED
+            and (event.logMonoTime != self._reference_plan_time_ns or reference_source_ns is not None or reference_fields is not None)):
+          source_ns = self.now_ns if reference_source_ns is None else reference_source_ns
+          self.reference_producer.qualify_source(source_ns, self.car_state.vEgo, self.car_state.aEgo, self.now_ns)
+          self.reference_producer.set_initial_state(max(self.car_state.vEgo, 0.0), self.car_state.aEgo)
+          self.reference_producer.publish(self.plan.reference)
+          for field, value in (reference_fields or {}).items():
+            setattr(self.plan.reference, field, value)
+          self._reference_plan_time_ns = int(event.logMonoTime)
         if self.plan.motionIntent.creepEvidenceValid:
           sources = [self.now_ns] * len(CREEP_INPUT_SERVICES) if raw_source_times is None else list(raw_source_times)
           if raw_source_times is None:
@@ -426,11 +441,14 @@ def test_published_mode_acknowledgement_is_consumed_by_the_real_planner(local_un
     state = make_state(speed=10.0)
     state['controlsState'] = harness.control.pm.messages['controlsState'].controlsState.as_builder()
     state['carControl'] = harness.control.pm.messages['carControl'].carControl.as_builder()
+    for service in state.logMonoTime:
+      state.logMonoTime[service] = harness.now_ns
     planner, extension = make_planner(speed=10.0)
-    planner.update(state)
+    planner.update(state, now_ns=harness.now_ns)
     assert planner.motion_intent.valid == local_unified
     publisher = CapturingPublisher()
-    planner.publish(state, publisher)
+    with patch('openpilot.cereal.messaging.time.monotonic_ns', return_value=harness.now_ns):
+      planner.publish(state, publisher)
     plan_event = publisher.messages['longitudinalPlan']
     assert plan_event.longitudinalPlan.motionIntent.version == MOTION_INTENT_VERSION
     assert plan_event.valid == local_unified
@@ -456,7 +474,7 @@ def test_cold_planner_rejection_can_still_publish_both_plan_channels(fault):
       state['carState'].vEgo = float('nan')
     else:
       state['modelV2'].velocity.x = []
-    planner.update(state)
+    planner.update(state, now_ns=advance(state, 0))
     assert not planner.motion_intent.valid
     publisher = CapturingPublisher()
     planner.publish(state, publisher)

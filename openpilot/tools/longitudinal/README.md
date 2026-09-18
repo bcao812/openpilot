@@ -16,7 +16,16 @@ research reports outside the software checkout; pass an explicit output path.
 | `replay_longitudinal_trace` | Compare trace-disabled/enabled sampled replays |
 | `window_replay` | Shared verified window input/result readers |
 
-Run from an isolated, host-built source tree, for example:
+Maintain source and tests in the active development tree. Commit the intended
+changes before testing, export that explicit commit into an isolated host tree,
+and make any fixes back in the active tree before committing and retesting.
+Historical research snapshots retain evidence and are no longer development
+copies. Record the tested commit, inputs/configuration, results and native
+artifact identity; a saved commit may still fail acceptance. C3 deployment
+selects an accepted commit and verifies matching ARM artifacts, actual installed
+files, effective version and LEGACY/SUPERVISED/UNIFIED mode.
+
+Run from the isolated, host-built commit snapshot, for example:
 
 ```bash
 python -m openpilot.tools.longitudinal.replay_pedal_switches --help

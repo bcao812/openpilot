@@ -64,14 +64,19 @@ def publish_and_consume(planner, state, consumer, plan_step_ns=50_000_000):
   timestamp = consumer.now_ns + plan_step_ns
   for service in state.logMonoTime:
     state.logMonoTime[service] = timestamp
-  planner.update(state)
+  planner.update(state, now_ns=timestamp)
   event = publish_plan(planner, state, timestamp)
   consumer.events['longitudinalPlan'] = event.as_builder()
   consumer.plan = consumer.events['longitudinalPlan'].longitudinalPlan
+  # Consume the real producer metadata; ControlsHarness must not synthesize a
+  # replacement source lease for an already published plan.
+  published_reference = event.longitudinalPlan.reference.to_dict()
+  consumer._reference_plan_time_ns = timestamp
   for name in ('vEgo', 'aEgo', 'standstill', 'vCruise', 'vCruiseCluster'):
     setattr(consumer.car_state, name, getattr(state['carState'], name))
   consumer.car_state.cruiseState.standstill = state['carState'].cruiseState.standstill
   command, motion = consumer.step(now_ns=timestamp, plan_time_ns=timestamp, model_time_ns=timestamp)
+  assert consumer.plan.reference.to_dict() == published_reference
   assert event.valid
   assert event.longitudinalPlan.solverStatus == 0
   assert consumer.plan.motionIntent.valid

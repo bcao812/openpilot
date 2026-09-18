@@ -258,6 +258,17 @@ class LongControl:
       else:
         output_accel = self.pid.update(a_target - CS.aEgo, speed=CS.vEgo, feedforward=a_target,
                                        freeze_integrator=self.motion_phase == MotionPhase.RELEASE)
+        # Isolated experiment only: one optional allocation stage after the
+        # existing owner has accepted TRACK, before the existing upward limit.
+        # It receives no authority to release, resume or change the intent.
+        allocation = getattr(self, '_response_candidate', None)
+        if (allocation is not None and self.longitudinal_mode == LongitudinalMode.UNIFIED
+            and self.motion_phase == MotionPhase.TRACK):
+          proposed = allocation(self, CS, a_target, accel_limits, now_ns=now_ns)
+          if proposed is not None:
+            if isinstance(proposed, bool) or not math.isfinite(proposed) or not accel_limits[0] <= proposed <= accel_limits[1]:
+              raise ValueError('Invalid experimental response allocation')
+            output_accel = float(proposed)
       output_accel = min(output_accel, self.last_output_accel + STARTING_ACCEL_RATE * DT_CTRL)
 
     if self.motion_input_constrained:

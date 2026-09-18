@@ -1035,6 +1035,14 @@ def test_actual_publisher_contract_and_scheduler_identity(monkeypatch, unified, 
   planner.unified = unified and supports_status
   planner.motion_enabled = planner.unified
   planner.longitudinal_mode = 2 if planner.unified else 0
+  if planner.unified:
+    # object.__new__ skips the real constructor's timing producer. Supply a
+    # real qualified source and initial state before exercising publication.
+    from openpilot.selfdrive.controls.lib.reference_timing import ReferenceTimingProducer
+
+    planner.reference_timing = ReferenceTimingProducer()
+    assert planner.reference_timing.qualify_source(1_000_000_000, 0.0, 0.0, 1_020_000_000) == 1_000_000_000
+    planner.reference_timing.set_initial_state(0.0, 0.0)
   planner.mpc = SimpleNamespace(solution_status=solver_status, source='cruise', solve_time=0.0)
   planner.trace = None
   planner.observation = None
@@ -1072,6 +1080,10 @@ def test_actual_publisher_contract_and_scheduler_identity(monkeypatch, unified, 
     assert publication.longitudinalPlan.solverStatus == solver_status
     if planner.unified:
       assert replay.decode_motion_intent(publication.longitudinalPlan) == planner.motion_intent
+      reference = publication.longitudinalPlan.reference
+      assert reference.timingKnown and reference.initialStateKnown
+      assert reference.sourceCarStateMonoTime == reference.referenceMonoTime == 1_000_000_000
+      assert reference.producerMonoTime == reference.producerInstanceMonoTime == 1_020_000_000
 
 
 def closed_runtime_fixture(monkeypatch):

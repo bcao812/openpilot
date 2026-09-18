@@ -171,16 +171,16 @@ def test_native_history_becomes_valid_only_after_a_finite_successful_solve(failu
   assert mpc.previous_solution_valid
 
 
-def test_continuous_qualified_reference_keeps_its_filter_history():
+def test_continuous_qualified_reference_keeps_smoothing_with_same_CS_initial_state():
   planner = production_planner()
   state = make_state(speed=20.0, target=25.0)
   planner.update(state, now_ns=advance(state, 0))
-  previous_filter = planner.v_desired_filter.x
   state['carState'].vEgo = 20.2
-  expected = previous_filter + (20.2 - previous_filter) * DT_MDL / (2.0 + DT_MDL)
   with patch.object(planner.mpc, 'set_weights', wraps=planner.mpc.set_weights) as weights:
     planner.update(state, now_ns=advance(state, 1))
   assert planner.motion_intent.valid
-  assert planner.mpc.x0[1] == pytest.approx(expected)
-  assert planner.mpc.x0[1] != pytest.approx(state['carState'].vEgo)
+  # The same-CS measurement and qualified native history are distinct; the
+  # unified planner uses the measured state without a second speed filter.
+  assert planner.mpc.x0[1] == float(state['carState'].vEgo)
+  assert planner.mpc.x0[2] == float(state['carState'].aEgo)
   assert weights.call_args.args[0]

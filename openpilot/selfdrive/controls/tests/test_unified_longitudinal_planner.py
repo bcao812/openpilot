@@ -101,8 +101,9 @@ def test_candidate_does_not_allocate_legacy_stop_owners():
 
 def test_new_pipeline_does_not_execute_independent_cruise_controller():
   planner, extension = make_planner()
+  state = make_state()
   with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_cruise_accel', side_effect=AssertionError('legacy cruise executed')):
-    planner.update(make_state())
+    planner.update(state, now_ns=advance(state, 0))
   assert planner.motion_intent.valid
   assert planner.motion_intent.version == MOTION_INTENT_VERSION
   assert planner.mpc.source == log.LongitudinalPlan.LongitudinalPlanSource.cruise
@@ -133,7 +134,7 @@ def test_model_action_admission_is_not_silently_widened(experimental, dec_enable
   with patch.object(planner.dec, 'active', return_value=dec_enabled), \
        patch.object(planner.dec, 'mode', return_value=mode), \
        patch.object(planner.dec, 'update', return_value=None):
-    planner.update(state)
+    planner.update(state, now_ns=advance(state, 0))
   assert planner.reference_planner.e2e_allowed == allowed
   assert planner.motion_intent.valid
   if allowed:
@@ -149,7 +150,7 @@ def test_stopped_hold_request_is_not_used_as_motion_initial_acceleration():
   state['controlsState'].longControlState = LongCtrlState.stopping
   state['carControl'].actuators.accel = -2.0
   planner.output_a_target = -2.0
-  planner.update(state)
+  planner.update(state, now_ns=advance(state, 0))
   assert planner.mpc.x0[2] == 0.0
   assert planner.motion_intent.reasons & int(StopReason.CRUISE)
 
@@ -175,7 +176,7 @@ def test_missing_or_mismatched_consumer_ack_does_not_release_legacy_hold(version
   state['controlsState'].motionState.version = version
   state['controlsState'].motionState.enabled = consumer_enabled
   state['controlsState'].longControlState = LongCtrlState.stopping
-  planner.update(state)
+  planner.update(state, now_ns=advance(state, 0))
   assert not planner.motion_intent.valid
   assert planner.output_a_target <= -0.2
   assert planner.output_should_stop
@@ -187,7 +188,7 @@ def test_nonfinite_motion_input_invalidates_intent_without_positive_request(attr
   planner, extension = make_planner()
   state = make_state()
   setattr(state['carState'], attribute, value)
-  planner.update(state)
+  planner.update(state, now_ns=advance(state, 0))
   assert not planner.motion_intent.valid
   assert np.isfinite(planner.output_a_target)
   assert planner.output_a_target <= -0.2
@@ -199,7 +200,7 @@ def test_solver_failure_is_invalid_not_a_successful_zero_trajectory():
   failing_solver = Mock(wraps=planner.mpc.solver)
   failing_solver.solve.return_value = 4
   with patch.object(planner.mpc, 'solver', failing_solver):
-    planner.update(state)
+    planner.update(state, now_ns=advance(state, 0))
   assert planner.mpc.solution_status == 4
   assert not planner.motion_intent.valid
   publisher = Publisher()
@@ -211,7 +212,7 @@ def test_reference_and_intent_round_trip_preserve_distinct_semantics():
   planner, extension = make_planner()
   state = make_state(experimental=True)
   state['modelV2'].action.desiredAcceleration = -3.0
-  planner.update(state)
+  planner.update(state, now_ns=advance(state, 0))
   publisher = Publisher()
   planner.publish(state, publisher)
   message = publisher.messages['longitudinalPlan']
@@ -350,7 +351,7 @@ def test_finite_kalman_stop_undershoot_is_projected_without_mutating_car_state(e
   state['carState'].standstill = standstill
   state['modelV2'].velocity.x = [0.1] * len(ModelConstants.T_IDXS)
   state['modelV2'].action.shouldStop = True
-  planner.update(state)
+  planner.update(state, now_ns=advance(state, 0))
   assert state['carState'].vEgo == pytest.approx(estimated_speed)
   assert planner.mpc.x0[1] == 0.0
   assert planner.mpc.solution_status == 0
@@ -383,7 +384,7 @@ def test_zero_forward_speed_and_negative_acceleration_cannot_invent_a_release(es
   lead.aLeadK = 0.0
   lead.aLeadTau = 1.5
   lead.modelProb = 0.99
-  planner.update(state)
+  planner.update(state, now_ns=advance(state, 0))
   assert planner.mpc.solution_status == 0
   assert planner.mpc.x0[1] == planner.mpc.x0[2] == 0.0
   assert state['carState'].aEgo == pytest.approx(measured_accel)
@@ -404,6 +405,6 @@ def test_positive_forward_speed_does_not_discard_measured_braking():
   planner, extension = make_planner(speed=0.2)
   state = make_state(speed=0.2)
   state['carState'].aEgo = -0.5
-  planner.update(state)
+  planner.update(state, now_ns=advance(state, 0))
   assert planner.mpc.x0[1] > 0.0
   assert planner.mpc.x0[2] == -0.5

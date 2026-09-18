@@ -10,14 +10,15 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_ACCEL, CREEP_SPEED, STOP_SPEED, should_stop, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import MpcReference, T_IDXS
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import MPC_INVALID_INPUT, MpcReference, T_IDXS
+from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   CONTROL_N_T_IDX, ALLOW_THROTTLE_THRESHOLD, MIN_ALLOW_THROTTLE_SPEED,
   LEAD_BRAKING_MIN_CHANGE_SCALE, CREEP_FOLLOW_MIN_ACCEL, CREEP_FOLLOW_MODEL_MARGIN,
   CREEP_FOLLOW_MIN_GAP, CREEP_FOLLOW_MIN_LEAD_SPEED, CREEP_FOLLOW_MAX_CLOSING_SPEED,
   CREEP_FINISH_T, COMFORT_BRAKE, LongitudinalPlanSource, LongitudinalPlanSourceSP,
   _A_TOTAL_MAX_V, _A_TOTAL_MAX_BP, get_max_accel, get_coast_accel,
-  constrain_braking_speed, constrain_lead_braking_speed, get_lead_braking_urgency,
+  get_lead_braking_urgency,
   has_safe_moving_lead, should_stop_for_close_lead,
 )
 from openpilot.selfdrive.controls.lib.motion_supervisor import CREEP_INPUT_SERVICES, MOTION_INTENT_VERSION, CreepSample, MotionIntent, StopReason
@@ -27,6 +28,9 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import Lon
 
 
 INPUT_SERVICES = ['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState', 'vehicleParameters']
+COMPATIBLE_MODEL_UNKNOWNS = frozenset({
+  'model_proxy_after_initial_state', 'backward_then_forward_is_ambiguous', 'isolated_zero_has_no_rest_support',
+})
 
 
 def model_reference_from_velocity(raw_velocity):
@@ -118,6 +122,13 @@ class UnifiedLongitudinalPlanner:
     self.reference_overridden = False
     self.e2e_allowed = False
     self.reference_initialized = False
+    self.reference_source_epoch_ns = None
+    self.model_reference_adapter = ModelReferenceAdapter()
+    self.model_evidence = None
+    self.model_reference_mode = 'not_admitted'
+    self.model_fallback_reason = ''
+    self._model_rest_active = False
+    self.entered_rest_goal = False
     self.cruise_initialized = False
     self.cold_standby_started = False
     self.standby = False
@@ -126,6 +137,9 @@ class UnifiedLongitudinalPlanner:
   def invalidate(self, speed, reason):
     planner = self.planner
     self.reference_initialized = False
+    self.reference_source_epoch_ns = None
+    self._model_rest_active = False
+    self.entered_rest_goal = False
     planner.mpc.invalidate_reference_history()
     self.standby = False
     planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), valid=False)
@@ -149,16 +163,19 @@ class UnifiedLongitudinalPlanner:
       return
     previous = float(previous_request) if math.isfinite(previous_request) else MPC_FAILURE_ACCEL
     request = min(previous, MPC_FAILURE_ACCEL)
+    goal_braking = planner.mpc.rest_goal_braking_accel
+    if goal_braking is not None and math.isfinite(goal_braking):
+      request = min(request, goal_braking)
     self.e2e_allowed = planner.is_e2e(state)
     model_request = state['modelV2'].action.desiredAcceleration
-    if self.e2e_allowed and math.isfinite(model_request):
+    if self.e2e_allowed and self.model_reference_mode != 'invalid' and math.isfinite(model_request):
       request = min(request, model_request)
     request = float(np.clip(request, ACCEL_MIN, ACCEL_MAX))
     planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), allow_creep=False,
                                          valid=False, braking_accel=request)
     planner.output_a_target = request
     self.constraint_accel = request
-    if self.e2e_allowed and model_request <= min(previous, MPC_FAILURE_ACCEL):
+    if self.e2e_allowed and self.model_reference_mode != 'invalid' and model_request <= min(previous, MPC_FAILURE_ACCEL):
       self.constraint_source = LongitudinalPlanSource.e2e
     planner._observe(constraintKnown=True, constraintAccel=request, modelAdmissionKnown=True,
                      e2eAllowed=bool(self.e2e_allowed))
@@ -216,11 +233,32 @@ class UnifiedLongitudinalPlanner:
       self.cold_standby_started = False
     return speed, measured_accel, healthy
 
+  @property
+  def _reference_consumer_clock_ns(self):
+    return self.planner.reference_timing.last_consumer_ns
+
+  def reference_source_epoch(self, state, now_ns):
+    """Use the same qualified source record that the production message carries."""
+    self.reference_source_epoch_ns = None
+    return self.planner.reference_timing.qualify_source(
+      getattr(state, 'logMonoTime', {}).get('carState'),
+      float(state['carState'].vEgo), float(state['carState'].aEgo), now_ns,
+    )
+
   def update(self, state, *, now_ns):
     planner = self.planner
-    previous_reference_valid = planner.mpc.prepare_reference_history(now_ns, valid=self.reference_initialized)
+    self.model_reference_mode = 'not_admitted'
+    self.model_fallback_reason = ''
+    self.model_evidence = None
+    source_epoch_ns = self.reference_source_epoch(state, now_ns)
+    if source_epoch_ns is None:
+      self.model_reference_adapter.clear_rest_continuity()
+      self.invalidate(float(state['carState'].vEgo), "invalid_reference_source_epoch")
+      return
+    previous_reference_valid = planner.mpc.prepare_reference_history(source_epoch_ns, valid=self.reference_initialized)
     prepared = self.prepare(state)
     if prepared is None:
+      self.model_reference_adapter.clear_rest_continuity()
       return
     speed, measured_accel, healthy = prepared
     car_state = state['carState']
@@ -232,14 +270,15 @@ class UnifiedLongitudinalPlanner:
     active = (state['selfdriveState'].enabled and state['carControl'].enabled and state['carControl'].longActive
               and not car_state.gasPressed and not car_state.brakePressed and not state['carControl'].cruiseControl.override)
     reset = state['controlsState'].longControlState == LongCtrlState.off or car_state.vCruise == V_CRUISE_UNSET or not active
-    # plannerd can restart while controlsd is still active. Its constructor's
-    # default zero filter is not a motion reference for an already moving car.
-    if not self.reference_initialized or reset or car_state.standstill and speed == 0.0:
-      planner.v_desired_filter.x = speed
-    initial_speed = max(0.0, float(planner.v_desired_filter.update(speed)))
-    if active and healthy and not reset:
-      initial_speed = constrain_braking_speed(initial_speed, speed, planner.output_a_target)
-      initial_speed = constrain_lead_braking_speed(initial_speed, speed, planner.output_a_target, state['radarState'])
+    retain_rest_continuity = healthy and active and not reset and self.e2e_allowed
+    if not retain_rest_continuity:
+      self.model_reference_adapter.clear_rest_continuity()
+    # vEgo and aEgo are one carState estimator result. A second speed filter or
+    # a fixed-step prediction would date the two initial-state components
+    # differently, including on startup and when planner updates are skipped.
+    initial_speed = speed
+    # Preserve the shared trace snapshot; UNIFIED does not consume this filter
+    # as either a motion estimate or a future reference state.
     planner.v_desired_filter.x = initial_speed
     initial_accel = float(np.clip(measured_accel, ACCEL_MIN, ACCEL_MAX))
     if initial_speed == 0.0:
@@ -249,6 +288,7 @@ class UnifiedLongitudinalPlanner:
     if len(state['carControl'].orientationNED) == 3:
       pitch = state['carControl'].orientationNED[1]
       if not math.isfinite(pitch):
+        self.model_reference_adapter.clear_rest_continuity()
         self.invalidate(speed, "nonfinite_pitch")
         return
       coast_accel = float(get_coast_accel(pitch - planner.pitch_bias.value))
@@ -256,6 +296,7 @@ class UnifiedLongitudinalPlanner:
     probabilities = model.meta.disengagePredictions.gasPressProbs
     throttle_probability = probabilities[1] if len(probabilities) > 1 else 1.0
     if not math.isfinite(throttle_probability):
+      self.model_reference_adapter.clear_rest_continuity()
       self.invalidate(speed, "nonfinite_throttle_probability")
       return
     planner.allow_throttle = throttle_probability > ALLOW_THROTTLE_THRESHOLD or speed <= MIN_ALLOW_THROTTLE_SPEED
@@ -266,23 +307,52 @@ class UnifiedLongitudinalPlanner:
     cruise_speed, policy_accel = LongitudinalPlannerSP.update_targets(planner, state, initial_speed, initial_accel, cruise_speed)
     planner._observe(policyTargetKnown=True, policySpeed=float(cruise_speed), policyAccel=float(policy_accel))
     if not math.isfinite(cruise_speed) or not math.isfinite(policy_accel):
+      self.model_reference_adapter.clear_rest_continuity()
       self.invalidate(speed, "nonfinite_policy_target")
       return
     cruise_speed = max(0.0, cruise_speed)
-    if self.e2e_allowed and model.action.shouldStop:
-      cruise_speed = 0.0
     steering = car_state.steeringAngleDeg - state['vehicleParameters'].angleOffsetDeg
     maximum_accel = cruise_accel_limit(planner.CP, speed, steering, self.e2e_allowed, coast_accel, planner.allow_throttle)
     model_position = model_velocity = model_acceleration = None
+    self.model_evidence = None
     if self.e2e_allowed:
       fields = (model.position.x, model.velocity.x, model.acceleration.x)
       if any(len(values) != len(ModelConstants.T_IDXS) or not np.all(np.isfinite(values)) for values in fields):
+        self.model_reference_adapter.clear_rest_continuity()
         self.invalidate(speed, "invalid_e2e_reference")
         return
       model_position, model_velocity, model_acceleration = model_reference_from_velocity(model.velocity.x)
+      self.model_evidence = self.model_reference_adapter.build(
+        model.velocity.x, T_IDXS, initial_speed,
+        model_mono_time_ns=getattr(state, 'logMonoTime', {}).get('modelV2'),
+        anchor_mono_time_ns=source_epoch_ns, consumed_mono_time_ns=now_ns,
+        retain_rest_continuity=retain_rest_continuity,
+      )
+      unknown = self.model_evidence.unknown
+      self.model_reference_mode = 'typed'
+      if unknown is not None:
+        self.model_fallback_reason = unknown.reason
+        self.model_reference_mode = ('compatibility_risk_only' if unknown.reason in COMPATIBLE_MODEL_UNKNOWNS else 'invalid')
+        if self.model_reference_mode == 'invalid':
+          # A future/expired/mutated source has no qualified new model risk
+          # input. The same MPC still consumes independently valid real leads
+          # and cruise; its invalid output cannot authorize forward movement.
+          model_position = model_velocity = model_acceleration = None
+      if self.model_reference_mode != 'invalid' and model.action.shouldStop:
+        cruise_speed = 0.0
+    has_rest_goal = self.model_evidence is not None and self.model_evidence.rest_goal is not None
+    self.entered_rest_goal = has_rest_goal and not self._model_rest_active
+    self._model_rest_active = has_rest_goal
+    if self.entered_rest_goal:
+      # A newly admitted rest goal replaces the preceding moving semantics.
+      # Keep this new epoch pending so the next same-goal frame can use its
+      # accepted trajectory; do not clear history on each new model identity.
+      planner.mpc.discard_prepared_reference_cost()
+      previous_reference_valid = False
     reference = MpcReference(
       cruise_speed=cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
+      typed_model=self.model_evidence,
     )
     urgency = 0.0
     if active and healthy and not reset and not forced_decel and planner.source == LongitudinalPlanSourceSP.cruise:
@@ -295,6 +365,7 @@ class UnifiedLongitudinalPlanner:
     planner.mpc.set_weights(previous_reference_valid and reference_qualified, personality=state['selfdriveState'].personality,
                             a_change_scale=1.0 - (1.0 - LEAD_BRAKING_MIN_CHANGE_SCALE) * urgency)
     planner.mpc.set_cur_state(initial_speed, initial_accel)
+    planner.reference_timing.set_initial_state(initial_speed, initial_accel)
     if planner.trace is not None:
       observe_trace(planner.trace, "begin", planner, state, reset, cruise_speed, coast_accel)
     observe(planner.observation, "mpc_started", planner.observation_attempt, planner.mpc)
@@ -318,11 +389,35 @@ class UnifiedLongitudinalPlanner:
     self.reference_source = planner.mpc.source
     if cruise_speed <= STOP_SPEED:
       self.constraint_accel = min(self.constraint_accel, CarControllerParams.BOSCH_GAS_LOOKUP_BP[0])
-    if self.e2e_allowed and model.action.desiredAcceleration < self.constraint_accel:
+    if self.e2e_allowed and self.model_reference_mode != 'invalid' and model.action.desiredAcceleration < self.constraint_accel:
       self.constraint_accel = float(model.action.desiredAcceleration)
+      self.constraint_source = LongitudinalPlanSource.e2e
+    evidence = self.model_evidence
+    model_stop_evidence = evidence is not None and (evidence.no_forward or evidence.has_rest_intent)
+    if model_stop_evidence and speed < STOP_SPEED and CarControllerParams.BOSCH_GAS_LOOKUP_BP[0] < self.constraint_accel:
+      self.constraint_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
       self.constraint_source = LongitudinalPlanSource.e2e
     planner._observe(constraintKnown=True, constraintAccel=float(self.constraint_accel))
     output = float(np.clip(min(self.reference_accel, self.constraint_accel), ACCEL_MIN, ACCEL_MAX))
+    if evidence is not None and evidence.unknown is not None and self.model_reference_mode == 'invalid':
+      # The same successful MPC still consumed admitted leads. Preserve its
+      # qualified braking and the preceding request while refusing movement
+      # from a model source that failed its own input contract.
+      previous = planner.output_a_target if math.isfinite(planner.output_a_target) else -0.2
+      request = float(np.clip(min(output, previous, -0.2), ACCEL_MIN, ACCEL_MAX))
+      self.invalidate(speed, 'unknown_model_' + evidence.unknown.reason)
+      # This is a producer-input failure, not an acados return code. The
+      # existing owner accepts a braking envelope only with a nonzero status;
+      # retain diagnostic_last_solver_return as the actual native result.
+      planner.mpc.solution_status = MPC_INVALID_INPUT
+      planner.mpc.failure_reason = 'unqualified_model_' + evidence.unknown.reason
+      planner.mpc.previous_solution_valid = False
+      planner.output_a_target = request
+      self.constraint_accel = request
+      planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), allow_creep=False,
+                                           valid=False, braking_accel=request)
+      planner._observe(constraintKnown=True, constraintAccel=request)
+      return
     self.reference_overridden = output != self.reference_accel
     if output < self.reference_accel:
       planner.mpc.source = self.constraint_source
@@ -333,6 +428,8 @@ class UnifiedLongitudinalPlanner:
     if (planner.mpc.v_solution[-1] < STOP_SPEED
         and (should_stop(speed, self.reference_accel) or speed < STOP_SPEED and not forward_reference)):
       reasons |= StopReason.MPC
+    if model_stop_evidence and speed < STOP_SPEED:
+      reasons |= StopReason.MPC
     if self.e2e_allowed and model.action.shouldStop:
       reasons |= StopReason.E2E
     if cruise_speed <= STOP_SPEED:
@@ -340,12 +437,15 @@ class UnifiedLongitudinalPlanner:
     qualified = active and healthy and not forced_decel and not planner.fcw and planner.source == LongitudinalPlanSourceSP.cruise
     if qualified and should_stop_for_close_lead(speed, output, state['radarState'], delay):
       reasons |= StopReason.CLOSE_LEAD
-    no_model_risk = (not model.action.shouldStop and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL
+    model_allows_external_departure = evidence is None or evidence.allows_external_departure
+    model_allows_trajectory_departure = evidence is None or evidence.allows_departure
+    no_model_risk = (model_allows_external_departure and not model.action.shouldStop
+                     and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL
                      and model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN)
     moving_lead = bool(qualified and not reasons and no_model_risk and output >= CREEP_FOLLOW_MIN_ACCEL
                        and cruise_speed >= CREEP_SPEED and has_safe_moving_lead(state['radarState'], speed, delay))
     trajectory_departure = (active and healthy and not forced_decel and not planner.fcw and not reasons
-                            and forward_reference)
+                            and forward_reference and model_allows_trajectory_departure)
     lead_departure = (qualified and not reasons and no_model_risk and output > 0.0
                       and cruise_speed >= CREEP_SPEED and has_departing_lead(state['radarState'], speed, delay))
     observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
@@ -357,8 +457,8 @@ class UnifiedLongitudinalPlanner:
     )
     planner.output_a_target = output
     planner.output_should_stop = bool(reasons)
-    planner.v_desired_filter.x = max(0.0, initial_speed + planner.dt * measured_accel)
     self.reference_initialized = bool(healthy and not reset)
+    self.reference_source_epoch_ns = source_epoch_ns if healthy else None
     planner.mpc.mark_reference_history(valid=bool(reference_qualified and self.reference_initialized))
     planner._observe(outcome="completed" if healthy else "completed_unhealthy_inputs")
     if planner.trace is not None:

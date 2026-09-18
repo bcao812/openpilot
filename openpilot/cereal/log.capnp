@@ -1554,6 +1554,19 @@ struct LongitudinalReference {
   overridden @2 :Bool;
   source @3 :LongitudinalPlan.LongitudinalPlanSource;
   constraintSource @4 :LongitudinalPlan.LongitudinalPlanSource;
+  timingVersion @5 :UInt8;
+  timingKnown @6 :Bool;
+  # Source publication is an observation proxy, not an ECU sample timestamp.
+  sourceCarStateMonoTime @7 :UInt64;
+  referenceMonoTime @8 :UInt64;
+  producerMonoTime @9 :UInt64;
+  # First qualified update in this planner instance; no persistent/random ID.
+  producerInstanceMonoTime @10 :UInt64;
+  sourceVEgo @11 :Float32;
+  sourceAEgo @12 :Float32;
+  initialVEgo @13 :Float32;
+  initialAEgo @14 :Float32;
+  initialStateKnown @15 :Bool;
 }
 
 struct LongitudinalMotionState {
@@ -1569,6 +1582,15 @@ struct LongitudinalMotionState {
   # Healthy input remains constrained until both producer identities advance.
   # Read-only status, not a fault or a grant of actuation/release authority.
   waitingForFreshInput @9 :Bool;
+  referenceTimingVersion @10 :UInt8;
+  referenceTimingValid @11 :Bool;
+  referenceTimingReason @12 :Text;
+  referenceSourceMonoTime @13 :UInt64;
+  referenceEpochMonoTime @14 :UInt64;
+  referenceProducerMonoTime @15 :UInt64;
+  referenceConsumerMonoTime @16 :UInt64;
+  referenceProducerInstanceMonoTime @17 :UInt64;
+  referenceSourceAdvanced @18 :Bool;
 }
 
 struct UiPlan {

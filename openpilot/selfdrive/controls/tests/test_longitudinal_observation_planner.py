@@ -1,4 +1,6 @@
 import math
+from copy import deepcopy
+from dataclasses import fields, is_dataclass
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -37,6 +39,34 @@ def make_planner(*, unified=True, diagnostics=None, speed=20.0, trace=None, plat
   return LongitudinalPlanner(params, extension, init_v=speed, unified=unified, diagnostics=diagnostics, trace=trace)
 
 
+def update_at_fixture_clock(planner, state, *, now_ns=None):
+  """Advance only the caller clock; source times and payloads stay untouched."""
+  if now_ns is None:
+    now_ns = getattr(planner, '_fixture_decision_ns', 955_000_000) + 50_000_000
+  planner._fixture_decision_ns = now_ns
+  return planner.update(state, now_ns=now_ns)
+
+
+def snapshot_value(value):
+  """Compare complete state by value, including typed evidence and arrays."""
+  if isinstance(value, np.ndarray):
+    return ('ndarray', value.dtype.str, value.shape, value.flags.writeable, value.tolist())
+  if is_dataclass(value):
+    return (type(value).__qualname__, {field.name: snapshot_value(getattr(value, field.name)) for field in fields(value)})
+  if isinstance(value, dict):
+    return {name: snapshot_value(item) for name, item in value.items()}
+  if isinstance(value, (tuple, list)):
+    return type(value)(snapshot_value(item) for item in value)
+  return deepcopy(value)
+
+
+def reference_snapshot(reference):
+  return {
+    name: snapshot_value(vars(value) if name == 'model_reference_adapter' else value)
+    for name, value in vars(reference).items() if name != 'planner'
+  }
+
+
 class Publisher:
   def __init__(self):
     self.messages = {}
@@ -73,7 +103,7 @@ def control_snapshot(planner):
     result[name] = getattr(planner, name).tolist()
   if planner.unified:
     result["intent"] = planner.motion_intent
-    result["reference"] = {name: value for name, value in vars(planner.reference_planner).items() if name != "planner"}
+    result["reference"] = reference_snapshot(planner.reference_planner)
   else:
     for name in ("stop_latched", "creep_t", "creep_stop", "creep_total_t", "moving_lead_t", "close_lead_stop"):
       result[name] = getattr(planner, name)
@@ -104,7 +134,7 @@ def set_field(state, path, value):
 def test_regular_logging_defaults_on_independently_of_candidate(unified):
   planner = make_planner(unified=unified)
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   assert observed.context.version == 1
   assert observed.context.producer == "planner"
@@ -136,7 +166,7 @@ def test_regular_logging_respects_vehicle_scope(platform, stock, interceptor):
 def test_explicit_disabled_observation_has_no_wire_context():
   planner = make_planner(diagnostics=False)
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   assert planner.observation_attempt is None
   assert planner.observation_result is None
   assert diagnostics(planner, state).context.version == 0
@@ -145,7 +175,7 @@ def test_explicit_disabled_observation_has_no_wire_context():
 @pytest.mark.parametrize("outcome,path,value", [
   ("motion_owner_unavailable", "controlsState.motionState.version", MOTION_INTENT_VERSION + 1),
   ("motion_owner_unavailable", "controlsState.motionState.enabled", False),
-  ("invalid_vehicle_values", "carState.aEgo", float("nan")),
+  ("invalid_reference_source_epoch", "carState.aEgo", float("nan")),
   ("invalid_vehicle_values", "carState.vCruise", float("inf")),
   ("invalid_model_shape", "modelV2.velocity.x", [1.0]),
   ("invalid_model_shape", "modelV2.orientationRate.z", [0.0]),
@@ -159,12 +189,12 @@ def test_explicit_disabled_observation_has_no_wire_context():
 def test_every_pre_mpc_rejection_has_fresh_known_fields(outcome, path, value):
   planner = make_planner()
   state = make_state(experimental=True)
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   solver_calls = planner.mpc.diagnostic_solve_calls
   set_field(state, path, value)
   state.logMonoTime["modelV2"] += 50_000_000
   with patch.object(planner.dec, "active", return_value=False):
-    planner.update(state)
+    update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   assert observed.context.sequence == 2
   assert observed.updateCompleted
@@ -186,7 +216,7 @@ def test_invalid_vehicle_geometry_or_delay_is_observed_without_solver(field, val
   planner = make_planner()
   state = make_state()
   setattr(planner.CP, field, value)
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   assert observed.outcome == "invalid_vehicle_values"
   assert not observed.solverAttempted
@@ -200,7 +230,7 @@ def test_unset_cruise_and_cold_standby_are_distinct(idle, expected):
   state["carControl"].enabled = not idle
   state["selfdriveState"].enabled = not idle
   state["controlsState"].longControlState = LongCtrlState.off if idle else LongCtrlState.pid
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   assert observed.outcome == expected
   assert not observed.solverAttempted and not observed.mpcUpdated
@@ -215,7 +245,7 @@ def test_actual_invalid_policy_output_is_preserved_without_recomputation(target)
   planner = make_planner()
   state = make_state()
   with patch.object(LongitudinalPlannerSP, "update_targets", return_value=target) as targets:
-    planner.update(state)
+    update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   targets.assert_called_once()
   assert observed.outcome == "nonfinite_policy_target"
@@ -228,13 +258,13 @@ def test_actual_invalid_policy_output_is_preserved_without_recomputation(target)
 def test_mpc_input_rejection_is_not_a_solver_attempt(unified):
   planner = make_planner(unified=unified)
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   lead = state["radarState"].leadOne
   lead.present = True
   lead.dRel = 20.0
   lead.vLead = 15.0
   lead.aLeadTau = float("nan")
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   assert observed.outcome == "mpc_invalid_input"
   assert observed.mpcUpdated and not observed.solverAttempted
@@ -258,7 +288,7 @@ def test_actual_solver_failures_survive_control_reset(unified, failure, status, 
   else:
     solver.solve.side_effect = RuntimeError("solver failure")
   with patch.object(planner.mpc, "solver", solver):
-    planner.update(state)
+    update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   assert observed.mpcUpdated and observed.solverAttempted
   assert observed.solverCalls == solver.solve.call_count == 1
@@ -277,7 +307,7 @@ def test_nonfinite_sample_is_not_replaced_with_invalidated_reference_zero():
   planner = make_planner()
   state = make_state()
   with patch("openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan", return_value=float("nan")) as sample:
-    planner.update(state)
+    update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   sample.assert_called_once()
   assert observed.outcome == "nonfinite_sampled_accel"
@@ -293,7 +323,7 @@ def test_unhealthy_input_completion_does_not_masquerade_as_admitted_intent():
   state = make_state()
   state.valid["modelV2"] = False
   state.all_checks = lambda service_list=None: all(state.valid[service] for service in (state.valid if service_list is None else service_list))
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   assert observed.outcome == "completed_unhealthy_inputs"
   assert observed.solverAttempted and not planner.motion_intent.valid
@@ -345,7 +375,7 @@ def test_input_snapshot_keeps_uint64_identity_and_unknown_health():
   state.frame = 37
   state.alive = {"modelV2": True, "carState": False}
   original = dict(state.logMonoTime)
-  planner.update(state)
+  update_at_fixture_clock(planner, state, now_ns=max(original.values()) + 5_000_000)
   state.logMonoTime = {service: mono + 2 for service, mono in state.logMonoTime.items()}
   observed = diagnostics(planner, state)
   assert observed.context.frameKnown and observed.context.frame == 37
@@ -365,13 +395,14 @@ def test_plan_sp_uses_actual_main_envelope_and_delay_has_consistent_units(delay_
   planner = make_planner()
   state = make_state()
   state.logMonoTime["modelV2"] = (1 << 60) + 13
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   main_mono = state.logMonoTime["modelV2"] + delay_ns
   monotimes = iter([main_mono, main_mono + 31])
   original_new_message = messaging.new_message
 
-  def timed_message(service):
-    return original_new_message(service, logMonoTime=next(monotimes))
+  def timed_message(service, **options):
+    options['logMonoTime'] = next(monotimes)
+    return original_new_message(service, **options)
 
   with patch("openpilot.selfdrive.controls.lib.longitudinal_planner.messaging.new_message", side_effect=timed_message):
     publisher = publish(planner, state)
@@ -387,7 +418,7 @@ def test_plan_sp_uses_actual_main_envelope_and_delay_has_consistent_units(delay_
 def test_standalone_sp_publication_keeps_unknown_parent_as_zero():
   planner = make_planner()
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   publisher = Publisher()
   planner.publish_longitudinal_plan_sp(state, publisher)
   assert publisher.messages["longitudinalPlanSP"].longitudinalPlanSP.longitudinalPlanMonoTime == 0
@@ -421,9 +452,9 @@ def test_observer_failure_is_output_neutral_and_counted(method, unified):
   baseline = make_planner(unified=unified, diagnostics=False)
   observed = make_planner(unified=unified)
   state = make_state()
-  baseline.update(state)
+  update_at_fixture_clock(baseline, state)
   with patch.object(observed.observation, method, side_effect=RuntimeError("observer unavailable")):
-    observed.update(state)
+    update_at_fixture_clock(observed, state)
     output = publish(observed, state)
   assert control_snapshot(baseline) == control_snapshot(observed)
   assert control_messages(publish(baseline, state)) == control_messages(output)
@@ -435,10 +466,10 @@ def test_observer_failure_is_output_neutral_and_counted(method, unified):
 def test_failed_begin_never_reuses_a_previous_unpublished_attempt():
   planner = make_planner()
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   state.logMonoTime["modelV2"] += 50_000_000
   with patch.object(planner.observation, "begin", side_effect=RuntimeError("new snapshot unavailable")):
-    planner.update(state)
+    update_at_fixture_clock(planner, state)
   assert planner.observation_attempt is None
   assert planner.observation_result is None
   assert diagnostics(planner, state).context.version == 0
@@ -451,7 +482,7 @@ def test_original_control_exception_is_preserved_with_failed_observer(unified):
   with patch.object(LongitudinalPlannerSP, "update", side_effect=failure), \
        patch.object(planner.observation, "record", side_effect=ValueError("diagnostic exception")):
     with pytest.raises(RuntimeError) as raised:
-      planner.update(make_state())
+      update_at_fixture_clock(planner, make_state())
   assert raised.value is failure
   assert not planner.observation_result["values"]["updateCompleted"]
   assert planner.observation_result["values"]["outcome"] == "control_exception"
@@ -463,7 +494,7 @@ def test_recorder_initialization_failure_does_not_prevent_control_startup():
     planner = make_planner()
   assert planner.observation is None
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   assert planner.motion_intent.valid
   assert diagnostics(planner, state).context.version == 0
 
@@ -503,7 +534,7 @@ def test_trace_attempt_hooks_cover_early_return_before_historical_begin():
   planner = make_planner(trace=trace)
   state = make_state()
   state["controlsState"].motionState.version = 0
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   publisher = publish(planner, state)
   assert trace.calls == [
     ("begin_attempt", state.logMonoTime["modelV2"]),
@@ -522,9 +553,9 @@ def test_trace_hook_exception_cannot_replace_control_output(method):
   planner = make_planner(trace=trace)
   baseline = make_planner(diagnostics=False)
   state = make_state()
-  baseline.update(state)
+  update_at_fixture_clock(baseline, state)
   with patch.object(trace, method, side_effect=RuntimeError("trace unavailable")):
-    planner.update(state)
+    update_at_fixture_clock(planner, state)
     publisher = publish(planner, state)
   assert trace.failures == 1
   assert control_snapshot(planner) == control_snapshot(baseline)
@@ -594,7 +625,7 @@ def test_trace_disabled_at_startup_is_preserved_in_regular_plan(tmp_path):
   assert trace is not None and not trace.enabled
   planner = make_planner(trace=trace)
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   assert observed.context.version == 1 and observed.traceStatusKnown
   assert not observed.detailedTraceEnabled and observed.detailedTraceDisabled
@@ -619,7 +650,7 @@ def test_trace_status_copies_real_counters_once_at_main_publication():
   trace.queue.extend([None, None, None])
   planner = make_planner(trace=trace)
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   before = trace.status()
   with patch.object(trace, "status", wraps=trace.status) as capture:
     observed = diagnostics(planner, state)
@@ -643,7 +674,7 @@ def test_trace_enabled_closed_and_disabled_are_separate_observations(closed, dis
   trace.disabled = disabled
   planner = make_planner(trace=trace)
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   assert observed.traceStatusKnown
   assert observed.traceClosed == closed
@@ -658,7 +689,7 @@ def test_incomplete_trace_status_never_becomes_known(missing):
   trace = LongitudinalTrace()
   planner = make_planner(trace=trace)
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   incomplete = trace.status()
   del incomplete[missing]
   with patch.object(trace, "status", return_value=incomplete):
@@ -684,7 +715,7 @@ def test_malformed_trace_status_cannot_drop_the_regular_diagnostic(field, value)
   trace = LongitudinalTrace()
   planner = make_planner(trace=trace)
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   malformed = dict(trace.status(), **{field: value})
   with patch.object(trace, "status", return_value=malformed):
     observed = diagnostics(planner, state)
@@ -698,7 +729,7 @@ def test_old_fake_trace_with_missing_attributes_does_not_claim_status(status):
   trace = SimpleNamespace(sequence=7, dropped=2, failures=1, status=lambda: status)
   planner = make_planner(trace=trace)
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   assert observed.context.version == 1
   assert not observed.detailedTraceEnabled and not observed.traceStatusKnown
@@ -710,7 +741,7 @@ def test_old_fake_trace_with_missing_attributes_does_not_claim_status(status):
 def test_absent_trace_keeps_status_unknown_without_diagnostic_error():
   planner = make_planner()
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   errors = planner.observation.recorder.errors
   observed = diagnostics(planner, state)
   assert not observed.detailedTraceEnabled and not observed.detailedTraceDisabled
@@ -723,8 +754,8 @@ def test_throwing_trace_status_preserves_regular_diagnostics_and_control():
   planner = make_planner(trace=trace)
   baseline = make_planner(diagnostics=False)
   state = make_state()
-  baseline.update(state)
-  planner.update(state)
+  update_at_fixture_clock(baseline, state)
+  update_at_fixture_clock(planner, state)
   errors = planner.observation.recorder.errors
   with patch.object(trace, "status", side_effect=RuntimeError("status unavailable")):
     observed = diagnostics(planner, state)
@@ -739,16 +770,16 @@ def test_disabled_writer_stops_native_detail_copies_and_reenable_restarts_them()
   trace = LongitudinalTrace()
   planner = make_planner(trace=trace)
   state = make_state()
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   assert planner.mpc.diagnostic_details_enabled
   parameters = planner.mpc.diagnostic_last_parameters
   assert parameters is not None
   trace.disabled = True
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   assert not planner.mpc.diagnostic_details_enabled
   assert planner.mpc.diagnostic_last_parameters is parameters
   trace.disabled = False
-  planner.update(state)
+  update_at_fixture_clock(planner, state)
   assert planner.mpc.diagnostic_details_enabled
   assert planner.mpc.diagnostic_last_parameters is not parameters
 
@@ -757,7 +788,7 @@ def test_trace_attached_after_initialization_has_native_details_without_regular_
   planner = make_planner(diagnostics=False)
   assert not planner.mpc.diagnostic_details_enabled
   planner.trace = LongitudinalTrace()
-  planner.update(make_state())
+  update_at_fixture_clock(planner, make_state())
   assert planner.observation_result is None
   assert planner.mpc.diagnostic_details_enabled
   assert planner.mpc.diagnostic_last_parameters is not None
@@ -773,8 +804,8 @@ def test_throwing_trace_enabled_property_disables_only_native_detail_capture():
   planner = make_planner(trace=trace)
   baseline = make_planner(diagnostics=False)
   state = make_state()
-  planner.update(state)
-  baseline.update(state)
+  update_at_fixture_clock(planner, state)
+  update_at_fixture_clock(baseline, state)
   observed = diagnostics(planner, state)
   assert not planner.mpc.diagnostic_details_enabled
   assert planner.mpc.diagnostic_last_parameters is None

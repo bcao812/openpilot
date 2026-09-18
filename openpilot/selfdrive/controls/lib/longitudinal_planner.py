@@ -280,6 +280,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
+    if self.unified:
+      from openpilot.selfdrive.controls.lib.reference_timing import ReferenceTimingProducer
+      self.reference_timing = ReferenceTimingProducer()
     if self.motion_enabled:
       from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import SupervisedLongitudinalPlanner, UnifiedLongitudinalPlanner
       self.reference_planner = UnifiedLongitudinalPlanner(self) if self.unified else SupervisedLongitudinalPlanner(self)
@@ -676,7 +679,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       observe_trace(self.trace, "finish", self, candidates, is_e2e)
 
   def publish(self, sm, pm):
-    plan_send = messaging.new_message('longitudinalPlan')
+    plan_send = messaging.new_message('longitudinalPlan', logMonoTime=time.monotonic_ns())
 
     plan_send.valid = (sm.all_checks() and self.mpc.solution_status == 0
                        and (not self.motion_enabled or self.motion_intent.valid or self.reference_planner.standby))
@@ -701,6 +704,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)
     if self.motion_enabled:
       self.reference_planner.publish(longitudinalPlan)
+    if self.unified:
+      self.reference_timing.publish(longitudinalPlan.reference)
     observe(self.observation, "publish", self.observation_result, longitudinalPlan, self)
 
     pm.send('longitudinalPlan', plan_send)

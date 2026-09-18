@@ -16,7 +16,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPl
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import reference_requests_departure
-from openpilot.selfdrive.controls.tests.test_longitudinal_observation_planner import diagnostics
+from openpilot.selfdrive.controls.tests.test_longitudinal_observation_planner import diagnostics, reference_snapshot
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import make_state
 
 
@@ -53,7 +53,7 @@ def snapshot(planner):
   result.update(
     velocity=planner.v_desired_filter.x, pitch=planner.pitch_bias.filter.x, initialized=planner.pitch_bias.filter.initialized,
     pitch_calls=planner.pitch_bias.diagnostic_calls, learn_calls=planner.pitch_bias.diagnostic_learn_calls,
-    intent=planner.motion_intent, reference={name: value for name, value in vars(planner.reference_planner).items() if name != 'planner'},
+    intent=planner.motion_intent, reference=reference_snapshot(planner.reference_planner),
     status=planner.mpc.solution_status, source=planner.mpc.source,
   )
   for name in ('x0', 'params', 'x_sol', 'u_sol', 'a_prev', 'yref', 'v_solution', 'a_solution', 'j_solution'):

@@ -26,6 +26,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent
+from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer
 from openpilot.selfdrive.modeld.constants import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
@@ -66,6 +67,8 @@ class Controls(ControlsExt):
     longitudinal_mode = resolve_longitudinal_mode(self.CP, self.CP_SP)
     self.LoC = LongControl(self.CP, self.CP_SP, unified=longitudinal_mode == LongitudinalMode.UNIFIED,
                           supervised=longitudinal_mode == LongitudinalMode.SUPERVISED)
+    self.reference_timing = ReferenceTimingConsumer()
+    self.reference_timing_check = None
     self.longitudinal_observation = ControlObservation.create(self.CP, self.CP_SP)
     self.longitudinal_mode_mismatch = False
     self.VM = VehicleModel(self.CP)
@@ -143,6 +146,22 @@ class Controls(ControlsExt):
     if self.LoC.unified or long_plan.solverStatus != 0:
       CC.longActive = CC.longActive and not CS.gasPressed and not CS.brakePressed
     motion_intent = MotionIntent.from_message(long_plan.motionIntent) if self.LoC.unified else None
+    now_ns = time.monotonic_ns() if self.LoC.unified else None
+    reference_valid = True
+    self.reference_timing_check = None
+    if self.LoC.longitudinal_mode == LongitudinalMode.UNIFIED:
+      # Preserve all three times: source epoch, LP Event availability and this
+      # actual consumption. Only source age can qualify a measured reference.
+      self.reference_timing_check = self.reference_timing.consume(
+        long_plan.reference, self.sm.logMonoTime['longitudinalPlan'], now_ns,
+        command_identity=(int(long_plan.modelMonoTime), float(long_plan.aTarget), bool(long_plan.shouldStop),
+                          int(long_plan.solverStatus), motion_intent, float(long_plan.reference.accel),
+                          float(long_plan.reference.constraintAccel), bool(long_plan.reference.overridden)))
+      reference_valid = self.reference_timing_check.valid
+      if not self.reference_timing_check.clock_valid:
+        # An impossible clock must not enter the owner's time high water.
+        # Its existing invalid-input path still owns braking and release.
+        now_ns = 0
     if (self.LoC.unified and self.LoC.can_standby and not motion_intent.ready and long_plan.solverStatus == 0
         and self.sm.all_checks(['longitudinalPlan', 'carState'])):
       CC.longActive = False
@@ -171,11 +190,11 @@ class Controls(ControlsExt):
         'intent': motion_intent,
         'plan_time_ns': int(self.sm.logMonoTime['longitudinalPlan']),
         'model_time_ns': int(long_plan.modelMonoTime),
-        'now_ns': time.monotonic_ns(),
+        'now_ns': now_ns,
         'standby_input': standby_input,
-        'plan_valid': (not self.longitudinal_mode_mismatch and self.sm.all_checks(['longitudinalPlan', 'carState'])
+        'plan_valid': (reference_valid and not self.longitudinal_mode_mismatch and self.sm.all_checks(['longitudinalPlan', 'carState'])
                        and math.isfinite(CS.vCruise) and CS.vCruise != V_CRUISE_UNSET),
-        'braking_plan_valid': (not self.longitudinal_mode_mismatch and self.sm.valid.get('carState') is True and CS.canValid
+        'braking_plan_valid': (reference_valid and not self.longitudinal_mode_mismatch and self.sm.valid.get('carState') is True and CS.canValid
                                and all(getattr(self.sm, health).get(service) is True for service in ('carState', 'longitudinalPlan')
                                        for health in ('seen', 'alive', 'freq_ok'))
                                and math.isfinite(CS.vCruise) and CS.vCruise != V_CRUISE_UNSET),
@@ -293,6 +312,18 @@ class Controls(ControlsExt):
       motion.waitingForFreshInput = bool(self.LoC.motion_waiting_for_fresh_input)
       motion.planMonoTime = int(self.sm.logMonoTime['longitudinalPlan'])
       motion.modelMonoTime = int(self.sm['longitudinalPlan'].modelMonoTime)
+      if self.reference_timing_check is not None:
+        check = self.reference_timing_check
+        motion.referenceTimingVersion = REFERENCE_TIMING_VERSION
+        motion.referenceTimingValid = check.valid
+        motion.referenceTimingReason = check.reason
+        motion.referenceConsumerMonoTime = check.now_ns
+        motion.referenceSourceAdvanced = check.source_advanced
+        if check.timing is not None:
+          motion.referenceSourceMonoTime = check.timing.source_ns
+          motion.referenceEpochMonoTime = check.timing.epoch_ns
+          motion.referenceProducerMonoTime = check.timing.producer_ns
+          motion.referenceProducerInstanceMonoTime = check.timing.instance_ns
 
     # trigger the car's stock driver monitoring escalation
     CC.driverMonitoringEscalation = cs.forceDecel
