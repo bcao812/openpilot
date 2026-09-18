@@ -673,6 +673,57 @@ class LongitudinalMpc:
                                       + 0.5 * jerks[stage] * extremum**2))
     return minimum
 
+  @classmethod
+  def rest_precision_control(cls, state, raw_jerk, duration, lower, upper):
+    interval = cls.rest_acceleration_interval(state, duration, lower, upper)
+    if interval is None:
+      return None
+    minimum, maximum = interval
+    acceleration = state[2]
+    desired = acceleration + raw_jerk * duration
+    next_acceleration = min(max(desired, minimum), maximum)
+    jerk = (next_acceleration - acceleration) / duration
+    # Bound arithmetic can round one ULP outside a closed face. Test the
+    # adjacent representable controls too; all states still follow dynamics.
+    candidates = [jerk, np.nextafter(jerk, -np.inf), np.nextafter(jerk, np.inf)]
+    candidates.sort(key=lambda candidate: abs(candidate - raw_jerk))
+    for candidate in candidates:
+      next_state = cls.integrate_jerk(state, candidate, duration)
+      if (minimum <= next_state[2] <= maximum
+          and np.all(next_state[1:] >= lower) and np.all(next_state[1:] <= upper)
+          and cls.segment_minimum_velocity(state, candidate, duration) >= 0.0):
+        return candidate, next_state
+    return None
+
+  @classmethod
+  def adjacent_rest_precision_controls(cls, state, raw_jerks, durations, lower, upper):
+    """Propose two integrated controls when a greedy endpoint has no interval.
+
+    A pair can change terminal v and a independently. This only proposes a
+    correction; the caller retains the original jerk and propagation budgets.
+    """
+    h0, h1 = durations
+    middle = cls.integrate_jerk(state, raw_jerks[0], h0)
+    terminal = cls.integrate_jerk(middle, raw_jerks[1], h1)
+    # Choose an interior endpoint to solve for jerk, without clipping any
+    # published state. The margin protects arithmetic cancellation at a face;
+    # it neither enlarges that face nor replaces the independent 1e-9 budget.
+    roundoff = cls.rest_arithmetic_roundoff(np.concatenate((state, middle, terminal, raw_jerks)))
+    margin = np.minimum(roundoff, 0.5 * (upper[1] - lower[1]))
+    target = np.clip(terminal[1:], lower[1] + margin, upper[1] - margin)
+    velocity_delta, acceleration_delta = target - terminal[1:]
+    first_delta = (2.0 * velocity_delta - h1 * acceleration_delta) / (h0 * (h0 + h1))
+    second_delta = (acceleration_delta - h0 * first_delta) / h1
+    jerks = raw_jerks + [first_delta, second_delta]
+    middle = cls.integrate_jerk(state, jerks[0], h0)
+    terminal = cls.integrate_jerk(middle, jerks[1], h1)
+    for index, (initial, final, jerk, duration) in enumerate(zip((state, middle), (middle, terminal), jerks, durations, strict=True)):
+      if (not np.all(np.isfinite(final)) or not np.isfinite(jerk)
+          or np.any(final[1:] < lower[index]) or np.any(final[1:] > upper[index])
+          or cls.segment_minimum_velocity(initial, jerk, duration) < 0.0):
+        return None
+    return jerks, middle, terminal
+
   def project_rest_precision(self):
     """Remove bounded numerical defects by changing jerk, never clipping x/v/a.
 
@@ -716,27 +767,24 @@ class LongitudinalMpc:
     largest_budget = difference_budget.copy()
     largest_jerk_correction = 0.0
     for stage, duration in enumerate(durations):
-      interval = self.rest_acceleration_interval(states[stage], duration, lower[stage+1], upper[stage+1])
-      if interval is None:
-        return 'rest_precision_no_feasible_numeric_trajectory'
-      minimum, maximum = interval
-      acceleration = states[stage, 2]
-      desired = acceleration + raw_jerks[stage] * duration
-      next_acceleration = min(max(desired, minimum), maximum)
-      jerk = (next_acceleration - acceleration) / duration
-      # Bound arithmetic can round one ULP outside a closed face. Test the
-      # adjacent representable controls as well; the states are always obtained
-      # from dynamics, including the degenerate corner with only one control.
-      candidates = [jerk, np.nextafter(jerk, -np.inf), np.nextafter(jerk, np.inf)]
-      candidates.sort(key=lambda candidate: abs(candidate - raw_jerks[stage]))
-      selected = None
-      for candidate in candidates:
-        next_state = self.integrate_jerk(states[stage], candidate, duration)
-        if (minimum <= next_state[2] <= maximum
-            and np.all(next_state[1:] >= lower[stage+1]) and np.all(next_state[1:] <= upper[stage+1])
-            and self.segment_minimum_velocity(states[stage], candidate, duration) >= 0.0):
-          selected = candidate, next_state
-          break
+      selected = self.rest_precision_control(states[stage], raw_jerks[stage], duration, lower[stage+1], upper[stage+1])
+      if selected is None and stage > 0 and node > 0:
+        pair = self.adjacent_rest_precision_controls(states[stage-1], raw_jerks[stage-1:stage+1], durations[stage-1:stage+1],
+                                                    lower[stage:stage+2], upper[stage:stage+2])
+        if pair is not None:
+          pair_jerks, middle, terminal = pair
+          prior_duration = durations[stage-1]
+          prior_budget = QP_FEASIBILITY_TOL * (1.0 / prior_duration + 2.0 / prior_duration**2)
+          prior_correction = abs(pair_jerks[0] - raw_jerks[stage-1])
+          # difference_budget already describes this prior endpoint. Recheck
+          # it after replacing its greedy control; the current endpoint goes
+          # through the unchanged budget checks immediately below.
+          if prior_correction > prior_budget or np.any(np.abs(middle - raw_states[stage]) > difference_budget):
+            return 'native_rest_precision_budget_exceeded'
+          jerks[stage-1], states[stage] = pair_jerks[0], middle
+          largest_jerk_correction = max(largest_jerk_correction, prior_correction)
+          selected = pair_jerks[1], terminal
+          diagnostics.setdefault('adjacentJerkCorrectionStages', []).append([stage-1, stage])
       if selected is None:
         return 'rest_precision_no_feasible_numeric_trajectory'
       jerks[stage], states[stage+1] = selected

@@ -185,6 +185,85 @@ def test_withheld_longer_future_seed_still_runs_the_original_native_problem():
   assert_future_rest_bounds(mpc, node)
 
 
+def cold_third_node_precision_case(previous_accel=False):
+  # Same fixed input as the two call94 cold failures, including its source
+  # event time. Earlier independent jerk choices leave a tiny empty interval.
+  speed, acceleration = 2.062713623046875, -1.7682684659957886
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=previous_accel)
+  mpc.set_cur_state(speed, acceleration)
+  if previous_accel:
+    mpc.a_prev[:] = np.linspace(acceleration, 0.0, len(T_IDXS))
+  return mpc, typed_reference(stopping_curve(speed, 0.3515625), speed)
+
+
+@pytest.mark.parametrize('previous_accel', [False, True])
+def test_adjacent_numeric_correction_preserves_the_original_control_and_propagation_budgets(previous_accel):
+  mpc, reference = cold_third_node_precision_case(previous_accel)
+  initial, history = mpc.x0.copy(), mpc.a_prev.copy()
+  mpc.update(radar_state(), reference=reference)
+  assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == mpc.solution_status == 0
+  assert mpc.solver.get_stats('statistics')[1, -1] == 0
+  projection = mpc.diagnostic_rest_goal['numericalProjection']
+  assert projection['applied'] and projection['adjacentJerkCorrectionStages'] == [[1, 2]]
+  assert projection['feasibilityTolerance'] == QP_FEASIBILITY_TOL
+  assert max(projection['maximumNativeDynamicsDefect']) <= QP_FEASIBILITY_TOL
+  assert projection['maximumNativeBoundViolation'] <= QP_FEASIBILITY_TOL
+  assert projection['maximumNativeContinuousBoundViolation'] <= QP_FEASIBILITY_TOL
+  assert projection['maximumCorrectedContinuousBoundViolation'] <= QP_FEASIBILITY_TOL
+  assert np.all(np.asarray(projection['maximumStateCorrection']) <= projection['maximumStateCorrectionBudget'])
+  raw_jerks = np.array([mpc.solver.get(stage, 'u')[0] for stage in range(len(T_IDXS) - 1)])
+  durations = np.diff(T_IDXS)
+  assert np.all(np.abs(mpc.j_solution - raw_jerks) <= QP_FEASIBILITY_TOL * (1.0 / durations + 2.0 / durations**2))
+  np.testing.assert_array_equal(mpc.x0, initial)
+  np.testing.assert_array_equal(mpc.params[:, 3], history)
+  np.testing.assert_allclose(mpc.x_sol, integrate(initial, mpc.j_solution), atol=2e-12, rtol=1e-13)
+  assert mpc.diagnostic_rest_goal['maximumRestStateError'] <= REST_STATE_TOL
+  assert mpc.diagnostic_rest_goal['minimumContinuousVelocity'] >= -REST_STATE_TOL
+
+
+@pytest.mark.parametrize('fault', ['raw_dynamics', 'first_jerk', 'second_jerk', 'previous_state'])
+def test_adjacent_numeric_correction_cannot_bypass_an_existing_certificate_budget(fault):
+  mpc, reference = cold_third_node_precision_case()
+  initial = mpc.x0.copy()
+  native, propose = mpc.solver, mpc.adjacent_rest_precision_controls
+  observer = Mock(wraps=native)
+
+  def read(stage, field):
+    value = native.get(stage, field)
+    if fault == 'raw_dynamics' and stage == 1 and field == 'x':
+      value[0] += 10.0 * QP_FEASIBILITY_TOL
+    return value
+
+  def over_budget(state, raw_jerks, durations, lower, upper):
+    pair = propose(state, raw_jerks, durations, lower, upper)
+    assert pair is not None
+    jerks, middle, terminal = pair
+    if fault == 'previous_state':
+      middle[0] += 1e-3
+    else:
+      index = int(fault == 'second_jerk')
+      duration = durations[index]
+      jerks[index] += 10.0 * QP_FEASIBILITY_TOL * (1.0 / duration + 2.0 / duration**2)
+    return jerks, middle, terminal
+
+  observer.get.side_effect = read
+  mpc.solver = observer
+  with patch.object(mpc, 'adjacent_rest_precision_controls', side_effect=over_budget) as adjacent:
+    mpc.update(radar_state(), reference=reference)
+  assert adjacent.call_count == (0 if fault == 'raw_dynamics' else 1)
+  assert mpc.diagnostic_solve_calls == observer.solve.call_count == 1 and mpc.diagnostic_last_solver_return == 0
+  assert native.get_stats('statistics')[1, -1] == 0
+  assert mpc.solution_status == MPC_GOAL_UNSATISFIED
+  assert mpc.rest_goal_braking_accel == ACCEL_MIN and not mpc.previous_solution_valid
+  expected = 'native_rest_dynamics_residual_exceeded' if fault == 'raw_dynamics' else 'native_rest_precision_budget_exceeded'
+  assert mpc.rest_goal_reason == expected
+  assert not mpc.diagnostic_rest_goal['numericalProjection']['applied']
+  np.testing.assert_array_equal(mpc.x0, initial)
+  np.testing.assert_array_equal(mpc.x_sol, np.array([read(stage, 'x') for stage in range(len(T_IDXS))]))
+  np.testing.assert_array_equal(mpc.j_solution, np.array([native.get(stage, 'u')[0] for stage in range(len(T_IDXS) - 1)]))
+
+
 def test_native_corner_is_repaired_with_one_solve_and_a_dynamically_consistent_trajectory():
   mpc = LongitudinalMpc()
   mpc.set_weights(prev_accel_constraint=False)
