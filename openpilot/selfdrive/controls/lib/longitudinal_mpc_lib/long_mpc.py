@@ -587,26 +587,50 @@ class LongitudinalMpc:
     return None if minimum - maximum > roundoff else (minimum, maximum)
 
   @classmethod
-  def future_rest_primal(cls, initial_state, node, interval):
+  def future_rest_primal(cls, initial_state, node, interval=None):
     """A continuable primal guess, never a substitute for the native solve.
 
-    End the first rest node with a=0 when possible; otherwise use v=tol and
-    a>=-tol. The next segment can then end at a=0 without negative velocity.
+    Short goals use their admitted interval. Longer goals ramp to a constant
+    acceleration and return to a=0 in the final interval. When strong initial
+    braking needs a positive first acceleration to remain forward, first meet
+    the same Bernstein face, then use the remaining intervals to stop.
+    Every segment and the tail are checked before the guess is installed.
     The stored a_prev cost history is deliberately not modified.
     """
-    minimum, maximum = interval
-    next_acceleration = maximum if node == 1 else 0.5 * (minimum + maximum)
     durations = np.diff(T_IDXS)
+    targets = np.zeros(N)
+    if node in (1, 2):
+      interval = interval if interval is not None else cls.future_rest_acceleration_interval(initial_state, node)
+      if interval is None:
+        return None
+      minimum, maximum = interval
+      targets[0] = maximum if node == 1 else 0.5 * (minimum + maximum)
+    elif 3 <= node <= N:
+      h0, h1 = durations[:2]
+      last, total = durations[node-1], T_IDXS[node]
+      velocity, acceleration = initial_state[1:]
+      delta = 2.0 * velocity + acceleration * h0
+      if delta >= 0.0:
+        # Integrate the initial ramp, constant segment and final ramp to get v_node=0.
+        targets[:node-1] = -(velocity + 0.5 * acceleration * h0) / (total - 0.5 * (h0 + last))
+      else:
+        split = cls.initial_rest_split(initial_state, h0)
+        if split <= 0.0:
+          return None
+        targets[0] = -delta / split
+        first_velocity = velocity + 0.5 * (acceleration + targets[0]) * h0
+        targets[1:node-1] = -(first_velocity + 0.5 * targets[0] * h1) / (total - h0 - 0.5 * (h1 + last))
+    else:
+      return None
     states = np.empty((N+1, X_DIM))
     jerks = np.zeros(N)
     states[0] = initial_state
     for stage, duration in enumerate(durations):
-      if stage:
-        next_acceleration = 0.0
-        if stage == 1 and node == 2:
-          without_final_acceleration = states[stage, 1] + 0.5 * states[stage, 2] * duration
-          if without_final_acceleration > REST_STATE_TOL:
-            next_acceleration = 2.0 * (REST_STATE_TOL - without_final_acceleration) / duration
+      next_acceleration = targets[stage]
+      if stage == 1 and node == 2:
+        without_final_acceleration = states[stage, 1] + 0.5 * states[stage, 2] * duration
+        if without_final_acceleration > REST_STATE_TOL:
+          next_acceleration = 2.0 * (REST_STATE_TOL - without_final_acceleration) / duration
       jerks[stage] = (next_acceleration - states[stage, 2]) / duration
       states[stage+1] = cls.integrate_jerk(states[stage], jerks[stage], duration)
     roundoff = cls.rest_arithmetic_roundoff(np.concatenate((states.ravel(), jerks)))
@@ -955,15 +979,14 @@ class LongitudinalMpc:
           upper[goal.native_node:, :] = [REST_STATE_TOL, 0.0]
           self.diagnostic_rest_goal.update(nativeVelocityBounds=[0.0, REST_STATE_TOL],
                                            nativeAccelerationBounds=[-REST_STATE_TOL, 0.0])
-          if goal.native_node in (1, 2):
-            future_primal = self.future_rest_primal(self.x0, goal.native_node, future_interval)
-            self.diagnostic_rest_goal['futurePrimalInitialized'] = future_primal is not None
-            if future_primal is not None:
-              future_states, future_jerks = future_primal
-              for stage in range(N+1):
-                self.solver.set(stage, 'x', future_states[stage])
-                if stage < N:
-                  self.solver.set(stage, 'u', np.array([future_jerks[stage]]))
+          future_primal = self.future_rest_primal(self.x0, goal.native_node, future_interval if goal.native_node in (1, 2) else None)
+          self.diagnostic_rest_goal['futurePrimalInitialized'] = future_primal is not None
+          if future_primal is not None:
+            future_states, future_jerks = future_primal
+            for stage in range(N+1):
+              self.solver.set(stage, 'x', future_states[stage])
+              if stage < N:
+                self.solver.set(stage, 'u', np.array([future_jerks[stage]]))
       if self.rest_goal_state in ('infeasible', 'unverified'):
         # Retain the failed goal while solving the existing lead/cruise risk
         # problem. The caller uses an explicit braking failure intent; it must

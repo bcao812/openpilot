@@ -1,6 +1,6 @@
 """Numerical rest repair must preserve dynamics, physical bounds and fault braking."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
@@ -8,7 +8,7 @@ import pytest
 from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  MODEL_A_REF, MODEL_V_REF, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, QP_FEASIBILITY_TOL, REST_STATE_TOL, T_IDXS,
+  MODEL_A_REF, MODEL_V_REF, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, QP_FEASIBILITY_TOL, REFERENCE_BOUND, REST_STATE_TOL, T_IDXS,
   LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.tests.test_due_rest_reference import NEAR_ZERO_STATES, typed_due_reference
@@ -44,6 +44,145 @@ def assert_future_rest_bounds(mpc, node):
   np.testing.assert_array_equal(upper[node:, 0], REST_STATE_TOL)
   np.testing.assert_array_equal(upper[node:, 1], 0.0)
   np.testing.assert_array_equal(mpc.params[node:, MODEL_V_REF:MODEL_A_REF+1], 0.0)
+
+
+def assert_future_primal_witness(initial, node, states, jerks):
+  """Check the entire seed independently of its construction and certificate helpers."""
+  arithmetic_tolerance = 2e-12
+  np.testing.assert_array_equal(states[0], initial)
+  np.testing.assert_allclose(states, integrate(initial, jerks), atol=arithmetic_tolerance, rtol=1e-13)
+  assert np.all(np.isfinite(states)) and np.all(np.isfinite(jerks))
+  assert np.max(np.abs(states[1:node, 1:]), initial=0.0) <= REFERENCE_BOUND
+  assert np.max(np.abs(states[node:, 1:])) <= REST_STATE_TOL + arithmetic_tolerance
+  assert np.max(states[node:, 2]) <= arithmetic_tolerance
+  # Check all analytic extrema, including the entire tail after the rest node.
+  # The arithmetic allowance here does not replace the real solve's 1e-3 gate.
+  for state, jerk, duration in zip(states[:-1], jerks, np.diff(T_IDXS), strict=True):
+    velocity = np.polynomial.Polynomial([state[1], state[2], 0.5 * jerk])
+    times = [0.0, duration, *(root for root in velocity.deriv().roots() if 0.0 < root < duration)]
+    assert np.min(velocity(times)) >= -arithmetic_tolerance
+
+
+@pytest.mark.parametrize('node', [3, 4, 5, len(T_IDXS) - 1])
+@pytest.mark.parametrize('delta', [-0.15, -1e-8, -1e-12, 0.0, 1e-12, 1e-8, 0.05])
+def test_longer_future_primal_has_a_complete_forward_witness_on_both_sides_of_the_first_ramp_boundary(node, delta):
+  speed = T_IDXS[1] / 2.0
+  initial = np.array([3.25, speed, (delta - 2.0 * speed) / T_IDXS[1]])
+  if delta == 0.0:
+    assert 2.0 * speed + initial[2] * T_IDXS[1] == 0.0
+  unchanged = initial.copy()
+  primal = LongitudinalMpc.future_rest_primal(initial, node)
+  assert primal is not None
+  assert_future_primal_witness(initial, node, *primal)
+  np.testing.assert_array_equal(initial, unchanged)
+
+
+@pytest.mark.parametrize('node', [3, 4, 5, len(T_IDXS) - 1])
+@pytest.mark.parametrize('acceleration', [0.0, 0.5])
+def test_longer_future_primal_preserves_the_zero_speed_boundary(node, acceleration):
+  initial = np.array([1.25, 0.0, acceleration])
+  primal = LongitudinalMpc.future_rest_primal(initial, node)
+  assert primal is not None
+  assert_future_primal_witness(initial, node, *primal)
+
+
+@pytest.mark.parametrize('node', [3, len(T_IDXS) - 1])
+@pytest.mark.parametrize('speed,acceleration', [
+  (0.0, -0.5), (1e-12, -0.5), (-0.01, 0.0), (2.0 * REFERENCE_BOUND, 0.0),
+])
+def test_longer_future_primal_is_withheld_without_a_forward_native_bound_witness(node, speed, acceleration):
+  # Failure of this particular seed is not a new MPC infeasibility decision.
+  assert LongitudinalMpc.future_rest_primal(np.array([0.0, speed, acceleration]), node) is None
+
+
+# Fixed x0/node pairs from the seven engineering -5 captures at 1f2d3bff
+# and J-58791a02038687ab native call 7500 (native 0, inner QP MAXITER).
+# These cold-solve contracts complement, rather than replace, full-state replay.
+LONGER_FUTURE_REST_STATES = [
+  pytest.param(5, 3.321539878845215, -1.088282823562622, id='complete-d08-call77'),
+  pytest.param(4, 2.7393274307250977, -1.4064717292785645, id='complete-d08-call86'),
+  pytest.param(3, 2.062713623046875, -1.7682684659957886, id='complete-d08-call94'),
+  pytest.param(3, 1.9661415815353394, -1.8345056772232056, id='complete-d08-call95'),
+  pytest.param(4, 3.6138765811920166, -1.4847933053970337, id='complete-downhill-call79'),
+  pytest.param(5, 4.915774345397949, -1.181573748588562, id='model-d08-call51'),
+  pytest.param(5, 4.947066783905029, -1.3658339977264404, id='model-downhill-call53'),
+  pytest.param(3, 0.016470566391944885, -1.655587911605835, id='j587-call7500'),
+  pytest.param(len(T_IDXS) - 1, 2.0, -0.5, id='terminal-node'),
+]
+
+
+@pytest.mark.parametrize('node,speed,acceleration', LONGER_FUTURE_REST_STATES)
+@pytest.mark.parametrize('previous_accel', [False, True])
+def test_longer_future_seed_keeps_the_actual_problem_and_one_converged_native_solve(node, speed, acceleration, previous_accel):
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=previous_accel)
+  mpc.set_cur_state(speed, acceleration)
+  initial = mpc.x0.copy()
+  history = np.linspace(acceleration, 0.0, len(T_IDXS)) if previous_accel else np.zeros(len(T_IDXS))
+  mpc.a_prev[:] = history
+  cost_weights = mpc._cost_weights.copy()
+  # A real source-grid rest event within the requested native interval.
+  stop_time = MODEL_TIMES[np.searchsorted(MODEL_TIMES, T_IDXS[node - 1], side='right')]
+  reference = typed_reference(stopping_curve(speed, stop_time), speed)
+  assert reference.typed_model.rest_goal.native_node == node
+  native = mpc.solver
+  observer = Mock(wraps=native)
+
+  def solve():
+    np.testing.assert_array_equal(mpc.x0, initial)
+    np.testing.assert_array_equal(mpc.a_prev, history)
+    np.testing.assert_array_equal(mpc.params[:, 3], history)
+    np.testing.assert_array_equal(mpc._cost_weights, cost_weights)
+    states = np.array([native.get(stage, 'x') for stage in range(len(T_IDXS))])
+    jerks = np.array([native.get(stage, 'u')[0] for stage in range(len(T_IDXS) - 1)])
+    assert_future_primal_witness(initial, node, states, jerks)
+    # Evaluate the actual rows and boxes installed on the native solver,
+    # independent of the seed's own feasibility helpers.
+    constraints = {(call.args[0], call.args[1]): call.args[2] for call in observer.constraints_set.call_args_list}
+    np.testing.assert_array_equal(constraints[0, 'lbx'], initial)
+    np.testing.assert_array_equal(constraints[0, 'ubx'], initial)
+    for stage in range(1, len(T_IDXS)):
+      assert np.all(states[stage, 1:] >= constraints[stage, 'lbx'] - 2e-12)
+      assert np.all(states[stage, 1:] <= constraints[stage, 'ubx'] + 2e-12)
+    for stage, jerk in enumerate(jerks):
+      row = constraints[stage, 'C'] @ states[stage] + constraints[stage, 'D'][:, 0] * jerk
+      assert np.all(row >= constraints[stage, 'lg'] - 2e-12)
+      assert np.all(row <= constraints[stage, 'ug'] + 2e-12)
+    return native.solve()
+
+  observer.solve.side_effect = solve
+  mpc.solver = observer
+  mpc.update(radar_state(), reference=reference)
+  assert observer.solve.call_count == mpc.diagnostic_solve_calls == 1
+  assert mpc.diagnostic_last_solver_return == mpc.last_solver_status == mpc.solution_status == 0
+  assert native.get_stats('statistics')[1, -1] == 0
+  assert mpc.rest_goal_state == 'satisfied' and mpc.rest_goal_braking_accel is None
+  assert mpc.diagnostic_rest_goal['futurePrimalInitialized']
+  assert mpc.rest_goal == reference.typed_model.rest_goal and not reference.typed_model.allows_departure
+  assert_future_rest_bounds(mpc, node)
+  np.testing.assert_array_equal(mpc.x0, initial)
+  np.testing.assert_array_equal(mpc.params[:, 3], history)
+  np.testing.assert_allclose(mpc.x_sol, integrate(initial, mpc.j_solution), atol=QP_FEASIBILITY_TOL, rtol=0.0)
+  np.testing.assert_array_equal(mpc.a_prev, np.interp(T_IDXS + mpc.dt, T_IDXS, mpc.a_solution))
+
+
+def test_withheld_longer_future_seed_still_runs_the_original_native_problem():
+  # This committed cold case already converged before longer-goal seeding.
+  speed, acceleration, raw_speed, raw_acceleration, node = FUTURE_REST_COUNTEREXAMPLES[0]
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=False)
+  mpc.set_cur_state(speed, acceleration)
+  raw = np.maximum(raw_speed + raw_acceleration * MODEL_TIMES, 0.0)
+  reference = typed_reference(raw, speed)
+  mpc.solver = Mock(wraps=mpc.solver)
+  with patch.object(mpc, 'future_rest_primal', return_value=None) as seed:
+    mpc.update(radar_state(), reference=reference)
+  assert seed.call_count == mpc.solver.solve.call_count == mpc.diagnostic_solve_calls == 1
+  assert mpc.diagnostic_last_solver_return == mpc.last_solver_status == mpc.solution_status == 0
+  assert mpc.solver.get_stats('statistics')[1, -1] == 0
+  assert mpc.rest_goal == reference.typed_model.rest_goal and mpc.rest_goal_state == 'satisfied'
+  assert not mpc.diagnostic_rest_goal['futurePrimalInitialized']
+  assert_future_rest_bounds(mpc, node)
 
 
 def test_native_corner_is_repaired_with_one_solve_and_a_dynamically_consistent_trajectory():
