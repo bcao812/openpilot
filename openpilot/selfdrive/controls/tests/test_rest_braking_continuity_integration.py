@@ -69,7 +69,10 @@ def failed_stop_then_zero(*, late_zero=False):
 @pytest.mark.parametrize('late_zero', [False, True])
 def test_accepted_failed_rest_braking_survives_fresh_zero_without_reviving_deadline(late_zero):
   harness, failed, current = failed_stop_then_zero(late_zero=late_zero)
-  rows = [harness.step() for _ in range(30)]
+  rows = []
+  for _ in range(30):
+    row = harness.step()
+    rows.append(row | {'continuity_limit': harness.controls.LoC.motion_supervisor.rest_braking_accel_limit})
   plan = harness.latest['longitudinalPlan'].longitudinalPlan
   evidence = harness.planner.reference_planner.model_evidence
   assert failed.longitudinalPlan.solverStatus == MPC_GOAL_INFEASIBLE
@@ -85,15 +88,20 @@ def test_accepted_failed_rest_braking_survives_fresh_zero_without_reviving_deadl
   assert plan.motionIntent.referenceKind == MotionReferenceKind.EXACT_ZERO
   assert not plan.motionIntent.restGoalRejected and not plan.motionIntent.releaseAllowed
   assert plan.motionIntent.producerInstanceMonoTime == plan.reference.producerInstanceMonoTime > 0
-  # The valid new solve may request less braking, while the accepted stop
-  # episode owns only the additional negative command constraint.
-  assert plan.aTarget > ACCEL_MIN + 0.1
+  # The aligned first zero solve actually supplies the weaker request. The
+  # asynchronous solve may itself request full braking; its qualified raw
+  # evidence must still preserve, rather than silently clear, the same cap.
+  if not late_zero:
+    assert current.longitudinalPlan.aTarget > ACCEL_MIN + 0.1
+  assert all(row['continuity_limit'] == pytest.approx(ACCEL_MIN) for row in rows)
   assert all(row['consumed_plan_mono'] >= current.logMonoTime for row in rows)
-  assert all(row['long_active'] and not row['degraded'] and row['phase'] == 'track' for row in rows)
+  # The existing selfdrived fault response can legitimately publish FORCE_DECEL
+  # and establish APPROACH; the continuity constraint must not bypass that owner.
+  assert all(row['long_active'] and not row['degraded'] and row['phase'] in ('track', 'approach') for row in rows)
   assert all(row['accel'] <= ACCEL_MIN + 1e-5 and not row['resume'] for row in rows)
   can_rows = [row for row in harness.native_commands if row['mono'] > rows[0]['mono']]
-  # Bosch's active TRACK/PID encoding keeps STANDSTILL_RELEASE=1 even when
-  # requesting negative acceleration. It is not cruiseControl.resume.
+  # Bosch's moving PID encoding keeps STANDSTILL_RELEASE=1 even when requesting
+  # negative acceleration. It is not cruiseControl.resume.
   assert can_rows and all(row['BRAKE_REQUEST'] and row['GAS_COMMAND'] <= 0.0
                           and row['ACCEL_COMMAND'] <= ACCEL_MIN + 0.01
                           and row['STANDSTILL_RELEASE'] == 1 for row in can_rows)
