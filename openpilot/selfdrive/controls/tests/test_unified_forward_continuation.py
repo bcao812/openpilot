@@ -1,12 +1,14 @@
 import numpy as np
 import pytest
 
+from openpilot.cereal import log
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_ACCEL, STOP_SPEED
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionReferenceKind, StopReason
+from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import reference_requests_departure
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import advance, make_planner, make_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -23,16 +25,38 @@ def execution_state(*, raw_forward=True, speed=0.02):
   state['carState'].aEgo = 0.18
   state['carControl'].actuators.longControlState = LongCtrlState.pid
   state['carControl'].actuators.accel = 0.18
+  state['controlsState'].motionState.phase = 'track'
   state['modelV2'].velocity.x = (np.minimum(2.76 + 0.2 * np.asarray(ModelConstants.T_IDXS), 3.0).tolist()
                                 if raw_forward else [3.0] * len(ModelConstants.T_IDXS))
   return state
 
 
-def execution_time(state, frame):
+def execution_time(planner, state, frame):
   now_ns = advance(state, frame)
-  # The input is the actual previous control publication, not this plan's
-  # command relabelled with a current timestamp.
+  # Consume the previous producer's serialized reference before the next
+  # planner invocation. Phase/PID are explicit owner-output fixtures; timing
+  # fields come from the production consumer, not a current-plan identity.
   state.logMonoTime['carControl'] = now_ns - 10_000_000
+  motion = state['controlsState'].motionState
+  motion.referenceTimingVersion = 0
+  motion.referenceTimingValid = False
+  for field in ('referenceConsumerMonoTime', 'referenceProducerMonoTime', 'referenceProducerInstanceMonoTime',
+                'referenceSourceMonoTime', 'referenceEpochMonoTime'):
+    setattr(motion, field, 0)
+  previous = planner.reference_timing.pending
+  if previous is not None:
+    reference = log.LongitudinalPlan.new_message().reference
+    planner.reference_timing.publish(reference)
+    check = planner._execution_test_consumer.consume(reference.as_reader(), previous.producer_ns + 1_000,
+                                                     state.logMonoTime['carControl'] - 1_000)
+    motion.referenceTimingVersion = REFERENCE_TIMING_VERSION
+    motion.referenceTimingValid = check.valid
+    motion.referenceConsumerMonoTime = check.now_ns
+    if check.timing is not None:
+      motion.referenceProducerMonoTime = check.timing.producer_ns
+      motion.referenceProducerInstanceMonoTime = check.timing.instance_ns
+      motion.referenceSourceMonoTime = check.timing.source_ns
+      motion.referenceEpochMonoTime = check.timing.epoch_ns
   return now_ns
 
 
@@ -56,10 +80,11 @@ def solution(planner, profile, *, initial_speed=0.02):
 def context(monkeypatch, *, warm=True, raw_forward=True):
   planner, _ = make_planner(speed=0.02)
   state = execution_state(raw_forward=raw_forward)
+  planner._execution_test_consumer = ReferenceTimingConsumer()
   monkeypatch.setattr(planner.mpc, 'update', lambda *args, **kwargs: None)
   if warm:
     solution(planner, 'launch')
-    planner.update(state, now_ns=execution_time(state, 0))
+    planner.update(state, now_ns=execution_time(planner, state, 0))
     assert planner.motion_intent.valid
     assert not planner.output_should_stop
     assert planner.motion_intent.release_allowed is raw_forward
@@ -68,13 +93,16 @@ def context(monkeypatch, *, warm=True, raw_forward=True):
 
 
 @pytest.mark.parametrize('profile', ['slow', 'departure_then_slow'])
-def test_executed_forward_does_not_stop_or_gain_new_release_from_low_speed_preference(monkeypatch, profile):
+@pytest.mark.parametrize('phase', ['release', 'track'])
+def test_executed_forward_does_not_stop_or_gain_new_release_from_low_speed_preference(monkeypatch, profile, phase):
   planner, state = context(monkeypatch)
   solution(planner, profile)
   state['carState'].aEgo = float(planner.mpc.a_solution[0])
-  planner.update(state, now_ns=execution_time(state, 1))
+  state['controlsState'].motionState.phase = phase
+  planner.update(state, now_ns=execution_time(planner, state, 1))
   assert planner.motion_intent.valid
   assert planner.motion_intent.reference_kind == MotionReferenceKind.FORWARD
+  assert state['controlsState'].motionState.referenceTimingValid
   assert 0.0 <= planner.output_a_target < STOP_ACCEL
   assert planner.mpc.v_solution[-1] < STOP_SPEED
   # Even when the trajectory otherwise proves departure, its old stop mask
@@ -88,17 +116,17 @@ def test_executed_forward_does_not_stop_or_gain_new_release_from_low_speed_prefe
 
 def test_moving_only_continues_an_executed_forward_session(monkeypatch):
   planner, state = context(monkeypatch)
-  planner.update(state, now_ns=execution_time(state, 1))
+  planner.update(state, now_ns=execution_time(planner, state, 1))
   assert not planner.output_should_stop
   state['modelV2'].velocity.x = [3.0] * len(ModelConstants.T_IDXS)
   for frame in (2, 3):
-    planner.update(state, now_ns=execution_time(state, frame))
+    planner.update(state, now_ns=execution_time(planner, state, frame))
     assert planner.motion_intent.reference_kind == MotionReferenceKind.MOVING
     assert not planner.output_should_stop
     assert not planner.motion_intent.release_allowed
 
   other, other_state = context(monkeypatch, raw_forward=False)
-  other.update(other_state, now_ns=execution_time(other_state, 1))
+  other.update(other_state, now_ns=execution_time(other, other_state, 1))
   assert other.motion_intent.reference_kind == MotionReferenceKind.MOVING
   assert other.output_should_stop
   assert not other.motion_intent.release_allowed
@@ -106,7 +134,7 @@ def test_moving_only_continues_an_executed_forward_session(monkeypatch):
 
 def test_new_producer_cannot_treat_pid_fields_as_reference_history(monkeypatch):
   planner, state = context(monkeypatch, warm=False)
-  planner.update(state, now_ns=execution_time(state, 0))
+  planner.update(state, now_ns=execution_time(planner, state, 0))
   assert planner.motion_intent.reference_kind == MotionReferenceKind.FORWARD
   assert planner.output_should_stop
   assert not planner.motion_intent.release_allowed
@@ -120,9 +148,10 @@ def test_cold_off_or_hold_with_flat_raw_input_cannot_acquire_permission(monkeypa
   state['modelV2'].velocity.x = [raw_speed] * len(ModelConstants.T_IDXS)
   state['controlsState'].longControlState = control_state
   state['carControl'].actuators.longControlState = control_state
+  state['controlsState'].motionState.phase = 'off' if control_state == LongCtrlState.off else 'hold'
   solution(planner, 'slow', initial_speed=0.0)
   for frame in (0, 1):
-    planner.update(state, now_ns=execution_time(state, frame))
+    planner.update(state, now_ns=execution_time(planner, state, frame))
     assert planner.output_should_stop
     assert not planner.motion_intent.release_allowed
     assert planner.reference_planner._forward_execution_instance_ns == 0
@@ -135,9 +164,9 @@ def test_cold_off_or_hold_with_flat_raw_input_cannot_acquire_permission(monkeypa
 ])
 def test_current_veto_clears_continuation_and_moving_cannot_rearm_it(monkeypatch, veto):
   planner, state = context(monkeypatch)
-  planner.update(state, now_ns=execution_time(state, 1))
+  planner.update(state, now_ns=execution_time(planner, state, 1))
   assert not planner.output_should_stop
-  now_ns = execution_time(state, 2)
+  now_ns = execution_time(planner, state, 2)
   if veto in ('leadOne', 'leadTwo'):
     lead = getattr(state['radarState'], veto)
     lead.present, lead.dRel, lead.vLead, lead.vRel = True, 50.0, 0.0, -state['carState'].vEgo
@@ -194,17 +223,83 @@ def test_current_veto_clears_continuation_and_moving_cannot_rearm_it(monkeypatch
   solution(planner, 'slow')
   recovered = execution_state(raw_forward=False)
   for frame in (3, 4):
-    planner.update(recovered, now_ns=execution_time(recovered, frame))
+    planner.update(recovered, now_ns=execution_time(planner, recovered, frame))
     assert planner.output_should_stop
     assert not planner.motion_intent.release_allowed
+
+
+@pytest.mark.parametrize('phase', ['', 'off', 'hold', 'approach', 'degraded', 'unknown'])
+def test_unknown_or_nonexecuting_owner_phase_clears_continuation(monkeypatch, phase):
+  planner, state = context(monkeypatch)
+  planner.update(state, now_ns=execution_time(planner, state, 1))
+  assert not planner.output_should_stop
+  now_ns = execution_time(planner, state, 2)
+  state['controlsState'].motionState.phase = phase
+  planner.update(state, now_ns=now_ns)
+  assert planner.output_should_stop
+  assert not planner.motion_intent.release_allowed
+  assert planner.reference_planner._forward_execution_instance_ns == 0
+  recovered = execution_state(raw_forward=False)
+  planner.update(recovered, now_ns=execution_time(planner, recovered, 3))
+  assert planner.output_should_stop
+
+
+@pytest.mark.parametrize('fault', [
+  'missing_timing', 'missing_version', 'wrong_version', 'invalid_timing', 'missing_instance', 'wrong_instance',
+  'old_producer', 'old_source', 'old_epoch', 'missing_consumer', 'old_consumer', 'consumer_after_control', 'consumer_after_controls',
+])
+def test_recent_pid_headers_cannot_substitute_for_same_reference_consumption(monkeypatch, fault):
+  planner, state = context(monkeypatch)
+  planner.update(state, now_ns=execution_time(planner, state, 1))
+  assert not planner.output_should_stop
+  now_ns = execution_time(planner, state, 2)
+  motion = state['controlsState'].motionState
+  assert motion.referenceTimingValid
+  if fault == 'missing_timing':
+    motion.referenceTimingVersion = 0
+    motion.referenceTimingValid = False
+    for field in ('referenceConsumerMonoTime', 'referenceProducerMonoTime', 'referenceProducerInstanceMonoTime',
+                  'referenceSourceMonoTime', 'referenceEpochMonoTime'):
+      setattr(motion, field, 0)
+  elif fault == 'missing_version':
+    motion.referenceTimingVersion = 0
+  elif fault == 'wrong_version':
+    motion.referenceTimingVersion = REFERENCE_TIMING_VERSION + 1
+  elif fault == 'invalid_timing':
+    motion.referenceTimingValid = False
+  elif fault == 'missing_instance':
+    motion.referenceProducerInstanceMonoTime = 0
+  elif fault == 'wrong_instance':
+    motion.referenceProducerInstanceMonoTime -= 1
+  elif fault == 'old_producer':
+    motion.referenceProducerMonoTime -= 50_000_000
+  elif fault == 'old_source':
+    motion.referenceSourceMonoTime -= 50_000_000
+  elif fault == 'old_epoch':
+    motion.referenceEpochMonoTime -= 50_000_000
+  elif fault == 'missing_consumer':
+    motion.referenceConsumerMonoTime = 0
+  elif fault == 'old_consumer':
+    motion.referenceConsumerMonoTime = motion.referenceProducerMonoTime - 1
+  elif fault == 'consumer_after_control':
+    motion.referenceConsumerMonoTime = state.logMonoTime['carControl'] + 1
+  elif fault == 'consumer_after_controls':
+    state.logMonoTime['controlsState'] = motion.referenceConsumerMonoTime - 1
+  planner.update(state, now_ns=now_ns)
+  assert planner.output_should_stop
+  assert not planner.motion_intent.release_allowed
+  assert planner.reference_planner._forward_execution_instance_ns == 0
+  recovered = execution_state(raw_forward=False)
+  planner.update(recovered, now_ns=execution_time(planner, recovered, 3))
+  assert planner.output_should_stop
 
 
 @pytest.mark.parametrize('service', ['carControl', 'controlsState'])
 @pytest.mark.parametrize('invalid_time', [None, 0, 1_000_000_000, 2_000_000_000])
 def test_missing_stale_or_future_control_publication_is_not_execution(monkeypatch, service, invalid_time):
   planner, state = context(monkeypatch)
-  planner.update(state, now_ns=execution_time(state, 1))
-  now_ns = execution_time(state, 2)
+  planner.update(state, now_ns=execution_time(planner, state, 1))
+  now_ns = execution_time(planner, state, 2)
   if invalid_time is None:
     del state.logMonoTime[service]
   else:
@@ -218,8 +313,8 @@ def test_missing_stale_or_future_control_publication_is_not_execution(monkeypatc
 @pytest.mark.parametrize('failure', ['source_clock', 'owner', 'vehicle', 'solver', 'sampled_accel'])
 def test_early_failure_clears_execution_before_a_later_moving_reference(monkeypatch, failure):
   planner, state = context(monkeypatch)
-  planner.update(state, now_ns=execution_time(state, 1))
-  now_ns = execution_time(state, 2)
+  planner.update(state, now_ns=execution_time(planner, state, 1))
+  now_ns = execution_time(planner, state, 2)
   if failure == 'source_clock':
     state.logMonoTime['carState'] = now_ns + 1
   elif failure == 'owner':
@@ -237,7 +332,7 @@ def test_early_failure_clears_execution_before_a_later_moving_reference(monkeypa
   solution(planner, 'slow')
   recovered = execution_state(raw_forward=False)
   for frame in (3, 4):
-    planner.update(recovered, now_ns=execution_time(recovered, frame))
+    planner.update(recovered, now_ns=execution_time(planner, recovered, frame))
     assert planner.output_should_stop
     assert not planner.motion_intent.release_allowed
 
@@ -245,9 +340,9 @@ def test_early_failure_clears_execution_before_a_later_moving_reference(monkeypa
 @pytest.mark.parametrize('interruption', ['gap', 'consumer_regression', 'instance'])
 def test_reference_discontinuity_cannot_preserve_execution(monkeypatch, interruption):
   planner, state = context(monkeypatch)
-  planner.update(state, now_ns=execution_time(state, 1))
+  planner.update(state, now_ns=execution_time(planner, state, 1))
   state['modelV2'].velocity.x = [3.0] * len(ModelConstants.T_IDXS)
-  now_ns = execution_time(state, 8 if interruption == 'gap' else 2)
+  now_ns = execution_time(planner, state, 8 if interruption == 'gap' else 2)
   if interruption == 'consumer_regression':
     now_ns = 1_050_000_000
   elif interruption == 'instance':
@@ -263,7 +358,7 @@ def test_continuation_exception_is_unified_only(monkeypatch, mode):
   planner, state = context(monkeypatch)
   planner.longitudinal_mode = mode
   state['controlsState'].motionState.planningMode = int(mode)
-  planner.reference_planner.update(state, now_ns=execution_time(state, 1))
+  planner.reference_planner.update(state, now_ns=execution_time(planner, state, 1))
   assert planner.output_should_stop
   assert not planner.motion_intent.release_allowed
   assert planner.reference_planner._forward_execution_instance_ns == 0

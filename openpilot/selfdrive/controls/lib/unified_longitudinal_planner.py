@@ -26,7 +26,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
 from openpilot.selfdrive.controls.lib.motion_supervisor import (CREEP_INPUT_SERVICES, MOTION_INTENT_VERSION, CreepSample, MotionIntent,
                                                                MotionReferenceKind, StopReason)
 from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
-from openpilot.selfdrive.controls.lib.reference_timing import valid_timestamp
+from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 
@@ -498,6 +498,7 @@ class UnifiedLongitudinalPlanner:
     raw_kind = self.describe_motion_reference(state)
     control = state['carControl']
     controls = state['controlsState']
+    motion = controls.motionState
     control_ns = getattr(state, 'logMonoTime', {}).get('carControl')
     controls_ns = getattr(state, 'logMonoTime', {}).get('controlsState')
     executed_forward = (
@@ -508,11 +509,19 @@ class UnifiedLongitudinalPlanner:
       and not state['radarState'].leadOne.present and not state['radarState'].leadTwo.present
       and math.isfinite(output) and output >= 0.0
       and controls.longControlState == LongCtrlState.pid and control.actuators.longControlState == LongCtrlState.pid
-      and not (controls.motionState.resolvedStop or controls.motionState.degraded or controls.motionState.waitingForFreshInput
-               or controls.motionState.reasons)
+      and motion.phase in ('release', 'track')
+      and not (motion.resolvedStop or motion.degraded or motion.waitingForFreshInput or motion.reasons)
       and math.isfinite(control.actuators.accel)
       and valid_timestamp(control_ns) and previous_producer_ns < control_ns < now_ns
       and valid_timestamp(controls_ns) and previous_producer_ns < controls_ns <= now_ns
+      # Recent headers and PID alone do not identify which plan ran. Require
+      # the owner's successful consumption of this instance's prior reference.
+      and motion.referenceTimingVersion == REFERENCE_TIMING_VERSION and motion.referenceTimingValid
+      and motion.referenceProducerInstanceMonoTime == self.producer_instance_ns
+      and motion.referenceProducerMonoTime == previous_producer_ns
+      and motion.referenceSourceMonoTime == previous_source_ns and motion.referenceEpochMonoTime == previous_source_ns
+      and valid_timestamp(motion.referenceConsumerMonoTime)
+      and previous_producer_ns < motion.referenceConsumerMonoTime <= min(control_ns, controls_ns)
       and (raw_kind == MotionReferenceKind.FORWARD or self._forward_execution_instance_ns == self.producer_instance_ns)
     )
     # MOVING may continue this producer's confirmed FORWARD execution, but it
