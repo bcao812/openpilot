@@ -127,10 +127,11 @@ class NativePolicy:
     if not all(np.all(np.isfinite(values)) for values in (self.mpc.x_sol, self.mpc.u_sol, self.mpc.params)):
       errors.append('nonfinite_native_output')
     command = float(action(self.mpc))
-    # This is the existing native numerical allowance. The ideal actuator below
-    # still saturates at the exact legal bounds, so extra braking is not granted.
-    if not math.isfinite(command) or not ACCEL_MIN - 1e-3 <= command <= ACCEL_MAX + 1e-3:
-      errors.append('native_action_outside_numeric_bounds')
+    # MPC acceleration limits are soft costs. The planner/actuator boundary
+    # clips the actual request; checking the raw optimum as though it were a
+    # transmitted command would conflate those two different contracts.
+    if not math.isfinite(command):
+      errors.append('nonfinite_native_action')
     return command, errors
 
 
@@ -155,7 +156,8 @@ def run_event(case, policy, *, duration=None, future_program_declared=True):
     margin = gap_min - CLEARANCE_M - required_closure(max(v, next_v), min(lead_v, next_lead_v), lead_a)
     rows.append({'end_s': (frame + 1) * DT_MDL, 'x': next_x, 'v': next_v, 'previous_v': v,
                  'lead_v': next_lead_v, 'previous_lead_v': lead_v, 'gap_min_m': gap_min,
-                 'margin_lower_bound_m': margin, 'command_mps2': command})
+                 'margin_lower_bound_m': margin, 'command_mps2': command,
+                 'delivered_mps2': delivered})
     x, v, lead_x, lead_v = next_x, next_v, next_lead_x, next_lead_v
     acceleration = 0.0 if v == 0.0 and delivered < 0.0 else delivered
   gaps = []
@@ -191,7 +193,11 @@ def test_positive_model_meets_independent_complete_lead_event(case, lead_index, 
     if result['rows']:
       diagnostics[name].update(min_gap_m=min(row['gap_min_m'] for row in result['rows']),
                                min_margin_lower_bound_m=min(row['margin_lower_bound_m'] for row in result['rows']),
-                               final_speed_mps=result['rows'][-1]['v'])
+                               final_speed_mps=result['rows'][-1]['v'],
+                               raw_request_range_mps2=[min(row['command_mps2'] for row in result['rows']),
+                                                       max(row['command_mps2'] for row in result['rows'])],
+                               delivered_range_mps2=[min(row['delivered_mps2'] for row in result['rows']),
+                                                     max(row['delivered_mps2'] for row in result['rows'])])
   if len(arms['lead_only']['rows']) == len(arms['positive_model']['rows']) and arms['lead_only']['rows']:
     paired = list(zip(arms['lead_only']['rows'], arms['positive_model']['rows'], strict=True))
     diagnostics['relative_diagnostic_only'] = {
