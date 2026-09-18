@@ -8,7 +8,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_STOP_T, STOP_RELEASE_ACCEL, STOP_SPEED
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_planner import has_safe_moving_lead
-from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import update_cruise
+from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import assert_invalid_motion_preserves_braking, update_cruise
 from openpilot.selfdrive.controls.tests.test_longitudinal_planner_creep import FRAMES_CAP
 from openpilot.selfdrive.controls.tests.test_longitudinal_planner_state import braking_planner, braking_state
 
@@ -119,6 +119,7 @@ def test_any_unsafe_or_uncertain_lead_keeps_original_creep_fallback(lead_name, f
 )
 def test_following_bypass_requires_all_activation_and_risk_guards(condition):
   planner, state = braking_planner(), following_state()
+  previous_target = planner.output_a_target
   if condition in ('no_lead', 'only_second_lead'):
     state['radarState'].leadOne.present = False
     state['radarState'].leadTwo.present = condition == 'only_second_lead'
@@ -145,7 +146,13 @@ def test_following_bypass_requires_all_activation_and_risk_guards(condition):
     planner.CP.openpilotLongitudinalControl = False
   follow(planner, state)
   assert planner.moving_lead_t == 0.0
-  assert planner.output_should_stop
+  if condition == 'unhealthy':
+    # Stale motion cannot confirm following or create a new creep-stop decision.
+    assert not planner.creep_stop
+    assert planner.creep_total_t == 0.0
+    assert_invalid_motion_preserves_braking(planner, state, previous_target)
+  else:
+    assert planner.output_should_stop
 
 
 @pytest.mark.parametrize('service', ['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState'])

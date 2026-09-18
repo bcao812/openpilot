@@ -8,7 +8,10 @@ from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.honda.hondacan import CanBus, create_acc_commands
 from opendbc.car.honda.values import CAR, DBC, CarControllerParams, HondaFlags
+from openpilot.cereal import custom
 from openpilot.common.realtime import DT_MDL
+from openpilot.selfdrive.controls.lib.longcontrol import LongControl, MPC_FAILURE_ACCEL
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import MPC_INVALID_INPUT
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (CRUISE_COAST_ACCEL, LongitudinalPlanner,
                                                                  LongitudinalPlanSource, get_cruise_coast_accel)
 from openpilot.selfdrive.controls.tests.test_longitudinal_planner_state import braking_planner, braking_state
@@ -43,6 +46,25 @@ def update_cruise(planner, state, a_cruise=-0.23, a_mpc=1.0, e2e=False, source=P
        patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets):
     planner.update(state)
   return planner.output_a_target
+
+
+def assert_invalid_motion_preserves_braking(planner, state, previous_target):
+  assert planner.mpc.solution_status == MPC_INVALID_INPUT
+  assert planner.mpc.failure_reason == 'invalid_input'
+  assert np.isfinite(planner.output_a_target)
+  assert planner.output_a_target <= min(previous_target, MPC_FAILURE_ACCEL)
+  assert planner.moving_lead_t == 0.0
+
+  controller = LongControl(planner.CP, custom.CarParamsSP.new_message())
+  controller.last_output_accel = -1.5
+  output = controller.update(True, state['carState'], planner.output_a_target, planner.output_should_stop,
+                             (-3.5, 2.0), solver_status=planner.mpc.solution_status)
+  assert np.isfinite(output) and output <= -1.5
+  wire = decoded_commands([output])[0]
+  assert wire['BRAKE_REQUEST'] and wire['GAS_COMMAND'] <= 0.0
+  # An invalid plan does not grant control when longitudinal control is inactive.
+  assert controller.update(False, state['carState'], planner.output_a_target, planner.output_should_stop,
+                           (-3.5, 2.0), solver_status=planner.mpc.solution_status) == 0.0
 
 
 @pytest.mark.parametrize('accel', [-3.5, -1.2, -0.3, -0.1, 0.0, 0.2, 2.0])
@@ -105,6 +127,7 @@ def test_other_platforms_are_unchanged(platform):
 def test_coast_preconditions_are_required(condition):
   planner = cruise_planner()
   state = cruise_state()
+  previous_target = planner.output_a_target
   if condition == 'gas':
     state['carState'].gasPressed = True
   elif condition == 'brake':
@@ -127,7 +150,11 @@ def test_coast_preconditions_are_required(condition):
   elif condition == 'throttle_veto':
     state['modelV2'] = state['modelV2'].as_builder()
     state['modelV2'].meta.disengagePredictions.gasPressProbs = [0.0, 0.0]
-  assert update_cruise(planner, state) == -0.23
+  output = update_cruise(planner, state)
+  if condition == 'unhealthy':
+    assert_invalid_motion_preserves_braking(planner, state, previous_target)
+  else:
+    assert output == -0.23
 
 
 @pytest.mark.parametrize('source', [PlanSourceSP.sccVision, PlanSourceSP.sccMap, PlanSourceSP.speedLimitAssist])
