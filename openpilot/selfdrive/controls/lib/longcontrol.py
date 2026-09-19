@@ -191,13 +191,15 @@ class LongControl:
     last_output_valid = math.isfinite(self.last_output_accel)
     if not last_output_valid:
       self.last_output_accel = 0.0
+    # Corrupt output history degrades normal control. A separately qualified
+    # fresh braking envelope is still usable without trusting that history.
     stop_accel_valid = (math.isfinite(self.CP.stopAccel)
                         and CarControllerParams.BOSCH_ACCEL_MIN <= self.CP.stopAccel <= DEGRADED_ACCEL)
     cold_standstill = self.motion_phase == MotionPhase.OFF and CS.standstill
     self.resolved_should_stop = self.motion_supervisor.update(
       active, CS.vEgo, CS.aEgo, CS.standstill, a_target, intent, plan_time_ns=plan_time_ns,
       model_time_ns=model_time_ns, now_ns=now_ns, plan_valid=plan_valid and limits_valid and last_output_valid and stop_accel_valid,
-      braking_plan_valid=braking_plan_valid and limits_valid and last_output_valid and stop_accel_valid, solver_status=solver_status)
+      braking_plan_valid=braking_plan_valid and limits_valid and stop_accel_valid, solver_status=solver_status)
     if cold_standstill and self.resolved_should_stop:
       hold_accel = self.CP.stopAccel if stop_accel_valid else -2.0
       self.last_output_accel = min(self.last_output_accel, hold_accel)

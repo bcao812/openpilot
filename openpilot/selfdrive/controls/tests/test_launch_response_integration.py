@@ -5,6 +5,7 @@ must separately check the required motion under their declared assumptions.
 """
 
 from dataclasses import replace
+import math
 from unittest.mock import patch
 
 import pytest
@@ -14,7 +15,7 @@ from opendbc.car.honda.values import CAR
 from openpilot.cereal import custom
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
-from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionPhase, MotionReferenceKind, StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import DEGRADED_ACCEL, MotionIntent, MotionPhase, MotionReferenceKind, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, controller
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
@@ -433,3 +434,40 @@ def test_cold_approach_or_prior_positive_output_does_not_gain_a_braking_handoff(
   assert not harness.control.launch_response.braking_handoff
   assert before < harness.step(-0.3, braking) <= before + 0.08 + 1e-12
   assert not harness.control.launch_response.braking_handoff
+
+
+@pytest.mark.parametrize('history', [math.nan, math.inf, -math.inf])
+@pytest.mark.parametrize('input_kind', ['fresh_braking', 'stale', 'future', 'positive_envelope', 'missing_envelope',
+                                       'unqualified_transport', 'normal_positive'])
+def test_corrupt_output_history_keeps_only_independently_qualified_fresh_braking(history, input_kind):
+  harness = ControlHarness()
+  harness.state.vEgo = 20.0
+  for _ in range(3):
+    harness.step(-0.4, forward_intent())
+  assert harness.control.motion_phase == MotionPhase.TRACK
+  assert harness.control.last_output_accel < 0.0
+  harness.control.last_output_accel = history
+
+  target = -1.5
+  intent = MotionIntent(valid=False, allow_creep=False, braking_accel=target, producer_instance_ns=INSTANCE_NS)
+  options = {'plan_valid': False, 'braking_plan_valid': True, 'solver_status': 4}
+  if input_kind == 'stale':
+    options.update(plan_time_ns=harness.now_ns - 1_000_000_000, model_time_ns=harness.now_ns - 1_000_000_000)
+  elif input_kind == 'future':
+    options.update(plan_time_ns=harness.now_ns + 20_000_000, model_time_ns=harness.now_ns + 20_000_000)
+  elif input_kind == 'positive_envelope':
+    target = 0.3
+    intent = replace(intent, braking_accel=target)
+  elif input_kind == 'missing_envelope':
+    intent = replace(intent, braking_accel=None)
+  elif input_kind == 'unqualified_transport':
+    options['braking_plan_valid'] = False
+  elif input_kind == 'normal_positive':
+    target = 0.3
+    intent = forward_intent()
+    options.update(plan_valid=True, solver_status=0)
+
+  expected = -1.5 if input_kind == 'fresh_braking' else DEGRADED_ACCEL
+  assert harness.step(target, intent, **options) == expected
+  assert harness.control.motion_degraded
+  assert harness.control.pid.i == 0.0
