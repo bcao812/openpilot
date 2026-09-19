@@ -315,9 +315,9 @@ def _progress_window(speed_for_frame, *, frames=60, intent_for_frame=None, targe
                           a_ego=(speed - previous_speed) / DT_CTRL, a_target=target,
                           now_ns=base + 2_000_000 + frame * 10_000_000)
     assert not owner.degraded
-    history.append(dict(stop=stopped, phase=owner.phase, elapsed=(frame + 1) * DT_CTRL, speed=speed,
-                        previous_speed=previous_speed, anchor=owner.creep_v, window=owner.creep_t,
-                        distance=owner.creep_distance, total=owner.creep_total_t, moving=owner.moving_lead_t))
+    history.append({'stop': stopped, 'phase': owner.phase, 'elapsed': (frame + 1) * DT_CTRL, 'speed': speed,
+                    'previous_speed': previous_speed, 'anchor': owner.creep_v, 'window': owner.creep_t,
+                    'distance': owner.creep_distance, 'total': owner.creep_total_t, 'moving': owner.moving_lead_t})
     previous_speed = speed
   return owner, history
 
@@ -441,7 +441,7 @@ def test_original_window_revocation_paths_clear_distance(fault):
   owner, rows = _progress_window(lambda frame: 0.7 + 0.004 * frame, frames=30)
   assert rows[-1]['distance'] > 0.0 and not rows[-1]['stop']
   timestamp = 2_300_000_000
-  options = dict(now_ns=timestamp + 2_000_000, intent=MotionIntent(producer_instance_ns=2_000_000_000))
+  options = {'now_ns': timestamp + 2_000_000, 'intent': MotionIntent(producer_instance_ns=2_000_000_000)}
   if fault in ('repeat_clock', 'backward_clock'):
     options['now_ns'] = owner._last_now_ns - int(fault == 'backward_clock')
   elif fault == 'clock_gap':
