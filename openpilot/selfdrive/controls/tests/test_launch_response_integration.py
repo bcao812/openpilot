@@ -5,15 +5,19 @@ must separately check the required motion under their declared assumptions.
 """
 
 from dataclasses import replace
+from unittest.mock import patch
 
 import pytest
 
 from opendbc.car import structs
 from opendbc.car.honda.values import CAR
 from openpilot.cereal import custom
+from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionPhase, MotionReferenceKind, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, controller
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
 
 
 INSTANCE_NS = 1_000_000_000
@@ -128,6 +132,52 @@ def test_qualified_rolling_feedback_uses_pid_i_once_and_moving_does_not_ratchet_
   harness.state.aEgo = 0.6
   harness.step(0.3, moving)
   assert 0.0 < harness.control.pid.i < learned
+
+
+def test_unknown_acc_reference_revokes_old_drive_and_only_learns_nonpositive_correction():
+  harness = rolling_feedback()
+  unknown = forward_intent(reference_kind=int(MotionReferenceKind.UNKNOWN))
+  for _ in range(100):
+    assert harness.step(0.3, unknown) <= 0.3
+    assert harness.control.pid.i == 0.0
+  assert not harness.control.launch_response.armed
+  # UNKNOWN erased the previous FORWARD qualification, even though the raw
+  # ACC releaseAllowed field was true. A kind alone cannot restore it.
+  for _ in range(20):
+    harness.step(0.3, forward_intent(release_allowed=False))
+    assert harness.control.pid.i == 0.0
+  harness.state.aEgo = 0.6
+  for _ in range(20):
+    assert harness.step(0.3, unknown) <= 0.3
+  assert harness.control.pid.i < 0.0
+
+
+def test_real_acc_publication_without_model_reference_reaches_braking_feedback():
+  """Normal ACC uses UNKNOWN by design; do not relabel it as model FORWARD."""
+  def update_targets(instance, state, v_ego, a_ego, v_cruise):
+    instance.source = LongitudinalPlanSource.cruise
+    instance.cruise_target = CruiseTarget(instance.source, v_cruise, a_ego)
+    return instance.cruise_target
+
+  with OpenpilotPrefix():
+    planner, control = make_planner_owner(speed=20.8)
+    state = make_state(speed=20.8, target=20.0)
+    with patch.object(planner, 'is_e2e', return_value=False), \
+         patch.object(LongitudinalPlannerSP, 'update', return_value=None), \
+         patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets), \
+         patch.object(control.launch_response, 'propose', wraps=control.launch_response.propose) as feedback:
+      for frame in range(20):
+        state['controlsState'].longControlState = control.long_control_state
+        plan, outputs = consume(planner, control, state, frame)
+        assert planner.reference_planner.model_evidence is None
+        assert plan.motionIntent.referenceKind == MotionReferenceKind.UNKNOWN
+        assert plan.motionIntent.valid and plan.solverStatus == 0
+        assert control.motion_phase == MotionPhase.TRACK
+        assert not control.motion_input_constrained
+        assert all(output <= plan.aTarget for output in outputs)
+      assert feedback.call_count == 100
+      assert control.pid.i < 0.0
+      assert not control.launch_response.armed
 
 
 def test_qualified_launch_to_rolling_keeps_one_integral_without_a_threshold_jump():

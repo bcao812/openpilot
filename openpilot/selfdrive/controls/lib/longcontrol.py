@@ -214,9 +214,12 @@ class LongControl:
     stopping = self.resolved_should_stop and (CS.standstill or CS.vEgo < CLOSE_LEAD_STOP_SPEED)
     allocation = getattr(self, '_response_candidate', None)
     response_available = self.launch_response is not None and allocation is None and not self.motion_input_constrained
+    # Normal ACC has no admitted model motion kind. Its healthy TRACK may
+    # correct excess acceleration; UNKNOWN never inherits positive effort.
     response_feedback = (response_available and not self.resolved_should_stop and not protocol_hold and not intent.reasons
                          and self.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
-                         and intent.reference_kind in (MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING)
+                         and (intent.reference_kind in (MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING)
+                              or self.motion_phase == MotionPhase.TRACK and intent.reference_kind == MotionReferenceKind.UNKNOWN)
                          and self.motion_supervisor.rest_braking_accel_limit is None)
     braking_feedback = (response_available and self.motion_phase == MotionPhase.APPROACH and not stopping and not protocol_hold)
     if self.launch_response is not None and not (response_feedback or braking_feedback):
@@ -249,7 +252,7 @@ class LongControl:
           output_accel = self.launch_response.propose(
             base_output, a_target, CS.aEgo, accel_limits[1], producer_instance_ns=intent.producer_instance_ns, now_ns=now_ns,
             forward=bool(intent.reference_kind == MotionReferenceKind.FORWARD), rolling=bool(not CS.standstill and CS.vEgo >= STOP_SPEED),
-            positive_allowed=intent.release_allowed)
+            positive_allowed=intent.release_allowed, continuation_allowed=intent.reference_kind != MotionReferenceKind.UNKNOWN)
         elif braking_feedback:
           # Do not weaken an accepted braking response just because TRACK
           # entered APPROACH. Only its actual nonpositive I may carry over;

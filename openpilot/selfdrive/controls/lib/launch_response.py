@@ -114,7 +114,7 @@ class LaunchResponse:
     return self._propose_output(base_output, min(self.bias, 0.0), upper_limit)
 
   def propose(self, base_output, a_target, a_ego, upper_limit, *, producer_instance_ns, now_ns,
-              forward, rolling=False, positive_allowed=False):
+              forward, rolling=False, positive_allowed=False, continuation_allowed=True):
     """Propose correction from a base EXCLUDING pid.i; do not accumulate yet.
 
     A qualified launch uses its original gain until first rolling motion,
@@ -123,15 +123,18 @@ class LaunchResponse:
     that producer instance. MOVING only retains/unwinds existing positive I.
     Rolling alone grants no drive permission. Near rest, ordinary tracking
     retains/unwinds its existing correction without learning another one.
+    Normal ACC has no admitted model motion reference (UNKNOWN); its measured
+    response can justify braking correction, but cannot inherit drive effort.
     """
     self._pending = None
     lower_limit = self._pid.neg_limit
     if (not self._valid_values(base_output, a_target, a_ego, upper_limit)
-        or lower_limit > upper_limit or any(type(value) is not bool for value in (forward, rolling, positive_allowed))):
+        or lower_limit > upper_limit
+        or any(type(value) is not bool for value in (forward, rolling, positive_allowed, continuation_allowed))):
       self.reset()
       return base_output
 
-    if a_target < 0.0:
+    if a_target < 0.0 or not continuation_allowed:
       # A new braking target/lost launch context cannot spend positive effort.
       self._pid.i = min(self.bias, 0.0)
       self._positive_authorized = False
@@ -157,7 +160,7 @@ class LaunchResponse:
       return base_output
     minimum = min(0.0, lower_limit - base_output)
     maximum = max(0.0, upper_limit - base_output)
-    can_learn_positive = forward and (positive_allowed or self._positive_authorized) and rolling
+    can_learn_positive = continuation_allowed and forward and (positive_allowed or self._positive_authorized) and rolling
     if self.armed:
       minimum = 0.0
       if not forward:
@@ -176,7 +179,7 @@ class LaunchResponse:
     stored = min(maximum, max(minimum, self.bias))
     candidate = min(maximum, max(minimum, stored + change))
     return self._propose_output(base_output, candidate, upper_limit,
-                                qualify=bool(forward and positive_allowed and a_target >= 0.0))
+                                qualify=bool(continuation_allowed and forward and positive_allowed and a_target >= 0.0))
 
   def confirm_output(self, output_accel):
     """Back-calculate after all LongControl limits, including the upward ramp.
