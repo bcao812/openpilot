@@ -35,7 +35,7 @@ def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady'
   if offset_profile is not None:
     offset_profile = tuple(offset_profile)
     if (not offset_profile or offset_profile[0][0] != 0.0 or not np.all(np.isfinite(offset_profile))
-        or any(current[0] >= following[0] for current, following in zip(offset_profile, offset_profile[1:]))
+        or any(current[0] >= following[0] for current, following in zip(offset_profile, offset_profile[1:], strict=False))
         or offset_profile[-1][0] >= duration):
       raise ValueError('Invalid declared disturbance profile')
   params = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
