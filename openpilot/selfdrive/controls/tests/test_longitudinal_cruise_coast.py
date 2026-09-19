@@ -1,16 +1,12 @@
 """Current cruise/owner and native CAN contracts after retiring scalar coast remapping."""
 
-import numpy as np
 import pytest
 
-from opendbc.can import CANPacker, CANParser
-from opendbc.car import Bus, structs
-from opendbc.car.honda.hondacan import CanBus, create_acc_commands
-from opendbc.car.honda.values import CAR, DBC, CarControllerParams, HondaFlags
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import braking_state, consume, make_handover_state, make_planner_owner
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.tools.longitudinal.replay_longitudinal_regressions import debounced_flips
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import decoded_commands
 
 
 def cruise_state():
@@ -19,27 +15,6 @@ def cruise_state():
   state['carState'].vCruiseCluster = 72.0
   state['carControl'].longActive = True
   return state
-
-
-def decoded_commands(accelerations):
-  params = structs.CarParams()
-  params.flags = int(HondaFlags.BOSCH)
-  params.openpilotLongitudinalControl = True
-  params.init('safetyConfigs', 1)
-  bus = CanBus(params)
-  dbc_name = DBC[CAR.HONDA_ACCORD][Bus.pt]
-  packer = CANPacker(dbc_name)
-  parser = CANParser(dbc_name, [('ACC_CONTROL', 50)], bus.pt)
-  result = []
-  for index, accel in enumerate(accelerations):
-    control = structs.CarControl.new_message()
-    control.actuators.accel = float(accel)
-    serialized = control.as_reader().actuators.accel
-    gas = float(np.interp(serialized, CarControllerParams.BOSCH_GAS_LOOKUP_BP, CarControllerParams.BOSCH_GAS_LOOKUP_V))
-    messages = create_acc_commands(packer, bus, True, True, serialized, gas, 0, params)
-    parser.update([((index + 1) * 20_000_000, messages)])
-    result.append(dict(parser.vl['ACC_CONTROL']))
-  return result
 
 
 def test_float32_and_real_can_remain_consistent():
@@ -65,7 +40,7 @@ def test_event_comparison_ignores_short_pulses():
 
 @pytest.mark.parametrize('a_mpc', [-2.0, -0.24, -0.22, -0.2])
 def test_admitted_braking_reference_is_not_weakened_by_the_current_owner(a_mpc):
-  from openpilot.selfdrive.controls.tests.test_unified_longcontrol import warm_tracking_harness
+  from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import warm_tracking_harness
 
   harness = warm_tracking_harness(20.2, -0.2)
   output = harness.step(a_mpc, MotionIntent(allow_creep=False))

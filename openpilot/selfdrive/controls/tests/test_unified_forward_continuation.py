@@ -12,7 +12,7 @@ from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_V
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import reference_requests_departure
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
-from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 

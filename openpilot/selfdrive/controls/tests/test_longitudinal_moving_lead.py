@@ -12,7 +12,7 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, Mot
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_handover_state, make_planner_owner
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_planner_creep import FRAMES_CAP
-from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import decoded_commands
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import decoded_commands
 
 
 def following_state(v_ego=1.0, *, experimental=True):
@@ -45,7 +45,7 @@ def follow_qualified_reference(state, acceleration):
   that a fresh optimizer would choose it while speed and gap never respond.
   The separate following plant tests the actual optimizer and delivered motion.
   """
-  from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ControlHarness
+  from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness
 
   harness = ControlHarness()
   harness.state = state['carState']

@@ -10,7 +10,9 @@ from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.control_observation import ControlObservation
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.tests.test_motion_rearm_wait import enter_off
-from openpilot.selfdrive.controls.tests.test_unified_controlsd import CapturingPublisher, ControlsHarness, new_event, selfdrive_event_harness, serialized
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import (
+  CapturingPublisher, ControlsHarness, new_event, selfdrive_event_harness, serialized,
+)
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.longitudinal_observation import SelfdriveObservation

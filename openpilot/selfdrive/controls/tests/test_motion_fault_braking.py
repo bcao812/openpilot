@@ -20,8 +20,8 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import (
 )
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_modes import MOTION_MODES, mode_controls
-from openpilot.selfdrive.controls.tests.test_unified_controlsd import selfdrive_event_harness, serialized
-from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ControlHarness, controller
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import selfdrive_event_harness, serialized
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, controller
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner_owner, make_handover_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
 

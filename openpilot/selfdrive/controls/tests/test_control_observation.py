@@ -9,7 +9,7 @@ from openpilot.cereal import log, messaging
 from openpilot.common.longitudinal_logging import CHECK_FLAGS
 from openpilot.selfdrive.controls.lib.control_observation import ControlObservation
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
-from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness, serialized
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness, serialized
 
 
 def observed_controls(*, enabled=True, unified=True):

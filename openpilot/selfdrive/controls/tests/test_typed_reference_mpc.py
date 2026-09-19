@@ -27,7 +27,7 @@ from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import act
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner, make_state
 from openpilot.selfdrive.controls.tests.test_unified_model_reference_contract import ModelReferenceHarness, held_harness, model_stop_curve
 from openpilot.selfdrive.controls.tests.test_unified_startup import PLANNER_STEPS
-from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness, new_event
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness, new_event
 
 
 def typed_reference(raw, speed, *, preference_time=2.5, cruise=30.0, typed=None):

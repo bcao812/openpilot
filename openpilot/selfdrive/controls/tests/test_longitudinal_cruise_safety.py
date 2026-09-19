@@ -8,7 +8,7 @@ import pytest
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_handover_state, make_planner_owner
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
-from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import decoded_commands
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import decoded_commands
 
 
 def braking_owner():

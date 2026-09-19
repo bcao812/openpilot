@@ -17,7 +17,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import should_stop_fo
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_lead_state import closing_state
-from openpilot.selfdrive.controls.tests.test_unified_longcontrol import controller, warm_tracking_harness
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import controller, warm_tracking_harness
 
 
 def near_stop_state():

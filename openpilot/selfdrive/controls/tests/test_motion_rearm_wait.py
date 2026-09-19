@@ -17,7 +17,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent, MotionPhase, MotionSupervisor, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_unified_creep_deadline import sample_step
-from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness, selfdrive_event_harness
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness, selfdrive_event_harness
 from openpilot.selfdrive.selfdrived.events import ET
 from openpilot.selfdrive.selfdrived.state import StateMachine
 

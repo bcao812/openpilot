@@ -13,8 +13,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode,
 from openpilot.selfdrive.controls.lib.motion_supervisor import DEGRADED_ACCEL, MOTION_INTENT_VERSION, MotionIntent, MotionPhase, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params  # noqa: F401
 from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarness
-from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness, selfdrive_event_harness
-from openpilot.selfdrive.controls.tests.test_unified_longcontrol import controller, normal_intent
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness, selfdrive_event_harness
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import controller, normal_intent
 from openpilot.selfdrive.controls.tests.test_unified_startup import StartupHarness
 
 

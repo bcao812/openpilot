@@ -370,7 +370,7 @@ def can_from_car_control(control, car_state):
 
 @pytest.mark.parametrize('manual', ['gas', 'brake', 'disable', 'override_event'])
 def test_real_controlsd_consumes_published_fault_status_and_manual_exit_before_can(manual):
-  from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness
+  from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness
 
   observations = []
   failure_chain(20.0, False, 'solver_status', latched=False, previous_target=-0.5, observations=observations)

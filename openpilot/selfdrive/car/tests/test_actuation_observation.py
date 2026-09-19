@@ -13,7 +13,7 @@ from openpilot.selfdrive.car.actuation_observation import ActuationObservation
 from openpilot.selfdrive.car.card import Car
 from openpilot.selfdrive.car.helpers import convert_to_capnp
 from openpilot.selfdrive.car.tests.test_longitudinal_authority import honda_authority_chain
-from openpilot.selfdrive.controls.tests.test_unified_controlsd import CapturingPublisher, bounded_submaster, new_event, serialized
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import CapturingPublisher, bounded_submaster, new_event, serialized
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 
 

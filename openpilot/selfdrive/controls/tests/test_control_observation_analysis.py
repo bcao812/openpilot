@@ -10,7 +10,7 @@ from openpilot.selfdrive.controls.lib.control_observation import ControlObservat
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_control_observation import control_payload
 from openpilot.selfdrive.controls.tests.test_motion_fault_braking import native_command
-from openpilot.selfdrive.controls.tests.test_unified_controlsd import CONTROL_SERVICES, ControlsHarness, bounded_submaster, new_event, serialized
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import CONTROL_SERVICES, ControlsHarness, bounded_submaster, new_event, serialized
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator
 
 

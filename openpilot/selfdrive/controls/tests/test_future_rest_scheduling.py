@@ -23,7 +23,7 @@ from openpilot.selfdrive.controls.tests.test_mpc_rest_numerics import assert_fut
 from openpilot.selfdrive.controls.tests.test_rest_braking_continuity import INSTANCE_NS, rejected_intent, tracking, zero_intent
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, SOURCE_NS, evidence, stopping_curve
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import typed_reference
-from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ACCEL_LIMITS, ControlHarness
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ACCEL_LIMITS, ControlHarness
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
 
 

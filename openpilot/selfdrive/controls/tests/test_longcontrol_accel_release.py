@@ -7,8 +7,8 @@ from opendbc.car.honda.values import CAR
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, StopReason
-from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import decoded_commands
-from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ControlHarness, controller, warm_tracking_harness
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import decoded_commands
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, controller, warm_tracking_harness
 
 
 @pytest.mark.parametrize('speed', [0.0, 0.5, 2.0, 15.0, 30.0])

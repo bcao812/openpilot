@@ -19,7 +19,7 @@ from openpilot.selfdrive.car.helpers import convert_to_capnp
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
-from openpilot.selfdrive.controls.tests.test_unified_controlsd import (
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import (
   CapturingPublisher, ControlsHarness, bounded_submaster, new_event, selfdrive_event_harness, serialized,
 )
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state

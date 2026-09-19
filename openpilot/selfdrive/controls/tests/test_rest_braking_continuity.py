@@ -16,7 +16,7 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import (
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarness
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, stopping_curve
-from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ACCEL_LIMITS, ControlHarness
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ACCEL_LIMITS, ControlHarness
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state
 
 

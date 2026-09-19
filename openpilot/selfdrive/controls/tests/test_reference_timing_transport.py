@@ -159,7 +159,7 @@ def test_timing_unit_restart_requires_a_new_source_and_retires_the_old_instance(
 def real_controls_harness():
   from openpilot.common.params import Params
   from openpilot.selfdrive.controls.controlsd import Controls
-  from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness, CapturingPublisher, new_event
+  from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness, CapturingPublisher, new_event
 
   harness = ControlsHarness()
   template = harness.control
@@ -259,7 +259,7 @@ def test_qualified_failed_solver_braking_keeps_its_time_contract():
 def test_legacy_does_not_consume_unified_timing():
   from opendbc.car.honda.values import CAR
   from openpilot.common.prefix import OpenpilotPrefix
-  from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness
+  from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness
 
   with OpenpilotPrefix():
     harness = ControlsHarness(platform=CAR.HONDA_CIVIC_BOSCH)
@@ -310,7 +310,7 @@ def test_plannerd_actual_subscription_call_keeps_all_provenance_sources():
 
 
 def consume_serialized_plan(harness, plan_event, now_ns):
-  from openpilot.selfdrive.controls.tests.test_unified_controlsd import serialized
+  from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import serialized
 
   harness.now_ns = now_ns
   harness.events['longitudinalPlan'] = plan_event.as_builder()
@@ -330,7 +330,7 @@ def consume_serialized_plan(harness, plan_event, now_ns):
 @pytest.mark.parametrize('interruption', ['duplicate', 'future', 'reordered', 'changed', 'late', 'restart'])
 def test_native_production_messages_keep_source_epoch_and_do_not_reseed_invalid_history(interruption):
   from openpilot.common.prefix import OpenpilotPrefix
-  from openpilot.selfdrive.controls.tests.test_unified_controlsd import CapturingPublisher, new_event, serialized
+  from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import CapturingPublisher, new_event, serialized
   from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state
 
   with OpenpilotPrefix():
