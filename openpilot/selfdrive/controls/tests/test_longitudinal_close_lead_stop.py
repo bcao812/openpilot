@@ -250,7 +250,8 @@ def lag_plant_clearance_qualification(arguments):
 
 def clearance_evaluation(baseline_gap, candidate_gap, qualification):
   former_passed = candidate_gap >= baseline_gap - 1e-5
-  if not math.isfinite(candidate_gap):
+  # Observed contact or overlap fails independently of a feasible stopping witness.
+  if not math.isfinite(candidate_gap) or candidate_gap <= 0.0:
     verdict = 'FAIL'
   elif qualification['status'] != 'QUALIFIED':
     verdict = 'INCONCLUSIVE'
@@ -268,12 +269,27 @@ def clearance_evaluation(baseline_gap, candidate_gap, qualification):
   (3.0, 4.5, True, 'PASS', 'NO_FLAG'),
   (1.0, 3.0, False, 'INCONCLUSIVE', 'NO_FLAG'),
   (3.0, 1.99, True, 'FAIL', 'REVIEW'),
+  (3.0, 0.01, False, 'INCONCLUSIVE', 'REVIEW'),
+  (3.0, 1.99, False, 'INCONCLUSIVE', 'REVIEW'),
+  (3.0, 2.0, False, 'INCONCLUSIVE', 'REVIEW'),
+  (3.0, 2.0, True, 'PASS', 'REVIEW'),
 ])
 def test_clearance_evaluation_does_not_use_reference_as_safety_oracle(baseline, candidate, qualified, expected, history):
   qualification = {'status': 'QUALIFIED' if qualified else 'INCONCLUSIVE'}
   result = clearance_evaluation(baseline, candidate, qualification)
   assert result['clearance_verdict'] == expected
   assert result['status'] == history
+
+
+@pytest.mark.parametrize('qualified', [False, True], ids=['unqualified', 'qualified'])
+@pytest.mark.parametrize('baseline', [-2.0, 3.0], ids=['unsafe_baseline', 'safe_baseline'])
+@pytest.mark.parametrize('candidate', [-0.1, 0.0, float('nan'), float('inf'), float('-inf')],
+                         ids=['overlap', 'contact', 'nan', 'positive_inf', 'negative_inf'])
+def test_observed_invalid_or_nonpositive_clearance_is_always_a_hard_failure(baseline, candidate, qualified):
+  qualification = {'status': 'QUALIFIED' if qualified else 'INCONCLUSIVE'}
+  result = clearance_evaluation(baseline, candidate, qualification)
+  assert result['clearance_verdict'] == 'FAIL'
+  assert result['qualification'] == qualification
 
 
 @pytest.mark.parametrize('initial_gap,offset', [(1.0, 0.0), (6.0, float('nan')), (6.0, 2.5)])
