@@ -12,6 +12,7 @@ from opendbc.car import structs
 from opendbc.car.honda.values import CAR
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL
+from openpilot.selfdrive.controls.lib.longcontrol import ROLLING_STOP_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_planner import should_stop_for_close_lead
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params

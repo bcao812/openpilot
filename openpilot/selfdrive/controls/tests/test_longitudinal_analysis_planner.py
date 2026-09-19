@@ -7,13 +7,13 @@ from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR
 from openpilot.cereal import log
 from openpilot.common.hardware.hw import Paths
+from openpilot.common.longitudinal_logging import observe
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import N, T_IDXS
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner, PASSIVE_PITCH_VERSION
-from openpilot.selfdrive.controls.lib.longitudinal_observation import observe
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import reference_requests_departure
