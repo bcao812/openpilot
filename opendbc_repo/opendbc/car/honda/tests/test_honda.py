@@ -61,9 +61,9 @@ class AccFaultHarness:
 
 class TestHondaStartupAccFaultMask(unittest.TestCase):
   """
-  Bosch Hondas can still report the previous drive's ACC fault for the first seconds after
-  ignition. accFaulted is not reversible until the car goes offroad, so it is suppressed inside
-  a startup window and engagement is blocked through cruiseState.available instead.
+  The Bosch startup grace period blocks engagement through cruiseState.available while a
+  raw brake/cruise fault is present. After the timer and a clean frame, faults are reported
+  through accFaulted normally. This host-state policy does not clear vehicle ECU DTCs.
   """
 
   # radarless reads CRUISE_FAULT_STATUS with stock ACC; radar Bosch needs alpha long to derive a fault

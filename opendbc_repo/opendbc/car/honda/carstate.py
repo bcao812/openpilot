@@ -204,11 +204,12 @@ class CarState(CarStateBase, CarStateExt):
     ret.cruiseState.enabled = cp.vl["POWERTRAIN_DATA"]["ACC_STATUS"] != 0
     ret.cruiseState.available = bool(cp.vl[self.car_state_scm_msg]["MAIN_ON"])
 
-    # Bosch cars can report a fault left over from the previous drive for the first few
-    # seconds after startup. accFaulted is not reversible until the car goes offroad, so a
-    # fault seen inside that window is suppressed and engagement is blocked via
-    # cruiseState.available instead. Once the window expires the first clean frame latches
-    # initial_accFault_cleared and normal fault reporting resumes for the rest of the drive.
+    # This changes openpilot's fault/engagement state only. It does not clear ECU DTCs
+    # or send a request to dismiss warnings on the vehicle's instrument cluster.
+    # During the Bosch startup grace period, a raw brake/cruise fault blocks engagement
+    # through cruiseState.available instead of accFaulted. Once the timer expires, the
+    # first clean frame latches initial_accFault_cleared and normal fault reporting
+    # resumes for the rest of the drive. A fault that never clears keeps engagement blocked.
     if ret.accFaulted:
       if (self.CP.flags & HondaFlags.BOSCH) and not self.initial_accFault_cleared:
         ret.accFaulted = False
