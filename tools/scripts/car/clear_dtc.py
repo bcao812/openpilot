@@ -73,7 +73,7 @@ def clear_and_verify(client, dtc, output, report):
 
 def main(argv=None):
   parser = argparse.ArgumentParser(description=__doc__, epilog=(
-    "Single-DTC groupOfDTC support is ECU-specific. Status bits 0x47 must be supported; "
+    "Single-DTC groupOfDTC support is ECU-specific. Status bits 0x47 must be supported; " +
     "all reported DTCs must have reliable inactive/test-complete status. There is no all-DTC fallback."))
   add_connection_arguments(parser)
   parser.add_argument("--dtc", required=True, type=single_dtc, help="full raw DTC previously read from this ECU (0xXXXXXX)")
