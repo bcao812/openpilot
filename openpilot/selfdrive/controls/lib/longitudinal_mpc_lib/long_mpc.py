@@ -347,6 +347,7 @@ class LongitudinalMpc:
     self.effective_rest_node = None
     self.effective_rest_state = 'none'
     self.effective_rest_reason = ''
+    self.rest_recovery_position_limit = None
     self.diagnostic_rest_goal = None
     self.diagnostic_reference_weights = None
     self.diagnostic_reference_bounds = None
@@ -651,12 +652,14 @@ class LongitudinalMpc:
     return states, jerks
 
   @classmethod
-  def scheduled_rest_trajectory_error(cls, initial_state, states, jerks, node, parameters, *, tolerance):
+  def scheduled_rest_trajectory_error(cls, initial_state, states, jerks, node, parameters, *, tolerance,
+                                      recovery_position_limit=None):
     """Check an entire scheduling witness or actual solution, not just its tail.
 
-    Acceleration and lead-danger rows are normally soft native constraints. A
-    new scheduling branch is admitted only when it satisfies those rows too;
-    this does not make them a separate physical safety guarantee in other modes.
+    Acceleration stays inside its envelope. The native soft following-distance
+    row must be nonnegative, or recover an existing deficit without increasing
+    it again. Recovery additionally stays behind both observed lead positions;
+    neither that geometry nor the soft row is a vehicle-response safety proof.
     """
     if (not isinstance(node, Integral) or isinstance(node, bool) or not 1 <= node <= N
         or states.shape != (N+1, X_DIM) or jerks.shape != (N,)
@@ -678,10 +681,30 @@ class LongitudinalMpc:
     if (np.any(states[:, 2] < parameters[:, 0] - tolerance)
         or np.any(states[:, 2] > parameters[:, 1] + tolerance)):
       return 'scheduled_rest_acceleration_envelope_violated'
-    danger_margin = ((parameters[:, 2] - states[:, 0])
-                     - parameters[:, 5] * get_safe_obstacle_distance(states[:, 1], parameters[:, 4])) / (states[:, 1] + 10.0)
-    if np.any(danger_margin < -tolerance):
-      return 'scheduled_rest_lead_danger_envelope_violated'
+    distance_margin = ((parameters[:, 2] - states[:, 0])
+                       - parameters[:, 5] * get_safe_obstacle_distance(states[:, 1], parameters[:, 4]))
+    initial_margin = ((parameters[0, 2] - initial_state[0])
+                      - parameters[0, 5] * get_safe_obstacle_distance(initial_state[1], parameters[0, 4]))
+    if initial_margin >= -tolerance * (initial_state[1] + 10.0):
+      # Keep the original admission rule when no existing deficit needs recovery.
+      if np.any(distance_margin / (states[:, 1] + 10.0) < -tolerance):
+        return 'scheduled_rest_lead_danger_envelope_violated'
+    else:
+      if (not isinstance(recovery_position_limit, (int, float, np.integer, np.floating))
+          or isinstance(recovery_position_limit, (bool, np.bool_))
+          or not np.isfinite(recovery_position_limit) or recovery_position_limit <= initial_state[0]):
+        return 'scheduled_rest_lead_danger_envelope_violated'
+      if cls.trajectory_maximum_position(states, jerks) > recovery_position_limit + tolerance:
+        return 'scheduled_rest_recovery_position_limit_violated'
+      # Carry a deficit in metres, not the speed-normalized residual: increasing
+      # speed must not create a larger distance allowance. Use the best deficit
+      # already reached, so recovery cannot be spent again or renewed after zero.
+      # The one fixed numerical allowance never accumulates across nodes.
+      deficit = np.maximum(0.0, -distance_margin)
+      best_previous = np.minimum.accumulate(np.concatenate(([-initial_margin], deficit[:-1])))
+      distance_tolerance = tolerance * (initial_state[1] + 10.0)
+      if np.any(deficit > best_previous + distance_tolerance):
+        return 'scheduled_rest_lead_danger_recovery_worsened'
     return ''
 
   def schedule_future_rest(self):
@@ -715,15 +738,24 @@ class LongitudinalMpc:
       else:
         states, jerks = primal
         arithmetic = self.rest_arithmetic_roundoff(np.concatenate((states.ravel(), jerks)))
-        reason = self.scheduled_rest_trajectory_error(self.x0, states, jerks, node, self.params, tolerance=arithmetic)
+        reason = self.scheduled_rest_trajectory_error(
+          self.x0, states, jerks, node, self.params, tolerance=arithmetic,
+          recovery_position_limit=getattr(self, 'rest_recovery_position_limit', None),
+        )
       candidates.append({'node': node, 'reason': reason})
       if not reason:
         self.effective_rest_node = node
         self.effective_rest_state = 'constrained'
+        initial_deficit = max(0.0, float(self.params[0, 5] * get_safe_obstacle_distance(self.x0[1], self.params[0, 4])
+                                         - (self.params[0, 2] - self.x0[0])))
+        recovering = initial_deficit > arithmetic * (self.x0[1] + 10.0)
         self.diagnostic_rest_goal.update(
           effectiveNativeNode=node, effectiveNativeTime=float(T_IDXS[node]), effectiveState='constrained',
           rescheduleDelay=float(T_IDXS[node] - goal.native_time_s),
           effectiveLateness=float(T_IDXS[node] - goal.remaining_time_s), scheduledPrimalVerified=True,
+          scheduledDangerPolicy='recover_initial_deficit' if recovering else 'nonnegative_margin',
+          initialDangerDeficitMeters=initial_deficit,
+          recoveryPositionLimit=getattr(self, 'rest_recovery_position_limit', None) if recovering else None,
         )
         return primal
     return None
@@ -757,6 +789,27 @@ class LongitudinalMpc:
           minimum = min(minimum, float(states[stage, 1] + states[stage, 2] * extremum
                                       + 0.5 * jerks[stage] * extremum**2))
     return minimum
+
+  @classmethod
+  def trajectory_maximum_position(cls, states, jerks):
+    """Include every constant-jerk position extremum and the residual-speed tail."""
+    maximum = float(np.max(states[:, 0]))
+    for state, jerk, duration in zip(states[:-1], jerks, np.diff(T_IDXS), strict=True):
+      maximum = max(maximum, float(cls.integrate_jerk(state, jerk, duration)[0]))
+      velocity, acceleration = state[1:]
+      roots = ()
+      if jerk == 0.0:
+        if acceleration != 0.0:
+          roots = (-velocity / acceleration,)
+      else:
+        discriminant = acceleration**2 - 2.0 * jerk * velocity
+        if discriminant >= 0.0:
+          numerator = -acceleration - np.copysign(np.sqrt(discriminant), acceleration)
+          roots = (numerator / jerk, 2.0 * velocity / numerator) if numerator != 0.0 else (0.0,)
+      for root in roots:
+        if 0.0 < root < duration:
+          maximum = max(maximum, float(cls.integrate_jerk(state, jerk, root)[0]))
+    return maximum
 
   @classmethod
   def rest_precision_control(cls, state, raw_jerk, duration, lower, upper):
@@ -1206,6 +1259,7 @@ class LongitudinalMpc:
     if not failure:
       failure = self.scheduled_rest_trajectory_error(
         self.x0, self.x_sol, self.j_solution, node, self.params, tolerance=QP_FEASIBILITY_TOL,
+        recovery_position_limit=self.rest_recovery_position_limit,
       )
     self.effective_rest_state = 'unsatisfied' if failure else 'satisfied'
     self.effective_rest_reason = failure
@@ -1237,6 +1291,7 @@ class LongitudinalMpc:
     self.effective_rest_node = None
     self.effective_rest_state = 'none'
     self.effective_rest_reason = ''
+    self.rest_recovery_position_limit = None
     self.diagnostic_rest_goal = None
     t_follow = get_T_FOLLOW(personality)
     self.solve_time = 0.0
@@ -1248,6 +1303,16 @@ class LongitudinalMpc:
       if lead.present and not np.all(np.isfinite([lead.dRel, lead.vLead, lead.aLeadK, lead.aLeadTau])):
         self.fail(MPC_INVALID_INPUT)
         return
+    present_leads = tuple(lead for lead in (radarstate.leadOne, radarstate.leadTwo) if lead.present)
+    if present_leads and all(lead.vLead >= 0.0 for lead in present_leads):
+      # Lock the geometry before process_lead clips an impossible close distance
+      # upward or adds a moving lead's stopping equivalence. Freezing each lead
+      # at its observed position is conservative only for non-reversing leads.
+      # CRASH_DISTANCE remains the existing geometric margin, not a certified
+      # road clearance or a replacement for the independent stopping contracts.
+      limit = self.x0[0] + min(lead.dRel for lead in present_leads) - CRASH_DISTANCE
+      if limit > self.x0[0]:
+        self.rest_recovery_position_limit = float(limit)
     with np.errstate(over='ignore', invalid='ignore'):
       lead_xv_0 = self.process_lead(radarstate.leadOne)
       lead_xv_1 = self.process_lead(radarstate.leadTwo)
