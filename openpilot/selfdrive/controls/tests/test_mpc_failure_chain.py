@@ -383,7 +383,12 @@ def test_real_controlsd_consumes_published_fault_status_and_manual_exit_before_c
   harness.plan.aTarget = -3.0
   for _ in range(20):
     harness.step()
-  assert harness.control.LoC.last_output_accel == -3.0
+  previous = harness.control.LoC.last_output_accel
+  previous_wire = harness.command.actuators.accel
+  assert ACCEL_MIN <= previous <= -3.0
+  assert previous_wire == pytest.approx(previous)
+  previous_can = can_from_car_control(harness.command, harness.car_state)
+  assert previous_can['ACCEL_COMMAND'] <= -3.0
   harness.events['longitudinalPlan'] = observations[0]['published'].as_builder()
   harness.plan = harness.events['longitudinalPlan'].longitudinalPlan
   harness.car_state.vEgo = 0.0
@@ -393,10 +398,11 @@ def test_real_controlsd_consumes_published_fault_status_and_manual_exit_before_c
   assert not harness.plan.shouldStop
   command, _ = harness.step()
   assert command.longActive
-  assert command.actuators.accel == -3.0
+  assert harness.control.LoC.last_output_accel == previous
+  assert command.actuators.accel == previous_wire
   assert not command.cruiseControl.resume
   can_values = can_from_car_control(command, harness.car_state)
-  assert can_values['ACCEL_COMMAND'] == -3.0
+  assert can_values['ACCEL_COMMAND'] == previous_can['ACCEL_COMMAND']
   assert can_values['BRAKE_REQUEST'] == 1 and can_values['GAS_COMMAND'] <= 0
 
   if manual in ('gas', 'brake'):

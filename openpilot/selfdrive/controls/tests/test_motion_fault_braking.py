@@ -360,6 +360,9 @@ def test_a_healthy_invalid_solver_plan_can_preserve_its_independent_braking_on_n
 ])
 def test_controlsd_uses_actual_input_health_not_only_the_producer_braking_flag(mode, health, service):
   harness = warm_controls(mode, 'track')
+  previous = harness.control.LoC.last_output_accel
+  assert CarControllerParams.BOSCH_ACCEL_MIN <= previous <= -0.4
+  assert harness.command.actuators.accel == pytest.approx(previous)
   wire_brake(harness)
   original_update = harness.control.sm.update_msgs
 
@@ -370,7 +373,8 @@ def test_controlsd_uses_actual_input_health_not_only_the_producer_braking_flag(m
   with patch.object(harness.control.sm, 'update_msgs', side_effect=unhealthy_update):
     command, motion = harness.step()
   assert motion.degraded
-  assert command.actuators.accel == pytest.approx(-0.4)
+  assert harness.control.LoC.last_output_accel == previous
+  assert command.actuators.accel == pytest.approx(previous)
   assert harness.control.LoC.motion_supervisor.degraded_braking_accel is None
 
 
@@ -384,6 +388,9 @@ def test_controlsd_uses_actual_input_health_not_only_the_producer_braking_flag(m
 ])
 def test_independent_braking_requires_known_boolean_health_when_the_normal_plan_is_unavailable(mode, health, service, value):
   harness = warm_controls(mode, 'track')
+  previous = harness.control.LoC.last_output_accel
+  assert CarControllerParams.BOSCH_ACCEL_MIN <= previous <= -0.4
+  assert harness.command.actuators.accel == pytest.approx(previous)
   wire_brake(harness)
   original_update = harness.control.sm.update_msgs
 
@@ -404,7 +411,8 @@ def test_independent_braking_requires_known_boolean_health_when_the_normal_plan_
     assert command.actuators.accel == pytest.approx(-3.0)
     assert harness.control.LoC.motion_supervisor.degraded_braking_accel == -3.0
   else:
-    assert command.actuators.accel == pytest.approx(-0.4)
+    assert harness.control.LoC.last_output_accel == previous
+    assert command.actuators.accel == pytest.approx(previous)
     assert harness.control.LoC.motion_supervisor.degraded_braking_accel is None
   assert not command.cruiseControl.resume
 
@@ -413,10 +421,14 @@ def test_independent_braking_requires_known_boolean_health_when_the_normal_plan_
 @pytest.mark.parametrize('field,value', [('canValid', False), ('vCruise', V_CRUISE_UNSET), ('vCruise', float('nan'))])
 def test_controlsd_checks_payload_vehicle_health_before_consuming_an_envelope(mode, field, value):
   harness = warm_controls(mode, 'track')
+  previous = harness.control.LoC.last_output_accel
+  assert CarControllerParams.BOSCH_ACCEL_MIN <= previous <= -0.4
+  assert harness.command.actuators.accel == pytest.approx(previous)
   wire_brake(harness)
   setattr(harness.car_state, field, value)
   command, motion = harness.step()
-  assert command.actuators.accel == pytest.approx(-0.4)
+  assert harness.control.LoC.last_output_accel == previous
+  assert command.actuators.accel == pytest.approx(previous)
   assert motion.degraded
   assert harness.control.LoC.motion_supervisor.degraded_braking_accel is None
 
@@ -619,13 +631,13 @@ def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_only
   assert stopping_can_frames == 50
   assert all(not row['can']['BRAKE_REQUEST'] or row['can']['GAS_COMMAND'] <= 0 for row in rows if row['can'] is not None)
   if withdrawal == 'forward':
-    # Twenty planner frames / one second remains the original release budget.
+    # The frozen one-second budget concerns stop ownership / TRACK, not a
+    # positive acceleration target or positive native gas by that deadline.
     assert any(row['release_allowed'] for row in rows if row['frame'] >= 30)
     assert rows[-1]['phase'] == MotionPhase.TRACK
     assert rows[-1]['state'] == LongCtrlState.pid
-    assert rows[-1]['target'] > 0.0 and rows[-1]['request'] > 0.0 and rows[-1]['applied'] > 0.0
-    final_can = next(row['can'] for row in reversed(rows) if row['can'] is not None)
-    assert final_can['GAS_COMMAND'] > 0 and not final_can['BRAKE_REQUEST']
+    assert not rows[-1]['resolved_stop']
+    assert not rows[-1]['owned_reasons'] & int(StopReason.E2E)
   else:
     assert rows[-1]['phase'] == MotionPhase.APPROACH
 
