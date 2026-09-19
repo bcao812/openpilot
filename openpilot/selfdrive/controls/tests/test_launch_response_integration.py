@@ -13,7 +13,7 @@ from opendbc.car.honda.values import CAR
 from openpilot.cereal import custom
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionPhase, MotionReferenceKind, StopReason
-from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ControlHarness, controller
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, controller
 
 
 INSTANCE_NS = 1_000_000_000
@@ -304,3 +304,82 @@ def test_restarting_producer_or_manual_reentry_cannot_inherit_signed_feedback(br
   assert harness.control.motion_phase == MotionPhase.OFF
   harness.step(0.3, restarted)
   assert harness.control.pid.i == 0.0
+
+
+@pytest.mark.parametrize('fresh', [False, True])
+def test_approach_same_producer_preserves_braking_for_cached_and_fresh_input(fresh):
+  harness = rolling_feedback(braking=True)
+  braking = forward_intent(reasons=StopReason.E2E, release_allowed=False)
+  before = harness.step(-0.5, braking)
+  correction = harness.control.pid.i
+  for _ in range(10):
+    assert harness.step(-0.5, braking, new_input=fresh) == pytest.approx(before)
+    assert harness.control.pid.i == pytest.approx(correction)
+    assert harness.control.motion_phase == MotionPhase.APPROACH
+    assert not harness.control.motion_input_constrained
+    assert not harness.control.launch_response.braking_handoff
+
+
+def test_approach_new_producer_hands_actual_brake_to_owner_without_inheriting_i():
+  harness = rolling_feedback(braking=True)
+  braking = forward_intent(reasons=StopReason.E2E, release_allowed=False)
+  before = harness.step(-0.5, braking)
+  assert before < -0.5 and harness.control.pid.i < 0.0
+  restarted = replace(braking, producer_instance_ns=INSTANCE_NS + 1)
+  for index in range(10):
+    assert harness.step(-0.5, restarted, new_input=index % 2 == 0) == pytest.approx(before)
+    assert harness.control.motion_phase == MotionPhase.APPROACH
+    assert not harness.control.motion_input_constrained  # restart itself is legitimate
+    assert harness.control.pid.i == 0.0
+    assert harness.control.launch_response.braking_handoff
+  assert harness.step(-2.0, restarted) == -2.0  # stronger braking is never delayed
+  assert harness.step(-0.3, restarted) == -2.0
+  release = replace(restarted, reasons=0, release_allowed=True)
+  assert -2.0 < harness.step(0.3, release) <= -1.92 + 1e-12
+  assert harness.control.motion_phase == MotionPhase.RELEASE
+  assert not harness.control.launch_response.braking_handoff
+  assert harness.control.pid.i == 0.0
+
+
+def test_approach_older_producer_uses_fault_envelope_after_clearing_i():
+  harness = rolling_feedback(braking=True)
+  braking = forward_intent(reasons=StopReason.E2E, release_allowed=False)
+  before = harness.step(-0.5, braking)
+  retired = replace(braking, producer_instance_ns=INSTANCE_NS - 1)
+  for _ in range(3):
+    assert harness.step(-0.5, retired) <= before
+    assert harness.control.motion_input_constrained
+    assert harness.control.pid.i == 0.0
+    assert not harness.control.launch_response.braking_handoff
+
+
+@pytest.mark.parametrize('clock', ['duplicate', 'backward', 'gap'])
+def test_approach_invalid_control_clock_uses_owned_brake_after_clearing_i(clock):
+  harness = rolling_feedback(braking=True)
+  braking = forward_intent(reasons=StopReason.E2E, release_allowed=False)
+  before = harness.step(-0.5, braking)
+  timestamp = {'duplicate': harness.now_ns, 'backward': harness.now_ns - 1,
+               'gap': harness.now_ns + 100_000_001}[clock]
+  assert harness.step(-0.5, braking, now_ns=timestamp) <= before
+  assert harness.control.motion_input_constrained
+  assert harness.control.pid.i == 0.0
+  assert not harness.control.launch_response.braking_handoff
+
+
+@pytest.mark.parametrize('learned_i_with_positive_output', [False, True])
+def test_cold_approach_or_prior_positive_output_does_not_gain_a_braking_handoff(learned_i_with_positive_output):
+  harness = ControlHarness()
+  harness.state.vEgo = 20.0
+  if learned_i_with_positive_output:
+    harness.state.aEgo = 0.6
+    for _ in range(200):
+      harness.step(0.5, forward_intent())
+    assert harness.control.pid.i < 0.0
+    assert harness.control.last_output_accel > 0.0
+  braking = forward_intent(reasons=StopReason.E2E, release_allowed=False, producer_instance_ns=INSTANCE_NS + 1)
+  before = harness.step(-0.5, braking)
+  assert before == -0.5
+  assert harness.control.pid.i == 0.0
+  assert not harness.control.launch_response.braking_handoff
+  assert before < harness.step(-0.3, braking) <= before + 0.08 + 1e-12
+  assert not harness.control.launch_response.braking_handoff

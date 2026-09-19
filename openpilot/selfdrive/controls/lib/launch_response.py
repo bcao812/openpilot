@@ -37,6 +37,11 @@ class LaunchResponse:
     return self._domain == 'launch'
 
   @property
+  def braking_handoff(self):
+    """Expired negative I was handed to the owner's current braking output."""
+    return self._domain == 'approach_handoff'
+
+  @property
   def bias(self):
     """Diagnostic alias; no second stored integral or launch correction."""
     return float(self._pid.i)
@@ -87,16 +92,22 @@ class LaunchResponse:
     self._pending = (baseline, candidate, qualify)
     return min(upper_limit, max(self._pid.neg_limit, base_output + candidate))
 
-  def freeze_braking(self, base_output, upper_limit, *, producer_instance_ns, now_ns):
+  def freeze_braking(self, base_output, upper_limit, *, producer_instance_ns, now_ns, braking_owned=False):
     """Carry only confirmed braking into APPROACH, without learning or drive.
 
     Timing and producer identity still apply. Actual HOLD, faults and manual
     revocation reset the state after the owner's stopping envelope takes over.
     """
     self._pending = None
-    if (not self._valid_values(base_output, upper_limit) or self._pid.neg_limit > upper_limit
+    had_braking = braking_owned is True and (self.braking_handoff or self._valid_values() and self.bias < 0.0)
+    if (not self._valid_values(base_output, upper_limit) or self._pid.neg_limit > upper_limit or type(braking_owned) is not bool
         or self._advance(producer_instance_ns, now_ns) is None):
       self.reset()
+      if had_braking:
+        # The new producer cannot inherit I. Its loss also cannot release
+        # the owner's existing stop. Keep only handoff provenance here;
+        # LongControl owns the actual last request until APPROACH ends.
+        self._domain = 'approach_handoff'
       return base_output
     self._domain = None
     self._positive_authorized = False

@@ -255,7 +255,12 @@ class LongControl:
           # entered APPROACH. Only its actual nonpositive I may carry over;
           # HOLD and faults already inherit last_output_accel before reset.
           output_accel = self.launch_response.freeze_braking(
-            base_output, accel_limits[1], producer_instance_ns=intent.producer_instance_ns, now_ns=now_ns)
+            base_output, accel_limits[1], producer_instance_ns=intent.producer_instance_ns, now_ns=now_ns,
+            braking_owned=self.last_output_accel < 0.0)
+          if self.launch_response.braking_handoff:
+            # A legitimate producer restart can leave the owner in APPROACH.
+            # Preserve its actual brake without transferring I to that source.
+            output_accel = min(output_accel, self.last_output_accel)
         # Isolated experiment only: one optional allocation stage after the
         # existing owner has accepted TRACK, before the existing upward limit.
         # It receives no authority to release, resume or change the intent.
