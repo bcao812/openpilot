@@ -264,6 +264,9 @@ class MotionSupervisor:
     self.creep_t = 0.0
     self.creep_total_t = 0.0
     self.creep_v = 0.0
+    self.creep_distance = 0.0
+    self._creep_last_v = 0.0
+    self._creep_progress_v = None
 
   @staticmethod
   def _timestamp_valid(timestamp) -> bool:
@@ -375,7 +378,7 @@ class MotionSupervisor:
       return min(CREEP_STOP_T, previous + min(DT_MDL, plan_step, model_step))
     return previous
 
-  def _update_creep(self, v_ego, a_target, allowed, elapsed):
+  def _update_creep(self, v_ego, a_target, allowed, elapsed, *, movement_evidence=False, fresh_input=False):
     if not allowed or not (0.0 <= v_ego < CREEP_SPEED and a_target < CREEP_ACCEL):
       self._reset_creep()
       return False
@@ -383,14 +386,39 @@ class MotionSupervisor:
       return True
     if self.creep_t == 0.0:
       self.creep_v = v_ego
+      self.creep_distance = 0.0
+      self._creep_last_v = v_ego
+      self._creep_progress_v = None
+    previous_speed = self._creep_last_v
+    previous_progress_speed = self._creep_progress_v
+    if fresh_input:
+      self._creep_progress_v = v_ego
     self.creep_t += elapsed
     self.creep_total_t += elapsed
+    self.creep_distance += 0.5 * (previous_speed + v_ego) * elapsed
+    self._creep_last_v = v_ego
     if self.creep_total_t >= CREEP_MAX_T - 1e-9:
+      return True
+    # The same qualified window has a motion budget: at its entry speed,
+    # CREEP_STOP_T would cover this distance. Spending it while speed is still
+    # rising cannot demonstrate progress toward stopping. Confirm that cause
+    # only across independently advancing plan/model pairs; repeated control
+    # consumption of one speed spike cannot itself add progress evidence.
+    # Keep the added budget in the existing rolling-speed domain; a near-zero
+    # anchor must not turn noise into a near-zero allowance. Pending movement
+    # evidence keeps its original confirmation opportunity; it does not gain
+    # release authority.
+    distance_exhausted = (fresh_input and not movement_evidence and self.creep_v >= STOP_SPEED
+                          and previous_progress_speed is not None and min(previous_progress_speed, v_ego) > self.creep_v
+                          and self.creep_distance > self.creep_v * CREEP_STOP_T + 1e-9)
+    if distance_exhausted:
       return True
     if self.creep_t > CREEP_STOP_T + 1e-9:
       if (self.creep_v - v_ego) * CREEP_FINISH_T < v_ego * CREEP_STOP_T:
         return True
       self.creep_t = 0.0
+      self.creep_distance = 0.0
+      self._creep_progress_v = None
     return False
 
   def _observe_inactive(self, v_ego, a_ego, a_target, intent, plan_time_ns, model_time_ns, now_ns, plan_valid, solver_status,
@@ -521,7 +549,8 @@ class MotionSupervisor:
     release_eligible = intent.release_allowed and not raw_reasons and stopped_phase
     self.release_lead_t = self._confirmation_time(self.release_lead_t, release_eligible, new_input, plan_step, model_step)
     following_moving_lead = self.moving_lead_t >= CREEP_STOP_T - 1e-9
-    creep_stop = self._update_creep(v_ego, a_target, intent.allow_creep and not following_moving_lead, elapsed_ns / 1e9)
+    creep_stop = self._update_creep(v_ego, a_target, intent.allow_creep and not following_moving_lead, elapsed_ns / 1e9,
+                                    movement_evidence=bool(intent.moving_lead or intent.release_allowed), fresh_input=new_input)
 
     reasons = raw_reasons
     if creep_stop:
