@@ -243,7 +243,11 @@ def test_published_fault_status_and_invalid_sentinel_survive_wire_round_trip(fai
     plan = event.longitudinalPlan
     assert not event.valid
     assert plan.solverStatus == status
-    assert np.all(np.asarray(plan.speeds) == 0.0)
+    # The planner's invalid publication retains measured motion; the native
+    # solver's zero sentinel is checked separately above, not a stopped car.
+    assert plan.reference.initialStateKnown
+    assert plan.reference.sourceVEgo == pytest.approx(0.2)
+    assert np.all(np.asarray(plan.speeds) == plan.reference.sourceVEgo)
     assert np.all(np.asarray(plan.accels) == 0.0)
     assert np.isfinite(plan.solverExecutionTime)
     assert plan.aTarget <= -1.5

@@ -12,7 +12,7 @@ from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.car.card import Car
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
-from openpilot.selfdrive.controls.lib.motion_supervisor import DEGRADED_ACCEL, MOTION_INTENT_VERSION, PLAN_LEASE_NS, StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import DEGRADED_ACCEL, MOTION_INTENT_VERSION, PLAN_LEASE_NS, MotionIntent, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 from openpilot.selfdrive.selfdrived.events import ET
 from openpilot.selfdrive.selfdrived.state import SOFT_DISABLE_TIME, StateMachine
@@ -495,6 +495,17 @@ def test_unified_consumer_uses_qualified_solver_failure_braking_without_a_positi
   harness.car_state.vEgo = speed
   harness.car_state.standstill = speed == 0.0
   harness.car_state.cruiseState.standstill = True
+  # Establish actual 100 Hz carState / 20 Hz plan reception while keeping the
+  # owner OFF. A first message alone cannot qualify independent fault braking.
+  harness.selfdrive_state.enabled = harness.selfdrive_state.active = False
+  harness.selfdrive_state.state = State.disabled
+  for frame in range(10):
+    harness.step(new_plan=frame % 5 == 0)
+  assert harness.motion.phase == 'off'
+  for service in ('carState', 'longitudinalPlan'):
+    assert all(getattr(harness.control.sm, health)[service] is True for health in ('seen', 'alive', 'freq_ok'))
+  harness.selfdrive_state.enabled = harness.selfdrive_state.active = True
+  harness.selfdrive_state.state = State.enabled
   harness.control.LoC.last_output_accel = 0.3
   harness.plan.aTarget = -0.5
   harness.plan.shouldStop = speed < 0.3
@@ -506,6 +517,9 @@ def test_unified_consumer_uses_qualified_solver_failure_braking_without_a_positi
   command, motion = harness.step()
   assert command.longActive
   assert motion.degraded
+  assert harness.control.reference_timing_check.valid
+  assert harness.plan.motionIntent.producerInstanceMonoTime == harness.plan.reference.producerInstanceMonoTime > 0
+  assert MotionIntent.from_message(harness.plan.motionIntent).is_braking_valid()
   assert harness.control.LoC.motion_supervisor.degraded_braking_accel == -0.5
   assert command.actuators.accel <= (-2.0 if speed == 0.0 else -0.5)
   assert not command.cruiseControl.resume

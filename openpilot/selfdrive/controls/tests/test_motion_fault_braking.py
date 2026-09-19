@@ -604,18 +604,28 @@ def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_only
         assert not candidate['release_allowed']
         assert candidate['resolved_stop']
       if previous['resolved_stop'] and not candidate['resolved_stop']:
-        assert candidate['release_allowed'] and candidate['target'] > 0.0
+        # Every case is still rolling. Qualified withdrawal may end APPROACH
+        # while the reference still requests braking; that is not propulsion.
+        assert candidate['release_allowed']
+        assert candidate['phase'] in (MotionPhase.RELEASE, MotionPhase.TRACK)
+        if candidate['target'] < 0.0:
+          assert candidate['request'] <= candidate['target'] + 1e-6
+          assert candidate['applied'] <= 0.0
       if candidate['resolved_stop']:
         assert candidate['request'] <= 0.0
         if candidate['can'] is not None:
           assert candidate['can']['GAS_COMMAND'] <= 0
     previous = candidate
   assert stopping_can_frames == 50
+  assert all(not row['can']['BRAKE_REQUEST'] or row['can']['GAS_COMMAND'] <= 0 for row in rows if row['can'] is not None)
   if withdrawal == 'forward':
     # Twenty planner frames / one second remains the original release budget.
     assert any(row['release_allowed'] for row in rows if row['frame'] >= 30)
     assert rows[-1]['phase'] == MotionPhase.TRACK
     assert rows[-1]['state'] == LongCtrlState.pid
+    assert rows[-1]['target'] > 0.0 and rows[-1]['request'] > 0.0 and rows[-1]['applied'] > 0.0
+    final_can = next(row['can'] for row in reversed(rows) if row['can'] is not None)
+    assert final_can['GAS_COMMAND'] > 0 and not final_can['BRAKE_REQUEST']
   else:
     assert rows[-1]['phase'] == MotionPhase.APPROACH
 

@@ -51,8 +51,13 @@ def follow_qualified_reference(state, acceleration):
   harness.state = state['carState']
   qualified = has_safe_moving_lead(state['radarState'], harness.state.vEgo, 0.5)
   assert qualified
-  intent = MotionIntent(moving_lead=qualified, reference_kind=int(MotionReferenceKind.MOVING))
-  outputs = [harness.step(acceleration, intent, new_input=tick % 5 == 0) for tick in range(2 * FRAMES_CAP * 5)]
+  intent = MotionIntent(moving_lead=qualified, reference_kind=int(MotionReferenceKind.MOVING),
+                        producer_instance_ns=harness.now_ns)
+  assert intent.is_valid()
+  outputs = []
+  for tick in range(2 * FRAMES_CAP * 5):
+    outputs.append(harness.step(acceleration, intent, new_input=tick % 5 == 0))
+    assert not harness.control.motion_input_constrained
   assert all(not (row['BRAKE_REQUEST'] and row['GAS_COMMAND'] > 0) for row in decoded_commands(outputs))
   return harness.control, outputs
 
