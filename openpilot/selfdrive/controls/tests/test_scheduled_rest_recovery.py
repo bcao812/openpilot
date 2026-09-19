@@ -5,6 +5,7 @@ synthetic stop references. They are not a replay or a vehicle-response model.
 """
 
 from dataclasses import asdict, replace
+import json
 from unittest.mock import patch
 
 import numpy as np
@@ -100,20 +101,85 @@ def test_recovered_distance_cannot_be_spent_again(early_deficit):
   deficit = np.zeros(N+1)
   deficit[:3] = early_deficit
   parameters = parameters_for_deficit(states, deficit)
-  assert check(states, jerks, parameters) == 'scheduled_rest_lead_danger_recovery_worsened'
+  # Both the improvement and rebound precede the declared arrival at node 7.
+  assert check(states, jerks, parameters, node=7) == 'scheduled_rest_lead_danger_recovery_worsened'
 
 
 def test_a_fixed_roundoff_allowance_cannot_accumulate_at_each_node():
   states, jerks = two_interval_stop()
+  arrival = 7
   tolerance = 1e-7
   distance_budget = tolerance * (states[0, 1] + 10.0)
   bounded = np.ones(N+1)
   bounded[1:4] += np.array([0.5, 0.75, 0.25]) * distance_budget
-  assert check(states, jerks, parameters_for_deficit(states, bounded), tolerance=tolerance) == ''
-  accumulating = 1.0 + np.arange(N+1) * (0.5 * distance_budget)
-  assert np.max(np.diff(accumulating)) < distance_budget
-  assert accumulating[-1] - accumulating[0] > distance_budget
-  assert check(states, jerks, parameters_for_deficit(states, accumulating), tolerance=tolerance) == 'scheduled_rest_lead_danger_recovery_worsened'
+  assert check(states, jerks, parameters_for_deficit(states, bounded), tolerance=tolerance, node=arrival) == ''
+  accumulating = np.ones(N+1)
+  accumulating[:arrival] += np.arange(arrival) * (0.5 * distance_budget)
+  accumulating[arrival:] = accumulating[arrival-1]
+  assert np.max(np.diff(accumulating[:arrival])) < distance_budget
+  assert accumulating[arrival-1] - accumulating[0] > distance_budget
+  assert check(states, jerks, parameters_for_deficit(states, accumulating), tolerance=tolerance, node=arrival) == 'scheduled_rest_lead_danger_recovery_worsened'
+
+
+def test_rest_precision_changes_only_arrival_headway_not_actual_state_or_geometry():
+  initial = np.array([0.0, 0.5 * REST_STATE_TOL, 0.0])
+  jerks = np.zeros(N)
+  states = integrate(initial, jerks)
+  arrival = 2
+  velocity_headway = LEAD_DANGER_FACTOR * (initial[1]**2 / 5.0 + 1.45 * initial[1])
+  deficit = np.full(N+1, 0.4)
+  deficit[:3] = 1.0, 0.2, 0.2 + velocity_headway
+  parameters = parameters_for_deficit(states, deficit)
+  before = states.copy(), jerks.copy(), parameters.copy()
+  # The actual arrival residual rises, and later headway changes remain visible;
+  # accepted resting state/geometry retain their separate original constraints.
+  assert deficit[arrival] > deficit[arrival-1]
+  assert np.max(deficit[arrival+1:]) > deficit[arrival]
+  ideal_rest_deficit = max(0.0, LEAD_DANGER_FACTOR * 6.0 - (parameters[arrival, 2] - states[arrival, 0]))
+  assert ideal_rest_deficit == pytest.approx(0.2, abs=1e-12)
+  assert check(states, jerks, parameters, node=arrival) == ''
+  for actual, expected in zip((states, jerks, parameters), before, strict=True):
+    np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize('cause', ['obstacle_moves_closer', 'ego_advances_after_lead_stops'])
+def test_arrival_keeps_real_position_and_obstacle_changes_in_the_deficit(cause):
+  if cause == 'obstacle_moves_closer':
+    states, jerks = two_interval_stop()
+    arrival = 2
+    deficit = np.full(N+1, 0.2)
+    deficit[0] = 1.0
+    parameters = parameters_for_deficit(states, deficit)
+    assert check(states, jerks, parameters, node=arrival) == ''
+    parameters[arrival, 2] -= 0.1
+  else:
+    # Before arrival the obstacle advances with the ego; it then holds its
+    # previous position. Actual integrated ego displacement must still count.
+    initial = np.array([0.0, 0.5 * REST_STATE_TOL, 0.0])
+    jerks = np.zeros(N)
+    states = integrate(initial, jerks)
+    arrival = N
+    parameters = parameters_for_deficit(states, 1.0)
+    assert check(states, jerks, parameters, node=arrival) == ''
+    parameters[arrival, 2] = parameters[arrival-1, 2]
+    velocity_headway = LEAD_DANGER_FACTOR * (initial[1]**2 / 5.0 + 1.45 * initial[1])
+    assert states[arrival, 0] - states[arrival-1, 0] > velocity_headway
+  assert check(states, jerks, parameters, node=arrival) == 'scheduled_rest_lead_danger_recovery_worsened'
+
+
+@pytest.mark.parametrize('outside', ['velocity', 'acceleration'])
+def test_arrival_headway_precision_never_excuses_a_state_outside_the_rest_box(outside):
+  for scale, expected in [(0.5, ''), (1.01, 'scheduled_rest_state_bounds_violated')]:
+    magnitude = scale * REST_STATE_TOL
+    if outside == 'velocity':
+      initial, arrival = np.array([0.0, magnitude, 0.0]), 2
+    else:
+      initial = np.array([0.0, 0.5 * REST_STATE_TOL + magnitude * T_IDXS[-1], -magnitude])
+      arrival = N
+    jerks = np.zeros(N)
+    states = integrate(initial, jerks)
+    parameters = parameters_for_deficit(states, np.linspace(1.0, 0.0, N+1))
+    assert check(states, jerks, parameters, node=arrival) == expected
 
 
 def test_increasing_speed_cannot_hide_a_larger_metre_deficit():
@@ -301,7 +367,8 @@ def assert_independent_native_recovery(mpc, radar):
     best = min(best, value)
   diagnostic = {'failure': mpc.failure_reason, 'native_return': mpc.diagnostic_last_solver_return,
                 'effective_node': mpc.effective_rest_node, 'maximum_position': maximum_position,
-                'position_limit': position_limit, 'largest_deficit_rise_m': largest_rise,
+                'position_limit': position_limit, 'raw_deficit_m': deficit.tolist(),
+                'raw_full_horizon_deficit_rise_m': float(largest_rise),
                 'rest_diagnostic': mpc.diagnostic_rest_goal}
   assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == 0, diagnostic
   assert mpc.solution_status == 0 and mpc.effective_rest_state == 'satisfied', diagnostic
@@ -312,8 +379,9 @@ def assert_independent_native_recovery(mpc, radar):
   assert initial_deficit > 0.0
   assert mpc.rest_recovery_position_limit == pytest.approx(position_limit, abs=1e-12)
   assert maximum_position <= position_limit + QP_FEASIBILITY_TOL
-  assert largest_rise <= QP_FEASIBILITY_TOL * (mpc.x0[1] + 10.0), diagnostic
   np.testing.assert_allclose(mpc.x_sol, integrate(mpc.x0, mpc.j_solution), atol=QP_FEASIBILITY_TOL, rtol=0.0)
+  # Independently establish the whole resting tail before interpreting the
+  # arrival headway interval. Actual x/v/a and solver arrays are never replaced.
   assert np.max(np.abs(mpc.x_sol[node:, 1:])) <= REST_STATE_TOL + QP_FEASIBILITY_TOL
   assert np.max(mpc.a_solution[node:]) <= QP_FEASIBILITY_TOL
   assert np.all(mpc.a_solution >= mpc.params[:, 0] - QP_FEASIBILITY_TOL)
@@ -322,21 +390,50 @@ def assert_independent_native_recovery(mpc, radar):
     velocity = np.polynomial.Polynomial([state[1], state[2], 0.5 * jerk])
     points = [0.0, duration, *(root for root in velocity.deriv().roots() if np.isreal(root) and 0.0 < root < duration)]
     assert np.min(velocity(points)) >= -QP_FEASIBILITY_TOL
+  distance_budget = QP_FEASIBILITY_TOL * (mpc.x0[1] + 10.0)
+  best = initial_deficit
+  approach_rise = 0.0
+  for value in deficit[:node]:
+    approach_rise = max(approach_rise, value - best)
+    assert value <= best + distance_budget, diagnostic
+    best = min(best, value)
+  arrival_gap = float(mpc.params[node, 2] - mpc.x_sol[node, 0])
+  ideal_rest_headway = float(mpc.params[node, 5] * 6.0)
+  rest_box_headway_max = float(ideal_rest_headway + mpc.params[node, 5]
+                             * (REST_STATE_TOL**2 / 5.0 + mpc.params[node, 4] * REST_STATE_TOL))
+  ideal_arrival_deficit = max(0.0, ideal_rest_headway - arrival_gap)
+  diagnostic.update(
+    approach_deficit_rise_m=float(approach_rise), fixed_distance_roundoff_m=float(distance_budget),
+    best_approach_deficit_m=float(best), arrival_actual_position_m=float(mpc.x_sol[node, 0]),
+    arrival_obstacle_position_m=float(mpc.params[node, 2]), arrival_actual_velocity_m_s=float(mpc.x_sol[node, 1]),
+    arrival_actual_deficit_m=float(deficit[node]), arrival_ideal_rest_deficit_m=ideal_arrival_deficit,
+    arrival_headway_interval_m=[ideal_rest_headway, rest_box_headway_max],
+    arrival_deficit_interval_m=[ideal_arrival_deficit, max(0.0, rest_box_headway_max - arrival_gap)],
+    arrival_headway_box_width_m=rest_box_headway_max - ideal_rest_headway,
+    resting_tail_displacement_m=float(np.max(mpc.x_sol[node:, 0]) - mpc.x_sol[node, 0]),
+    scope='Actual approach deficit; arrival v=0 headway lower endpoint at actual x/obstacle; tail headway is diagnostic.',
+  )
+  assert ideal_arrival_deficit <= best + distance_budget, diagnostic
+  assert deficit[node] <= max(0.0, rest_box_headway_max - arrival_gap) + distance_budget, diagnostic
+  return {key: value for key, value in diagnostic.items() if key != 'rest_diagnostic'}
 
 
 @pytest.mark.parametrize('speed,acceleration,age_ns,stop_time,lead_values', J451_INPUTS)
-def test_recorded_j451_initial_state_and_present_leads_with_a_synthetic_stop_reference(speed, acceleration, age_ns, stop_time, lead_values):
+def test_recorded_j451_initial_state_and_present_leads_with_a_synthetic_stop_reference(speed, acceleration, age_ns, stop_time, lead_values, request):
   radar = radar_state()
   for lead, values in zip((radar.leadOne, radar.leadTwo), lead_values, strict=True):
     lead.present = True
     lead.dRel, lead.vLead, lead.aLeadK, lead.aLeadTau, lead.modelProb = values
   mpc = solve_synthetic_stop(speed, acceleration, age_ns, stop_time, radar)
-  assert_independent_native_recovery(mpc, radar)
+  diagnostic = assert_independent_native_recovery(mpc, radar)
+  request.node.user_properties.append(('headway_recovery_diagnostic', json.dumps(diagnostic, allow_nan=False)))
 
 
-def test_stationary_close_lead_requires_a_valid_native_stop_without_spending_a_creep_allowance():
-  # Counterexample control: unlike the three logged observations, this lead
-  # stays still. A permitted 0.001 m/s rest tail must not conceal new approach.
+def test_stationary_close_lead_requires_a_valid_native_stop_without_spending_a_creep_allowance(request):
+  # Same stationary fixture; no new displacement allowance. The original rest
+  # box and raw position limit govern the entire tail. Raw headway rise and
+  # the arrival's finite-precision headway interval remain in the JUnit record.
   radar = radar_state(distance=1.73, speed=0.0, acceleration=0.0)
   mpc = solve_synthetic_stop(0.07988708466291428, -1.2803713083267212, 860104, 0.03, radar)
-  assert_independent_native_recovery(mpc, radar)
+  diagnostic = assert_independent_native_recovery(mpc, radar)
+  request.node.user_properties.append(('headway_recovery_diagnostic', json.dumps(diagnostic, allow_nan=False)))

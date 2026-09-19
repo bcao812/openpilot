@@ -657,9 +657,10 @@ class LongitudinalMpc:
     """Check an entire scheduling witness or actual solution, not just its tail.
 
     Acceleration stays inside its envelope. The native soft following-distance
-    row must be nonnegative, or recover an existing deficit without increasing
-    it again. Recovery additionally stays behind both observed lead positions;
-    neither that geometry nor the soft row is a vehicle-response safety proof.
+    row must be nonnegative, or recover an existing deficit through arrival.
+    Arrival uses the headway interval of the already-validated rest precision;
+    the resting tail keeps its state and complete observed-geometry contracts.
+    Neither that geometry nor the soft row is a vehicle-response safety proof.
     """
     if (not isinstance(node, Integral) or isinstance(node, bool) or not 1 <= node <= N
         or states.shape != (N+1, X_DIM) or jerks.shape != (N,)
@@ -696,15 +697,21 @@ class LongitudinalMpc:
         return 'scheduled_rest_lead_danger_envelope_violated'
       if cls.trajectory_maximum_position(states, jerks) > recovery_position_limit + tolerance:
         return 'scheduled_rest_recovery_position_limit_violated'
-      # Carry a deficit in metres, not the speed-normalized residual: increasing
-      # speed must not create a larger distance allowance. Use the best deficit
-      # already reached, so recovery cannot be spent again or renewed after zero.
-      # The one fixed numerical allowance never accumulates across nodes.
-      deficit = np.maximum(0.0, -distance_margin)
+      # Carry the approach deficit in metres, not the speed-normalized residual.
+      # At arrival the accepted rest box represents ideal v=0: the headway term
+      # ranges from factor*STOP_DISTANCE to factor*safe_distance(REST_STATE_TOL).
+      # Test its lower endpoint using the ACTUAL position/obstacle. This changes
+      # only a soft preference's precision, never the trajectory, numerical
+      # tolerance or raw lead geometry. Real position loss is still counted.
+      deficit = np.maximum(0.0, -distance_margin[:node+1])
+      deficit[node] = max(0.0, parameters[node, 5] * STOP_DISTANCE - (parameters[node, 2] - states[node, 0]))
       best_previous = np.minimum.accumulate(np.concatenate(([-initial_margin], deficit[:-1])))
       distance_tolerance = tolerance * (initial_state[1] + 10.0)
       if np.any(deficit > best_previous + distance_tolerance):
         return 'scheduled_rest_lead_danger_recovery_worsened'
+      # After arrival, the full checked rest box, continuous velocity and raw
+      # geometry retain responsibility. A soft headway change cannot impose an
+      # extra exact-zero-displacement contract on the accepted resting tail.
     return ''
 
   def schedule_future_rest(self):
@@ -754,6 +761,8 @@ class LongitudinalMpc:
           rescheduleDelay=float(T_IDXS[node] - goal.native_time_s),
           effectiveLateness=float(T_IDXS[node] - goal.remaining_time_s), scheduledPrimalVerified=True,
           scheduledDangerPolicy='recover_initial_deficit' if recovering else 'nonnegative_margin',
+          scheduledRecoveryScope='through_arrival_with_rest_headway_precision' if recovering else None,
+          scheduledTailContract='rest_state_and_raw_lead_geometry' if recovering else None,
           initialDangerDeficitMeters=initial_deficit,
           recoveryPositionLimit=getattr(self, 'rest_recovery_position_limit', None) if recovering else None,
         )
