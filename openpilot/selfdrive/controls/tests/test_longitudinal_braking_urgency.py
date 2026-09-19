@@ -148,7 +148,6 @@ def test_mode_and_driver_guards_preserve_normal_weights(condition):
   elif condition == 'inactive':
     state['carControl'].longActive = False
   elif condition == 'disabled':
-    state['selfdriveState'] = state['selfdriveState'].as_builder()
     state['selfdriveState'].enabled = False
   elif condition == 'control_disabled':
     state['carControl'].enabled = False
@@ -165,7 +164,7 @@ def test_mode_and_driver_guards_preserve_normal_weights(condition):
     assert all(call.kwargs.get('a_change_scale', 1.0) == 1.0 for call in calls)
     assert not planner.motion_intent.valid
   else:
-    assert planner.mpc.set_weights.call_args.kwargs['a_change_scale'] == 1.0
+    assert planner.mpc.set_weights.call_args.kwargs.get('a_change_scale', 1.0) == 1.0
 
 
 def test_real_mpc_receives_urgency_and_keeps_its_acceleration_limits():

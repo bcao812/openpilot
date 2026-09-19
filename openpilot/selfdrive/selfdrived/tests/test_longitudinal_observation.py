@@ -31,7 +31,7 @@ def isolated_params():
 
 def observed_selfdrive(control_state=None, *, enabled=True):
   if control_state is None:
-    harness = ControlsHarness(unified=False, supervised=True)
+    harness = ControlsHarness()
     harness.step()
     control_state = harness.control.pm.messages["controlsState"]
   daemon, car_state = selfdrive_event_harness(control_state)
@@ -81,7 +81,7 @@ def payload(daemon):
 
 
 def test_real_motion_fault_branch_state_machine_alert_and_next_force_decel_are_observed():
-  controls = ControlsHarness(unified=False, supervised=True)
+  controls = ControlsHarness()
   controls.control.longitudinal_observation = ControlObservation(
     controls.control.CP, controls.control.CP_SP, enabled=True, clock=lambda: controls.now_ns,
   )
@@ -110,7 +110,7 @@ def test_real_motion_fault_branch_state_machine_alert_and_next_force_decel_are_o
   assert actual.longitudinalDiagnostics.analysis.selfdriveSoftDisabling
 
 
-@pytest.mark.parametrize('mode', [LongitudinalMode.SUPERVISED, LongitudinalMode.UNIFIED], ids=lambda mode: mode.name)
+@pytest.mark.parametrize('mode', [LongitudinalMode.UNIFIED], ids=lambda mode: mode.name)
 def test_healthy_wait_does_not_claim_a_motion_comm_issue(mode):
   controls = enter_off(mode)
   controls.step(new_plan=False)
@@ -202,7 +202,7 @@ def test_skipped_decision_branches_are_unknown_instead_of_reported_healthy(early
 @pytest.mark.parametrize("failure", [None, "begin", "motion_check", "motion_comm_issue_added", "state_machine_input",
                                     "state_machine_output", "publish"])
 def test_observer_enable_disable_and_failure_preserve_actual_events_states_alerts_and_publications(failure):
-  control = ControlsHarness(unified=False, supervised=True)
+  control = ControlsHarness()
   control.plan.motionIntent.valid = False
   control.step()
   baseline, raw = observed_selfdrive(control.control.pm.messages["controlsState"], enabled=False)

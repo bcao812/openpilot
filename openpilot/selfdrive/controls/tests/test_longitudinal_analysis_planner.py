@@ -180,7 +180,15 @@ def test_unified_observation_keeps_reference_and_admitted_model_constraint_separ
   assert not observed.analysis.referenceCandidates.known
   assert observed.modelAdmissionKnown and observed.e2eAllowed == admitted
   assert observed.sampledAccelKnown and observed.sampledAccel == 1.0
-  assert planner.output_a_target == (min(1.0, model_accel) if admitted else 1.0)
+  assert planner.reference_planner.reference_accel == 1.0
+  # Straight-line cruise at 20.2 m/s has a 0.928 m/s^2 upper bound. An
+  # admitted -2.0 model constraint is separate from the sampled MPC request.
+  expected_ceiling = model_accel if admitted else 0.928
+  assert observed.constraintKnown
+  assert observed.constraintAccel == pytest.approx(expected_ceiling)
+  assert planner.reference_planner.constraint_accel == pytest.approx(expected_ceiling)
+  assert planner.output_a_target == pytest.approx(min(1.0, expected_ceiling))
+  assert -3.5 <= planner.output_a_target <= 2.0
   assert trace.failures == 0 and trace.queue
 
 

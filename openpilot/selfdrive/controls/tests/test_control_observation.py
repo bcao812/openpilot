@@ -94,15 +94,15 @@ def test_actual_control_inputs_and_published_command_have_distinct_exact_identit
 
 
 @pytest.mark.parametrize("unified", [False, True])
-def test_observation_is_automatic_for_supported_car_independently_of_unified_mode(unified):
+def test_automatic_observation_matches_the_vehicle_scope(unified):
   harness = ControlsHarness(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   observer = ControlObservation.create(harness.control.CP, harness.control.CP_SP)
-  assert observer.recorder.enabled
+  assert observer.recorder.enabled == unified
   observer.recorder.clock = lambda: harness.now_ns
   harness.control.longitudinal_observation = observer
   harness.step()
   diagnostics = harness.control.pm.messages["controlsState"].controlsState.longitudinalDiagnostics
-  assert diagnostics.context.version == 1
+  assert diagnostics.context.version == (1 if unified else 0)
   assert diagnostics.unified == unified
 
 

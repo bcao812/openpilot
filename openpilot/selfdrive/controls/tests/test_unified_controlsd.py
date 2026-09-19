@@ -696,8 +696,8 @@ def test_rejected_release_needs_new_producer_ids_before_actual_resume(fault):
 
 
 @pytest.mark.parametrize('speed', [0.0, 0.2, 1.0, 20.0])
-def test_legacy_consumer_uses_solver_failure_without_a_positive_ramp_or_resume(speed):
-  harness = ControlsHarness(platform=CAR.HONDA_CIVIC_BOSCH)
+def test_unified_consumer_uses_qualified_solver_failure_braking_without_a_positive_ramp_or_resume(speed):
+  harness = ControlsHarness()
   harness.car_state.vEgo = speed
   harness.car_state.standstill = speed == 0.0
   harness.car_state.cruiseState.standstill = True
@@ -705,9 +705,14 @@ def test_legacy_consumer_uses_solver_failure_without_a_positive_ramp_or_resume(s
   harness.plan.aTarget = -0.5
   harness.plan.shouldStop = speed < 0.3
   harness.plan.solverStatus = 4
+  harness.plan.motionIntent.valid = False
+  harness.plan.motionIntent.brakingValid = True
+  harness.plan.motionIntent.brakingAccel = -0.5
   harness.events['longitudinalPlan'].valid = False
-  command, _ = harness.step()
+  command, motion = harness.step()
   assert command.longActive
+  assert motion.degraded
+  assert harness.control.LoC.motion_supervisor.degraded_braking_accel == -0.5
   assert command.actuators.accel <= (-2.0 if speed == 0.0 else -0.5)
   assert not command.cruiseControl.resume
   harness.car_state.brakePressed = True
@@ -734,7 +739,7 @@ def test_solver_failure_cannot_be_overridden_by_inconsistent_valid_flags():
 
 @pytest.mark.parametrize('pedal', ['gasPressed', 'brakePressed'])
 @pytest.mark.parametrize('unified', [False, True])
-def test_card_restricts_cached_control_before_controlsd_consumes_the_pedal_edge(pedal, unified):
+def test_card_pedal_edge_restriction_is_scoped_and_keeps_cached_control_immutable(pedal, unified):
   harness = ControlsHarness(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   harness.step()
   last_command = harness.control.pm.messages['carControl']
@@ -752,10 +757,13 @@ def test_card_restricts_cached_control_before_controlsd_consumes_the_pedal_edge(
   with patch('openpilot.selfdrive.car.card.REPLAY', False):
     card.controls_update(harness.car_state, card.sm['carControl'], custom.CarControlSP.new_message())
   applied = card.CI.apply.call_args.args[0]
-  assert not applied.longActive
-  assert applied.actuators.accel == 0.0
-  assert applied.actuators.longControlState == LongCtrlState.off
-  assert not applied.cruiseControl.resume
+  if unified:
+    assert not applied.longActive
+    assert applied.actuators.accel == 0.0
+    assert applied.actuators.longControlState == LongCtrlState.off
+    assert not applied.cruiseControl.resume
+  else:
+    assert applied.to_dict() == last_command.carControl.to_dict()
   assert applied.enabled == last_command.carControl.enabled
   assert applied.latActive == last_command.carControl.latActive
   assert card.sm['carControl'].longActive

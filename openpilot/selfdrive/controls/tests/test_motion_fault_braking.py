@@ -15,12 +15,15 @@ from openpilot.cereal import log, messaging
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
-from openpilot.selfdrive.controls.lib.motion_supervisor import DEGRADED_ACCEL, MOTION_INTENT_VERSION, PLAN_LEASE_NS, MotionIntent, MotionPhase, StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import (
+  DEGRADED_ACCEL, MOTION_INTENT_VERSION, PLAN_LEASE_NS, MotionIntent, MotionPhase, MotionReferenceKind, StopReason,
+)
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_modes import MOTION_MODES, mode_controls
 from openpilot.selfdrive.controls.tests.test_unified_controlsd import selfdrive_event_harness, serialized
 from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ControlHarness, controller
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner_owner, make_handover_state
+from openpilot.selfdrive.modeld.constants import ModelConstants
 
 
 MISSING_HEALTH = object()
@@ -223,11 +226,12 @@ def test_envelope_requires_explicit_health_gate_and_real_nonzero_solver_status(m
 
 
 @pytest.mark.parametrize('mode', MOTION_MODES)
-def test_a_structurally_valid_envelope_from_the_other_stage_cannot_deepen_braking(mode):
+@pytest.mark.parametrize('incoming_mode', [LongitudinalMode.LEGACY, LongitudinalMode.SUPERVISED])
+def test_a_retired_mode_envelope_is_invalid_and_cannot_deepen_braking(mode, incoming_mode):
   harness = warm_controller(mode)
-  other_mode = LongitudinalMode.SUPERVISED
-  intent = brake_intent(other_mode)
-  assert intent.is_braking_valid()
+  intent = brake_intent(incoming_mode)
+  assert not intent.is_braking_valid()
+  assert replace(intent, mode=int(mode)).is_braking_valid()
   assert harness.step(-3.5, intent, plan_valid=False, solver_status=4, braking_plan_valid=True) == -0.4
   assert harness.control.motion_degraded
   assert harness.control.motion_supervisor.degraded_braking_accel is None
@@ -513,7 +517,7 @@ def test_qualified_braking_watermarks_require_two_fresh_identities_and_keep_an_o
   assert not harness.control.LoC.motion_owner_established
 
 
-def e2e_actuation_arm(speed, model_request):
+def e2e_actuation_arm(speed, model_request, *, withdrawal):
   planner, owner = make_planner_owner(speed=speed, initial_accel=model_request)
   state = make_handover_state(speed=speed, target=speed + 10.0, experimental=True)
   dbc_name = DBC[planner.CP.carFingerprint][Bus.pt]
@@ -525,6 +529,13 @@ def e2e_actuation_arm(speed, model_request):
   for frame in range(50):
     state['modelV2'].action.shouldStop = 10 <= frame < 30
     state['modelV2'].action.desiredAcceleration = model_request if frame < 30 else 1.0
+    if frame >= 30 and withdrawal == 'forward':
+      # A rising source trajectory is independent departure evidence. Clearing
+      # shouldStop while leaving the original flat MOVING source is not.
+      model = state['modelV2']
+      model.velocity.x = [float(speed + sample) for sample in ModelConstants.T_IDXS]
+      model.position.x = [float(speed * sample + 0.5 * sample ** 2) for sample in ModelConstants.T_IDXS]
+      model.acceleration.x = [1.0] * len(ModelConstants.T_IDXS)
     state['controlsState'].longControlState = owner.long_control_state
     timestamp = advance(state, frame)
     planner.update(state, now_ns=timestamp)
@@ -555,6 +566,7 @@ def e2e_actuation_arm(speed, model_request):
         'frame': frame, 'tick': tick, 'target': float(plan.aTarget), 'plan_valid': bool(event.valid),
         'solver_status': int(plan.solverStatus), 'raw_reasons': int(plan.motionIntent.reasons),
         'release_allowed': bool(plan.motionIntent.releaseAllowed),
+        'reference_kind': int(plan.motionIntent.referenceKind),
         'owned_reasons': int(owner.motion_reasons), 'request': float(output), 'applied': float(native_output.accel),
         'state': owner.long_control_state, 'phase': owner.motion_phase, 'degraded': owner.motion_degraded,
         'resolved_stop': owner.resolved_should_stop, 'can': decoded,
@@ -564,8 +576,9 @@ def e2e_actuation_arm(speed, model_request):
 
 @pytest.mark.parametrize('speed', [1.99, 2.0, 2.01, 5.0, 20.0])
 @pytest.mark.parametrize('model_request', [-3.0, -0.5, -0.1, 0.3])
-def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_releases_on_qualified_withdrawal(speed, model_request):
-  rows = e2e_actuation_arm(speed, model_request)
+@pytest.mark.parametrize('withdrawal', ['forward', 'moving'])
+def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_only_releases_on_qualified_withdrawal(speed, model_request, withdrawal):
+  rows = e2e_actuation_arm(speed, model_request, withdrawal=withdrawal)
   assert len(rows) == 250
   stopping_can_frames = 0
   previous = None
@@ -585,6 +598,11 @@ def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_rele
         assert candidate['can']['ACCEL_COMMAND'] <= 0.0
     elif candidate['frame'] >= 30:
       assert not candidate['raw_reasons'] & int(StopReason.E2E)
+      expected_kind = MotionReferenceKind.FORWARD if withdrawal == 'forward' else MotionReferenceKind.MOVING
+      assert candidate['reference_kind'] == expected_kind
+      if withdrawal == 'moving':
+        assert not candidate['release_allowed']
+        assert candidate['resolved_stop']
       if previous['resolved_stop'] and not candidate['resolved_stop']:
         assert candidate['release_allowed'] and candidate['target'] > 0.0
       if candidate['resolved_stop']:
@@ -593,8 +611,13 @@ def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_rele
           assert candidate['can']['GAS_COMMAND'] <= 0
     previous = candidate
   assert stopping_can_frames == 50
-  assert rows[-1]['phase'] == MotionPhase.TRACK
-  assert rows[-1]['state'] == LongCtrlState.pid
+  if withdrawal == 'forward':
+    # Twenty planner frames / one second remains the original release budget.
+    assert any(row['release_allowed'] for row in rows if row['frame'] >= 30)
+    assert rows[-1]['phase'] == MotionPhase.TRACK
+    assert rows[-1]['state'] == LongCtrlState.pid
+  else:
+    assert rows[-1]['phase'] == MotionPhase.APPROACH
 
 
 def test_unified_high_speed_e2e_execution_tracks_the_braking_reference():

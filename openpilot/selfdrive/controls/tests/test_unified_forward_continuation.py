@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from opendbc.car.honda.values import CAR
 from openpilot.cereal import log
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_ACCEL, STOP_SPEED
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
@@ -11,6 +12,7 @@ from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_V
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import reference_requests_departure
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
+from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 
@@ -347,12 +349,38 @@ def test_reference_discontinuity_cannot_preserve_execution(monkeypatch, interrup
   assert planner.output_should_stop or not planner.motion_intent.valid
 
 
+@pytest.mark.parametrize('platform', [CAR.HONDA_CIVIC, CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CRV_HYBRID])
+def test_generic_legacy_platforms_do_not_construct_a_unified_continuation_owner(platform):
+  planner, _ = make_planner(platform=platform)
+  assert planner.longitudinal_mode == LongitudinalMode.LEGACY
+  assert not planner.unified
+  assert not hasattr(planner, 'reference_planner')
+
+
 @pytest.mark.parametrize('mode', [LongitudinalMode.LEGACY, LongitudinalMode.SUPERVISED])
-def test_continuation_exception_is_unified_only(monkeypatch, mode):
+def test_wrong_owner_wire_mode_revokes_continuation_and_preserves_consumers_hold(monkeypatch, mode):
   planner, state = context(monkeypatch)
-  planner.longitudinal_mode = mode
+  planner.update(state, now_ns=execution_time(planner, state, 1))
+  assert not planner.output_should_stop
+  assert planner.reference_planner._forward_execution_instance_ns > 0
+  now_ns = execution_time(planner, state, 2)
   state['controlsState'].motionState.planningMode = int(mode)
-  planner.reference_planner.update(state, now_ns=execution_time(planner, state, 1))
-  assert planner.output_should_stop
+  planner.update(state, now_ns=now_ns)
+  assert planner.longitudinal_mode == LongitudinalMode.UNIFIED
+  assert not planner.motion_intent.valid
   assert not planner.motion_intent.release_allowed
   assert planner.reference_planner._forward_execution_instance_ns == 0
+  assert planner.observation_result['values']['outcome'] == 'motion_owner_unavailable'
+
+  consumer = ControlsHarness()
+  consumer.hold()
+  consumer.plan.motionIntent.mode = int(mode)
+  consumer.plan.motionIntent.reasons = 0
+  consumer.plan.motionIntent.releaseAllowed = True
+  consumer.plan.aTarget = 1.0
+  command, motion = consumer.step()
+  assert consumer.control.longitudinal_mode_mismatch
+  assert command.longActive
+  assert command.actuators.accel <= -2.0
+  assert not command.cruiseControl.resume
+  assert motion.degraded and motion.resolvedStop

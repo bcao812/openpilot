@@ -73,8 +73,8 @@ class ControlHarness:
 def warm_tracking_harness(speed, acceleration):
   """Establish executed TRACK history; a manually seeded OFF request is not history."""
   harness = ControlHarness()
-  harness.state.vEgo = speed
-  harness.state.aEgo = acceleration
+  harness.state.vEgo = float(speed)
+  harness.state.aEgo = float(acceleration)
   for _ in range(20):
     harness.step(acceleration, MotionIntent(allow_creep=False))
   assert harness.control.motion_phase == MotionPhase.TRACK

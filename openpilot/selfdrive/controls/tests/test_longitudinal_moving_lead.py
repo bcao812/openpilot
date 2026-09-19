@@ -8,9 +8,11 @@ import pytest
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
 from openpilot.selfdrive.controls.lib.longitudinal_planner import has_safe_moving_lead
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionReferenceKind
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_handover_state, make_planner_owner
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_planner_creep import FRAMES_CAP
+from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import decoded_commands
 
 
 def following_state(v_ego=1.0, *, experimental=True):
@@ -36,12 +38,30 @@ def follow(planner, owner, state, frames=2 * FRAMES_CAP, *, start=0):
   return outputs
 
 
+def follow_qualified_reference(state, acceleration):
+  """The original held-input owner contract, with its explicitly given reference.
+
+  These cases specified an MPC reference of -0.2/-0.27; they did not establish
+  that a fresh optimizer would choose it while speed and gap never respond.
+  The separate following plant tests the actual optimizer and delivered motion.
+  """
+  from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ControlHarness
+
+  harness = ControlHarness()
+  harness.state = state['carState']
+  qualified = has_safe_moving_lead(state['radarState'], harness.state.vEgo, 0.5)
+  assert qualified
+  intent = MotionIntent(moving_lead=qualified, reference_kind=int(MotionReferenceKind.MOVING))
+  outputs = [harness.step(acceleration, intent, new_input=tick % 5 == 0) for tick in range(2 * FRAMES_CAP * 5)]
+  assert all(not (row['BRAKE_REQUEST'] and row['GAS_COMMAND'] > 0) for row in decoded_commands(outputs))
+  return harness.control, outputs
+
+
 @pytest.mark.parametrize('e2e', [False, True])
 def test_sustained_moving_lead_does_not_create_an_open_loop_stop(e2e):
-  planner, owner = make_planner_owner(speed=1.0)
   state = following_state(experimental=e2e)
   before = deepcopy(state['radarState'].to_dict())
-  outputs = follow(planner, owner, state)
+  owner, outputs = follow_qualified_reference(state, -0.2)
   assert not owner.resolved_should_stop
   assert min(outputs) >= -3.5 and max(outputs) <= 2.0
   assert state['radarState'].to_dict() == before
@@ -49,12 +69,11 @@ def test_sustained_moving_lead_does_not_create_an_open_loop_stop(e2e):
 
 def test_logged_moving_lead_approach_does_not_force_a_stop():
   """Retain the 2026-09-10 route 5a input before the assisted launch at t=2202.815."""
-  planner, owner = make_planner_owner(speed=1.18)
   state = following_state(1.18)
   for lead in (state['radarState'].leadOne, state['radarState'].leadTwo):
     lead.dRel, lead.vLead, lead.vRel, lead.aLeadK = 6.1, 0.95, -0.23, -0.25
   state['modelV2'].action.desiredAcceleration = -0.27
-  outputs = follow(planner, owner, state)
+  owner, outputs = follow_qualified_reference(state, -0.27)
   assert max(outputs) <= -0.27
   assert not owner.resolved_should_stop
 
@@ -115,7 +134,6 @@ def test_following_bypass_requires_all_activation_and_risk_guards(condition):
   elif condition == 'long_inactive':
     state['carControl'].longActive = False
   elif condition == 'disabled':
-    state['selfdriveState'] = state['selfdriveState'].as_builder()
     state['selfdriveState'].enabled = False
   elif condition == 'control_disabled':
     state['carControl'].enabled = False

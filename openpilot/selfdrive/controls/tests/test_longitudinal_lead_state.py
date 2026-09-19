@@ -96,7 +96,6 @@ def test_driver_mode_and_health_guards_preserve_the_existing_state(condition):
   elif condition == 'inactive':
     state['carControl'].longActive = False
   elif condition == 'disabled':
-    state['selfdriveState'] = state['selfdriveState'].as_builder()
     state['selfdriveState'].enabled = False
   elif condition == 'control_disabled':
     state['carControl'].enabled = False

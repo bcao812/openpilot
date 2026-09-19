@@ -19,7 +19,9 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   MPC_INVALID_INPUT, MPC_INVALID_SOLUTION, MPC_SOLVER_ERROR, T_IDXS, LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import build_sm
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, StopReason
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_handover_state
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import (
   CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource as PlanSourceSP,
 )
@@ -102,31 +104,41 @@ def test_zero_sentinel_preserves_diagnostics_and_timing(status, reason):
 def failure_chain(speed, e2e, failure, *, latched=True, previous_target=-1.5, previous_output=None,
                   sp_target=None, model_target=0.3, model_healthy=True, wire_target=None, observations=None,
                   manual=None, recover_after=None, transmit_solver_status=True):
-  parameters = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC_BOSCH)
+  parameters = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
   parameters.openpilotLongitudinalControl = True
   parameters.longitudinalActuatorDelay = 0.5
-  parameters_sp = CarInterface.get_non_essential_params_sp(parameters, CAR.HONDA_CIVIC_BOSCH)
-  planner = LongitudinalPlanner(parameters, parameters_sp, init_v=speed, init_a=previous_target)
+  parameters_sp = CarInterface.get_non_essential_params_sp(parameters, CAR.HONDA_ACCORD)
+  initial = previous_target if np.isfinite(previous_target) else 0.0
+  planner = LongitudinalPlanner(parameters, parameters_sp, init_v=speed, init_a=initial)
   longitudinal = LongControl(parameters, parameters_sp)
+  assert planner.unified and longitudinal.unified
   controller = CarController({Bus.pt: DBC[parameters.carFingerprint][Bus.pt]}, parameters, parameters_sp)
   parser = CANParser(DBC[parameters.carFingerprint][Bus.pt], [('ACC_CONTROL', 50)], CanBus(parameters).pt)
   control_sp = structs.CarControlSP()
-  state = build_sm(speed, False)
-  for service in ('carState', 'carControl', 'controlsState', 'modelV2', 'selfdriveState'):
-    state[service] = state[service].as_builder()
-  state['carState'].aEgo = previous_target if np.isfinite(previous_target) else 0.0
-  state['carState'].standstill = speed == 0.0
+  state = make_handover_state(speed=speed, target=100.0 / 3.6, experimental=e2e)
+  state['carState'].aEgo = initial
   state['carState'].cruiseState.available = True
-  state['carControl'].enabled = True
-  state['carControl'].longActive = True
   state['modelV2'].action.desiredAcceleration = model_target
   state['modelV2'].action.shouldStop = False
-  planner.stop_latched = latched
-  planner.output_should_stop = latched
-  planner.a_cruise = 0.3
-  longitudinal.long_control_state = LongCtrlState.stopping if latched else LongCtrlState.pid
-  longitudinal.last_output_accel = previous_target if previous_output is None else previous_output
-  longitudinal.starting = latched
+
+  # An owned request must have actually passed through the current controller.
+  # Merely assigning legacy state/last_output fields cannot establish authority.
+  prior_output = previous_target if previous_output is None else previous_output
+  warm_request = float(prior_output) if np.isfinite(prior_output) else -0.5
+  state['carState'].standstill = latched and speed == 0.0
+  warm_intent = MotionIntent(reasons=int(StopReason.MPC) if latched else 0, allow_creep=False)
+  for tick in range(20):
+    timestamp = 2_000_000_000 - (20 - tick) * round(DT_CTRL * 1e9)
+    longitudinal.update(True, state['carState'], warm_request, latched, (ACCEL_MIN, ACCEL_MAX),
+                        intent=warm_intent, plan_time_ns=timestamp, model_time_ns=timestamp, now_ns=timestamp)
+  if not latched:
+    assert longitudinal.last_output_accel == pytest.approx(warm_request)
+  state['carState'].standstill = speed == 0.0
+  planner.output_a_target = previous_target
+  if not np.isfinite(prior_output):
+    # Deliberate stored-command corruption, after establishing valid ownership.
+    longitudinal.last_output_accel = prior_output
+
   wrapper = SimpleNamespace(out=state['carState'], v_cruise_factor=1.0, is_metric=False,
                             acc_hud={}, lkas_hud={}, stock_brake={})
   native_solver = inject_failure(planner.mpc, failure)
@@ -145,9 +157,9 @@ def failure_chain(speed, e2e, failure, *, latched=True, previous_target=-1.5, pr
        patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets), \
        patch.object(LongitudinalPlanner, 'is_e2e', return_value=e2e):
     for frame in range(round(1.0 / DT_CTRL)):
-      timestamp = 1_000_000_000 + frame * round(DT_CTRL * 1e9)
+      timestamp = 2_000_000_000 + frame * round(DT_CTRL * 1e9)
       active = not (manual == 'disable' and frame >= 25)
-      state['carControl'].enabled = active
+      state['carControl'].enabled = state['carControl'].longActive = active
       state['selfdriveState'].enabled = active
       if frame >= 25 and manual in ('gas', 'brake'):
         setattr(state['carState'], manual + 'Pressed', True)
@@ -155,22 +167,30 @@ def failure_chain(speed, e2e, failure, *, latched=True, previous_target=-1.5, pr
         planner.mpc.solver = native_solver
       state['controlsState'].longControlState = longitudinal.long_control_state
       if frame % round(DT_MDL / DT_CTRL) == 0:
-        state.logMonoTime['modelV2'] = timestamp
-        planner.update(state)
-        planner.publish(state, publisher)
+        for service in state.logMonoTime:
+          state.logMonoTime[service] = timestamp
+        planner.update(state, now_ns=timestamp + 500_000)
+        with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=timestamp + 1_000_000):
+          planner.publish(state, publisher)
         event = publisher.received
         plan = event.longitudinalPlan
         assert plan.solverStatus == planner.mpc.solution_status
         if plan.solverStatus != 0:
           assert not publisher.published.valid
-        plan_rows.append((plan.aTarget, plan.shouldStop, planner.stop_latched))
-      options = {'solver_status': int(plan.solverStatus), 'plan_valid': event.valid} if transmit_solver_status else {}
+        plan_rows.append((plan.aTarget, plan.shouldStop, longitudinal.resolved_should_stop))
+      options = {
+        'intent': MotionIntent.from_message(plan.motionIntent), 'plan_time_ns': event.logMonoTime,
+        'model_time_ns': plan.modelMonoTime, 'now_ns': timestamp + 2_000_000,
+        'plan_valid': event.valid, 'braking_plan_valid': state.all_checks(['carState']),
+      }
+      if transmit_solver_status:
+        options['solver_status'] = int(plan.solverStatus)
       command = float(longitudinal.update(active, state['carState'], plan.aTarget, plan.shouldStop,
                                            (ACCEL_MIN, ACCEL_MAX), **options))
       commands.append(command)
       control_rows.append(longitudinal.long_control_state)
       control = state['carControl'].as_reader().as_builder()
-      control.longActive = active and not (plan.solverStatus != 0 and (state['carState'].gasPressed or state['carState'].brakePressed))
+      control.longActive = active and not (state['carState'].gasPressed or state['carState'].brakePressed)
       control.actuators.accel = command
       control.actuators.longControlState = longitudinal.long_control_state
       _, messages = controller.update(control.as_reader(), control_sp, wrapper, timestamp)
@@ -188,10 +208,10 @@ def failure_chain(speed, e2e, failure, *, latched=True, previous_target=-1.5, pr
 @pytest.mark.parametrize('speed', [0.0, 0.05, 0.2, 0.29])
 @pytest.mark.parametrize('e2e', [False, True])
 @pytest.mark.parametrize('failure', ['solver_status', 'nonfinite_solution'])
-def test_native_failure_cannot_release_legacy_stop_or_emit_honda_gas(speed, e2e, failure):
+def test_native_failure_cannot_release_the_owned_stop_or_emit_honda_gas(speed, e2e, failure):
   planner, longitudinal, plan_rows, control_rows, commands, can_rows = failure_chain(speed, e2e, failure)
-  assert not planner.unified and not longitudinal.unified
-  assert all(target <= 0.0 and stopping and latched for target, stopping, latched in plan_rows), plan_rows
+  assert planner.unified and longitudinal.unified
+  assert all(target <= 0.0 and owned_stop for target, _, owned_stop in plan_rows), plan_rows
   assert all(value == LongCtrlState.stopping for value in control_rows), control_rows
   assert all(ACCEL_MIN <= command <= 0.0 for command in commands), commands
   assert can_rows
@@ -204,7 +224,7 @@ def test_native_failure_cannot_release_legacy_stop_or_emit_honda_gas(speed, e2e,
 def test_unlatched_failure_never_weakens_braking_or_requests_gas(speed, previous_target):
   planner, longitudinal, plan_rows, _, commands, can_rows = failure_chain(
     speed, False, 'solver_status', latched=False, previous_target=previous_target)
-  assert not planner.unified and not longitudinal.unified
+  assert planner.unified and longitudinal.unified
   bound = min(previous_target, -0.5)
   assert all(target <= bound for target, _, _ in plan_rows), plan_rows
   assert all(ACCEL_MIN <= command <= bound for command in commands), commands
@@ -227,7 +247,8 @@ def test_published_fault_status_and_invalid_sentinel_survive_wire_round_trip(fai
     assert np.all(np.asarray(plan.accels) == 0.0)
     assert np.isfinite(plan.solverExecutionTime)
     assert plan.aTarget <= -1.5
-    assert plan.shouldStop
+    assert not plan.motionIntent.valid
+    assert row['control_state'] == LongCtrlState.stopping
     assert row['command'] <= -1.5
 
 
@@ -243,12 +264,13 @@ def test_wire_fault_preserves_stronger_loc_request_than_the_planner_request(spee
   assert all(row['ACCEL_COMMAND'] == -3.0 and row['BRAKE_REQUEST'] == 1 and row['GAS_COMMAND'] <= 0 for row in can_rows)
 
 
-def test_omitting_fault_status_is_detectable_even_when_the_scalar_target_is_negative():
+def test_other_invalid_wire_evidence_preserves_braking_when_fault_status_is_omitted():
   _, _, _, _, commands, _ = failure_chain(
     20.0, False, 'solver_status', latched=False, previous_target=-0.5, previous_output=-3.0,
     transmit_solver_status=False)
-  assert commands[0] == -3.0 + STARTING_ACCEL_RATE * DT_CTRL
-  assert commands[0] > -3.0
+  # Current protocol has independent publication and intent validity. Omitting
+  # the numeric diagnostic alone must not turn their invalid packet healthy.
+  assert all(command == -3.0 for command in commands)
 
 
 @pytest.mark.parametrize('wire_target', [float('nan'), float('inf'), -float('inf'), 2.0])
@@ -352,14 +374,17 @@ def test_real_controlsd_consumes_published_fault_status_and_manual_exit_before_c
 
   observations = []
   failure_chain(20.0, False, 'solver_status', latched=False, previous_target=-0.5, observations=observations)
-  harness = ControlsHarness(platform=CAR.HONDA_CIVIC_BOSCH)
+  harness = ControlsHarness()
+  harness.car_state.vEgo = 20.0
+  harness.plan.aTarget = -3.0
+  for _ in range(20):
+    harness.step()
+  assert harness.control.LoC.last_output_accel == -3.0
   harness.events['longitudinalPlan'] = observations[0]['published'].as_builder()
   harness.plan = harness.events['longitudinalPlan'].longitudinalPlan
   harness.car_state.vEgo = 0.0
   harness.car_state.standstill = True
   harness.car_state.cruiseState.standstill = True
-  harness.control.LoC.last_output_accel = -3.0
-  harness.control.LoC.long_control_state = LongCtrlState.pid
   assert harness.plan.solverStatus == 4
   assert not harness.plan.shouldStop
   command, _ = harness.step()
