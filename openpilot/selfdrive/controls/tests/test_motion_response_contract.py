@@ -32,7 +32,7 @@ def test_response_permission_survives_real_wire_roundtrip(kind):
   planner.motion_intent = MotionIntent(response_kind=int(kind), producer_instance_ns=INSTANCE_NS)
   message = log.LongitudinalPlan.new_message()
   producer.publish(message)
-  assert MOTION_INTENT_VERSION == 5
+  assert MOTION_INTENT_VERSION == 6
   with log.LongitudinalPlan.from_bytes(message.to_bytes()) as decoded:
     assert decoded.motionIntent.responseKind == kind
     assert MotionIntent.from_message(decoded.motionIntent) == planner.motion_intent
@@ -40,7 +40,7 @@ def test_response_permission_survives_real_wire_roundtrip(kind):
 
 
 @pytest.mark.parametrize('changes', [
-  {'version': 4}, {'response_kind': True}, {'response_kind': 1.0}, {'response_kind': -1}, {'response_kind': 3},
+  {'version': 4}, {'version': 5}, {'response_kind': True}, {'response_kind': 1.0}, {'response_kind': -1}, {'response_kind': 4},
   {'producer_instance_ns': 0}, {'producer_instance_ns': None}, {'ready': False}, {'valid': False},
   {'reasons': int(StopReason.FORCE_DECEL)}, {'reference_kind': int(MotionReferenceKind.MOVING)}, {'braking_accel': -0.5},
 ])
@@ -49,12 +49,13 @@ def test_bad_absolute_response_contract_is_rejected(changes):
   assert not replace(intent, **changes).is_valid()
 
 
-def test_missing_field_and_old_version_never_acquire_an_absolute_response_contract():
+@pytest.mark.parametrize('old_version', [4, 5])
+def test_missing_field_and_old_version_never_acquire_an_absolute_response_contract(old_version):
   message = SimpleNamespace(version=MOTION_INTENT_VERSION, reasons=0, movingLead=False, releaseAllowed=False,
                             allowCreep=False, valid=True, mode=int(LongitudinalMode.UNIFIED), producerInstanceMonoTime=INSTANCE_NS)
   assert MotionIntent.from_message(message).response_kind == MotionResponseKind.NONE
   assert MotionIntent.from_message(message).is_valid()
-  message.version = 4
+  message.version = old_version
   message.responseKind = int(MotionResponseKind.ABSOLUTE_ACC)
   assert not MotionIntent.from_message(message).is_valid()
 
@@ -171,7 +172,7 @@ def test_fcw_does_not_withdraw_existing_qualified_braking(selected, e2e, target,
 
 
 @pytest.mark.parametrize('selected', [0, 1])
-def test_fcw_retires_absolute_acc_positive_response_even_with_a_qualified_lead(selected, ordinary_policy):
+def test_ordinary_acc_with_a_lead_cannot_gain_positive_i_before_or_during_fcw(selected, ordinary_policy):
   planner, control = make_planner_owner()
   state = make_state()
   set_lead((state['radarState'].leadOne, state['radarState'].leadTwo)[selected])
@@ -190,13 +191,60 @@ def test_fcw_retires_absolute_acc_positive_response_even_with_a_qualified_lead(s
       plan, outputs = consume(planner, control, state, frame)
       assert plan.aTarget > 0.0 and planner.fcw == (frame >= 3)
       assert planner.reference_planner.model_evidence is None
-      if frame < 3:
-        assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+      assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+      assert control.pid.i == 0.0
+      assert all(output <= plan.aTarget for output in outputs)
+
+
+@pytest.mark.parametrize('boundary', ['leadOne', 'leadTwo', 'fcw', 'force_decel', 'model', 'override', 'unhealthy', 'manual'])
+def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boundary, ordinary_policy):
+  planner, control = make_planner_owner()
+  state = make_state()
+  native_update = planner.mpc.update
+  e2e, fcw, healthy, target = False, False, True, 0.3
+
+  def update(*args, **kwargs):
+    native_update(*args, **kwargs)
+    # A cruise label alone must never hide either newly present lead.
+    planner.mpc.source = LongitudinalPlanSource.cruise
+    planner.mpc.crash_cnt = 4 if fcw else 0
+
+  with patch.object(planner, 'is_e2e', side_effect=lambda _: e2e), patch.object(planner.mpc, 'update', side_effect=update), \
+       patch.object(state, 'all_checks', side_effect=lambda *args, **kwargs: healthy), \
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan', side_effect=lambda *args, **kwargs: target):
+    for frame in range(6):
+      if frame == 3:
         assert control.pid.i > 0.0
-      else:
+        if boundary in ('leadOne', 'leadTwo'):
+          set_lead(getattr(state['radarState'], boundary), closing=0.0, gap=200.0)
+        elif boundary == 'fcw':
+          fcw = True
+        elif boundary == 'force_decel':
+          state['controlsState'].forceDecel = True
+        elif boundary == 'model':
+          e2e = True
+        elif boundary == 'override':
+          target = 3.0
+        elif boundary == 'unhealthy':
+          healthy = False
+        else:
+          state['carState'].brakePressed = True
+      state['controlsState'].longControlState = control.long_control_state
+      plan, outputs = consume(planner, control, state, frame)
+      if frame == 0:
         assert plan.motionIntent.responseKind == MotionResponseKind.NONE
         assert control.pid.i == 0.0
-        assert all(output <= plan.aTarget for output in outputs)
+      elif frame < 3:
+        assert plan.motionIntent.responseKind == MotionResponseKind.PURE_CRUISE
+        assert control.pid.i > 0.0
+      else:
+        expected = MotionResponseKind.ABSOLUTE_ACC if boundary in ('leadOne', 'leadTwo', 'fcw') else MotionResponseKind.NONE
+        assert plan.motionIntent.responseKind == expected
+        assert control.pid.i == 0.0
+        if boundary == 'model':
+          assert plan.motionIntent.referenceKind == MotionReferenceKind.MOVING
+        if boundary in ('leadOne', 'leadTwo', 'fcw', 'model'):
+          assert all(output <= plan.aTarget for output in outputs)
 
 
 def test_lead_loss_threshold_crossing_and_slot_change_recompute_permission_without_hidden_i(ordinary_policy):

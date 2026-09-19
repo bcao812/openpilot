@@ -214,16 +214,42 @@ def test_missing_response_domain_cannot_infer_acc_from_measurement(measured):
 
 
 @pytest.mark.parametrize('measured', [-0.25, 0.25])
-def test_explicit_absolute_acc_learns_both_signs_without_departure_permission(measured):
+def test_explicit_pure_cruise_learns_both_signs_without_departure_permission(measured):
   harness = FeedbackHarness()
   for _ in range(100):
-    harness.step(base=0.0, target=0.0, measured=measured, rolling=True, forward=False, response_domain=ResponseDomain.ABSOLUTE_ACC)
+    harness.step(base=0.0, target=0.0, measured=measured, rolling=True, forward=False, response_domain=ResponseDomain.PURE_CRUISE)
   assert harness.pid.i * measured < 0.0
   assert harness.step(base=0.0, target=0.0, measured=measured, rolling=True, forward=False) == 0.0
-  assert harness.pid.i == 0.0  # model preference inherits neither ACC sign
+  assert harness.pid.i == 0.0  # model preference inherits neither cruise sign
 
 
-@pytest.mark.parametrize('response_domain', [ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING])
+@pytest.mark.parametrize('target', [-0.3, 0.0, 0.3])
+def test_ordinary_acc_never_learns_positive_i_but_can_correct_excess_response_at_any_target(target):
+  harness = FeedbackHarness()
+  for _ in range(100):
+    assert harness.step(base=target, target=target, measured=target - 0.25, rolling=True,
+                        response_domain=ResponseDomain.ABSOLUTE_ACC) == target
+  for _ in range(100):
+    harness.step(base=target, target=target, measured=target + 0.25, rolling=True,
+                 response_domain=ResponseDomain.ABSOLUTE_ACC)
+  assert harness.pid.i < 0.0
+
+
+def test_pure_cruise_net_acceleration_zero_crossing_keeps_i_until_risk_domain_takes_over():
+  harness = FeedbackHarness()
+  for _ in range(100):
+    harness.step(base=0.0, target=0.0, measured=-0.25, rolling=True, response_domain=ResponseDomain.PURE_CRUISE)
+  learned = harness.pid.i
+  assert learned > 0.0
+  assert harness.step(base=-0.001, target=-0.001, measured=-0.25, rolling=True,
+                      response_domain=ResponseDomain.PURE_CRUISE) > 0.0
+  assert harness.pid.i > learned
+  assert harness.step(base=-0.001, target=-0.001, measured=-0.25, rolling=True,
+                      response_domain=ResponseDomain.ABSOLUTE_ACC) == -0.001
+  assert harness.pid.i == 0.0
+
+
+@pytest.mark.parametrize('response_domain', [ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING, ResponseDomain.PURE_CRUISE])
 def test_explicit_rolling_domains_do_not_create_feedback_near_rest(response_domain):
   harness = FeedbackHarness()
   for _ in range(100):
@@ -234,7 +260,7 @@ def test_explicit_rolling_domains_do_not_create_feedback_near_rest(response_doma
 def test_lead_domain_retires_positive_effort_and_ends_with_its_negative_target():
   harness = FeedbackHarness()
   for _ in range(100):
-    harness.step(rolling=True, response_domain=ResponseDomain.ABSOLUTE_ACC)
+    harness.step(rolling=True, response_domain=ResponseDomain.PURE_CRUISE)
   assert harness.pid.i > 0.0
   for _ in range(100):
     assert harness.step(base=-0.5, target=-0.5, rolling=True, response_domain=ResponseDomain.LEAD_BRAKING) < -0.5
@@ -284,9 +310,9 @@ def test_raw_saturated_feedforward_cannot_hide_or_manufacture_correction(base):
   harness = FeedbackHarness()
   for _ in range(200):
     harness.step(base=0.0, target=0.0, measured=math.copysign(0.3, -base), rolling=True, positive_allowed=True,
-                 response_domain=ResponseDomain.ABSOLUTE_ACC)
+                 response_domain=ResponseDomain.PURE_CRUISE)
   assert harness.pid.i != 0.0
-  output = harness.step(base=base, target=base, measured=base, rolling=True, response_domain=ResponseDomain.ABSOLUTE_ACC)
+  output = harness.step(base=base, target=base, measured=base, rolling=True, response_domain=ResponseDomain.PURE_CRUISE)
   assert output == (-3.5 if base < 0 else 2.0)
   assert harness.pid.i == 0.0
   assert harness.step(base=0.0, target=0.0, measured=0.0, rolling=True) == 0.0
@@ -330,7 +356,8 @@ def test_approach_cannot_freeze_braking_across_invalid_identity_or_time(fault):
 
 @pytest.mark.parametrize('delay,response_time', [(0.3, 0.2), (0.5, 0.4), (1.0, 0.8)])
 @pytest.mark.parametrize('offset', [-0.25, 0.0, 0.25])
-@pytest.mark.parametrize('response_domain', [ResponseDomain.MODEL, ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING])
+@pytest.mark.parametrize('response_domain', [ResponseDomain.MODEL, ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING,
+                                           ResponseDomain.PURE_CRUISE])
 def test_fixed_reference_delayed_response_respects_domain_through_disturbance_reversal(delay, response_time, offset, response_domain):
   """One fixed permission domain; unsupported correction signs stay forbidden.
 
@@ -354,12 +381,12 @@ def test_fixed_reference_delayed_response_respects_domain_through_disturbance_re
       assert harness.response.bias == harness.pid.i
       if response_domain == ResponseDomain.MODEL:
         assert harness.pid.i >= 0.0
-      elif response_domain == ResponseDomain.LEAD_BRAKING:
+      elif response_domain in (ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING):
         assert harness.pid.i <= 0.0
     expected_correction = -disturbance
     if response_domain == ResponseDomain.MODEL:
       expected_correction = max(expected_correction, 0.0)
-    elif response_domain == ResponseDomain.LEAD_BRAKING:
+    elif response_domain in (ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING):
       expected_correction = min(expected_correction, 0.0)
     assert max(abs(value - target - disturbance - expected_correction) for value in tail) < 0.005
     assert harness.pid.i == pytest.approx(expected_correction, abs=0.005)

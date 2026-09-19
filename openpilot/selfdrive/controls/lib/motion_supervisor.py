@@ -10,7 +10,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_ACCEL, CREEP_F
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
 
-MOTION_INTENT_VERSION = 5
+MOTION_INTENT_VERSION = 6
 PLAN_LEASE_NS = 250_000_000
 MODEL_LEASE_NS = 250_000_000
 MAX_CONTROL_GAP_NS = 100_000_000
@@ -37,6 +37,7 @@ class MotionResponseKind(IntEnum):
   NONE = 0
   ABSOLUTE_ACC = 1
   LEAD_BRAKING = 2
+  PURE_CRUISE = 3
 
 
 class StopReason(IntFlag):
@@ -152,7 +153,8 @@ class MotionIntent:
             and self.reference_kind in tuple(MotionReferenceKind)
             and isinstance(self.response_kind, int) and not isinstance(self.response_kind, bool)
             and self.response_kind in tuple(MotionResponseKind)
-            and (self.response_kind != MotionResponseKind.ABSOLUTE_ACC or self.reference_kind == MotionReferenceKind.UNKNOWN)
+            and (self.response_kind not in (MotionResponseKind.ABSOLUTE_ACC, MotionResponseKind.PURE_CRUISE)
+                 or self.reference_kind == MotionReferenceKind.UNKNOWN)
             and (self.reference_kind not in (MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.REST, MotionReferenceKind.NO_FORWARD)
                  or not self.release_allowed and not self.moving_lead)
             and type(self.rest_goal_rejected) is bool

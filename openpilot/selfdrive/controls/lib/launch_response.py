@@ -22,6 +22,7 @@ class ResponseDomain(IntEnum):
   MODEL = 1
   ABSOLUTE_ACC = 2
   LEAD_BRAKING = 3
+  PURE_CRUISE = 4
 
 
 class LaunchResponse:
@@ -134,11 +135,13 @@ class LaunchResponse:
     that producer instance. MOVING only retains/unwinds existing positive I.
     Rolling alone grants no drive permission. Near rest, ordinary tracking
     retains/unwinds its existing correction without learning another one.
-    An explicit absolute ACC target admits signed tracking correction while
-    rolling; a negative target still cannot spend positive correction.
-    Independently qualified lead braking admits only nonpositive correction
-    while its target remains negative. Model movement retains its original
-    nonnegative permission and cannot inherit either domain's correction.
+    Ordinary ACC admits only nonpositive correction, including compensation
+    for excess acceleration while its target is positive. Independently
+    qualified lead braking additionally requires a negative target.
+    Only explicit pure cruise admits signed rolling disturbance correction:
+    its target is net acceleration, so crossing zero does not reset I.
+    Model movement retains its original nonnegative permission and cannot
+    inherit another domain's correction.
     """
     self._pending = None
     lower_limit = self._pid.neg_limit
@@ -163,8 +166,9 @@ class LaunchResponse:
       self._positive_authorized = False
       if self.armed:
         self._domain = None
-    if a_target < 0.0 or response_domain == ResponseDomain.LEAD_BRAKING:
-      # A new braking target cannot spend previous positive effort.
+    nonpositive_response = response_domain in (ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING)
+    if nonpositive_response or model_response and a_target < 0.0:
+      # Risk/following domains cannot spend previous pure-cruise drive effort.
       self._pid.i = min(self.bias, 0.0)
       self._positive_authorized = False
       if self.armed:
@@ -190,7 +194,7 @@ class LaunchResponse:
       return base_output
     minimum = min(0.0, lower_limit - base_output)
     maximum = max(0.0, upper_limit - base_output)
-    can_learn_positive = rolling and (response_domain == ResponseDomain.ABSOLUTE_ACC
+    can_learn_positive = rolling and (response_domain == ResponseDomain.PURE_CRUISE
                                      or model_response and forward and (positive_allowed or self._positive_authorized))
     if self.armed:
       minimum = 0.0
@@ -199,7 +203,7 @@ class LaunchResponse:
     else:
       if model_response:
         minimum = 0.0
-      if a_target < 0.0 or response_domain == ResponseDomain.LEAD_BRAKING:
+      if nonpositive_response or model_response and a_target < 0.0:
         maximum = min(maximum, 0.0)
       elif not can_learn_positive:
         # Permission is independent of speed and reference kind. Continuing

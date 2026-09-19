@@ -1550,8 +1550,8 @@ struct LongitudinalMotionIntent {
   referenceKind @14 :UInt8;
   restGoalRejected @15 :Bool;
   producerInstanceMonoTime @16 :UInt64;
-  # Version 5 response permission, separate from model reference semantics.
-  # 0 NONE, 1 ABSOLUTE_ACC, 2 LEAD_BRAKING; absent evidence grants neither.
+  # Version 6 response permission, separate from model reference semantics.
+  # 0 NONE, 1 ABSOLUTE_ACC, 2 LEAD_BRAKING, 3 PURE_CRUISE; absent evidence grants none.
   responseKind @17 :UInt8;
 }
 

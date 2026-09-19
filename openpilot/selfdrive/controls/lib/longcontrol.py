@@ -222,7 +222,9 @@ class LongControl:
     if (response_available and not self.resolved_should_stop and not protocol_hold and not intent.reasons
         and self.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
         and self.motion_supervisor.rest_braking_accel_limit is None):
-      if intent.response_kind == MotionResponseKind.ABSOLUTE_ACC and self.motion_phase == MotionPhase.TRACK:
+      if intent.response_kind == MotionResponseKind.PURE_CRUISE and self.motion_phase == MotionPhase.TRACK:
+        response_domain = ResponseDomain.PURE_CRUISE
+      elif intent.response_kind == MotionResponseKind.ABSOLUTE_ACC and self.motion_phase == MotionPhase.TRACK:
         response_domain = ResponseDomain.ABSOLUTE_ACC
       elif (intent.response_kind == MotionResponseKind.LEAD_BRAKING and self.motion_phase == MotionPhase.TRACK
             and a_target < 0.0):

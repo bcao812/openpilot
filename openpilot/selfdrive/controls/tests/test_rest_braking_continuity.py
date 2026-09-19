@@ -180,7 +180,7 @@ def test_current_protocol_roundtrip_keeps_descriptions_and_instance_without_addi
   owner.publish(message)
   with log.LongitudinalPlan.from_bytes(message.to_bytes()) as decoded:
     assert MotionIntent.from_message(decoded.motionIntent) == intent
-    assert decoded.motionIntent.version == MOTION_INTENT_VERSION == 5
+    assert decoded.motionIntent.version == MOTION_INTENT_VERSION == 6
     assert decoded.motionIntent.reasons == intent.reasons == 0
 
 

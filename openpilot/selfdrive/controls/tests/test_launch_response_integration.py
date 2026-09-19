@@ -37,6 +37,10 @@ def absolute_intent(**changes):
                               producer_instance_ns=INSTANCE_NS), **changes)
 
 
+def pure_intent(**changes):
+  return replace(absolute_intent(response_kind=int(MotionResponseKind.PURE_CRUISE)), **changes)
+
+
 def start_release(control=None):
   harness = ControlHarness(control)
   harness.hold()
@@ -217,13 +221,15 @@ def test_real_acc_publication_without_model_reference_declares_signed_response(s
         plan, outputs = consume(planner, control, state, frame)
         assert planner.reference_planner.model_evidence is None
         assert plan.motionIntent.referenceKind == MotionReferenceKind.UNKNOWN
-        assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+        assert plan.motionIntent.responseKind == (MotionResponseKind.NONE if frame == 0 else MotionResponseKind.PURE_CRUISE)
+        if frame == 0:
+          assert control.pid.i == 0.0  # producer saw OFF; it cannot grant response during reset
         assert plan.motionIntent.valid and plan.solverStatus == 0
         assert control.motion_phase == MotionPhase.TRACK
         assert not control.motion_input_constrained
         if correction_sign < 0:
           assert all(output <= plan.aTarget for output in outputs)
-      assert feedback.call_count == 100
+      assert feedback.call_count == 95
       assert control.pid.i * correction_sign > 0.0
       assert not control.launch_response.armed
 
@@ -299,31 +305,32 @@ def test_lead_contract_cannot_continue_learning_after_negative_target_ends(targe
   assert not harness.control.motion_input_constrained
 
 
-def test_acc_positive_effort_is_not_model_departure_history_and_cannot_reduce_a_braking_target():
+def test_pure_cruise_positive_effort_is_not_model_departure_history_or_ordinary_acc_authority():
   harness = ControlHarness()
   harness.state.vEgo = 20.0
   for _ in range(100):
-    harness.step(0.3, absolute_intent())
+    harness.step(0.3, pure_intent())
   assert harness.control.pid.i > 0.0
   for _ in range(20):
     harness.step(0.3, forward_intent(release_allowed=False))
     assert harness.control.pid.i == 0.0
   for _ in range(100):
-    harness.step(0.3, absolute_intent())
+    harness.step(0.3, pure_intent())
   assert harness.control.pid.i > 0.0
   assert harness.step(-0.5, absolute_intent()) <= -0.5
   assert harness.control.pid.i <= 0.0
 
 
-def test_absolute_response_does_not_release_hold_or_learn_during_release():
+@pytest.mark.parametrize('intent_factory', [absolute_intent, pure_intent])
+def test_absolute_response_does_not_release_hold_or_learn_during_release(intent_factory):
   harness = ControlHarness()
   harness.hold()
   for _ in range(50):
-    assert harness.step(0.3, absolute_intent()) <= -0.2
+    assert harness.step(0.3, intent_factory()) <= -0.2
     assert harness.control.motion_phase == MotionPhase.HOLD
     assert harness.control.pid.i == 0.0
   for _ in range(50):
-    harness.step(0.3, absolute_intent(release_allowed=True))
+    harness.step(0.3, intent_factory(release_allowed=True))
     assert harness.control.pid.i == 0.0
     assert not harness.control.launch_response.armed
     if harness.control.motion_phase == MotionPhase.TRACK:
@@ -332,10 +339,10 @@ def test_absolute_response_does_not_release_hold_or_learn_during_release():
 
 
 @pytest.mark.parametrize('boundary', ['inactive', 'gas', 'brake', 'stale', 'mutated_contract'])
-def test_new_acc_permission_still_obeys_manual_transport_and_same_plan_identity(boundary):
+def test_pure_cruise_permission_still_obeys_manual_transport_and_same_plan_identity(boundary):
   harness = ControlHarness()
   harness.state.vEgo = 20.0
-  intent = absolute_intent()
+  intent = pure_intent()
   for _ in range(100):
     harness.step(0.3, intent)
   assert harness.control.pid.i > 0.0
@@ -355,6 +362,20 @@ def test_new_acc_permission_still_obeys_manual_transport_and_same_plan_identity(
     assert output == 0.0 and harness.control.motion_phase == MotionPhase.OFF
   else:
     assert output <= DEGRADED_ACCEL and harness.control.motion_input_constrained
+
+
+@pytest.mark.parametrize('reason', [StopReason.CRUISE, StopReason.FORCE_DECEL, StopReason.E2E])
+def test_stop_approach_cannot_spend_previous_pure_cruise_positive_i(reason):
+  harness = ControlHarness()
+  harness.state.vEgo = 20.0
+  for _ in range(100):
+    harness.step(0.3, pure_intent())
+  assert harness.control.pid.i > 0.0
+  stop = MotionIntent(reasons=int(reason), allow_creep=False, producer_instance_ns=INSTANCE_NS)
+  assert harness.step(-0.5, stop) <= -0.5
+  assert harness.control.pid.i == 0.0
+  assert harness.control.motion_phase == MotionPhase.APPROACH
+  assert not harness.control.motion_input_constrained
 
 
 @pytest.mark.parametrize('override', ['inactive', 'gas', 'brake'])

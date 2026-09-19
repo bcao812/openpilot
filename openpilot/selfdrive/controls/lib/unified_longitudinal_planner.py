@@ -534,14 +534,20 @@ class UnifiedLongitudinalPlanner:
       lead_sources = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
       lead_index = lead_sources.index(planner.mpc.source) if planner.mpc.source in lead_sources else None
       selected_lead = (state['radarState'].leadOne, state['radarState'].leadTwo)[lead_index] if lead_index is not None else None
-      if ((not planner.fcw or output < 0.0) and not self.e2e_allowed and evidence is None
+      if (not self.e2e_allowed and evidence is None
           and (planner.mpc.source == LongitudinalPlanSource.cruise or selected_lead is not None and selected_lead.present)):
         # Ordinary ACC owns an absolute speed/lead target. Missing model
         # semantics alone are not this certificate; policy, health and the
         # current unoverridden target must all retain their qualification.
-        # FCW rejects positive feedback, not an absolute braking target;
-        # the consumer already forbids positive I for every negative target.
+        # Ordinary ACC retains only braking correction, including for excess
+        # response to a positive target. FCW does not revoke this negative I.
         response_kind = MotionResponseKind.ABSOLUTE_ACC
+        if (not planner.fcw and planner.mpc.source == LongitudinalPlanSource.cruise
+            and not state['radarState'].leadOne.present and not state['radarState'].leadTwo.present):
+          # With no lead/model risk owner, correct net cruise acceleration in
+          # both directions. Its disturbance I may cross the target's zero;
+          # the appearance of either lead immediately withdraws this domain.
+          response_kind = MotionResponseKind.PURE_CRUISE
       elif (selected_lead is not None and output < 0.0
             and get_lead_braking_urgency(speed, output, state['radarState'], delay, lead_index=lead_index) > 0.0):
         # MPC source names one obstacle, not a causal braking proof. Require

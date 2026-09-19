@@ -29,7 +29,15 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import Cru
 
 
 def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady', speed_target=20.0, duration=80.0,
-                         response_time=0.4, lead_braking_duration=None, lead_slot='leadOne'):
+                         response_time=0.4, lead_braking_duration=None, lead_slot='leadOne', offset_profile=None):
+  # Optional, explicitly declared extra cases. None preserves every original
+  # plant input and the constant-offset arithmetic below.
+  if offset_profile is not None:
+    offset_profile = tuple(offset_profile)
+    if (not offset_profile or offset_profile[0][0] != 0.0 or not np.all(np.isfinite(offset_profile))
+        or any(current[0] >= following[0] for current, following in zip(offset_profile, offset_profile[1:]))
+        or offset_profile[-1][0] >= duration):
+      raise ValueError('Invalid declared disturbance profile')
   params = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
   params.openpilotLongitudinalControl = True
   params_sp = CarInterface.get_non_essential_params_sp(params, CAR.HONDA_ACCORD)
@@ -114,14 +122,20 @@ def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady'
                          'can_brake': bool(values['BRAKE_REQUEST']), 'can_gas': int(values['GAS_COMMAND'])})
       applied = delayed_commands.popleft()
       delayed_commands.append(control.actuators.accel)
-      acceleration += (applied + offset - acceleration) * DT_CTRL / response_time
+      disturbance = offset
+      if offset_profile is not None:
+        for start, value in offset_profile:
+          if timestamp < start:
+            break
+          disturbance = value
+      acceleration += (applied + disturbance - acceleration) * DT_CTRL / response_time
       speed = max(0.0, speed + acceleration * DT_CTRL)
       gap += (lead_speed - speed) * DT_CTRL
       history.append((timestamp, speed, command, gap))
   values = np.array(history)
   steady = values[values[:, 0] >= duration - 20.0]
   braking = values[(values[:, 0] >= 25.0) & (values[:, 2] < -1.0), 0]
-  return {'runtime_mode': planner.longitudinal_mode.name, 'gas_interceptor': bool(params_sp.enableGasInterceptor),
+  result = {'runtime_mode': planner.longitudinal_mode.name, 'gas_interceptor': bool(params_sp.enableGasInterceptor),
           'speed_error_kph': float((np.mean(steady[:, 1]) - speed_target) * 3.6),
           'minimum_speed': float(np.min(values[:, 1])),
           'speed_range_kph': float(np.ptp(steady[:, 1]) * 3.6), 'minimum_gap': float(np.min(values[:, 3])),
@@ -130,6 +144,17 @@ def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady'
           'brake_response': float(braking[0] - 25.0) if len(braking) else None,
           'switches': switch_metrics([row for row in can_rows if row['t'] >= 20.0]),
           'conflicts': sum(row['can_brake'] and row['can_gas'] > 0 for row in can_rows)}
+  if offset_profile is not None:
+    result['disturbance_windows'] = []
+    for index, (start, value) in enumerate(offset_profile):
+      end = offset_profile[index + 1][0] if index + 1 < len(offset_profile) else duration
+      tail = values[(values[:, 0] >= max(start, end - 20.0)) & (values[:, 0] < end)]
+      result['disturbance_windows'].append({
+        'start': start, 'end': end, 'offset': value,
+        'speed_error_kph': float((np.mean(tail[:, 1]) - speed_target) * 3.6),
+        'speed_range_kph': float(np.ptp(tail[:, 1]) * 3.6),
+      })
+  return result
 
 
 @pytest.mark.parametrize('offset,noise,delay,scenario,speed_target', [
@@ -148,6 +173,29 @@ def test_closed_loop_cruise_bounds(offset, noise, delay, scenario, speed_target)
   result = simulate_lead_cruise(**arguments)
   assert abs(result['speed_error_kph']) <= 1.1
   assert result['speed_range_kph'] <= 0.4
+  assert result['minimum_command'] >= -3.5
+  assert result['maximum_command'] <= 2.0
+  assert result['conflicts'] == 0
+
+
+@pytest.mark.parametrize('offset', [-0.25, 0.25])
+def test_pure_cruise_rejects_both_signed_disturbances_in_the_original_speed_tracking_plant(offset):
+  result = simulate_lead_cruise(offset=offset, scenario='no_lead')
+  assert abs(result['speed_error_kph']) <= 1.1
+  assert result['speed_range_kph'] <= 0.4
+  assert result['minimum_command'] >= -3.5
+  assert result['maximum_command'] <= 2.0
+  assert result['conflicts'] == 0
+
+
+@pytest.mark.parametrize('first_offset', [-0.25, 0.25])
+def test_pure_cruise_disturbance_reversal_recovers_in_every_declared_window(first_offset):
+  profile = ((0.0, first_offset), (40.0, 0.0), (80.0, -first_offset))
+  result = simulate_lead_cruise(scenario='no_lead', duration=120.0, offset_profile=profile)
+  assert len(result['disturbance_windows']) == len(profile)
+  for window in result['disturbance_windows']:
+    assert abs(window['speed_error_kph']) <= 1.1
+    assert window['speed_range_kph'] <= 0.4
   assert result['minimum_command'] >= -3.5
   assert result['maximum_command'] <= 2.0
   assert result['conflicts'] == 0
