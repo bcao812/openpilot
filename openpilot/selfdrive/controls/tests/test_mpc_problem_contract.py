@@ -22,9 +22,12 @@ class NativeProblemRecorder:
   def __init__(self, native):
     self.native = native
     self.cost_writes = []
+    self.constraint_writes = []
     self.costs = {}
     self.constraints = {}
+    self.input_buffers = {}
     self.solved_costs = []
+    self.before_solve = None
     self.failure = None
 
   def __getattr__(self, name):
@@ -33,14 +36,21 @@ class NativeProblemRecorder:
   def cost_set(self, stage, field, value):
     self.cost_writes.append((stage, field))
     self.costs[stage, field] = np.array(value, copy=True)
+    if field == 'W':
+      self.input_buffers[stage, field] = value
     return self.native.cost_set(stage, field, value)
 
   def constraints_set(self, stage, field, value, *args, **kwargs):
+    self.constraint_writes.append((stage, field))
     self.constraints[stage, field] = np.array(value, copy=True)
+    if field in ('C', 'D', 'lg', 'ug'):
+      self.input_buffers[stage, field] = value
     return self.native.constraints_set(stage, field, value, *args, **kwargs)
 
   def solve(self):
     self.solved_costs.append({key: value.copy() for key, value in self.costs.items()})
+    if self.before_solve is not None:
+      self.before_solve()
     if self.failure == 'solver_status':
       return 4
     if self.failure == 'solver_exception':
@@ -115,6 +125,23 @@ def assert_cost_contract(costs, kind, *, jerk_factor=1.0, history_scale=1.0, pre
       np.testing.assert_array_equal(costs[stage, 'Zl'], [1e6, 1e6, 1e6, 100.0])
 
 
+def assert_problem_write_order(recorder):
+  assert recorder.cost_writes == [(stage, field) for stage in range(N) for field in ('W', 'Zl')] + [(N, 'W')]
+  assert recorder.constraint_writes == (
+    [(stage, field) for stage in range(N) for field in ('C', 'D', 'lg', 'ug')]
+    + [(stage, field) for stage in range(1, N+1) for field in ('lbx', 'ubx')]
+    + [(0, 'lbx'), (0, 'ubx')]
+  )
+
+
+def assert_inactive_rest_constraints(constraints):
+  for stage in range(N):
+    np.testing.assert_array_equal(constraints[stage, 'C'], 0.0)
+    np.testing.assert_array_equal(constraints[stage, 'D'], 0.0)
+    np.testing.assert_array_equal(constraints[stage, 'lg'], -1.0)
+    np.testing.assert_array_equal(constraints[stage, 'ug'], 1.0)
+
+
 @pytest.mark.parametrize('kind', ['legacy', 'cruise', 'moving', 'no_forward', 'due_rest', 'future_rest', 'scheduled_rest'])
 @pytest.mark.parametrize('personality,scale,previous,factor', [
   (log.LongitudinalPersonality.relaxed, 1.0, True, 1.0),
@@ -127,6 +154,7 @@ def test_final_costs_are_installed_once_for_each_cold_and_warm_update(recorded_m
   assert mpc.outcome is MpcOutcome.NOT_SOLVED
   for _ in range(2):
     recorder.cost_writes.clear()
+    recorder.constraint_writes.clear()
     mpc.set_weights(previous, personality, a_change_scale=scale)
     assert not recorder.cost_writes
     mpc.set_cur_state(speed, 0.0)
@@ -134,8 +162,7 @@ def test_final_costs_are_installed_once_for_each_cold_and_warm_update(recorded_m
     mpc.update(no_leads(), personality, reference=reference)
     assert len(recorder.solved_costs) == calls + 1
     assert mpc.diagnostic_last_solver_return == 0 and mpc.outcome is MpcOutcome.ACCEPTED
-    assert sorted(recorder.cost_writes) == sorted([(stage, 'W') for stage in range(N+1)]
-                                                + [(stage, 'Zl') for stage in range(N)])
+    assert_problem_write_order(recorder)
     assert_cost_contract(recorder.solved_costs[-1], kind, jerk_factor=factor, history_scale=scale, previous_accel=previous)
 
 
@@ -143,13 +170,14 @@ def test_rest_and_no_rest_switches_clear_previous_costs_and_native_bounds(record
   mpc, recorder = recorded_mpc
   # No fresh set_weights call is required for a subsequent update. In
   # particular, prior model costs and state bounds must not become base costs.
-  for kind in ('moving', 'future_rest', 'due_rest', 'no_forward', 'cruise', 'legacy', 'scheduled_rest', 'cruise'):
+  for kind in ('moving', 'future_rest', 'cruise', 'future_rest', 'due_rest', 'no_forward', 'cruise', 'legacy', 'scheduled_rest', 'cruise'):
     speed, reference = reference_case(kind)
     recorder.cost_writes.clear()
+    recorder.constraint_writes.clear()
     mpc.set_cur_state(speed, 0.0)
     mpc.update(no_leads(), reference=reference)
     assert mpc.outcome is MpcOutcome.ACCEPTED
-    assert len([field for _, field in recorder.cost_writes if field == 'W']) == N+1
+    assert_problem_write_order(recorder)
     assert_cost_contract(recorder.solved_costs[-1], kind)
     if kind in ('legacy', 'cruise'):
       assert mpc.rest_goal is None and mpc.effective_rest_node is None
@@ -158,9 +186,40 @@ def test_rest_and_no_rest_switches_clear_previous_costs_and_native_bounds(record
       for stage in range(1, N+1):
         np.testing.assert_array_equal(recorder.constraints[stage, 'lbx'], -REFERENCE_BOUND)
         np.testing.assert_array_equal(recorder.constraints[stage, 'ubx'], REFERENCE_BOUND)
-      for stage in range(N):
-        np.testing.assert_array_equal(recorder.constraints[stage, 'C'], 0.0)
-        np.testing.assert_array_equal(recorder.constraints[stage, 'D'], 0.0)
+      assert_inactive_rest_constraints(recorder.constraints)
+
+
+@pytest.mark.parametrize('reset_between_updates', [False, True])
+def test_native_problem_does_not_borrow_reused_python_buffers(recorded_mpc, reset_between_updates):
+  mpc, recorder = recorded_mpc
+  control = LongitudinalMpc()
+
+  def overwrite_installed_inputs():
+    # Exercise the actual native copy contract, rather than the recorder's
+    # snapshots: destroy caller-owned data after every setter and before solve.
+    # The following update must also clear every old matrix/constraint entry.
+    assert len(recorder.input_buffers) == (N+1) + 4*N
+    for value in recorder.input_buffers.values():
+      assert value.dtype == np.float64 and value.flags.f_contiguous and value.flags.writeable
+      value.fill(np.nan)
+
+  recorder.before_solve = overwrite_installed_inputs
+  for kind in ('future_rest', 'cruise', 'future_rest', 'due_rest', 'moving', 'cruise'):
+    speed, reference = reference_case(kind)
+    for candidate in (control, mpc):
+      candidate.set_cur_state(speed, 0.0)
+      candidate.update(no_leads(), reference=reference)
+      assert candidate.outcome is MpcOutcome.ACCEPTED
+    np.testing.assert_array_equal(mpc.x_sol, control.x_sol)
+    np.testing.assert_array_equal(mpc.u_sol, control.u_sol)
+    assert recorder.native.get_cost() == control.solver.get_cost()
+    assert_cost_contract(recorder.solved_costs[-1], kind)
+    if kind == 'cruise':
+      assert_inactive_rest_constraints(recorder.constraints)
+    if reset_between_updates:
+      for candidate in (control, mpc):
+        candidate.reset()
+        assert candidate.outcome is MpcOutcome.NOT_SOLVED
 
 
 @pytest.mark.parametrize('failure', ['invalid_input', 'solver_status', 'solver_exception', 'nonfinite'])
@@ -180,11 +239,15 @@ def test_failure_reset_restores_default_costs_without_a_new_setter(recorded_mpc,
   assert mpc.outcome is (MpcOutcome.INPUT_REJECTED if failure == 'invalid_input' else MpcOutcome.SOLVER_FAULT)
   assert not mpc.previous_solution_valid
   recorder.failure = None
+  recorder.cost_writes.clear()
+  recorder.constraint_writes.clear()
   mpc.set_cur_state(10.0, 0.0)
   mpc.update(no_leads(), reference=MpcReference(20.0))
   assert mpc.outcome is MpcOutcome.ACCEPTED
   assert mpc.rest_goal is None and mpc.effective_rest_node is None
+  assert_problem_write_order(recorder)
   assert_cost_contract(recorder.solved_costs[-1], 'cruise')
+  assert_inactive_rest_constraints(recorder.constraints)
 
 
 def test_direct_run_applies_pending_base_costs_once(recorded_mpc):

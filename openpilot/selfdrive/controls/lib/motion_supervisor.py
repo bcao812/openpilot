@@ -40,6 +40,10 @@ class MotionResponseKind(IntEnum):
   PURE_CRUISE = 3
 
 
+MOTION_REFERENCE_KINDS = tuple(MotionReferenceKind)
+MOTION_RESPONSE_KINDS = tuple(MotionResponseKind)
+
+
 class StopReason(IntFlag):
   NONE = 0
   MPC = 1 << 0
@@ -150,9 +154,9 @@ class MotionIntent:
             and self.reasons >= 0 and not self.reasons & ~int(RAW_STOP_REASONS)
             and all(type(value) is bool for value in (self.moving_lead, self.release_allowed, self.allow_creep, self.valid, self.ready))
             and isinstance(self.reference_kind, int) and not isinstance(self.reference_kind, bool)
-            and self.reference_kind in tuple(MotionReferenceKind)
+            and self.reference_kind in MOTION_REFERENCE_KINDS
             and isinstance(self.response_kind, int) and not isinstance(self.response_kind, bool)
-            and self.response_kind in tuple(MotionResponseKind)
+            and self.response_kind in MOTION_RESPONSE_KINDS
             and (self.response_kind not in (MotionResponseKind.ABSOLUTE_ACC, MotionResponseKind.PURE_CRUISE)
                  or self.reference_kind == MotionReferenceKind.UNKNOWN)
             and (self.reference_kind not in (MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.REST, MotionReferenceKind.NO_FORWARD)

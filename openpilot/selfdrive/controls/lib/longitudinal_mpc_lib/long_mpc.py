@@ -329,6 +329,15 @@ class LongitudinalMpc:
     self.diagnostic_reset_calls += 1
     self.solver.reset()
 
+    # The native setters copy their inputs synchronously. Keep private,
+    # writable column-major buffers for each stage, including the terminal
+    # cost's smaller shape, so installing a problem needs no matrix allocation.
+    self._cost_matrices = [np.zeros((dimension, dimension), order='F')
+                           for dimension in [COST_DIM] * N + [COST_E_DIM]]
+    self._cost_diagonals = [matrix.ravel(order='F')[::matrix.shape[0]+1] for matrix in self._cost_matrices]
+    self._rest_constraint_buffers = [(np.zeros((2, X_DIM), order='F'), np.zeros((2, U_DIM), order='F'),
+                                      np.full(2, -1.0), np.ones(2)) for _ in range(N)]
+
     self.x_sol = np.zeros((N+1, X_DIM))
     self.u_sol = np.zeros((N, 1))
     self.v_solution = np.zeros(N+1)
@@ -461,9 +470,10 @@ class LongitudinalMpc:
     return weights
 
   def install_cost_weights(self, weights):
-    for stage in range(N+1):
-      dimension = COST_DIM if stage < N else COST_E_DIM
-      self.solver.cost_set(stage, 'W', np.asfortranarray(np.diag(weights[stage, :dimension])))
+    for stage, (matrix, diagonal) in enumerate(zip(self._cost_matrices, self._cost_diagonals, strict=True)):
+      matrix.fill(0.0)
+      diagonal[:] = weights[stage, :len(diagonal)]
+      self.solver.cost_set(stage, 'W', matrix)
       if stage < N:
         self.solver.cost_set(stage, 'Zl', self._constraint_cost_weights)
     self._costs_pending = False
@@ -1022,8 +1032,11 @@ class LongitudinalMpc:
     constrained_stages = max(0, node - 1) if future else 0
     splits = []
     for stage, duration in enumerate(np.diff(T_IDXS)):
-      C, D = np.zeros((2, X_DIM)), np.zeros((2, U_DIM))
-      lower, upper = -np.ones(2), np.ones(2)
+      C, D, lower, upper = self._rest_constraint_buffers[stage]
+      C.fill(0.0)
+      D.fill(0.0)
+      lower.fill(-1.0)
+      upper.fill(1.0)
       if stage < constrained_stages:
         # x0 is fixed. Admission and the native C row share this exact split.
         split = self.initial_rest_split(self.x0, duration) if stage == 0 else duration / 2.0
