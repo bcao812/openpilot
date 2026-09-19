@@ -19,9 +19,9 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   MPC_INVALID_INPUT, MPC_INVALID_SOLUTION, MPC_SOLVER_ERROR, T_IDXS, LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
-from openpilot.selfdrive.controls.tests.test_longitudinal_planner_creep import build_sm
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import build_sm
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import (
-  LongitudinalPlannerSP, LongitudinalPlanSource as PlanSourceSP,
+  CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource as PlanSourceSP,
 )
 
 
@@ -99,15 +99,15 @@ def test_zero_sentinel_preserves_diagnostics_and_timing(status, reason):
   assert planner.failure_reason == ''
 
 
-def failure_chain(speed, e2e, failure, unified, *, latched=True, previous_target=-1.5, previous_output=None,
+def failure_chain(speed, e2e, failure, *, latched=True, previous_target=-1.5, previous_output=None,
                   sp_target=None, model_target=0.3, model_healthy=True, wire_target=None, observations=None,
                   manual=None, recover_after=None, transmit_solver_status=True):
-  parameters = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
+  parameters = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC_BOSCH)
   parameters.openpilotLongitudinalControl = True
   parameters.longitudinalActuatorDelay = 0.5
-  parameters_sp = CarInterface.get_non_essential_params_sp(parameters, CAR.HONDA_ACCORD)
-  planner = LongitudinalPlanner(parameters, parameters_sp, init_v=speed, init_a=previous_target, unified=unified)
-  longitudinal = LongControl(parameters, parameters_sp, unified=unified)
+  parameters_sp = CarInterface.get_non_essential_params_sp(parameters, CAR.HONDA_CIVIC_BOSCH)
+  planner = LongitudinalPlanner(parameters, parameters_sp, init_v=speed, init_a=previous_target)
+  longitudinal = LongControl(parameters, parameters_sp)
   controller = CarController({Bus.pt: DBC[parameters.carFingerprint][Bus.pt]}, parameters, parameters_sp)
   parser = CANParser(DBC[parameters.carFingerprint][Bus.pt], [('ACC_CONTROL', 50)], CanBus(parameters).pt)
   control_sp = structs.CarControlSP()
@@ -138,7 +138,8 @@ def failure_chain(speed, e2e, failure, unified, *, latched=True, previous_target
 
   def update_targets(instance, current_state, v_ego, a_ego, v_cruise):
     instance.source = PlanSourceSP.cruise
-    return v_cruise, a_ego if sp_target is None else sp_target
+    instance.cruise_target = CruiseTarget(instance.source, v_cruise, a_ego if sp_target is None else sp_target)
+    return instance.cruise_target
 
   with patch.object(LongitudinalPlannerSP, 'update', return_value=None), \
        patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets), \
@@ -187,9 +188,8 @@ def failure_chain(speed, e2e, failure, unified, *, latched=True, previous_target
 @pytest.mark.parametrize('speed', [0.0, 0.05, 0.2, 0.29])
 @pytest.mark.parametrize('e2e', [False, True])
 @pytest.mark.parametrize('failure', ['solver_status', 'nonfinite_solution'])
-@pytest.mark.parametrize('unified', [False])
-def test_native_failure_cannot_release_legacy_stop_or_emit_honda_gas(speed, e2e, failure, unified):
-  planner, longitudinal, plan_rows, control_rows, commands, can_rows = failure_chain(speed, e2e, failure, unified)
+def test_native_failure_cannot_release_legacy_stop_or_emit_honda_gas(speed, e2e, failure):
+  planner, longitudinal, plan_rows, control_rows, commands, can_rows = failure_chain(speed, e2e, failure)
   assert not planner.unified and not longitudinal.unified
   assert all(target <= 0.0 and stopping and latched for target, stopping, latched in plan_rows), plan_rows
   assert all(value == LongCtrlState.stopping for value in control_rows), control_rows
@@ -203,7 +203,7 @@ def test_native_failure_cannot_release_legacy_stop_or_emit_honda_gas(speed, e2e,
                                                  (0.0, 0.3), (0.2, 0.3), (1.0, 0.3)])
 def test_unlatched_failure_never_weakens_braking_or_requests_gas(speed, previous_target):
   planner, longitudinal, plan_rows, _, commands, can_rows = failure_chain(
-    speed, False, 'solver_status', False, latched=False, previous_target=previous_target)
+    speed, False, 'solver_status', latched=False, previous_target=previous_target)
   assert not planner.unified and not longitudinal.unified
   bound = min(previous_target, -0.5)
   assert all(target <= bound for target, _, _ in plan_rows), plan_rows
@@ -216,7 +216,7 @@ def test_unlatched_failure_never_weakens_braking_or_requests_gas(speed, previous
 @pytest.mark.parametrize('failure,status', [('solver_status', 4), ('nonfinite_solution', MPC_INVALID_SOLUTION)])
 def test_published_fault_status_and_invalid_sentinel_survive_wire_round_trip(failure, status):
   observations = []
-  failure_chain(0.2, False, failure, False, observations=observations)
+  failure_chain(0.2, False, failure, observations=observations)
   assert observations
   for row in observations:
     event = row['event']
@@ -235,7 +235,7 @@ def test_published_fault_status_and_invalid_sentinel_survive_wire_round_trip(fai
 def test_wire_fault_preserves_stronger_loc_request_than_the_planner_request(speed):
   observations = []
   _, _, plan_rows, _, commands, can_rows = failure_chain(
-    speed, False, 'solver_status', False, latched=False, previous_target=-0.5, previous_output=-3.0,
+    speed, False, 'solver_status', latched=False, previous_target=-0.5, previous_output=-3.0,
     observations=observations)
   assert all(target == -0.5 for target, _, _ in plan_rows)
   assert all(row['event'].longitudinalPlan.solverStatus == 4 for row in observations)
@@ -245,7 +245,7 @@ def test_wire_fault_preserves_stronger_loc_request_than_the_planner_request(spee
 
 def test_omitting_fault_status_is_detectable_even_when_the_scalar_target_is_negative():
   _, _, _, _, commands, _ = failure_chain(
-    20.0, False, 'solver_status', False, latched=False, previous_target=-0.5, previous_output=-3.0,
+    20.0, False, 'solver_status', latched=False, previous_target=-0.5, previous_output=-3.0,
     transmit_solver_status=False)
   assert commands[0] == -3.0 + STARTING_ACCEL_RATE * DT_CTRL
   assert commands[0] > -3.0
@@ -256,7 +256,7 @@ def test_omitting_fault_status_is_detectable_even_when_the_scalar_target_is_nega
 def test_corrupted_wire_target_cannot_override_the_published_failure_status(wire_target, speed):
   observations = []
   _, _, _, _, commands, can_rows = failure_chain(
-    speed, False, 'solver_status', False, latched=False, previous_target=-0.5, previous_output=-1.5,
+    speed, False, 'solver_status', latched=False, previous_target=-0.5, previous_output=-1.5,
     wire_target=wire_target, observations=observations)
   assert all(row['published'].longitudinalPlan.aTarget == -0.5 for row in observations)
   assert all(row['event'].longitudinalPlan.solverStatus == 4 for row in observations)
@@ -269,7 +269,7 @@ def test_corrupted_wire_target_cannot_override_the_published_failure_status(wire
 def test_nonfinite_previous_planner_and_loc_targets_have_a_finite_wire_failure(previous_target, speed):
   observations = []
   _, _, plan_rows, _, commands, can_rows = failure_chain(
-    speed, False, 'solver_status', False, latched=False, previous_target=previous_target, observations=observations)
+    speed, False, 'solver_status', latched=False, previous_target=previous_target, observations=observations)
   assert all(row['event'].longitudinalPlan.solverStatus != 0 and not row['event'].valid for row in observations)
   assert all(np.isfinite(target) and ACCEL_MIN <= target <= -0.5 for target, _, _ in plan_rows)
   assert all(np.isfinite(command) and ACCEL_MIN <= command <= -0.5 for command in commands)
@@ -279,7 +279,7 @@ def test_nonfinite_previous_planner_and_loc_targets_have_a_finite_wire_failure(p
 @pytest.mark.parametrize('sp_target', [1.0, -3.0, float('nan')])
 def test_sp_hint_cannot_replace_the_previous_executed_planner_target_during_failure(sp_target):
   _, _, plan_rows, _, commands, can_rows = failure_chain(
-    5.0, False, 'solver_status', False, latched=False, previous_target=-1.5, sp_target=sp_target)
+    5.0, False, 'solver_status', latched=False, previous_target=-1.5, sp_target=sp_target)
   assert all(target == -1.5 for target, _, _ in plan_rows)
   assert all(command <= -1.5 for command in commands)
   assert all(row['ACCEL_COMMAND'] <= -1.5 and row['GAS_COMMAND'] <= 0 for row in can_rows)
@@ -295,7 +295,7 @@ def test_sp_hint_cannot_replace_the_previous_executed_planner_target_during_fail
 ])
 def test_only_healthy_admitted_model_braking_can_strengthen_the_failure_target(e2e, healthy, model_target, expected):
   _, _, plan_rows, _, commands, can_rows = failure_chain(
-    5.0, e2e, 'solver_status', False, latched=False, previous_target=-1.5,
+    5.0, e2e, 'solver_status', latched=False, previous_target=-1.5,
     model_target=model_target, model_healthy=healthy)
   assert all(target == expected for target, _, _ in plan_rows)
   assert all(command == expected for command in commands)
@@ -306,7 +306,7 @@ def test_only_healthy_admitted_model_braking_can_strengthen_the_failure_target(e
 @pytest.mark.parametrize('wire_target', [None, float('nan'), -float('inf')])
 def test_manual_exit_has_priority_over_fault_hold_and_malformed_wire_targets(manual, wire_target):
   observations = []
-  failure_chain(0.0, False, 'solver_status', False, wire_target=wire_target, manual=manual, observations=observations)
+  failure_chain(0.0, False, 'solver_status', wire_target=wire_target, manual=manual, observations=observations)
   before = [row for row in observations if row['frame'] < 25]
   after = [row for row in observations if row['frame'] >= 25]
   assert all(row['command'] <= -1.5 and row['long_active'] for row in before)
@@ -318,7 +318,7 @@ def test_manual_exit_has_priority_over_fault_hold_and_malformed_wire_targets(man
 @pytest.mark.parametrize('speed', [0.0, 0.2, 5.0])
 def test_recovered_solver_restores_valid_protocol_without_an_acceleration_release_step(speed):
   observations = []
-  failure_chain(speed, False, 'solver_status', False, latched=False, previous_target=-1.5,
+  failure_chain(speed, False, 'solver_status', latched=False, previous_target=-1.5,
                 recover_after=0.25, observations=observations)
   before = [row for row in observations if row['frame'] < 25]
   after = [row for row in observations if row['frame'] >= 25]
@@ -351,8 +351,8 @@ def test_real_controlsd_consumes_published_fault_status_and_manual_exit_before_c
   from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness
 
   observations = []
-  failure_chain(20.0, False, 'solver_status', False, latched=False, previous_target=-0.5, observations=observations)
-  harness = ControlsHarness(unified=False)
+  failure_chain(20.0, False, 'solver_status', latched=False, previous_target=-0.5, observations=observations)
+  harness = ControlsHarness(platform=CAR.HONDA_CIVIC_BOSCH)
   harness.events['longitudinalPlan'] = observations[0]['published'].as_builder()
   harness.plan = harness.events['longitudinalPlan'].longitudinalPlan
   harness.car_state.vEgo = 0.0

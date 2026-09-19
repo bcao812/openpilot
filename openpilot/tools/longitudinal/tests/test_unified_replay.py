@@ -25,14 +25,17 @@ class FixtureIntent(SimpleNamespace):
             and self.braking_accel is None and self.reasons in (0, int(replay.motion_runtime.StopReason.CRUISE)))
 
 
-def test_old_constructor_has_no_new_optional_argument():
+def test_flagless_constructor_is_validated_against_its_actual_runtime_mode():
   class Legacy:
     def __init__(self, params, params_sp):
       pass
 
   assert replay.component_options(Legacy, False) == {}
-  with pytest.raises(ValueError, match='does not support'):
-    replay.component_options(Legacy, True)
+  assert replay.component_options(Legacy, True) == {}
+  with pytest.raises(ValueError, match='Requested replay mode 2'):
+    replay.require_component_mode(Legacy(None, None), 2, 'controller')
+  with pytest.raises(ValueError, match='retired supervised'):
+    replay.component_options(Legacy, False, True)
 
 
 def test_planner_clock_keyword_is_opt_in_for_the_tested_public_api():
@@ -71,7 +74,8 @@ def test_recorded_targets_cannot_be_mixed_with_candidate_intent():
 
 def replay_fixture(monkeypatch, *, consume=True, legacy_api=False, solver_status=0, publish_solver_status=True,
                    standby_eligible=False, publish_standby=False, envelope_api=False, owner_established=False,
-                   rearm_api=False, rearm_wait=False):
+                   rearm_api=False, rearm_wait=False, automatic_api=False):
+  """Historical protocol doubles plus a flagless, platform-selected API double."""
   intent = FixtureIntent(version=replay.MOTION_PROTOCOL_VERSION, mode=2, reasons=0, moving_lead=False, release_allowed=False,
                          allow_creep=True, valid=True, ready=True, braking_accel=None)
   controls, encoded = [], []
@@ -195,6 +199,22 @@ def replay_fixture(monkeypatch, *, consume=True, legacy_api=False, solver_status
         self.motion_phase = 1
       return result
 
+  class AutomaticPlanner(Planner):
+    def __init__(self, params, params_sp):
+      supported = (params.carFingerprint == replay.CAR.HONDA_ACCORD and params.openpilotLongitudinalControl
+                   and not params_sp.enableGasInterceptor)
+      super().__init__(params, params_sp, unified=supported)
+
+  class AutomaticLongitudinal(RearmLongitudinal):
+    def __init__(self, params, params_sp):
+      supported = (params.carFingerprint == replay.CAR.HONDA_ACCORD and params.openpilotLongitudinalControl
+                   and not params_sp.enableGasInterceptor)
+      super().__init__(params, params_sp, unified=supported)
+
+    def update(self, *arguments, intent=None, solver_status=missing, braking_plan_valid=False, standby_input=False, **options):
+      return super().update(*arguments, intent=intent, solver_status=solver_status, braking_plan_valid=braking_plan_valid,
+                            standby_input=standby_input, **options)
+
   class Controller:
     def __init__(self, *arguments):
       self.frame = 0
@@ -211,8 +231,8 @@ def replay_fixture(monkeypatch, *, consume=True, legacy_api=False, solver_status
     def update(self, frames):
       pass
 
-  monkeypatch.setattr(replay.planner_module, 'LongitudinalPlanner', Planner)
-  monkeypatch.setattr(replay, 'LongControl', LegacyLongitudinal if legacy_api else RearmLongitudinal if rearm_api
+  monkeypatch.setattr(replay.planner_module, 'LongitudinalPlanner', AutomaticPlanner if automatic_api else Planner)
+  monkeypatch.setattr(replay, 'LongControl', AutomaticLongitudinal if automatic_api else LegacyLongitudinal if legacy_api else RearmLongitudinal if rearm_api
                       else EnvelopeLongitudinal if envelope_api else Longitudinal)
   monkeypatch.setattr(replay, 'decode_motion_intent', lambda plan: plan.motionIntent)
   monkeypatch.setattr(replay, 'CarController', Controller)
@@ -383,6 +403,56 @@ def test_candidate_replay_consumes_real_plan_model_and_control_timestamps(monkey
   assert not original_controls.motionState.enabled
 
 
+def test_automatic_runtime_retains_the_full_motion_consumer_contract(monkeypatch):
+  messages, window, controls, _, _ = replay_fixture(monkeypatch, automatic_api=True)
+  result = replay.replay_window(None, window, messages=messages, unified=True)
+  capabilities = result['capabilities']
+  assert capabilities['requested_mode'] == capabilities['planner_mode'] == capabilities['controller_mode'] == 2
+  for field in ('controller_solver_status', 'controller_mode_protocol', 'controller_planning_mode_protocol',
+                'controller_readiness', 'controller_braking_health_protocol', 'controller_owner_protocol',
+                'controller_waiting_protocol', 'controller_standby_input_protocol'):
+    assert capabilities[field]
+  assert result['motion_replay']['accepted_intent_versions'] == {str(replay.MOTION_PROTOCOL_VERSION): 1}
+  assert result['motion_replay']['accepted_intent_modes'] == {'2': 1}
+  assert controls[-1][1]['solver_status'] == 0
+  assert controls[-1][1]['plan_valid']
+  assert 'braking_plan_valid' in controls[-1][1]
+  assert controls[-1][1]['standby_input'] is False
+
+
+@pytest.mark.parametrize('supervised', [False, True])
+def test_retired_requested_modes_cannot_be_relabelled_as_automatic_unified(monkeypatch, supervised):
+  messages, window, controls, _, _ = replay_fixture(monkeypatch, automatic_api=True)
+  with pytest.raises(ValueError, match='retired supervised' if supervised else 'Requested replay mode 0'):
+    replay.replay_window(None, window, messages=messages, supervised=supervised)
+  assert not controls
+
+
+def test_automatic_constructor_does_not_bypass_the_actual_platform_gate(monkeypatch):
+  messages, window, controls, _, _ = replay_fixture(monkeypatch, automatic_api=True)
+  next(item.carParamsSP for item in messages if item.which() == 'carParamsSP').enableGasInterceptor = True
+  with pytest.raises(ValueError, match='Requested replay mode 2.*runtime mode 0'):
+    replay.replay_window(None, window, messages=messages, unified=True)
+  assert not controls
+
+
+@pytest.mark.parametrize('interceptor', [False, True])
+def test_real_controller_identity_and_protocol_use_the_vehicle_gate(interceptor):
+  from openpilot.common.prefix import OpenpilotPrefix
+  from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner
+
+  with OpenpilotPrefix():
+    planner, extension = make_planner(interceptor=interceptor)
+    controller = replay.LongControl(planner.CP, extension)
+  expected_mode = 0 if interceptor else 2
+  assert replay.require_component_mode(planner, expected_mode, 'planner') == expected_mode
+  assert replay.require_component_mode(controller, expected_mode, 'controller') == expected_mode
+  assert replay.controller_mode_protocols(controller) == (True, True)
+  assert replay.solver_status_supported(type(controller), True)
+  assert replay.component_options(type(controller), True) == {}
+  assert type(controller.can_standby) is bool
+
+
 @pytest.mark.parametrize('version', [2, 3])
 def test_each_native_motion_generation_executes_with_its_semantic_version(monkeypatch, version):
   monkeypatch.setattr(replay, 'MOTION_PROTOCOL_VERSION', version)
@@ -415,9 +485,9 @@ def test_candidate_arguments_cannot_be_silently_ignored(monkeypatch):
     replay.replay_window(None, window, messages=messages, unified=True)
 
 
-@pytest.mark.parametrize('mode', [1, 2])
-def test_healthy_rearm_wait_is_constrained_unconsumed_and_cannot_resume(monkeypatch, mode):
-  messages, window, controls, encoded, _ = replay_fixture(monkeypatch, rearm_api=True, rearm_wait=True)
+@pytest.mark.parametrize('mode,automatic_api', [(1, False), (2, False), (2, True)])
+def test_healthy_rearm_wait_is_constrained_unconsumed_and_cannot_resume(monkeypatch, mode, automatic_api):
+  messages, window, controls, encoded, _ = replay_fixture(monkeypatch, rearm_api=True, rearm_wait=True, automatic_api=automatic_api)
   result = replay.replay_window(None, window, messages=messages, supervised=mode == 1, unified=mode == 2)
   row = result['control_rows'][0]
   assert row['motion_waiting_for_fresh_input']
@@ -435,14 +505,13 @@ def test_healthy_rearm_wait_is_constrained_unconsumed_and_cannot_resume(monkeypa
 
 
 @pytest.mark.skipif(not hasattr(replay.LongControl, 'motion_waiting_for_fresh_input'), reason='tested legacy runtime has no healthy-wait API')
-@pytest.mark.parametrize('mode', [LongitudinalMode.SUPERVISED, LongitudinalMode.UNIFIED], ids=lambda mode: mode.name)
 @pytest.mark.parametrize('trigger', ['enable_between_plans', 'gas_release_between_plans', 'gas_release_after_active_plan'])
-def test_precheck_and_consumption_match_the_actual_healthy_rearm_consumer(monkeypatch, trigger, mode):
+def test_precheck_and_consumption_match_the_actual_healthy_rearm_consumer(monkeypatch, trigger):
   from openpilot.common.prefix import OpenpilotPrefix
   from openpilot.selfdrive.controls.tests.test_motion_rearm_wait import enter_off
 
   with OpenpilotPrefix():
-    harness = enter_off(mode, trigger=trigger)
+    harness = enter_off(LongitudinalMode.UNIFIED, trigger=trigger)
     controller = harness.control.LoC
     original = controller.update
     receipts = []
@@ -453,7 +522,7 @@ def test_precheck_and_consumption_match_the_actual_healthy_rearm_consumer(monkey
       assert vars(controller.motion_supervisor) == before
       output = original(active, state, target, stop, limits, **options)
       diagnostics = replay.motion_diagnostics(controller, options['intent'], target, options['plan_time_ns'],
-                                              options['model_time_ns'], active, int(mode))
+                                              options['model_time_ns'], active, int(LongitudinalMode.UNIFIED))
       receipts.append((evidence, diagnostics, float(np.float32(output))))
       return output
 
@@ -554,18 +623,17 @@ def test_waiting_evidence_checks_raw_health_and_rearm_before_update_without_muta
   assert vars(supervisor) == snapshot
 
 
-@pytest.mark.parametrize('mode', [LongitudinalMode.SUPERVISED, LongitudinalMode.UNIFIED], ids=lambda mode: mode.name)
 @pytest.mark.parametrize('failure', [None, 'not_rearming', 'fault_barrier', 'clock_repeat', 'clock_backwards', 'clock_gap',
                                     'invalid_plan', 'solver', 'nonfinite_target', 'future_plan', 'future_model',
                                     'expired_plan', 'expired_model', 'plan_backwards', 'rewritten_plan', 'mode_mismatch',
                                     'version', 'unready', 'invalid_intent', 'inactive', 'gas', 'brake',
                                     'model_only', 'new_plan_only', 'new_both'])
-def test_actual_precheck_cannot_trust_a_claimed_waiting_flag_over_input_health(mode, failure):
+def test_actual_precheck_cannot_trust_a_claimed_waiting_flag_over_input_health(failure):
   from openpilot.common.prefix import OpenpilotPrefix
   from openpilot.selfdrive.controls.tests.test_motion_rearm_wait import enter_off
 
   with OpenpilotPrefix():
-    harness = enter_off(mode)
+    harness = enter_off(LongitudinalMode.UNIFIED)
     controller, state = harness.control.LoC, harness.car_state
     owner = controller.motion_supervisor
     owner.waiting_for_fresh_input = True
@@ -600,8 +668,7 @@ def test_actual_precheck_cannot_trust_a_claimed_waiting_flag_over_input_health(m
     elif failure == 'rewritten_plan':
       options['intent'] = replace(options['intent'], release_allowed=not options['intent'].release_allowed)
     elif failure == 'mode_mismatch':
-      options['intent'] = replace(options['intent'], mode=int(LongitudinalMode.UNIFIED if mode == LongitudinalMode.SUPERVISED
-                                                             else LongitudinalMode.SUPERVISED))
+      options['intent'] = replace(options['intent'], mode=int(LongitudinalMode.SUPERVISED))
     elif failure == 'version':
       options['intent'] = replace(options['intent'], version=replay.MOTION_PROTOCOL_VERSION + 1)
     elif failure == 'unready':
@@ -754,8 +821,9 @@ def test_old_recorded_plan_missing_status_defaults_only_its_consumer_input(monke
   assert controls[-1][1]['solver_status'] == 0
 
 
-def test_candidate_mode_mismatch_disables_control_and_resume(monkeypatch):
-  messages, window, controls, encoded, intent = replay_fixture(monkeypatch)
+@pytest.mark.parametrize('automatic_api', [False, True])
+def test_candidate_mode_mismatch_disables_control_and_resume(monkeypatch, automatic_api):
+  messages, window, controls, encoded, intent = replay_fixture(monkeypatch, automatic_api=automatic_api)
   intent.version = 0
   result = replay.replay_window(None, window, messages=messages, unified=True)
   assert not controls[-1][0][0]
@@ -764,8 +832,10 @@ def test_candidate_mode_mismatch_disables_control_and_resume(monkeypatch):
   assert not encoded[-1].cruiseControl.resume
 
 
-def test_cold_standby_keeps_enabled_for_initialization_without_longitudinal_actuation(monkeypatch):
-  messages, window, controls, encoded, intent = replay_fixture(monkeypatch, standby_eligible=True, publish_standby=True)
+@pytest.mark.parametrize('automatic_api', [False, True])
+def test_cold_standby_keeps_enabled_for_initialization_without_longitudinal_actuation(monkeypatch, automatic_api):
+  messages, window, controls, encoded, intent = replay_fixture(
+    monkeypatch, standby_eligible=True, publish_standby=True, automatic_api=automatic_api)
   intent.ready = intent.valid = False
   for message in messages:
     if message.which() == 'carState':
@@ -800,9 +870,10 @@ def test_ready_false_during_existing_hold_degrades_without_switching_off(monkeyp
   assert not encoded[-1].cruiseControl.resume
 
 
+@pytest.mark.parametrize('automatic_api', [False, True])
 @pytest.mark.parametrize('cruise_speed', [replay.V_CRUISE_UNSET, float('nan'), float('inf')])
-def test_latest_unset_cruise_invalidates_a_ready_plan_without_cold_standby(monkeypatch, cruise_speed):
-  messages, window, controls, encoded, _ = replay_fixture(monkeypatch)
+def test_latest_unset_cruise_invalidates_a_ready_plan_without_cold_standby(monkeypatch, cruise_speed, automatic_api):
+  messages, window, controls, encoded, _ = replay_fixture(monkeypatch, automatic_api=automatic_api)
   current_state = deepcopy(next(message.carState for message in messages if message.which() == 'carState'))
   current_state.vCruise = cruise_speed
   position = next(index for index, message in enumerate(messages)
@@ -835,8 +906,9 @@ def test_unhealthy_unready_plan_does_not_use_the_standby_exception(monkeypatch, 
   assert result['control_rows'][0]['motion_degraded']
 
 
-def test_missing_published_readiness_cannot_be_silently_defaulted_for_new_controller(monkeypatch):
-  messages, window, _, _, intent = replay_fixture(monkeypatch)
+@pytest.mark.parametrize('automatic_api', [False, True])
+def test_missing_published_readiness_cannot_be_silently_defaulted_for_new_controller(monkeypatch, automatic_api):
+  messages, window, _, _, intent = replay_fixture(monkeypatch, automatic_api=automatic_api)
   del intent.ready
   with pytest.raises(ValueError, match='published motion readiness'):
     replay.replay_window(None, window, messages=messages, unified=True)
@@ -1030,19 +1102,18 @@ def test_baseline_without_helper_keeps_its_cached_request_visible(monkeypatch):
 @pytest.mark.parametrize('solver_status', [0, 4])
 @pytest.mark.parametrize('input_valid,intent_valid', [(True, True), (False, True), (True, False)])
 def test_actual_publisher_contract_and_scheduler_identity(monkeypatch, unified, solver_status, input_valid, intent_valid):
-  planner = object.__new__(replay.planner_module.LongitudinalPlanner)
-  supports_status = replay.solver_status_supported(replay.LongControl, False)
-  planner.unified = unified and supports_status
-  planner.motion_enabled = planner.unified
-  planner.longitudinal_mode = 2 if planner.unified else 0
-  if planner.unified:
-    # object.__new__ skips the real constructor's timing producer. Supply a
-    # real qualified source and initial state before exercising publication.
-    from openpilot.selfdrive.controls.lib.reference_timing import ReferenceTimingProducer
+  from openpilot.common.prefix import OpenpilotPrefix
+  from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent
+  from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner
 
-    planner.reference_timing = ReferenceTimingProducer()
+  with OpenpilotPrefix():
+    planner, _ = make_planner(interceptor=not unified)
+  assert planner.unified is unified
+  assert replay.component_mode(planner) == (2 if unified else 0)
+  if planner.unified:
     assert planner.reference_timing.qualify_source(1_000_000_000, 0.0, 0.0, 1_020_000_000) == 1_000_000_000
     planner.reference_timing.set_initial_state(0.0, 0.0)
+    planner.motion_intent = MotionIntent(valid=intent_valid)
   planner.mpc = SimpleNamespace(solution_status=solver_status, source='cruise', solve_time=0.0)
   planner.trace = None
   planner.observation = None
@@ -1054,16 +1125,10 @@ def test_actual_publisher_contract_and_scheduler_identity(monkeypatch, unified, 
   planner.output_should_stop = False
   planner.allow_throttle = True
   planner.fcw = False
-  if supports_status:
-    from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent
-    from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import UnifiedLongitudinalPlanner
-
-    planner.reference_planner = UnifiedLongitudinalPlanner(planner)
-    planner.motion_intent = MotionIntent(valid=intent_valid)
   published_parents = []
 
-  def publish_sp(state, publisher, parent_plan_mono_time=0):
-    published_parents.append(parent_plan_mono_time)
+  def publish_sp(state, publisher, parent_plan_mono_time=0, *, legacy_acceleration=None):
+    published_parents.append((parent_plan_mono_time, legacy_acceleration))
 
   monkeypatch.setattr(planner, 'publish_longitudinal_plan_sp', publish_sp)
   state = replay.ReplayState({'radarState': Snapshot(leadOne=Snapshot(present=False))})
@@ -1071,19 +1136,18 @@ def test_actual_publisher_contract_and_scheduler_identity(monkeypatch, unified, 
   state.logMonoTime = {'modelV2': 1_000_000_000}
   publication = replay.publish_plan(planner, state, 1_020_000_000)
   assert publication.logMonoTime == 1_020_000_000
-  assert published_parents == [publication.logMonoTime]
+  assert published_parents == [(publication.logMonoTime, None if unified else planner.output_a_target)]
   assert publication.longitudinalPlan.modelMonoTime == 1_000_000_000
   assert publication.longitudinalPlan.aTarget == float(np.float32(-0.123456789))
-  expected_valid = input_valid and (not supports_status or solver_status == 0 and (not planner.unified or intent_valid))
+  expected_valid = input_valid and solver_status == 0 and (not planner.unified or intent_valid)
   assert publication.valid == expected_valid
-  if supports_status:
-    assert publication.longitudinalPlan.solverStatus == solver_status
-    if planner.unified:
-      assert replay.decode_motion_intent(publication.longitudinalPlan) == planner.motion_intent
-      reference = publication.longitudinalPlan.reference
-      assert reference.timingKnown and reference.initialStateKnown
-      assert reference.sourceCarStateMonoTime == reference.referenceMonoTime == 1_000_000_000
-      assert reference.producerMonoTime == reference.producerInstanceMonoTime == 1_020_000_000
+  assert publication.longitudinalPlan.solverStatus == solver_status
+  if planner.unified:
+    assert replay.decode_motion_intent(publication.longitudinalPlan) == planner.motion_intent
+    reference = publication.longitudinalPlan.reference
+    assert reference.timingKnown and reference.initialStateKnown
+    assert reference.sourceCarStateMonoTime == reference.referenceMonoTime == 1_000_000_000
+    assert reference.producerMonoTime == reference.producerInstanceMonoTime == 1_020_000_000
 
 
 def closed_runtime_fixture(monkeypatch):
@@ -1208,9 +1272,10 @@ def test_consumer_health_reuses_native_frequency_checks_without_counting_duplica
   assert not stale['longitudinalPlan']['alive']
 
 
+@pytest.mark.parametrize('automatic_api', [False, True])
 @pytest.mark.parametrize('failure', [None, 'can_valid', 'car_state_valid', 'car_state_frequency', 'plan_alive', 'plan_frequency'])
-def test_braking_health_is_independent_of_invalid_failed_reference_publication(monkeypatch, failure):
-  messages, window, controls, _, intent = replay_fixture(monkeypatch, solver_status=4, envelope_api=True)
+def test_braking_health_is_independent_of_invalid_failed_reference_publication(monkeypatch, failure, automatic_api):
+  messages, window, controls, _, intent = replay_fixture(monkeypatch, solver_status=4, envelope_api=True, automatic_api=automatic_api)
   intent.valid = False
   intent.allow_creep = False
   intent.braking_accel = -2.5
@@ -1230,7 +1295,7 @@ def test_braking_health_is_independent_of_invalid_failed_reference_publication(m
     if item.which() == 'carState':
       item.carState.canValid = failure != 'can_valid'
       item.valid = failure != 'car_state_valid'
-  result = replay.replay_window(None, window, messages=messages, supervised=True)
+  result = replay.replay_window(None, window, messages=messages, supervised=not automatic_api, unified=automatic_api)
   assert controls[-1][1]['braking_plan_valid'] is (failure is None)
   assert controls[-1][1]['plan_valid'] is False
   assert not result['plan_rows'][0]['published_valid']
@@ -1238,16 +1303,18 @@ def test_braking_health_is_independent_of_invalid_failed_reference_publication(m
   assert result['control_rows'][0]['intent_braking_accel'] == -2.5
 
 
+@pytest.mark.parametrize('automatic_api', [False, True])
 @pytest.mark.parametrize('established', [False, True])
 @pytest.mark.parametrize('pedal', [None, 'gasPressed', 'brakePressed'])
-def test_mode_fault_preserves_established_owner_without_overriding_driver(monkeypatch, established, pedal):
-  messages, window, controls, encoded, intent = replay_fixture(monkeypatch, envelope_api=True, owner_established=established)
+def test_mode_fault_preserves_established_owner_without_overriding_driver(monkeypatch, established, pedal, automatic_api):
+  messages, window, controls, encoded, intent = replay_fixture(
+    monkeypatch, envelope_api=True, owner_established=established, automatic_api=automatic_api)
   intent.version = 1
   if pedal is not None:
     for item in messages:
       if item.which() == 'carState':
         setattr(item.carState, pedal, True)
-  result = replay.replay_window(None, window, messages=messages, supervised=True)
+  result = replay.replay_window(None, window, messages=messages, supervised=not automatic_api, unified=automatic_api)
   assert controls[-1][0][0] is (established and pedal is None)
   assert controls[-1][1]['plan_valid'] is False
   assert controls[-1][1]['braking_plan_valid'] is False

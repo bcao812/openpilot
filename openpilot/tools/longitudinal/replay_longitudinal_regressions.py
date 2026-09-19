@@ -7,8 +7,10 @@ against logged speed/acceleration before interpreting candidate command differen
 
 import argparse
 import hashlib
+import inspect
 import json
 from pathlib import Path
+from typing import get_origin
 from unittest.mock import patch
 
 import numpy as np
@@ -21,12 +23,34 @@ from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib import longitudinal_planner as planner_module
 from openpilot.selfdrive.controls.lib.longitudinal_planner import CONTROL_N_T_IDX, LongitudinalPlanner
+from openpilot.sunnypilot.selfdrive.controls.lib import longitudinal_planner as sp_module
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 from openpilot.tools.lib.logreader import LogReader
 
 
 SERVICES = ('carState', 'carControl', 'controlsState', 'vehicleParameters', 'radarState', 'modelV2', 'selfdriveState')
 SOURCE_NAMES = {value: name for name, value in planner_module.LongitudinalPlanSource.schema.enumerants.items()}
+
+
+def sp_target_return_type(method):
+  """Select the frozen target contract from the unpatched, tested public API."""
+  annotation = inspect.signature(method).return_annotation
+  if annotation is inspect.Signature.empty or annotation is tuple or get_origin(annotation) is tuple:
+    return None
+  target_type = getattr(sp_module, 'CruiseTarget', None)
+  if target_type is not None and annotation is target_type:
+    return target_type
+  raise ValueError(f'Unsupported SP target return contract: {annotation!r}')
+
+
+def frozen_sp_target(instance, source, speed, acceleration, target_type):
+  instance.source = source
+  if target_type is None:
+    return speed, acceleration
+  target = target_type(source=source, speed=speed, acceleration=acceleration)
+  instance.cruise_target = target
+  instance.output_v_target = speed
+  return target
 
 
 class ReplayState(dict):
@@ -117,11 +141,14 @@ def replay(logs, route, start, end):
     raise ValueError('Completed local route including segment zero is required')
   params, params_sp, origin = route_metadata(paths)
   planner = LongitudinalPlanner(params, params_sp)
+  if getattr(planner, 'motion_enabled', False):
+    raise ValueError('Planner-only replay has no motion-consumer ACK or exact input clock; '
+                     'use replay_pedal_switches with --unified for this runtime')
   current = {}
+  target_type = sp_target_return_type(LongitudinalPlannerSP.update_targets)
 
   def update_targets(instance, state, v_ego, a_ego, v_cruise):
-    instance.source = current['sp'].longitudinalPlanSource
-    return v_cruise, a_ego
+    return frozen_sp_target(instance, current['sp'].longitudinalPlanSource, v_cruise, a_ego, target_type)
 
   def is_e2e(instance, state):
     dec = current['sp'].dec

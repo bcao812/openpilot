@@ -4,9 +4,11 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
+from opendbc.car.honda.values import CAR
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import A_CHANGE_COST, DANGER_ZONE_COST, J_EGO_COST, LongitudinalMpc
 from openpilot.selfdrive.controls.lib.longitudinal_planner import get_lead_braking_urgency
-from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import assert_invalid_motion_preserves_braking
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_lead_state import closing_planner, closing_state
 
 
@@ -137,8 +139,8 @@ def test_disabled_acceleration_constraint_is_still_disabled():
   ['gas', 'brake', 'override', 'inactive', 'disabled', 'control_disabled', 'force_decel', 'unhealthy', 'stock_long', 'other_platform'],
 )
 def test_mode_and_driver_guards_preserve_normal_weights(condition):
-  planner, state = closing_planner(), urgent_state()
-  previous_target = planner.output_a_target
+  platform = CAR.HONDA_CIVIC_BOSCH if condition == 'other_platform' else CAR.HONDA_ACCORD
+  planner, state = closing_planner(platform, openpilot_long=condition != 'stock_long'), urgent_state()
   if condition in ('gas', 'brake'):
     setattr(state['carState'], condition + 'Pressed', True)
   elif condition == 'override':
@@ -154,19 +156,14 @@ def test_mode_and_driver_guards_preserve_normal_weights(condition):
     state['controlsState'].forceDecel = True
   elif condition == 'unhealthy':
     state.all_checks = lambda service_list=None: False
-  elif condition == 'stock_long':
-    planner.CP.openpilotLongitudinalControl = False
-  elif condition == 'other_platform':
-    planner.CP.carFingerprint = 'OTHER'
   original = planner.mpc.set_weights
   planner.mpc.set_weights = Mock(wraps=original)
-  planner.update(state)
+  planner.update(state, now_ns=advance(state, 0))
   if condition == 'unhealthy':
     calls = planner.mpc.set_weights.call_args_list
-    assert calls[0].kwargs['a_change_scale'] == 1.0
-    # Invalid-input reset calls set_weights() with its normal default scale.
+    # An input rejected before solving need not install costs at all.
     assert all(call.kwargs.get('a_change_scale', 1.0) == 1.0 for call in calls)
-    assert_invalid_motion_preserves_braking(planner, state, previous_target)
+    assert not planner.motion_intent.valid
   else:
     assert planner.mpc.set_weights.call_args.kwargs['a_change_scale'] == 1.0
 
@@ -175,7 +172,7 @@ def test_real_mpc_receives_urgency_and_keeps_its_acceleration_limits():
   planner, state = closing_planner(), urgent_state()
   original = planner.mpc.set_weights
   planner.mpc.set_weights = Mock(wraps=original)
-  planner.update(state)
+  planner.update(state, now_ns=advance(state, 0))
   assert planner.mpc.set_weights.call_args.kwargs['a_change_scale'] == 0.5
   assert planner.mpc.solution_status == 0
   assert -3.5 <= planner.output_a_target <= 2.0

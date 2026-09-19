@@ -11,12 +11,12 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   LEAD_DANGER_FACTOR, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, N, PARAM_DIM, QP_FEASIBILITY_TOL,
   REST_STATE_TOL, T_IDXS, LongitudinalMpc,
 )
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, MotionReferenceKind
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_due_rest_reference import typed_due_reference
 from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarness
 from openpilot.selfdrive.controls.tests.test_mpc_rest_numerics import assert_future_primal_witness, integrate
@@ -25,12 +25,6 @@ from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import typed_reference
 from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ACCEL_LIMITS, ControlHarness
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def solve(reference, speed=10.0, acceleration=0.0):

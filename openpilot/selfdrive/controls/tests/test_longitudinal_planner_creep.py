@@ -1,13 +1,21 @@
+"""Creep contracts for the retained compatibility planner.
+
+The generic factory uses stock longitudinal control on Civic Bosch. The
+standard Accord's active stop owner is covered by the UNIFIED owner tests.
+"""
+
 from typing import cast
 
 from opendbc.car import structs
-from openpilot.cereal import custom, messaging
+from opendbc.car.honda.values import CAR
+from openpilot.cereal import custom
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED,
                                                             CREEP_STOP_T, STOP_ACCEL, STOP_RELEASE_ACCEL, STOP_SPEED,
                                                             should_stop)
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import build_sm
 
 # above STOP_SPEED, so should_stop() alone can never latch here, and inside the creep band
 V_CREEP = 0.5
@@ -54,63 +62,17 @@ class MockDec:
     return True
 
 
-class MockSubMaster(dict):
-  def __init__(self, services):
-    super().__init__(services)
-    self.valid = dict.fromkeys(services, True)
-    self.logMonoTime = dict.fromkeys(services, 0)
-    self.updated = dict.fromkeys(services, True)
-    self.recv_frame = dict.fromkeys(services, 1)
-
-  def all_checks(self, service_list=None) -> bool:
-    return True
-
-
-def build_sm(v_ego: float, force_decel: bool, enabled: bool = True, experimental_mode: bool = False,
-             v_cruise_kph: float = 100.0):
-  services = {}
-  for service in ("radarState", "vehicleParameters", "carStateSP", "liveMapDataSP", "gpsLocationExternal", "gpsLocation"):
-    services[service] = getattr(messaging.new_message(service), service)
-
-  controls_state = messaging.new_message('controlsState')
-  controls_state.controlsState.forceDecel = force_decel
-  services['controlsState'] = controls_state.controlsState.as_reader()
-
-  car_state = messaging.new_message('carState')
-  car_state.carState.vEgo = v_ego
-  car_state.carState.vCruise = v_cruise_kph
-  car_state.carState.vCruiseCluster = v_cruise_kph
-  services['carState'] = car_state.carState.as_reader()
-
-  selfdrive_state = messaging.new_message('selfdriveState')
-  selfdrive_state.selfdriveState.enabled = enabled
-  selfdrive_state.selfdriveState.experimentalMode = experimental_mode
-  services['selfdriveState'] = selfdrive_state.selfdriveState.as_reader()
-
-  car_control = messaging.new_message('carControl')
-  car_control.carControl.enabled = enabled
-  services['carControl'] = car_control.carControl.as_reader()
-
-  model = messaging.new_message('modelV2')
-  model.modelV2.orientationRate.z = [1e-3] * 33  # straight ahead, but non-zero to keep SCC out of the way
-  model.modelV2.velocity.x = [v_ego] * 33
-  model.modelV2.position.x = [float(i) for i in range(33)]
-  # the model is asymptotically converging: it asks for no speed, but never dips below the
-  # actuator dead band, which is exactly the case should_stop() cannot resolve on its own
-  model.modelV2.action.desiredAcceleration = -0.1
-  services['modelV2'] = model.modelV2.as_reader()
-
-  return MockSubMaster(services)
-
-
-def build_planner(dec_active: bool = True, dec_mode: str = "acc") -> LongitudinalPlanner:
+def build_planner(dec_active: bool = True, dec_mode: str = "acc", *, platform=CAR.HONDA_CIVIC_BOSCH,
+                  openpilot_long=False) -> LongitudinalPlanner:
   CP = structs.CarParams()
+  CP.carFingerprint = platform
+  CP.openpilotLongitudinalControl = openpilot_long
   CP.steerRatio = 15.0
   CP.wheelbase = 2.7
   CP.longitudinalActuatorDelay = 0.5  # Honda Bosch
-  CP_SP = custom.CarParamsSP.new_message().as_reader()
+  CP_SP = custom.CarParamsSP.new_message()
 
-  planner = LongitudinalPlanner(CP, CP_SP, init_v=V_CREEP)
+  planner = LongitudinalPlanner(CP, CP_SP.as_reader(), init_v=V_CREEP)
   planner.dec = cast(DynamicExperimentalController, MockDec(dec_active, dec_mode))
   return planner
 

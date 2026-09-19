@@ -7,28 +7,22 @@ import numpy as np
 import pytest
 
 from openpilot.cereal import log
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
 from openpilot.selfdrive.controls.lib.motion_supervisor import (
   DEGRADED_ACCEL, MOTION_INTENT_VERSION, MotionIntent, MotionPhase, MotionReferenceKind, StopReason,
 )
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarness
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, stopping_curve
 from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ACCEL_LIMITS, ControlHarness
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state
 
 
 INSTANCE_NS = 1_000_000_000
 SOURCE_NS = 2_000_000_000
 NOW_NS = SOURCE_NS + 10_000_000
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def zero_intent(**changes):

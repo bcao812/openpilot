@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 
 from openpilot.cereal import log
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_ACCEL, STOP_SPEED
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
@@ -10,14 +9,9 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDX
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionReferenceKind, StopReason
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import reference_requests_departure
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import advance, make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def execution_state(*, raw_forward=True, speed=0.02):

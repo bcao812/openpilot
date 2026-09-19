@@ -53,7 +53,7 @@ class LongitudinalPlannerSP:
 
     return experimental_mode and self.dec.mode() == "blended"
 
-  def update_targets(self, sm: messaging.SubMaster, v_ego: float, a_ego: float, v_cruise: float) -> tuple[float, float]:
+  def update_targets(self, sm: messaging.SubMaster, v_ego: float, a_ego: float, v_cruise: float) -> CruiseTarget:
     CS = sm['carState']
     v_cruise_cluster_kph = min(CS.vCruiseCluster, V_CRUISE_MAX)
     v_cruise_cluster = v_cruise_cluster_kph * CV.KPH_TO_MS
@@ -83,16 +83,15 @@ class LongitudinalPlannerSP:
     speed, acceleration = targets[self.source]
     self.cruise_target = CruiseTarget(self.source, float(speed), float(acceleration))
     self.output_v_target = speed
-    if not getattr(self, 'unified', False):
-      self.output_a_target = acceleration
-    return speed, acceleration
+    return self.cruise_target
 
   def update(self, sm: messaging.SubMaster) -> None:
     self.events_sp.clear()
     self.dec.update(sm)
     self.e2e_alerts_helper.update(sm, self.events_sp)
 
-  def publish_longitudinal_plan_sp(self, sm: messaging.SubMaster, pm: messaging.PubMaster, parent_plan_mono_time=0) -> None:
+  def publish_longitudinal_plan_sp(self, sm: messaging.SubMaster, pm: messaging.PubMaster, parent_plan_mono_time=0,
+                                  *, legacy_acceleration: float | None = None) -> None:
     plan_sp_send = messaging.new_message('longitudinalPlanSP')
 
     plan_sp_send.valid = (sm.all_checks(service_list=['carState', 'controlsState'])
@@ -102,7 +101,9 @@ class LongitudinalPlannerSP:
     longitudinalPlanSP.longitudinalPlanMonoTime = parent_plan_mono_time
     longitudinalPlanSP.longitudinalPlanSource = self.source
     longitudinalPlanSP.vTarget = float(self.output_v_target)
-    longitudinalPlanSP.aTarget = float(self.cruise_target.acceleration if getattr(self, 'unified', False) else self.output_a_target)
+    # UNIFIED publishes its policy target; LEGACY explicitly supplies the final
+    # reference acceleration used by this field before mode convergence.
+    longitudinalPlanSP.aTarget = float(self.cruise_target.acceleration if legacy_acceleration is None else legacy_acceleration)
     longitudinalPlanSP.events = self.events_sp.to_msg()
 
     # Dynamic Experimental Control

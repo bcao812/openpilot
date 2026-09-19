@@ -18,11 +18,11 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MAX, ACCEL_MIN
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS, LongitudinalMpc, MpcReference
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import model_reference_from_velocity
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import action, radar_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
@@ -49,12 +49,6 @@ EVENTS = (
   LeadEvent('closing_braking', 44.0, 10.0, -1.5, 20.0),
   LeadEvent('matching_then_braking', 30.0, 20.0, -3.0, 20.0),
 )
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def motion(x, v, a, t):

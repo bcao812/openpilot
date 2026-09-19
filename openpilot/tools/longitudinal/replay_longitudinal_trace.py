@@ -2,6 +2,7 @@
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor
+from functools import wraps
 import inspect
 import json
 from pathlib import Path
@@ -15,11 +16,14 @@ from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrac
 from openpilot.tools.longitudinal.evaluate_pedal_full_routes import native_clean, exact_alignment, columns, compare_can
 from openpilot.tools.longitudinal.window_replay import load_window, window_messages
 from openpilot.tools.longitudinal.replay_pedal_full_routes import NumericSink, ROW_FIELDS, NATIVE_FIELDS
-from openpilot.tools.longitudinal.replay_pedal_switches import replay_window, save_json, sha256
+from openpilot.tools.longitudinal.replay_pedal_switches import replay_window, save_json, selected_mode, sha256
 
 
 def run_window(arguments):
-  corpus, destination, window, enabled = arguments
+  corpus, destination, window, enabled, *options = arguments
+  unified = bool(options and options[0])
+  supervised = bool(len(options) > 1 and options[1])
+  selected_mode(unified, supervised)
   mode = 'on' if enabled else 'off'
   output = destination / mode
   output.mkdir(parents=True, exist_ok=True)
@@ -41,6 +45,7 @@ def run_window(arguments):
     emitted['samples'] += len(payload['samples'])
     emitted['bytes'] += len(encoded)
 
+  @wraps(original_init)
   def initialize(planner, *args, **kwargs):
     recorder = LongitudinalTrace(emit=emit) if enabled else None
     if recorder is not None:
@@ -59,7 +64,8 @@ def run_window(arguments):
   started = time.monotonic()
   try:
     with patch.object(LongitudinalPlanner, '__init__', new=initialize):
-      result = replay_window(None, dict(window, cache=window['id']), messages=window_messages(corpus, window, sink), row_sink=sink, strict=True)
+      result = replay_window(None, dict(window, cache=window['id']), messages=window_messages(corpus, window, sink), row_sink=sink, strict=True,
+                             unified=unified, supervised=supervised)
   finally:
     for recorder in records:
       recorder.close()
@@ -92,6 +98,9 @@ def evaluate(selection, output):
     expected_window = dict(window, cache=window['id'])
     if before_meta['window'] != expected_window or after_meta['window'] != expected_window:
       raise ValueError('Sampled replay window changed')
+    for name in ('requested_mode', 'planner_mode', 'controller_mode'):
+      if before_meta['capabilities'][name] != after_meta['capabilities'][name]:
+        raise ValueError(f'Trace comparison changed longitudinal {name}')
     for kind in ROW_FIELDS:
       for field in ROW_FIELDS[kind]:
         if not np.array_equal(before[kind][field], after[kind][field], equal_nan=True):
@@ -132,6 +141,9 @@ def main():
   parser.add_argument('--output', type=Path, required=True)
   parser.add_argument('--workers', type=int, default=1)
   parser.add_argument('--mode', choices=('both', 'off', 'on'), default='both')
+  motion_modes = parser.add_mutually_exclusive_group()
+  motion_modes.add_argument('--unified', action='store_true')
+  motion_modes.add_argument('--supervised', action='store_true', help='Replay a historical source tree implementing SUPERVISED')
   arguments = parser.parse_args()
   selection = json.loads(arguments.selection.read_text())
   if arguments.command == 'evaluate':
@@ -144,7 +156,8 @@ def main():
     parser.error('--workers must be positive')
   arguments.output.mkdir(parents=True, exist_ok=True)
   modes = (False, True) if arguments.mode == 'both' else (arguments.mode == 'on',)
-  jobs = [(corpus, arguments.output, window, enabled) for window in selection['windows'] for enabled in modes]
+  jobs = [(corpus, arguments.output, window, enabled, arguments.unified, arguments.supervised)
+          for window in selection['windows'] for enabled in modes]
   if arguments.workers == 1:
     for job in jobs:
       run_window(job)

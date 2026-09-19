@@ -11,7 +11,6 @@ from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR
 from openpilot.cereal import messaging
 from openpilot.common.longitudinal_logging import CHECK_FLAGS, PLANNER_INPUTS
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
@@ -20,23 +19,18 @@ from openpilot.selfdrive.controls.lib.longitudinal_observation import PlannerObs
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner, MIN_ALLOW_THROTTLE_SPEED, PitchBiasEstimator
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import make_state
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP
 
 
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
-
-
-def make_planner(*, unified=True, diagnostics=None, speed=20.0, trace=None, platform=CAR.HONDA_ACCORD, stock=False, interceptor=False):
+def make_planner(*, diagnostics=None, speed=20.0, trace=None, platform=CAR.HONDA_ACCORD, stock=False, interceptor=False):
   params = CarInterface.get_non_essential_params(platform)
   params.openpilotLongitudinalControl = not stock
   extension = CarInterface.get_non_essential_params_sp(params, platform)
   extension.enableGasInterceptor = interceptor
-  return LongitudinalPlanner(params, extension, init_v=speed, unified=unified, diagnostics=diagnostics, trace=trace)
+  return LongitudinalPlanner(params, extension, init_v=speed, diagnostics=diagnostics, trace=trace)
 
 
 def update_at_fixture_clock(planner, state, *, now_ns=None):
@@ -105,7 +99,7 @@ def control_snapshot(planner):
     result["intent"] = planner.motion_intent
     result["reference"] = reference_snapshot(planner.reference_planner)
   else:
-    for name in ("stop_latched", "creep_t", "creep_stop", "creep_total_t", "moving_lead_t", "close_lead_stop"):
+    for name in ("stop_latched", "creep_t", "creep_stop", "creep_total_t"):
       result[name] = getattr(planner, name)
   return result
 
@@ -130,9 +124,8 @@ def set_field(state, path, value):
   setattr(target, fields[-1], value)
 
 
-@pytest.mark.parametrize("unified", [False, True])
-def test_regular_logging_defaults_on_independently_of_candidate(unified):
-  planner = make_planner(unified=unified)
+def test_regular_logging_defaults_on_for_supported_vehicle():
+  planner = make_planner()
   state = make_state()
   update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
@@ -141,7 +134,7 @@ def test_regular_logging_defaults_on_independently_of_candidate(unified):
   assert observed.context.sequence == 1
   assert observed.context.session > 0
   assert observed.context.endMonoTime >= observed.context.startMonoTime > 0
-  assert observed.unified == unified
+  assert observed.unified
   assert observed.updateCompleted
   assert observed.outcome == "completed"
   assert observed.mpcUpdated and observed.solverAttempted and observed.solverReturnKnown
@@ -244,7 +237,7 @@ def test_unset_cruise_and_cold_standby_are_distinct(idle, expected):
 def test_actual_invalid_policy_output_is_preserved_without_recomputation(target):
   planner = make_planner()
   state = make_state()
-  with patch.object(LongitudinalPlannerSP, "update_targets", return_value=target) as targets:
+  with patch.object(LongitudinalPlannerSP, "update_targets", return_value=CruiseTarget(planner.source, *target)) as targets:
     update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   targets.assert_called_once()
@@ -256,7 +249,7 @@ def test_actual_invalid_policy_output_is_preserved_without_recomputation(target)
 
 @pytest.mark.parametrize("unified", [False, True])
 def test_mpc_input_rejection_is_not_a_solver_attempt(unified):
-  planner = make_planner(unified=unified)
+  planner = make_planner(diagnostics=True, platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   state = make_state()
   update_at_fixture_clock(planner, state)
   lead = state["radarState"].leadOne
@@ -279,7 +272,7 @@ def test_mpc_input_rejection_is_not_a_solver_attempt(unified):
 @pytest.mark.parametrize("unified", [False, True])
 @pytest.mark.parametrize("failure,status,return_known", [("status", 4, True), ("exception", MPC_SOLVER_ERROR, False)])
 def test_actual_solver_failures_survive_control_reset(unified, failure, status, return_known):
-  planner = make_planner(unified=unified)
+  planner = make_planner(diagnostics=True, platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   state = make_state()
   state["carState"].aEgo = -0.4
   solver = Mock(wraps=planner.mpc.solver)
@@ -340,7 +333,7 @@ def test_unhealthy_input_completion_does_not_masquerade_as_admitted_intent():
 ])
 @pytest.mark.parametrize("unified", [False, True])
 def test_pitch_observation_counts_actual_filter_branches(speed, orientation, called, learned, unified):
-  planner = make_planner(unified=unified, speed=speed)
+  planner = make_planner(diagnostics=True, platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH, speed=speed)
   state = make_state(speed=speed)
   state["carControl"].orientationNED = orientation
   with patch.object(planner.pitch_bias.filter, "update", wraps=planner.pitch_bias.filter.update) as filter_update:
@@ -427,8 +420,8 @@ def test_standalone_sp_publication_keeps_unknown_parent_as_zero():
 @pytest.mark.parametrize("unified", [False, True])
 @pytest.mark.parametrize("experimental", [False, True])
 def test_logging_on_off_preserves_control_messages_and_state(unified, experimental):
-  baseline = make_planner(unified=unified, diagnostics=False)
-  observed = make_planner(unified=unified, diagnostics=True)
+  baseline = make_planner(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH, diagnostics=False)
+  observed = make_planner(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH, diagnostics=True)
   for frame in range(30):
     speed = max(0.0, 20.0 - frame * 0.5)
     state = make_state(speed=speed, experimental=experimental, target=18.0)
@@ -449,8 +442,8 @@ def test_logging_on_off_preserves_control_messages_and_state(unified, experiment
 @pytest.mark.parametrize("method", ["begin", "record", "mpc_started", "finish", "publish"])
 @pytest.mark.parametrize("unified", [False, True])
 def test_observer_failure_is_output_neutral_and_counted(method, unified):
-  baseline = make_planner(unified=unified, diagnostics=False)
-  observed = make_planner(unified=unified)
+  baseline = make_planner(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH, diagnostics=False)
+  observed = make_planner(diagnostics=True, platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   state = make_state()
   update_at_fixture_clock(baseline, state)
   with patch.object(observed.observation, method, side_effect=RuntimeError("observer unavailable")):
@@ -477,7 +470,7 @@ def test_failed_begin_never_reuses_a_previous_unpublished_attempt():
 
 @pytest.mark.parametrize("unified", [False, True])
 def test_original_control_exception_is_preserved_with_failed_observer(unified):
-  planner = make_planner(unified=unified)
+  planner = make_planner(diagnostics=True, platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   failure = RuntimeError("original control exception")
   with patch.object(LongitudinalPlannerSP, "update", side_effect=failure), \
        patch.object(planner.observation, "record", side_effect=ValueError("diagnostic exception")):

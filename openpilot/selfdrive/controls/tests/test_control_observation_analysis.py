@@ -3,24 +3,19 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from opendbc.car.honda.values import CAR
 from openpilot.cereal import log
 from openpilot.common.longitudinal_logging import CHECK_FLAGS
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.control_observation import ControlObservation, supervisor_snapshot
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_control_observation import control_payload
 from openpilot.selfdrive.controls.tests.test_motion_fault_braking import native_command
 from openpilot.selfdrive.controls.tests.test_unified_controlsd import CONTROL_SERVICES, ControlsHarness, bounded_submaster, new_event, serialized
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator
 
 
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
-
-
-def observed(*, enabled=True, supervised=True, unified=False):
-  harness = ControlsHarness(unified=unified, supervised=supervised)
+def observed(*, enabled=True, platform=CAR.HONDA_ACCORD):
+  harness = ControlsHarness(platform=platform)
   harness.control.longitudinal_observation = ControlObservation(
     harness.control.CP, harness.control.CP_SP, enabled=enabled, clock=lambda: harness.now_ns,
   )
@@ -31,19 +26,19 @@ def analysis(harness):
   return harness.control.pm.messages["controlsState"].controlsState.longitudinalDiagnostics.analysis
 
 
-@pytest.mark.parametrize("supervised,unified", [(True, False), (False, True), (False, False)])
-def test_input_booleans_are_the_values_passed_to_the_real_controller(supervised, unified):
-  harness = observed(supervised=supervised, unified=unified)
+@pytest.mark.parametrize("platform,unified", [(CAR.HONDA_ACCORD, True), (CAR.HONDA_CIVIC_BOSCH, False)], ids=["unified", "legacy"])
+def test_input_booleans_are_the_values_passed_to_the_real_controller(platform, unified):
+  harness = observed(platform=platform)
   controller = harness.control.LoC
   with patch.object(controller, "update", wraps=controller.update) as update:
     harness.step()
   value = analysis(harness)
   assert value.version == 1
-  assert value.motionInputsKnown == (supervised or unified)
-  assert value.motionBefore.known == value.motionAfter.known == (supervised or unified)
+  assert value.motionInputsKnown == unified
+  assert value.motionBefore.known == value.motionAfter.known == unified
   for name, field in (("plan_valid", "planValid"), ("braking_plan_valid", "brakingPlanValid"), ("standby_input", "standbyInput")):
     assert getattr(value, field) == update.call_args.kwargs.get(name, False)
-  if supervised or unified:
+  if unified:
     assert value.motionBefore.phase == "off"
     assert value.motionAfter.phase == controller.motion_supervisor.phase.text
   update.assert_called_once()
@@ -57,7 +52,7 @@ def test_snapshot_does_not_call_supervisor_predicates_or_mutate_qualification_st
   supervisor._rearm_model_time_ns = (1 << 53) + 97
   before = dict(vars(supervisor))
   with ExitStack() as stack:
-    for name in ("_valid_input", "_valid_transport", "_valid_creep_transport", "_latest_input_ids", "_remember_rearm_input"):
+    for name in ("_valid_input", "_valid_transport", "_valid_braking_input", "_latest_input_ids", "_remember_rearm_input"):
       stack.enter_context(patch.object(supervisor, name, side_effect=AssertionError("observer must only copy stored state")))
     value = supervisor_snapshot(harness.control.LoC)
   assert vars(supervisor) == before
@@ -89,39 +84,44 @@ def test_public_off_state_does_not_hide_sticky_fault_or_rearm_barrier():
   assert value.motionAfter.creepT == value.motionAfter.creepTotalT == 0.0
 
 
-def test_off_credit_and_independent_sample_are_copied_after_real_reentry():
+def test_rearm_barrier_and_live_creep_timing_are_copied_after_real_reentry():
   harness = observed()
   harness.car_state.vEgo = 0.8
   harness.plan.aTarget = -0.4
   harness.selfdrive_state.enabled = False
   harness.selfdrive_state.active = False
-  harness.plan.motionIntent.creepReset = True
   harness.plan.motionIntent.allowCreep = False
   harness.step()
-  pending = analysis(harness).motionAfter.pendingOffCreep
-  assert pending.known and pending.reset
-  assert pending.measuredSpeed == pytest.approx(0.8)
-  assert list(pending.sourceMonoTimes) == list(harness.plan.motionIntent.creepSourceMonoTimes)
+  inactive = analysis(harness).motionAfter
+  assert inactive.known and inactive.phase == "off" and inactive.requireNewInput
+  assert inactive.creepT == inactive.creepTotalT == 0.0
+  assert not inactive.pendingOffCreep.known
+  assert not inactive.independentCreepSample.known
   harness.selfdrive_state.enabled = True
   harness.selfdrive_state.active = True
   harness.step(new_plan=False)
   assert analysis(harness).motionAfter.waitingForFreshInput
   assert not analysis(harness).motionAfter.degraded
-  harness.plan.motionIntent.creepReset = False
   harness.plan.motionIntent.allowCreep = True
   harness.step()
   value = analysis(harness).motionAfter
   supervisor = harness.control.LoC.motion_supervisor
-  assert value.creepOffCreditNs == supervisor._creep_off_credit_ns > 0
-  assert value.creepWindowOffCreditNs == supervisor._creep_window_off_credit_ns
-  assert value.creepTotalNs == supervisor._creep_total_ns
-  assert value.creepT == supervisor.creep_t
-  assert value.independentCreepSample.known
-  assert list(value.independentCreepSample.sourceMonoTimes) == list(supervisor._last_independent_creep_sample.source_times_ns)
+  assert not value.waitingForFreshInput and not value.requireNewInput and not value.degraded
+  assert value.creepT == supervisor.creep_t > 0.0
+  assert value.creepTotalT == supervisor.creep_total_t
+  assert value.creepV == supervisor.creep_v == pytest.approx(0.8)
+  ids = {entry.service: entry.monoTime for entry in value.ids}
+  assert ids["lastPlan"] == supervisor._last_plan_time_ns == harness.events["longitudinalPlan"].logMonoTime
+  assert ids["lastModel"] == supervisor._last_model_time_ns == harness.plan.modelMonoTime
+  previous_creep_time = value.creepT
+  harness.step(new_plan=False)
+  repeated = analysis(harness).motionAfter
+  assert repeated.creepT == supervisor.creep_t > previous_creep_time
+  assert {entry.service: entry.monoTime for entry in repeated.ids}["lastPlan"] == ids["lastPlan"]
 
 
 @pytest.mark.parametrize("failure", [None, "begin", "controller_input", "controller_output", "end", "publish"])
-def test_supervised_on_off_and_observer_errors_preserve_controls_and_native_acc_command(failure):
+def test_unified_on_off_and_observer_errors_preserve_controls_and_native_acc_command(failure):
   baseline, candidate = observed(enabled=False), observed()
   with ExitStack() as stack:
     if failure is not None:
@@ -142,7 +142,6 @@ def test_supervised_on_off_and_observer_errors_preserve_controls_and_native_acc_
         harness.selfdrive_state.active = active
         harness.plan.aTarget = -0.4
         harness.plan.motionIntent.valid = valid
-        harness.plan.motionIntent.creepReset = not creep
         harness.plan.motionIntent.allowCreep = creep
         harness.step(new_plan=new_plan)
       assert control_payload(baseline) == control_payload(candidate)

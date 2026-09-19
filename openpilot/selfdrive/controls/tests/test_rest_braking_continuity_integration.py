@@ -9,21 +9,15 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import MPC_GOAL_INFEASIBLE
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionReferenceKind
 from openpilot.selfdrive.controls.lib.reference_timing import ReferenceTimingConsumer
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import StrictPlanTransportHarness
 from openpilot.selfdrive.controls.tests.test_unified_controlsd import CONTROL_STEP_NS, serialized
 from openpilot.selfdrive.controls.tests.test_unified_model_reference_contract import model_stop_curve
 from openpilot.selfdrive.controls.tests.test_unified_startup import PLANNER_STEPS
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def zero_curve():

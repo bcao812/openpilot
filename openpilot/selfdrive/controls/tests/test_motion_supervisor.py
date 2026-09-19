@@ -13,8 +13,8 @@ CONTROL_INTERVAL_NS = round(DT_CTRL * 1e9)
 
 
 class MotionHarness:
-  def __init__(self, mode=LongitudinalMode.UNIFIED):
-    self.supervisor = MotionSupervisor(mode=mode)
+  def __init__(self):
+    self.supervisor = MotionSupervisor()
     self.now_ns = 2_000_000_000
     self.plan_time_ns = self.now_ns
     self.model_time_ns = self.now_ns

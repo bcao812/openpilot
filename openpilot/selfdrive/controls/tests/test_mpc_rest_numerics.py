@@ -8,23 +8,17 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   MODEL_A_REF, MODEL_V_REF, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, QP_FEASIBILITY_TOL, QP_MAX_ITER, REFERENCE_BOUND, REST_STATE_TOL, T_IDXS,
   LongitudinalMpc, MpcReference,
 )
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_due_rest_reference import NEAR_ZERO_STATES, typed_due_reference
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, stopping_curve
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import StrictPlanTransportHarness, typed_reference
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
 from openpilot.selfdrive.controls.tests.test_unified_model_reference_contract import model_stop_curve
 from openpilot.selfdrive.controls.tests.test_unified_startup import PLANNER_STEPS
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def test_generated_iteration_budget_preserves_one_rti_and_the_original_tolerances():

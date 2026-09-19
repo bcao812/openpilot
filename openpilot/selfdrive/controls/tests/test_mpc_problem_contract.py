@@ -1,0 +1,251 @@
+"""Native problem installation and domain acceptance, with independent cost/dynamics oracles."""
+
+from dataclasses import replace
+from decimal import Decimal, localcontext
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import numpy as np
+import pytest
+
+from openpilot.cereal import log
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  MODEL_V_REF, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, N, REFERENCE_BOUND, T_IDXS,
+  LongitudinalMpc, MpcOutcome, MpcReference,
+)
+from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, ModelSource, MovingPreference, NoForward, RestGoal
+
+
+class NativeProblemRecorder:
+  """Observe actual native calls without replacing its optimization or reset."""
+
+  def __init__(self, native):
+    self.native = native
+    self.cost_writes = []
+    self.costs = {}
+    self.constraints = {}
+    self.solved_costs = []
+    self.failure = None
+
+  def __getattr__(self, name):
+    return getattr(self.native, name)
+
+  def cost_set(self, stage, field, value):
+    self.cost_writes.append((stage, field))
+    self.costs[stage, field] = np.array(value, copy=True)
+    return self.native.cost_set(stage, field, value)
+
+  def constraints_set(self, stage, field, value, *args, **kwargs):
+    self.constraints[stage, field] = np.array(value, copy=True)
+    return self.native.constraints_set(stage, field, value, *args, **kwargs)
+
+  def solve(self):
+    self.solved_costs.append({key: value.copy() for key, value in self.costs.items()})
+    if self.failure == 'solver_status':
+      return 4
+    if self.failure == 'solver_exception':
+      raise RuntimeError('injected native failure')
+    return self.native.solve()
+
+  def get(self, stage, field):
+    value = self.native.get(stage, field)
+    if stage == 1 and field == 'x' and self.failure in ('nonfinite', 'rest_defect'):
+      value = value.copy()
+      value[1] = np.nan if self.failure == 'nonfinite' else value[1] + 0.01
+    return value
+
+
+@pytest.fixture
+def recorded_mpc():
+  mpc = LongitudinalMpc()
+  recorder = NativeProblemRecorder(mpc.solver)
+  mpc.solver = recorder
+  return mpc, recorder
+
+
+def no_leads():
+  return SimpleNamespace(leadOne=SimpleNamespace(present=False), leadTwo=SimpleNamespace(present=False))
+
+
+def reference_case(kind):
+  """Build MPC input directly, independently of model-adapter classification."""
+  speed = 0.0 if kind in ('due_rest', 'no_forward') else 1.0 if kind in ('future_rest', 'scheduled_rest') else 10.0
+  if kind == 'legacy':
+    return speed, None
+  if kind == 'cruise':
+    return speed, MpcReference(20.0)
+  source = ModelSource(1_000_000_000, 1_000_000_000, 1_000_000_000, proxy_age_s=0.0)
+  moving, events = None, ()
+  if kind in ('due_rest', 'no_forward'):
+    events = (NoForward('no_positive_progress'),)
+  else:
+    supported = np.ones(N+1, dtype=bool)
+    if kind == 'moving':
+      supported[-2:] = False
+    moving = MovingPreference(speed * T_IDXS, np.full(N+1, speed), np.zeros(N+1), supported)
+  if kind in ('due_rest', 'future_rest', 'scheduled_rest'):
+    node = {'due_rest': 0, 'future_rest': 6, 'scheduled_rest': 1}[kind]
+    goal_time = float(T_IDXS[node])
+    events += (RestGoal((0, 1), (0.0, goal_time), source.model_mono_time_ns + round(goal_time * 1e9),
+                       goal_time, node, goal_time, 0.0),)
+  typed = ModelReferenceEvidence(source, moving, events)
+  return speed, MpcReference(20.0, typed_model=typed, allow_future_rest_reschedule=kind == 'scheduled_rest')
+
+
+def assert_cost_contract(costs, kind, *, jerk_factor=1.0, history_scale=1.0, previous_accel=True):
+  # This scalar objective is the pre-refactor engineering contract, not a call
+  # to the builder. Distinct residuals also expose coordinate/order mistakes.
+  residuals = np.vstack((np.eye(6), [1.3, -2.1, 0.7, -0.4, 0.2, -0.8]))
+  typed = kind not in ('legacy', 'cruise')
+  for stage, timestamp in enumerate(T_IDXS):
+    supported = kind != 'moving' or stage < N-1
+    matrix = costs[stage, 'W']
+    np.testing.assert_array_equal(matrix - np.diag(np.diag(matrix)), 0.0)
+    for residual in residuals:
+      distance_cost = 0.0 if typed else 3.0 * residual[0]**2
+      preference_cost = (5.0 * jerk_factor * (residual[2]**2 / 2.5**4 + residual[3]**2 / 2.5**2)
+                         if typed and supported else 0.0)
+      history = (200.0 * jerk_factor * history_scale * min(1.0, max(0.0, 2.0 - timestamp)) * residual[4]**2
+                 if previous_accel else 0.0)
+      jerk_cost = 5.0 * jerk_factor * residual[5]**2 if stage < N else 0.0
+      vector = residual if stage < N else residual[:-1]
+      assert matrix.shape == (len(vector), len(vector))
+      assert vector @ matrix @ vector == pytest.approx(distance_cost + preference_cost + history + jerk_cost, abs=1e-13)
+    if stage < N:
+      np.testing.assert_array_equal(costs[stage, 'Zl'], [1e6, 1e6, 1e6, 100.0])
+
+
+@pytest.mark.parametrize('kind', ['legacy', 'cruise', 'moving', 'no_forward', 'due_rest', 'future_rest', 'scheduled_rest'])
+@pytest.mark.parametrize('personality,scale,previous,factor', [
+  (log.LongitudinalPersonality.relaxed, 1.0, True, 1.0),
+  (log.LongitudinalPersonality.standard, 0.35, True, 1.0),
+  (log.LongitudinalPersonality.aggressive, 0.7, False, 0.5),
+])
+def test_final_costs_are_installed_once_for_each_cold_and_warm_update(recorded_mpc, kind, personality, scale, previous, factor):
+  mpc, recorder = recorded_mpc
+  speed, reference = reference_case(kind)
+  assert mpc.outcome is MpcOutcome.NOT_SOLVED
+  for _ in range(2):
+    recorder.cost_writes.clear()
+    mpc.set_weights(previous, personality, a_change_scale=scale)
+    assert not recorder.cost_writes
+    mpc.set_cur_state(speed, 0.0)
+    calls = len(recorder.solved_costs)
+    mpc.update(no_leads(), personality, reference=reference)
+    assert len(recorder.solved_costs) == calls + 1
+    assert mpc.diagnostic_last_solver_return == 0 and mpc.outcome is MpcOutcome.ACCEPTED
+    assert sorted(recorder.cost_writes) == sorted([(stage, 'W') for stage in range(N+1)]
+                                                + [(stage, 'Zl') for stage in range(N)])
+    assert_cost_contract(recorder.solved_costs[-1], kind, jerk_factor=factor, history_scale=scale, previous_accel=previous)
+
+
+def test_rest_and_no_rest_switches_clear_previous_costs_and_native_bounds(recorded_mpc):
+  mpc, recorder = recorded_mpc
+  # No fresh set_weights call is required for a subsequent update. In
+  # particular, prior model costs and state bounds must not become base costs.
+  for kind in ('moving', 'future_rest', 'due_rest', 'no_forward', 'cruise', 'legacy', 'scheduled_rest', 'cruise'):
+    speed, reference = reference_case(kind)
+    recorder.cost_writes.clear()
+    mpc.set_cur_state(speed, 0.0)
+    mpc.update(no_leads(), reference=reference)
+    assert mpc.outcome is MpcOutcome.ACCEPTED
+    assert len([field for _, field in recorder.cost_writes if field == 'W']) == N+1
+    assert_cost_contract(recorder.solved_costs[-1], kind)
+    if kind in ('legacy', 'cruise'):
+      assert mpc.rest_goal is None and mpc.effective_rest_node is None
+      np.testing.assert_array_equal(mpc.params[:, MODEL_V_REF:], 0.0)
+      np.testing.assert_array_equal(mpc.yref, 0.0)
+      for stage in range(1, N+1):
+        np.testing.assert_array_equal(recorder.constraints[stage, 'lbx'], -REFERENCE_BOUND)
+        np.testing.assert_array_equal(recorder.constraints[stage, 'ubx'], REFERENCE_BOUND)
+      for stage in range(N):
+        np.testing.assert_array_equal(recorder.constraints[stage, 'C'], 0.0)
+        np.testing.assert_array_equal(recorder.constraints[stage, 'D'], 0.0)
+
+
+@pytest.mark.parametrize('failure', ['invalid_input', 'solver_status', 'solver_exception', 'nonfinite'])
+def test_failure_reset_restores_default_costs_without_a_new_setter(recorded_mpc, failure):
+  mpc, recorder = recorded_mpc
+  speed, reference = reference_case('future_rest')
+  mpc.set_weights(False, log.LongitudinalPersonality.aggressive)
+  mpc.set_cur_state(speed, 0.0)
+  mpc.update(no_leads(), reference=reference)
+  assert mpc.outcome is MpcOutcome.ACCEPTED
+  recorder.failure = failure
+  mpc.set_cur_state(speed, 0.0)
+  calls = len(recorder.solved_costs)
+  bad_reference = replace(reference, cruise_speed=np.nan) if failure == 'invalid_input' else reference
+  mpc.update(no_leads(), reference=bad_reference)
+  assert len(recorder.solved_costs) - calls == (0 if failure == 'invalid_input' else 1)
+  assert mpc.outcome is (MpcOutcome.INPUT_REJECTED if failure == 'invalid_input' else MpcOutcome.SOLVER_FAULT)
+  assert not mpc.previous_solution_valid
+  recorder.failure = None
+  mpc.set_cur_state(10.0, 0.0)
+  mpc.update(no_leads(), reference=MpcReference(20.0))
+  assert mpc.outcome is MpcOutcome.ACCEPTED
+  assert mpc.rest_goal is None and mpc.effective_rest_node is None
+  assert_cost_contract(recorder.solved_costs[-1], 'cruise')
+
+
+def test_direct_run_applies_pending_base_costs_once(recorded_mpc):
+  mpc, recorder = recorded_mpc
+  mpc.set_cur_state(10.0, 0.0)
+  mpc.update(no_leads())
+  recorder.cost_writes.clear()
+  mpc.set_weights(False, log.LongitudinalPersonality.aggressive)
+  assert not recorder.cost_writes
+  mpc.run()
+  assert mpc.outcome is MpcOutcome.ACCEPTED
+  assert_cost_contract(recorder.solved_costs[-1], 'legacy', jerk_factor=0.5, previous_accel=False)
+  assert len([field for _, field in recorder.cost_writes if field == 'W']) == N+1
+  recorder.cost_writes.clear()
+  mpc.run()
+  assert not recorder.cost_writes
+
+
+@pytest.mark.parametrize('rejection', ['source_time', 'no_scheduling_witness', 'native_rest_defect'])
+def test_domain_rest_rejection_keeps_native_success_and_goal_identity(recorded_mpc, rejection):
+  mpc, recorder = recorded_mpc
+  kind = 'scheduled_rest' if rejection == 'no_scheduling_witness' else 'due_rest'
+  speed, reference = reference_case(kind)
+  goal = reference.typed_model.rest_goal
+  mpc.set_weights(False)
+  mpc.set_cur_state(1.0 if rejection == 'source_time' else speed, 0.0)
+  if rejection == 'no_scheduling_witness':
+    with patch.object(mpc, 'future_rest_primal', return_value=None):
+      mpc.update(no_leads(), reference=reference)
+    # A missing finite-family witness rejects the requested contract; this
+    # interface deliberately makes no claim of global reachability failure.
+    assert mpc.effective_rest_node is None
+    assert mpc.diagnostic_rest_goal['schedulingCandidates']
+  else:
+    recorder.failure = 'rest_defect' if rejection == 'native_rest_defect' else None
+    mpc.update(no_leads(), reference=reference)
+  assert mpc.rest_goal is goal
+  assert mpc.outcome is MpcOutcome.REST_REJECTED
+  assert mpc.diagnostic_last_solver_return == mpc.last_solver_status == 0
+  assert mpc.solution_status == (MPC_GOAL_UNSATISFIED if rejection == 'native_rest_defect' else MPC_GOAL_INFEASIBLE)
+  assert not mpc.previous_solution_valid
+  mpc.reset()
+  assert mpc.outcome is MpcOutcome.NOT_SOLVED
+
+
+def test_shared_dynamics_residual_matches_high_precision_polynomial_oracle():
+  def endpoint(state, jerk, duration):
+    with localcontext() as context:
+      context.prec = 80
+      x, v, a, j, h = map(Decimal.from_float, map(float, (*state, jerk, duration)))
+      return np.array([float(x + v*h + a*h*h/2 + j*h*h*h/6), float(v + a*h + j*h*h/2), float(a + j*h)])
+
+  jerks = np.linspace(-2.0, 3.0, N)
+  states = np.zeros((N+1, 3))
+  states[0] = [2.0, 3.0, -0.4]
+  for stage, duration in enumerate(np.diff(T_IDXS)):
+    states[stage+1] = endpoint(states[stage], jerks[stage], duration)
+  states[6] += [1e-5, -2e-5, 3e-5]
+  before = states.copy()
+  expected = np.array([states[stage+1] - endpoint(states[stage], jerks[stage], duration)
+                       for stage, duration in enumerate(np.diff(T_IDXS))])
+  actual = LongitudinalMpc.trajectory_dynamics_defects(states, jerks)
+  np.testing.assert_allclose(actual, expected, atol=1e-13, rtol=0.0)
+  np.testing.assert_array_equal(states, before)

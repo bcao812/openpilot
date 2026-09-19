@@ -14,9 +14,9 @@ from openpilot.selfdrive.car.card import Car
 from openpilot.selfdrive.controls.controlsd import Controls
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
-from openpilot.selfdrive.controls.lib.motion_supervisor import CREEP_INPUT_SERVICES, DEGRADED_ACCEL, MOTION_INTENT_VERSION, PLAN_LEASE_NS, StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import DEGRADED_ACCEL, MOTION_INTENT_VERSION, PLAN_LEASE_NS, StopReason
 from openpilot.selfdrive.controls.lib.reference_timing import ReferenceTimingConsumer, ReferenceTimingProducer
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import advance, make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 from openpilot.selfdrive.selfdrived.events import ET, Events
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 from openpilot.selfdrive.selfdrived.state import SOFT_DISABLE_TIME, StateMachine
@@ -66,7 +66,7 @@ class CapturingPublisher:
 class ControlsHarness:
   """Run real state_control/publish and LongControl, with bounded lateral and vehicle-model collaborators."""
 
-  def __init__(self, unified=True, supervised=False):
+  def __init__(self, *, platform=CAR.HONDA_ACCORD, openpilot_long=True, interceptor=False):
     self.now_ns = 2_000_000_000
     self.events = {service: new_event(service) for service in CONTROL_SERVICES}
     self.car_state = self.events['carState'].carState
@@ -86,25 +86,23 @@ class ControlsHarness:
 
     control = Controls.__new__(Controls)
     control.CP = car.CarParams.new_message()
-    control.CP.carFingerprint = CAR.HONDA_ACCORD
-    control.CP.openpilotLongitudinalControl = True
+    control.CP.carFingerprint = platform
+    control.CP.openpilotLongitudinalControl = openpilot_long
     control.CP.pcmCruise = True
     control.CP.stopAccel = -2.0
     control.CP.longitudinalTuning.kiBP = [0.0]
     control.CP.longitudinalTuning.kiV = [0.0]
     control.CP.lateralTuning.init('pid')
     control.CP_SP = custom.CarParamsSP.new_message()
+    control.CP_SP.enableGasInterceptor = interceptor
     control.CI = SimpleNamespace(get_pid_accel_limits=CarInterface.get_pid_accel_limits)
-    control.LoC = LongControl(control.CP, control.CP_SP, unified=unified, supervised=supervised)
+    control.LoC = LongControl(control.CP, control.CP_SP)
     control.reference_timing = ReferenceTimingConsumer()
     control.reference_timing_check = None
     self.reference_producer = ReferenceTimingProducer()
     self._reference_plan_time_ns = None
     self.plan.motionIntent.version = MOTION_INTENT_VERSION if control.LoC.unified else 0
     self.plan.motionIntent.mode = int(control.LoC.longitudinal_mode)
-    # This harness explicitly produces healthy raw snapshots. A test can clear
-    # creepEvidenceValid to exercise missing data; step never repairs that bit.
-    self.plan.motionIntent.creepEvidenceValid = control.LoC.longitudinal_mode == LongitudinalMode.SUPERVISED
     control.longitudinal_mode_mismatch = False
     control.VM = SimpleNamespace(update_params=Mock(), calc_curvature=Mock(return_value=0.0))
     lateral_log = new_event('controlsState').controlsState.lateralControlState.init('pidState')
@@ -118,7 +116,7 @@ class ControlsHarness:
     control.calibrated_pose = None
     self.control = control
 
-  def step(self, *, new_plan=True, plan_time_ns=None, model_time_ns=None, now_ns=None, raw_source_times=None,
+  def step(self, *, new_plan=True, plan_time_ns=None, model_time_ns=None, now_ns=None,
            reference_source_ns=None, reference_fields=None, intent_fields=None):
     self.now_ns = self.now_ns + CONTROL_STEP_NS if now_ns is None else now_ns
     incoming = []
@@ -138,12 +136,6 @@ class ControlsHarness:
           for field, value in (reference_fields or {}).items():
             setattr(self.plan.reference, field, value)
           self._reference_plan_time_ns = int(event.logMonoTime)
-        if self.plan.motionIntent.creepEvidenceValid:
-          sources = [self.now_ns] * len(CREEP_INPUT_SERVICES) if raw_source_times is None else list(raw_source_times)
-          if raw_source_times is None:
-            sources[2] = int(self.plan.modelMonoTime)
-          self.plan.motionIntent.creepSourceMonoTimes = sources
-          self.plan.motionIntent.creepMeasuredSpeed = float(self.car_state.vEgo)
         for field, value in (intent_fields or {}).items():
           setattr(self.plan.motionIntent, field, value)
       else:
@@ -212,7 +204,7 @@ def test_current_intent_and_stop_transition_are_consumed_and_published_in_the_sa
   (True, MOTION_INTENT_VERSION + 1), (False, MOTION_INTENT_VERSION + 1),
 ])
 def test_mode_mismatch_disables_actuation_and_resume_but_keeps_health_message_valid(unified, version):
-  harness = ControlsHarness(unified=unified)
+  harness = ControlsHarness(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   harness.plan.motionIntent.version = version
   harness.car_state.cruiseState.standstill = True
   command, motion = harness.step()
@@ -432,7 +424,7 @@ def test_disable_clears_a_fault_immediately_and_reenable_requires_new_evidence()
 @pytest.mark.parametrize('local_unified', [False, True])
 def test_published_mode_acknowledgement_is_consumed_by_the_real_planner(local_unified):
   with OpenpilotPrefix():
-    harness = ControlsHarness(unified=local_unified)
+    harness = ControlsHarness(platform=CAR.HONDA_ACCORD if local_unified else CAR.HONDA_CIVIC_BOSCH)
     harness.plan.motionIntent.version = 0 if local_unified else MOTION_INTENT_VERSION
     harness.plan.motionIntent.mode = int(LongitudinalMode.LEGACY if local_unified else LongitudinalMode.UNIFIED)
     command, motion = harness.step()
@@ -550,7 +542,7 @@ def selfdrive_event_harness(control_state):
 
 @pytest.mark.parametrize('local_unified', [False, True])
 def test_real_selfdrived_events_convert_degradation_to_three_second_soft_disable(local_unified):
-  harness = ControlsHarness(unified=local_unified)
+  harness = ControlsHarness(platform=CAR.HONDA_ACCORD if local_unified else CAR.HONDA_CIVIC_BOSCH)
   if local_unified:
     harness.plan.motionIntent.valid = False
   else:
@@ -705,7 +697,7 @@ def test_rejected_release_needs_new_producer_ids_before_actual_resume(fault):
 
 @pytest.mark.parametrize('speed', [0.0, 0.2, 1.0, 20.0])
 def test_legacy_consumer_uses_solver_failure_without_a_positive_ramp_or_resume(speed):
-  harness = ControlsHarness(unified=False)
+  harness = ControlsHarness(platform=CAR.HONDA_CIVIC_BOSCH)
   harness.car_state.vEgo = speed
   harness.car_state.standstill = speed == 0.0
   harness.car_state.cruiseState.standstill = True
@@ -743,7 +735,7 @@ def test_solver_failure_cannot_be_overridden_by_inconsistent_valid_flags():
 @pytest.mark.parametrize('pedal', ['gasPressed', 'brakePressed'])
 @pytest.mark.parametrize('unified', [False, True])
 def test_card_restricts_cached_control_before_controlsd_consumes_the_pedal_edge(pedal, unified):
-  harness = ControlsHarness(unified=unified)
+  harness = ControlsHarness(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   harness.step()
   last_command = harness.control.pm.messages['carControl']
   assert last_command.carControl.longActive

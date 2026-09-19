@@ -1,23 +1,17 @@
 from enum import IntEnum
 
 from opendbc.car.honda.values import CAR
-from openpilot.common.params import Params
 
 
 class LongitudinalMode(IntEnum):
   LEGACY = 0
+  # Retired runtime mode. Keep the ordinal for historical message decoding.
   SUPERVISED = 1
   UNIFIED = 2
 
 
-def resolve_longitudinal_mode(CP, CP_SP, *, unified: bool | None = None, supervised: bool | None = None) -> LongitudinalMode:
+def resolve_longitudinal_mode(CP, CP_SP) -> LongitudinalMode:
+  """Select the supported runtime from vehicle capabilities, never migration flags."""
   if CP.carFingerprint != CAR.HONDA_ACCORD or not CP.openpilotLongitudinalControl or CP_SP.enableGasInterceptor:
     return LongitudinalMode.LEGACY
-  params = Params() if unified is None or supervised is None else None
-  unified = params.get_bool("LongitudinalUnifiedEnabled") if unified is None else unified
-  supervised = params.get_bool("LongitudinalMotionEnabled") if supervised is None else supervised
-  if unified:
-    return LongitudinalMode.UNIFIED
-  if supervised:
-    return LongitudinalMode.SUPERVISED
-  return LongitudinalMode.LEGACY
+  return LongitudinalMode.UNIFIED

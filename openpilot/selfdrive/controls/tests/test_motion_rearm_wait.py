@@ -12,11 +12,11 @@ from unittest.mock import patch
 import pytest
 
 from openpilot.cereal import log
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent, MotionPhase, MotionSupervisor, StopReason
-from openpilot.selfdrive.controls.tests.test_supervised_creep_timing import raw_intent, sample_step
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
+from openpilot.selfdrive.controls.tests.test_unified_creep_deadline import sample_step
 from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness, selfdrive_event_harness
 from openpilot.selfdrive.selfdrived.events import ET
 from openpilot.selfdrive.selfdrived.state import StateMachine
@@ -26,24 +26,17 @@ State = log.SelfdriveState.OpenpilotState
 EventName = log.OnroadEvent.EventName
 
 
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
-
-
-@pytest.fixture(params=(LongitudinalMode.SUPERVISED, LongitudinalMode.UNIFIED), ids=lambda mode: mode.name)
+@pytest.fixture(params=(LongitudinalMode.UNIFIED,), ids=lambda mode: mode.name)
 def mode(request):
   return request.param
 
 
 def enter_off(mode, *, trigger='enable_between_plans', speed=11.343399047851562, target=-0.590408980846405, release_allowed=False):
-  harness = ControlsHarness(unified=mode == LongitudinalMode.UNIFIED, supervised=mode == LongitudinalMode.SUPERVISED)
+  harness = ControlsHarness()
   harness.car_state.vEgo = speed
   harness.plan.aTarget = target
   harness.plan.motionIntent.ready = True
   harness.plan.motionIntent.releaseAllowed = release_allowed
-  harness.plan.motionIntent.creepReset = True
   harness.plan.motionIntent.allowCreep = False
   if trigger == 'enable_between_plans':
     harness.selfdrive_state.enabled = False
@@ -103,7 +96,6 @@ def test_healthy_rearm_does_not_create_comm_issue_or_force_decel(mode, trigger, 
   _, motion = harness.step(new_plan=False)
   assert motion.waitingForFreshInput and not motion.degraded
   assert not harness.control.pm.messages['controlsState'].controlsState.forceDecel
-  harness.plan.motionIntent.creepReset = False
   harness.plan.motionIntent.allowCreep = True
   command, motion = harness.step()
   assert not motion.degraded and not motion.waitingForFreshInput
@@ -163,7 +155,6 @@ def test_waiting_requires_both_producer_ids_without_regranting_old_movement(mode
   harness = enter_off(mode, speed=0.8, target=1.0)
   _, motion = harness.step(new_plan=False)
   old_model = int(motion.modelMonoTime)
-  harness.plan.motionIntent.creepReset = False
   harness.plan.motionIntent.allowCreep = True
   harness.plan.motionIntent.releaseAllowed = True
   for _ in range(3):
@@ -178,7 +169,7 @@ def test_waiting_requires_both_producer_ids_without_regranting_old_movement(mode
 
 
 def test_cold_standby_then_healthy_off_does_not_create_a_fault_history(mode):
-  harness = ControlsHarness(unified=mode == LongitudinalMode.UNIFIED, supervised=mode == LongitudinalMode.SUPERVISED)
+  harness = ControlsHarness()
   harness.selfdrive_state.enabled = False
   harness.selfdrive_state.active = False
   harness.selfdrive_state.state = State.disabled
@@ -186,7 +177,6 @@ def test_cold_standby_then_healthy_off_does_not_create_a_fault_history(mode):
   harness.plan.aTarget = -0.3
   harness.plan.motionIntent.valid = False
   harness.plan.motionIntent.ready = False
-  harness.plan.motionIntent.creepEvidenceValid = False
   command, motion = harness.step()
   assert command.actuators.accel == 0.0
   assert not motion.degraded and not motion.waitingForFreshInput
@@ -195,8 +185,6 @@ def test_cold_standby_then_healthy_off_does_not_create_a_fault_history(mode):
   harness.car_state.vCruise = 80.0
   harness.plan.motionIntent.valid = True
   harness.plan.motionIntent.ready = True
-  harness.plan.motionIntent.creepEvidenceValid = mode == LongitudinalMode.SUPERVISED
-  harness.plan.motionIntent.creepReset = True
   harness.step()
   harness.selfdrive_state.enabled = True
   harness.selfdrive_state.active = True
@@ -220,7 +208,7 @@ def test_real_fault_during_waiting_still_reaches_actual_fault_consumers(mode, fa
     harness.plan.motionIntent.version = MOTION_INTENT_VERSION + 1
     command, motion = harness.step()
   elif fault == 'mode':
-    harness.plan.motionIntent.mode = int(LongitudinalMode.UNIFIED if mode == LongitudinalMode.SUPERVISED else LongitudinalMode.SUPERVISED)
+    harness.plan.motionIntent.mode = int(LongitudinalMode.SUPERVISED)
     command, motion = harness.step()
   elif fault == 'solver':
     harness.plan.solverStatus = 4
@@ -261,9 +249,8 @@ def test_a_causal_invalid_packet_cannot_be_repaired_with_the_same_ids_to_clear_f
   _, motion = harness.step()
   assert motion.degraded
   rejected_plan, rejected_model = int(motion.planMonoTime), int(motion.modelMonoTime)
-  sources = tuple(harness.plan.motionIntent.creepSourceMonoTimes)
   harness.plan.motionIntent.valid = True
-  command, repaired = harness.step(plan_time_ns=rejected_plan, model_time_ns=rejected_model, raw_source_times=sources)
+  command, repaired = harness.step(plan_time_ns=rejected_plan, model_time_ns=rejected_model)
   assert repaired.degraded and not repaired.waitingForFreshInput
   assert command.actuators.accel <= -0.2
   daemon, _, machine = event_consumers(harness)
@@ -285,13 +272,10 @@ def test_fault_cause_survives_off_and_cannot_be_relabelled_as_healthy_wait(mode,
   if cold_standby_between:
     harness.car_state.vCruise = V_CRUISE_UNSET
     harness.plan.motionIntent.ready = False
-    harness.plan.motionIntent.creepEvidenceValid = False
     harness.step()
   harness.car_state.vCruise = 80.0
   harness.plan.motionIntent.valid = True
   harness.plan.motionIntent.ready = True
-  harness.plan.motionIntent.creepEvidenceValid = mode == LongitudinalMode.SUPERVISED
-  harness.plan.motionIntent.creepReset = True
   harness.step()
   harness.selfdrive_state.enabled = True
   harness.selfdrive_state.active = True
@@ -319,20 +303,18 @@ def test_manual_authority_immediately_clears_wait_and_output(mode, pedal):
 
 @pytest.mark.parametrize('placeholder', [None, MotionIntent(version=0, valid=False)])
 def test_initial_absent_input_does_not_seed_a_fault_before_a_healthy_off_sample(mode, placeholder):
-  owner = MotionSupervisor(mode)
+  owner = MotionSupervisor()
   owner.update(False, 0.8, 0.0, False, None, placeholder, now_ns=1_900_000_000, plan_valid=False)
   assert not owner._rearm_after_fault
-  off = (raw_intent(2_000_000_000, speed=0.8, reset=True, allow_creep=False) if mode == LongitudinalMode.SUPERVISED
-         else MotionIntent(allow_creep=False))
+  off = MotionIntent(allow_creep=False)
   sample_step(owner, 2_000_000_000, intent=off, v_ego=0.8, active=False)
   sample_step(owner, 2_000_000_000, intent=off, v_ego=0.8, now_ns=2_012_000_000)
   assert owner.waiting_for_fresh_input and not owner.degraded
 
 
 def test_noncausal_nonzero_input_does_not_masquerade_as_an_initial_placeholder(mode):
-  owner = MotionSupervisor(mode)
-  bad = (raw_intent(3_000_000_000, reset=True, allow_creep=False) if mode == LongitudinalMode.SUPERVISED
-         else MotionIntent(allow_creep=False))
+  owner = MotionSupervisor()
+  bad = MotionIntent(allow_creep=False)
   sample_step(owner, 3_000_000_000, intent=bad, active=False, now_ns=2_000_000_000)
   assert owner._rearm_after_fault
   assert owner._latest_input_ids() == (0, 0)
@@ -349,11 +331,10 @@ def test_future_failed_header_does_not_poison_the_fresh_recovery_watermark(mode)
 
 @pytest.mark.parametrize('fault', ['valid', 'version', 'mode', 'solver', 'nonfinite', 'future', 'backward', 'clock', 'expired'])
 def test_real_fault_while_off_survives_a_healthy_off_packet_and_reentry(mode, fault):
-  owner = MotionSupervisor(mode)
+  owner = MotionSupervisor()
 
   def off_intent(timestamp):
-    return (raw_intent(timestamp, reset=True, allow_creep=False) if mode == LongitudinalMode.SUPERVISED
-            else MotionIntent(allow_creep=False))
+    return MotionIntent(allow_creep=False)
 
   initial = off_intent(2_000_000_000)
   sample_step(owner, 2_000_000_000, intent=initial, active=False)
@@ -364,7 +345,7 @@ def test_real_fault_while_off_survives_a_healthy_off_packet_and_reentry(mode, fa
   elif fault == 'version':
     candidate = replace(candidate, version=MOTION_INTENT_VERSION + 1)
   elif fault == 'mode':
-    candidate = replace(candidate, mode=int(LongitudinalMode.UNIFIED if mode == LongitudinalMode.SUPERVISED else LongitudinalMode.SUPERVISED))
+    candidate = replace(candidate, mode=int(LongitudinalMode.SUPERVISED))
   elif fault == 'solver':
     kwargs['solver_status'] = 4
   elif fault == 'nonfinite':

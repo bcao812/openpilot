@@ -29,7 +29,9 @@ from opendbc.car.honda.values import CAR, DBC, CarControllerParams
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib import longitudinal_planner as planner_module
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
-from openpilot.tools.longitudinal.replay_longitudinal_regressions import ReplayState, SERVICES
+from openpilot.tools.longitudinal.replay_longitudinal_regressions import (
+  ReplayState, SERVICES, frozen_sp_target, sp_target_return_type,
+)
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 from openpilot.tools.lib.logreader import LogReader
 
@@ -246,15 +248,42 @@ def component_mode(component):
 
 
 def component_options(component, unified, supervised=False):
+  """Pass historical mode switches; automatic platforms are checked after construction.
+
+  The absence of a constructor flag says nothing about the resulting runtime
+  mode. In particular, it must neither reject automatic UNIFIED nor relabel a
+  requested LEGACY/SUPERVISED replay as UNIFIED.
+  """
   selected_mode(unified, supervised)
   parameters = inspect.signature(component).parameters
   options = {}
   for name, enabled in (('unified', unified), ('supervised', supervised)):
     if name in parameters:
       options[name] = enabled
-    elif enabled:
-      raise ValueError(f'{component.__name__} does not support {name} replay')
+    elif enabled and name == 'supervised':
+      raise ValueError(f'{component.__name__} does not support retired supervised replay; select its historical source tree')
   return options
+
+
+def require_component_mode(component, mode, name):
+  actual_mode = component_mode(component)
+  if actual_mode != mode or int(getattr(component, 'mode', actual_mode)) != mode:
+    raise ValueError(f'Requested replay mode {mode} is not enabled on the actual {name} (runtime mode {actual_mode}); '
+                     'select a source tree that implements the requested mode')
+  return actual_mode
+
+
+def controller_mode_protocols(controller):
+  """Inspect consumer inputs and runtime identity, independent of rollout flags.
+
+  Early historical consumers exposed only a unified constructor switch and
+  version-1 intent. The explicit longitudinal_mode identity distinguishes the
+  mode-bearing protocol; a current automatic constructor needs no switch.
+  """
+  parameters = inspect.signature(controller.update).parameters
+  mode_protocol = ('intent' in parameters or 'unified' in inspect.signature(type(controller)).parameters)
+  planning_mode_protocol = mode_protocol and hasattr(controller, 'longitudinal_mode')
+  return mode_protocol, planning_mode_protocol
 
 
 def solver_status_supported(component, unified):
@@ -264,7 +293,7 @@ def solver_status_supported(component, unified):
   return supported
 
 
-def frozen_sp_publish(instance, state, publisher, parent_plan_mono_time=0):
+def frozen_sp_publish(instance, state, publisher, parent_plan_mono_time=0, *, legacy_acceleration=None):
   return None
 
 
@@ -765,6 +794,8 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
   progress.data['initialization_wait'] = []
   control_sp = structs.CarControlSP()
   state_wrapper = SimpleNamespace(v_cruise_factor=1.0, is_metric=False, acc_hud={}, lkas_hud={}, stock_brake={})
+  target_type = sp_target_return_type(LongitudinalPlannerSP.update_targets)
+  capabilities['sp_target_return_contract'] = target_type.__name__ if target_type is not None else 'historical_tuple'
 
   def emit(kind, row):
     if row_sink is not None:
@@ -778,8 +809,8 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
     progress.unavailable(reason, required)
 
   def update_targets(instance, state, v_ego, a_ego, v_cruise):
-    instance.source = current['sp'].longitudinalPlanSource
-    return recorded_sp_targets(current['sp'], a_ego, v_cruise)
+    speed, acceleration = recorded_sp_targets(current['sp'], a_ego, v_cruise)
+    return frozen_sp_target(instance, current['sp'].longitudinalPlanSource, speed, acceleration, target_type)
 
   def is_e2e(instance, state):
     dec = current['sp'].dec
@@ -821,6 +852,7 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
           raise ValueError('This replay requires Accord openpilot longitudinal')
         planner = planner_module.LongitudinalPlanner(params, params_sp,
                                                      **component_options(planner_module.LongitudinalPlanner, unified, supervised))
+        capabilities['planner_mode'] = require_component_mode(planner, mode, 'planner')
         progress.data['components']['planner'] = True
         progress.initialize_solver(planner)
         controller_params_sp = structs.CarParamsSP()
@@ -829,10 +861,10 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
         controller = CarController({Bus.pt: DBC[params.carFingerprint][Bus.pt]}, params, controller_params_sp)
         progress.data['components']['carcontroller'] = True
         longitudinal = LongControl(params, controller_params_sp, **component_options(LongControl, unified, supervised))
+        capabilities['controller_mode'] = require_component_mode(longitudinal, mode, 'controller')
         progress.data['components']['longcontrol'] = True
         capabilities['controller_solver_status'] = solver_status_supported(LongControl, motion_enabled)
-        capabilities['controller_mode_protocol'] = 'unified' in inspect.signature(LongControl).parameters
-        capabilities['controller_planning_mode_protocol'] = 'supervised' in inspect.signature(LongControl).parameters
+        capabilities['controller_mode_protocol'], capabilities['controller_planning_mode_protocol'] = controller_mode_protocols(longitudinal)
         capabilities['controller_readiness'] = capabilities['controller_mode_protocol'] and hasattr(longitudinal, 'can_standby')
         capabilities['controller_braking_health_protocol'] = 'braking_plan_valid' in inspect.signature(LongControl.update).parameters
         capabilities['controller_owner_protocol'] = hasattr(longitudinal, 'motion_owner_established')
@@ -850,11 +882,6 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
           consumer_health = ReplayConsumerHealth()
           capabilities['braking_health_method'] = 'native_FrequencyTracker_on_recorded_consumer_ID_updates_without_publication_validity'
           capabilities['braking_health_clock'] = 'controlsState_publication_proxy_for_SubMaster_receive_time_not_recorded_IPC_arrival'
-        for name, component in (('planner', planner), ('controller', longitudinal)):
-          actual_mode = component_mode(component)
-          capabilities[name + '_mode'] = actual_mode
-          if actual_mode != mode or int(getattr(component, 'mode', actual_mode)) != mode:
-            raise ValueError(f'Requested replay mode {mode} is not enabled on the actual {name}')
         parser = CANParser(DBC[params.carFingerprint][Bus.pt], [('ACC_CONTROL', 50)], CanBus(params).pt)
         recorded_parser = CANParser(DBC[params.carFingerprint][Bus.pt], [('ACC_CONTROL', 50)], CanBus(params).pt)
       if service in SERVICES:
@@ -1209,6 +1236,7 @@ def run_one(arguments):
                   'openpilot/cereal/messaging/__init__.py', 'openpilot/cereal/services.py', 'openpilot/common/utils.py',
                   'openpilot/selfdrive/controls/lib/drive_helpers.py', 'openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py',
                   'openpilot/sunnypilot/selfdrive/controls/lib/longitudinal_planner.py',
+                  'openpilot/tools/longitudinal/replay_longitudinal_regressions.py',
                   'openpilot/selfdrive/car/longitudinal_authority.py', 'openpilot/selfdrive/car/card.py',
                   'openpilot/selfdrive/controls/controlsd.py',
                   'opendbc_repo/opendbc/car/honda/carcontroller.py', 'opendbc_repo/opendbc/car/honda/hondacan.py',

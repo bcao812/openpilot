@@ -198,7 +198,7 @@ def test_experimental_allocator_and_configured_integrator_are_not_combined_with_
   parameters.stopAccel = -2.0
   parameters.longitudinalTuning.kiBP = [0.0]
   parameters.longitudinalTuning.kiV = [1.0]
-  control = LongControl(parameters, custom.CarParamsSP.new_message(), unified=True)
+  control = LongControl(parameters, custom.CarParamsSP.new_message())
   assert control.launch_response is None
 
 

@@ -13,14 +13,15 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import N, T_IDXS
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner, PASSIVE_PITCH_VERSION
+from openpilot.selfdrive.controls.lib.longitudinal_observation import observe
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import reference_requests_departure
 from openpilot.selfdrive.controls.tests.test_longitudinal_observation_planner import diagnostics, reference_snapshot
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state
 
 
-MODES = (LongitudinalMode.SUPERVISED, LongitudinalMode.UNIFIED)
+MODES = (LongitudinalMode.UNIFIED,)
 
 
 @pytest.fixture(autouse=True)
@@ -35,8 +36,7 @@ def planner_for(mode, *, enabled=True, speed=20.0, trace=None):
   params = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
   params.openpilotLongitudinalControl = True
   extension = CarInterface.get_non_essential_params_sp(params, CAR.HONDA_ACCORD)
-  return LongitudinalPlanner(params, extension, init_v=speed, unified=mode == LongitudinalMode.UNIFIED,
-                             supervised=mode == LongitudinalMode.SUPERVISED, diagnostics=enabled, trace=trace)
+  return LongitudinalPlanner(params, extension, init_v=speed, diagnostics=enabled, trace=trace)
 
 
 def state_for(mode, *, speed=20.0, target=22.0, mono=1_000_000_000):
@@ -165,32 +165,23 @@ def test_cold_standby_passive_learning_remains_visible_without_a_reference(mode)
   assert not observed.analysis.obstacleSummary.known and not observed.solverAttempted
 
 
-@pytest.mark.parametrize('admitted,model_accel,coast_applied', [(False, 0.5, True), (False, -2.0, False), (True, -2.0, False)])
-def test_supervised_copies_all_candidates_including_rejected_e2e_and_trace_coast_values(admitted, model_accel, coast_applied):
+@pytest.mark.parametrize('admitted,model_accel', [(False, 0.5), (False, -2.0), (True, -2.0)])
+def test_unified_observation_keeps_reference_and_admitted_model_constraint_separate(admitted, model_accel):
   trace = LongitudinalTrace()
-  planner = planner_for(LongitudinalMode.SUPERVISED, speed=20.2, trace=trace)
-  state = state_for(LongitudinalMode.SUPERVISED, speed=20.2, target=20.2)
+  planner = planner_for(LongitudinalMode.UNIFIED, speed=20.2, trace=trace)
+  state = state_for(LongitudinalMode.UNIFIED, speed=20.2, target=20.2)
   state['modelV2'].action.desiredAcceleration = model_accel
-  with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_cruise_accel', return_value=-0.23) as cruise, \
-       patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_accel_from_plan', return_value=1.0) as sample, \
+  with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_cruise_accel', side_effect=AssertionError('retired cruise executed')), \
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan', return_value=1.0) as sample, \
        patch.object(planner, 'is_e2e', return_value=admitted):
     planner.update(state, now_ns=1_005_000_000)
-  cruise.assert_called_once()
   sample.assert_called_once()
   observed = diagnostics(planner, state)
-  candidates = observed.analysis.referenceCandidates
-  assert candidates.known and candidates.mpcAccel == 1.0
-  assert candidates.mpcSource.raw == planner.reference_planner.reference_source
-  assert candidates.cruiseRawAccel == -0.23
-  assert candidates.cruiseAccel == (-0.19 if coast_applied else -0.23)
-  assert candidates.e2eAccel == model_accel and candidates.e2eAdmitted == admitted
-  assert candidates.coastTransformApplied == coast_applied
-  assert planner.output_a_target == (model_accel if admitted else candidates.cruiseAccel)
+  assert not observed.analysis.referenceCandidates.known
+  assert observed.modelAdmissionKnown and observed.e2eAllowed == admitted
+  assert observed.sampledAccelKnown and observed.sampledAccel == 1.0
+  assert planner.output_a_target == (min(1.0, model_accel) if admitted else 1.0)
   assert trace.failures == 0 and trace.queue
-  row = dict(zip(trace.queue[-1].fields, trace.queue[-1], strict=True))
-  assert row['mpc_accel'] == candidates.mpcAccel and row['mpc_stop'] == candidates.mpcShouldStop
-  assert row['cruise_raw'] == candidates.cruiseRawAccel and row['cruise_accel'] == candidates.cruiseAccel
-  assert row['cruise_stop'] == candidates.cruiseShouldStop
 
 
 @pytest.mark.parametrize('mode', MODES)
@@ -232,7 +223,7 @@ def test_unified_obstacle_summary_uses_existing_bounded_solver_inputs_without_an
 
 
 @pytest.mark.parametrize('mode', MODES)
-@pytest.mark.parametrize('method', ['record_analysis', 'reference_candidates', 'departure', 'passive_snapshot'])
+@pytest.mark.parametrize('method', ['record_analysis', 'departure', 'passive_snapshot'])
 def test_new_observer_failure_does_not_change_control_solver_or_learning(mode, method):
   enabled = planner_for(mode)
   disabled = planner_for(mode, enabled=False)
@@ -242,8 +233,7 @@ def test_new_observer_failure_does_not_change_control_solver_or_learning(mode, m
   disabled.update(state, now_ns=1_005_000_000)
   assert snapshot(enabled) == snapshot(disabled)
   assert enabled.mpc.diagnostic_solve_calls == disabled.mpc.diagnostic_solve_calls == 1
-  if method != 'reference_candidates' or mode == LongitudinalMode.SUPERVISED:
-    assert enabled.observation.recorder.errors > 0
+  assert enabled.observation.recorder.errors > 0
 
 
 @pytest.mark.parametrize('mode', MODES)
@@ -275,19 +265,17 @@ def test_original_passive_exception_still_propagates_with_incomplete_attempt(mod
 
 
 @pytest.mark.parametrize('velocity', [[], None, 0.0])
-def test_supervised_short_circuited_bad_terminal_speed_does_not_add_an_observation_exception(velocity):
-  enabled = planner_for(LongitudinalMode.SUPERVISED)
-  disabled = planner_for(LongitudinalMode.SUPERVISED, enabled=False)
-  state = state_for(LongitudinalMode.SUPERVISED, speed=20.0)
-  candidates = [(0.1, log.LongitudinalPlan.LongitudinalPlanSource.lead0, False),
-                (0.1, log.LongitudinalPlan.LongitudinalPlanSource.cruise, False)]
+def test_malformed_terminal_speed_cannot_grant_departure_or_escape_observation_isolation(velocity):
+  enabled = planner_for(LongitudinalMode.UNIFIED)
+  disabled = planner_for(LongitudinalMode.UNIFIED, enabled=False)
+  state = state_for(LongitudinalMode.UNIFIED, speed=20.0)
   for planner in (enabled, disabled):
     planner.mpc.v_solution = velocity
     planner.output_a_target = 0.1
     planner.observation_attempt = planner.observation.begin(planner, state, now_ns=1_005_000_000, passive_version=1)
-    # At this speed the original owner does not read the terminal node. Its
-    # departure predicate rejects malformed trajectories without raising.
-    planner.reference_planner.finish_reference(state, candidates, 22.0, False)
+    forward = reference_requests_departure(velocity, planner.mpc.a_solution, planner.mpc.j_solution)
+    assert not forward
+    observe(planner.observation, 'departure', planner.observation_attempt, forward, velocity, False, False, False, False)
     planner.observation_result = planner.observation.finish(planner.observation_attempt, planner, True)
   assert enabled.motion_intent == disabled.motion_intent
   assert enabled.output_a_target == disabled.output_a_target == 0.1

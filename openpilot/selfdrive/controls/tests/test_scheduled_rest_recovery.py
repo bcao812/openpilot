@@ -12,21 +12,15 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   CRASH_DISTANCE, LEAD_DANGER_FACTOR, MPC_INVALID_INPUT, N, PARAM_DIM, QP_FEASIBILITY_TOL,
   REST_STATE_TOL, T_IDXS, LongitudinalMpc,
 )
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_mpc_rest_numerics import integrate
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, SOURCE_NS, evidence, stopping_curve
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import typed_reference
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def two_interval_stop():

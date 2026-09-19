@@ -5,19 +5,13 @@ import pytest
 
 from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, MpcReference
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import advance, make_planner, make_state
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 
 
 def production_planner():
@@ -25,7 +19,7 @@ def production_planner():
   params.openpilotLongitudinalControl = True
   extension = CarInterface.get_non_essential_params_sp(params, CAR.HONDA_ACCORD)
   extension.enableGasInterceptor = False
-  return LongitudinalPlanner(params, extension, unified=True)
+  return LongitudinalPlanner(params, extension)
 
 
 def first_active_reference(seed_speed, measured_accel, lead_distance=None):

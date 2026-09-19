@@ -8,22 +8,16 @@ speed-bias correction, physical stopping distance or vehicle brake release.
 import numpy as np
 import pytest
 
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import should_stop
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_unified_controlsd import serialized
 from openpilot.selfdrive.controls.tests.test_unified_startup import CONTROL_STEP_NS, PLANNER_STEPS, StartupHarness
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 
 PLAN_STEP_NS = round(DT_MDL * 1e9)
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def model_stop_curve(initial_speed, stop_time):

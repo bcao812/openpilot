@@ -6,7 +6,7 @@ research reports outside the software checkout; pass an explicit output path.
 
 | Module | Purpose |
 |---|---|
-| `replay_longitudinal_regressions` | Planner regression windows and switch metrics |
+| `replay_longitudinal_regressions` | Historical LEGACY planner windows and switch metrics |
 | `replay_pedal_switches` | Timestamp-aligned planner, LongControl and Honda CAN replay |
 | `replay_pedal_full_routes` | Bounded-memory full-route replay and provenance |
 | `evaluate_pedal_switches` | Compare replayed event windows |
@@ -65,14 +65,15 @@ controller consumed. Exact historical CAN fidelity needs independently
 identified consumed inputs and loaded-source provenance; numerical agreement
 at the recorded-input boundary does not supply either missing identity.
 
-## Unified longitudinal candidate
+## Unified longitudinal architecture
 
-`replay_pedal_switches run --unified` explicitly selects the experimental unified
-planner and motion supervisor. The runtime parameter `LongitudinalUnifiedEnabled`
-is development-only and defaults to off. It is restricted to Accord openpilot
-longitudinal without a gas interceptor. This is a development candidate, not a
-release-approved controller: the fixed-log critical-braking gate has found weaker
-requests, so successful unit tests do not authorize enabling it on a vehicle.
+Accord openpilot longitudinal without a gas interceptor always uses the unified
+planner and motion supervisor. The migration parameters and production constructor
+overrides have been removed. `replay_pedal_switches run --unified` records this
+explicit replay selection and verifies both components actually use mode 2.
+Other platform configurations retain their existing LEGACY path. Host test results
+and frozen-log comparisons have their own scope; device artifacts and vehicle
+behavior require separate validation.
 
 The candidate supplies cruise and admitted model references to one MPC, keeps
 model-action constraints separate, and gives the control-rate supervisor sole
@@ -104,11 +105,9 @@ the cold OFF consumer permits the enable handshake without longitudinal
 actuation. After any accepted motion, a missing setpoint or unready plan is a
 fault, not permission to return to standby or release a hold.
 
-Shared MPC/planner failure handling is not isolated by this candidate switch.
-The final driver-authority check and additional fault-aware hold consumer are
-Accord-gated and also apply with the candidate disabled. Healthy automatic
-behavior is the compatibility boundary; fault handling and immediate manual
-revocation are intentional changes. Final driver authority is checked before CarD calls
+Shared MPC/planner failure handling also serves the remaining LEGACY configurations.
+The Accord motion owner preserves qualified braking obligations during input or
+solver faults. Final driver authority is checked before CarD calls
 `CarInterface.apply`, using current pedals rather than the older control packet's
 vehicle sample.
 
@@ -135,31 +134,25 @@ Perception, DEC/SP decisions, most software feedback and measured vehicle motion
 remain frozen in the basic log replay. It is not a plant-calibrated closed loop,
 a proof of hill-hold performance, or an end-to-end hard-real-time lease test.
 
-## Independently supervised stage
+## Runtime modes and historical replay
 
-The development stages are selected at process construction:
+The platform capability gate selects the runtime architecture at construction:
 
 | Mode | Selection | Reference and stop owner |
 |---|---|---|
-| Legacy / 0 | Both parameters off | Existing reference and existing stop path |
-| Supervised / 1 | `LongitudinalMotionEnabled` only | Existing normal reference/request calculation, new motion supervisor |
-| Unified / 2 | `LongitudinalUnifiedEnabled` | Unified-reference experiment and new motion supervisor |
+| Legacy / 0 | Other supported configurations, including stock ACC | Existing shared reference and stop path |
+| Supervised / 1 | Historical source only | Retired migration stage; numeric identity retained for old logs |
+| Unified / 2 | Accord OP-long without an interceptor | Unified reference and the control-rate motion supervisor |
 
-Both parameters default to off; unified takes precedence if both are selected.
-The Accord OP-long/no-interceptor gate applies to both development stages.
-`replay_pedal_switches run --supervised` selects the independent owner stage;
-`--unified` still selects the full-reference experiment. They are mutually
-exclusive, and neither flag constitutes release approval.
+The two replay flags remain mutually exclusive so historical source snapshots
+can still be evaluated. Requesting LEGACY or SUPERVISED on the current supported
+Accord raises a mode mismatch; the tool never relabels a UNIFIED execution.
+Full-route and trace wrappers propagate the requested mode and verify it in the
+result. The older planner-only tool lacks consumer feedback and rejects the
+motion architecture; use the timestamp-aligned planner/controller/CAN replay.
 
-The supervised planner does not allocate the old stop/creep/close-lead latches
-or timers. It supplies raw evidence to the single control-rate owner while
-reusing the legacy normal calculation directly. It does not run both planners
-and select their minimum. Its retained legacy reference state, SP interaction
-and delay-equivalent request are compatibility debt, not a claim of physically
-consistent state or a repaired unified MPC.
-
-Motion intent version 2 identifies the selected planning mode. Producer and
-consumer must agree; a version-1 packet or unknown/mismatched mode cannot grant
+The current motion intent version and planning mode must agree at producer and
+consumer. A stale version or unknown/mismatched mode cannot grant
 drive or release. Cold or legacy consumers cannot acquire authority from such
 a mismatch. For an already established, still-authorized motion owner, a
 protocol fault is handled as degraded input rather than as a driver-requested
@@ -174,14 +167,15 @@ invalid packet's acceleration is not trusted.
 `controls/lib/longitudinal_trajectory.py` provides offline exact constant-jerk
 sampling and request audits. It has no runtime actuation authority and does not
 replace `get_accel_from_plan`. Exact sampling alone does not identify the ECU
-response or resolve the unified candidate's critical-braking rejection.
+response or establish delivered braking performance.
 
 Additional host tests:
 
 ```bash
 python -m pytest -q \
   openpilot/selfdrive/controls/tests/test_longitudinal_modes.py \
-  openpilot/selfdrive/controls/tests/test_supervised_longitudinal_planner.py \
+  openpilot/selfdrive/controls/tests/test_unified_handover.py \
+  openpilot/selfdrive/controls/tests/test_unified_creep_deadline.py \
   openpilot/selfdrive/controls/tests/test_longitudinal_trajectory.py
 ```
 
@@ -192,7 +186,7 @@ Keep the earlier implementation record as historical evidence.
 
 ## Longitudinal observation version 1
 
-Routine observation is independent of the unified candidate switch. For Accord
+Routine observation follows the supported platform capability. For Accord
 openpilot longitudinal without a gas interceptor, it appends diagnostics to
 existing `longitudinalPlan`, `controlsState` and `carOutput` messages. No new
 high-frequency service or marker is required for this lightweight layer.
@@ -277,7 +271,7 @@ Replay progress now retains attempted/completed calls separately for warmup,
 score and total execution. ERROR results retain bounded missing-dependency
 examples, partial chunks and hashes; `load_result` still refuses them as complete
 comparison inputs. Missing real solver counters remain unknown. Logging does
-not waive the unified candidate's existing critical-braking rejection.
+not turn incomplete execution or an observed contract failure into acceptance.
 
 The parent-workspace design and validation record is
 `_arch/c3xl-dev/04-longitudinal-logging-2026-09-15.md`. Schema/native changes need

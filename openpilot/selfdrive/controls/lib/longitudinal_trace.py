@@ -399,7 +399,7 @@ class LongitudinalTrace:
       self.pending_detail = immutable_value({
         'session': decimal_id(self.session), 'sequence': decimal_id(self.attempt['sequence']),
         'plan_mono': None, 'outcome': outcome, 'update_completed': values.get('updateCompleted'),
-        'mode': 'unified' if planner.unified else 'supervised' if self.schema == MOTION_TRACE_SCHEMA else 'legacy',
+        'mode': 'unified' if planner.unified else 'legacy',
         'start_mono': decimal_id(self.attempt['start_mono']), 'end_mono': decimal_id(time.monotonic_ns()),
         'planner_session': decimal_id(getattr(observer_recorder, 'session', None)),
         'planner_sequence': decimal_id(sample.get('sequence')),
@@ -520,7 +520,7 @@ class LongitudinalTrace:
     except Exception:
       self.fail()
 
-  def finish_unified(self, planner, is_e2e, candidates=None):
+  def finish_unified(self, planner, is_e2e):
     if not self.enabled or self.pending is None:
       return
     try:
@@ -528,13 +528,7 @@ class LongitudinalTrace:
       self.fields = UNIFIED_TRACE_FIELDS
       reference = planner.reference_planner
       intent = planner.motion_intent
-      if candidates is None:
-        candidate_values = (float(reference.reference_accel), str(reference.reference_source), None, None, None, None)
-      else:
-        mpc_accel, mpc_source, mpc_stop = candidates[0]
-        cruise_accel, _, cruise_stop = candidates[1]
-        candidate_values = (float(mpc_accel), str(mpc_source), bool(mpc_stop),
-                            float(planner.a_cruise), float(cruise_accel), bool(cruise_stop))
+      candidate_values = (float(reference.reference_accel), str(reference.reference_source), None, None, None, None)
       self.pending += (
         *candidate_values, bool(is_e2e), str(planner.mpc.source),
         float(planner.output_a_target), bool(planner.output_should_stop),

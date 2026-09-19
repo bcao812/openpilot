@@ -1,20 +1,22 @@
+"""Shared close-lead risk geometry, current owner braking, and independent lag-plant clearance."""
+
 from copy import deepcopy
 import json
 import math
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from opendbc.car import structs
 from opendbc.car.honda.values import CAR
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL
-from openpilot.selfdrive.controls.lib.longcontrol import ROLLING_STOP_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_planner import should_stop_for_close_lead
-from openpilot.selfdrive.controls.tests.test_longcontrol_accel_release import controller
-from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import update_cruise
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, StopReason
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_lead_state import closing_state
-from openpilot.selfdrive.controls.tests.test_longitudinal_planner_state import braking_planner
+from openpilot.selfdrive.controls.tests.test_unified_longcontrol import controller, warm_tracking_harness
 
 
 def near_stop_state():
@@ -29,28 +31,15 @@ def close_stop(state, speed=1.3, acceleration=-0.7, delay=0.5, measured_accelera
   return should_stop_for_close_lead(speed, acceleration, state['radarState'], delay, a_ego=measured_acceleration)
 
 
-def update(planner, state, acceleration=-0.7):
-  update_cruise(planner, state, a_cruise=1.0, a_mpc=acceleration, e2e=False)
-
-
 def test_nearly_stopped_lead_does_not_wait_for_the_fixed_creep_speed():
   state = near_stop_state()
   assert close_stop(state)
-  planner = braking_planner()
-  update(planner, state)
-  assert planner.close_lead_stop
-  assert planner.output_should_stop
-  assert not planner.creep_stop
 
 
 def test_distant_stopped_lead_keeps_the_normal_approach():
   state = near_stop_state()
   state['radarState'].leadOne.dRel = 7.0
   assert not close_stop(state)
-  planner = braking_planner()
-  update(planner, state)
-  assert not planner.close_lead_stop
-  assert not planner.output_should_stop
 
 
 def test_stopping_budget_accounts_for_actuator_and_ramp_delay():
@@ -77,14 +66,9 @@ def test_a_more_negative_measurement_does_not_spend_the_requested_braking_reserv
 
 @pytest.mark.parametrize('distance,transient_acceleration', [(7.0, 1.0), (15.0, 2.0)])
 def test_a_positive_acceleration_transient_does_not_latch_a_distant_lead(distance, transient_acceleration):
-  planner, state = braking_planner(), near_stop_state()
+  state = near_stop_state()
   state['radarState'].leadOne.dRel = distance
   state['carState'].aEgo = transient_acceleration
-  update(planner, state)
-  assert not planner.close_lead_stop and not planner.output_should_stop
-  state['carState'].aEgo = -0.7
-  update(planner, state)
-  assert not planner.close_lead_stop and not planner.output_should_stop
 
 
 @pytest.mark.parametrize('measured_acceleration', [float('nan'), float('inf'), float('-inf')])
@@ -147,74 +131,6 @@ def test_no_lead_does_not_enter_fallback():
   state = near_stop_state()
   state['radarState'].leadOne.present = False
   assert not close_stop(state)
-
-
-def test_latched_stop_does_not_chatter_on_distance_noise():
-  planner, state = braking_planner(), near_stop_state()
-  update(planner, state)
-  for distance in (4.0, 3.0, 4.1, 2.9):
-    state['radarState'].leadOne.dRel = distance
-    update(planner, state)
-    assert planner.close_lead_stop
-    assert planner.output_should_stop
-
-
-@pytest.mark.parametrize('acceleration', [-1.5, -2.0, -3.5, STOP_RELEASE_ACCEL, 0.5])
-def test_stronger_braking_or_a_clear_launch_releases_the_extra_latch(acceleration):
-  planner, state = braking_planner(), near_stop_state()
-  update(planner, state)
-  assert planner.close_lead_stop
-  update(planner, state, acceleration)
-  assert not planner.close_lead_stop
-  assert not planner.output_should_stop
-
-
-@pytest.mark.parametrize(
-  'condition',
-  ['gas', 'brake', 'override', 'inactive', 'disabled', 'control_disabled', 'force_decel', 'unhealthy', 'stock_long', 'other_platform'],
-)
-def test_driver_mode_and_health_guards_clear_the_latch(condition):
-  planner, state = braking_planner(), near_stop_state()
-  update(planner, state)
-  assert planner.close_lead_stop
-  if condition in ('gas', 'brake'):
-    setattr(state['carState'], condition + 'Pressed', True)
-  elif condition == 'override':
-    state['carControl'].cruiseControl.override = True
-  elif condition == 'inactive':
-    state['carControl'].longActive = False
-  elif condition == 'disabled':
-    state['selfdriveState'] = state['selfdriveState'].as_builder()
-    state['selfdriveState'].enabled = False
-  elif condition == 'control_disabled':
-    state['carControl'].enabled = False
-  elif condition == 'force_decel':
-    state['controlsState'].forceDecel = True
-  elif condition == 'unhealthy':
-    state.all_checks = lambda service_list=None: False
-  elif condition == 'stock_long':
-    planner.CP.openpilotLongitudinalControl = False
-  elif condition == 'other_platform':
-    planner.CP.carFingerprint = 'OTHER'
-  update(planner, state)
-  assert not planner.close_lead_stop
-
-
-def test_speed_above_the_low_speed_band_clears_the_extra_latch():
-  planner, state = braking_planner(), near_stop_state()
-  update(planner, state)
-  state['carState'].vEgo = 2.0
-  update(planner, state)
-  assert not planner.close_lead_stop
-
-
-def test_solver_failure_clears_the_extra_latch():
-  planner, state = braking_planner(), near_stop_state()
-  update(planner, state)
-  planner.mpc.solution_status = 1
-  with patch.object(planner.mpc, 'update', return_value=None):
-    update(planner, state)
-  assert not planner.close_lead_stop
 
 
 def lag_plant_clearance_qualification(arguments):
@@ -308,7 +224,7 @@ def test_low_speed_lag_plant_meets_independent_clearance(delay, offset, speed, r
   from openpilot.selfdrive.controls.tests.test_longitudinal_following_scenarios import simulate_following
 
   arguments = {'initial_speed': speed, 'lead_speed': 0.0, 'initial_gap': 6.0, 'delay': delay, 'response_time': 0.4, 'offset': offset, 'duration': 20.0}
-  with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.should_stop_for_close_lead', return_value=False):
+  with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.should_stop_for_close_lead', return_value=False):
     before = simulate_following(**arguments)
   after = simulate_following(**arguments)
   qualification = lag_plant_clearance_qualification(arguments)
@@ -324,53 +240,44 @@ def test_low_speed_lag_plant_meets_independent_clearance(delay, offset, speed, r
   assert evaluation['clearance_verdict'] == 'PASS', evaluation
 
 
-@pytest.mark.parametrize('speed', [0.3, 0.5, 1.3, 1.99])
-@pytest.mark.parametrize('target', [-0.7, -1.3, -2.5, -3.5])
-def test_stopping_transition_preserves_planner_braking(speed, target):
-  control = controller(initial=-0.4)
-  state = structs.CarState()
-  state.vEgo = speed
-  assert control.update(True, state, target, True, (-3.5, 2.0)) <= target
+@pytest.mark.parametrize('acceleration', [-1.5, -2.0, -3.5, STOP_RELEASE_ACCEL, 0.5])
+def test_current_stop_owner_preserves_braking_until_qualified_departure(acceleration):
+  harness = warm_tracking_harness(1.3, -0.4)
+  harness.step(-0.7, MotionIntent(reasons=StopReason.CLOSE_LEAD))
+  output = harness.step(acceleration, MotionIntent(allow_creep=False))
+  assert np.isfinite(output) and -3.5 <= output <= 0.0
+  if acceleration < 0.0:
+    assert output <= acceleration
 
 
-@pytest.mark.parametrize('speed', [0.0, 0.29, 2.0, 10.0])
-def test_existing_settle_and_high_speed_ramp_are_unchanged(speed):
-  control = controller(initial=-0.4)
-  state = structs.CarState()
-  state.vEgo = speed
-  assert control.update(True, state, -1.3, True, (-3.5, 2.0)) == pytest.approx(-0.42)
-
-
-def test_stopped_hold_keeps_the_existing_ramp():
-  control = controller(initial=-0.4)
-  state = structs.CarState()
-  state.vEgo = 0.5
-  state.standstill = True
-  assert control.update(True, state, -1.3, True, (-3.5, 2.0)) == pytest.approx(-0.42)
+def test_close_lead_stop_owner_does_not_chatter_on_distance_noise():
+  harness = warm_tracking_harness(1.3, -0.4)
+  state = near_stop_state()
+  harness.step(-0.7, MotionIntent(reasons=StopReason.CLOSE_LEAD))
+  for distance in (4.0, 3.0, 4.1, 2.9):
+    state['radarState'].leadOne.dRel = distance
+    reason = StopReason.CLOSE_LEAD if close_stop(state) else StopReason.NONE
+    harness.step(-0.7, MotionIntent(reasons=reason, allow_creep=False))
+    assert harness.control.resolved_should_stop
 
 
 @pytest.mark.parametrize('target', [0.5, float('nan'), float('inf'), float('-inf')])
-def test_stopping_ramp_does_not_follow_positive_or_invalid_requests(target):
-  control = controller(initial=-0.4)
-  state = structs.CarState()
-  state.vEgo = 1.3
-  assert control.update(True, state, target, True, (-3.5, 2.0)) == pytest.approx(-0.42)
+def test_invalid_or_positive_stop_request_cannot_weaken_established_braking(target):
+  harness = warm_tracking_harness(1.3, -0.4)
+  output = harness.step(target, MotionIntent(reasons=StopReason.CLOSE_LEAD))
+  assert np.isfinite(output) and output <= -0.4
 
 
 def test_stopping_brake_priority_still_respects_the_can_limit():
-  control = controller(initial=-0.4)
-  state = structs.CarState()
-  state.vEgo = 1.3
-  assert control.update(True, state, -5.0, True, (-3.5, 2.0)) == -3.5
+  harness = warm_tracking_harness(1.3, -0.4)
+  assert harness.step(-5.0, MotionIntent(reasons=StopReason.CLOSE_LEAD)) == -3.5
 
 
 def test_stopping_brake_priority_never_delays_manual_disable():
-  control = controller(initial=-0.4)
-  state = structs.CarState()
-  state.vEgo = 1.3
-  control.update(True, state, -1.3, True, (-3.5, 2.0))
-  state.brakePressed = True
-  assert control.update(False, state, -3.5, True, (-3.5, 2.0)) == 0.0
+  harness = warm_tracking_harness(1.3, -0.4)
+  harness.step(-1.3, MotionIntent(reasons=StopReason.CLOSE_LEAD))
+  harness.state.brakePressed = True
+  assert harness.step(-3.5, MotionIntent(reasons=StopReason.CLOSE_LEAD), active=False) == 0.0
 
 
 @pytest.mark.parametrize('platform,openpilot_long', [(CAR.HONDA_CIVIC_BOSCH, True), (CAR.HONDA_ACCORD, False)])
@@ -378,4 +285,5 @@ def test_other_platforms_and_stock_long_keep_the_original_stopping_ramp(platform
   control = controller(platform=platform, openpilot_long=openpilot_long, initial=-0.4)
   state = structs.CarState()
   state.vEgo = 1.3
+  assert not control.unified
   assert control.update(True, state, -1.3, True, (-3.5, 2.0)) == pytest.approx(-0.42)

@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   J_EGO_COST, MODEL_A_REF, MODEL_BRAKING_PRIORITY, MODEL_V_REF, MPC_GOAL_INFEASIBLE,
@@ -22,18 +21,13 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
 from openpilot.selfdrive.controls.lib.model_reference import moving_preference
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import model_reference_from_velocity
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, SOURCE_NS, evidence, stopping_curve
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import action, radar_state, solve_reference
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import Publisher, advance, make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner, make_state
 from openpilot.selfdrive.controls.tests.test_unified_model_reference_contract import ModelReferenceHarness, held_harness, model_stop_curve
 from openpilot.selfdrive.controls.tests.test_unified_startup import PLANNER_STEPS
 from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness, new_event
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def typed_reference(raw, speed, *, preference_time=2.5, cruise=30.0, typed=None):

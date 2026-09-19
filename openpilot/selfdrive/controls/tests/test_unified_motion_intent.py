@@ -2,24 +2,18 @@ import numpy as np
 import pytest
 
 from opendbc.car.honda.values import CarControllerParams
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_planner import CONTROL_N_T_IDX
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import reference_requests_departure
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import decoded_commands
 from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.tools.longitudinal.replay_pedal_switches import publish_plan
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def stopped_lead_state(speed, gap=6.0, measured_accel=0.0):
@@ -43,7 +37,7 @@ def held_consumer(planner, extension):
   consumer = ControlsHarness()
   consumer.control.CP = planner.CP
   consumer.control.CP_SP = extension
-  consumer.control.LoC = LongControl(planner.CP, extension, unified=True)
+  consumer.control.LoC = LongControl(planner.CP, extension)
   consumer.hold()
   return consumer
 
@@ -52,7 +46,7 @@ def tracking_consumer(planner, extension, previous_request=0.0):
   consumer = ControlsHarness()
   consumer.control.CP = planner.CP
   consumer.control.CP_SP = extension
-  consumer.control.LoC = LongControl(planner.CP, extension, unified=True)
+  consumer.control.LoC = LongControl(planner.CP, extension)
   consumer.plan.aTarget = previous_request
   consumer.step()
   assert consumer.motion.phase == 'track'

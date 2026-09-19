@@ -13,7 +13,7 @@ from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHa
 
 
 def observed_controls(*, enabled=True, unified=True):
-  harness = ControlsHarness(unified=unified)
+  harness = ControlsHarness(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   harness.control.longitudinal_observation = ControlObservation(
     harness.control.CP, harness.control.CP_SP, enabled=enabled, clock=lambda: harness.now_ns,
   )
@@ -95,7 +95,7 @@ def test_actual_control_inputs_and_published_command_have_distinct_exact_identit
 
 @pytest.mark.parametrize("unified", [False, True])
 def test_observation_is_automatic_for_supported_car_independently_of_unified_mode(unified):
-  harness = ControlsHarness(unified=unified)
+  harness = ControlsHarness(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   observer = ControlObservation.create(harness.control.CP, harness.control.CP_SP)
   assert observer.recorder.enabled
   observer.recorder.clock = lambda: harness.now_ns

@@ -11,7 +11,6 @@ from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, DBC
 from opendbc.car.structs import car
 from openpilot.cereal import custom, log
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.car.card import Car
 from openpilot.selfdrive.car.car_events import CarEvents
@@ -19,10 +18,11 @@ from openpilot.selfdrive.car.cruise import VCruiseHelper, V_CRUISE_INITIAL, V_CR
 from openpilot.selfdrive.car.helpers import convert_to_capnp
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_unified_controlsd import (
   CapturingPublisher, ControlsHarness, bounded_submaster, new_event, selfdrive_event_harness, serialized,
 )
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.selfdrived.events import ET
 from openpilot.selfdrive.selfdrived.state import StateMachine
@@ -36,20 +36,12 @@ CONTROL_STEP_NS = round(DT_CTRL * 1e9)
 PLANNER_STEPS = round(DT_MDL / DT_CTRL)
 
 
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
-
-
 class StartupHarness:
   """Execute the longitudinal startup chain; transport, sensors and lateral control remain bounded fixtures."""
 
-  def __init__(self, *, unified=True, supervised=False, speed=5.0):
+  def __init__(self, *, platform=CAR.HONDA_ACCORD, openpilot_long=True, interceptor=False, speed=5.0):
     self.now_ns = 10_000_000_000
     self.frame = 0
-    self.unified = unified
-    self.supervised = supervised
     self.history = []
     self.native_commands = []
     self.model_stop = False
@@ -63,18 +55,18 @@ class StartupHarness:
     self.source_state.cruiseState.enabled = False
     self.source_state.cruiseState.standstill = speed == 0.0
 
-    self.CP = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
-    self.CP.openpilotLongitudinalControl = True
+    self.CP = CarInterface.get_non_essential_params(platform)
+    self.CP.openpilotLongitudinalControl = openpilot_long
     self.CP.pcmCruise = False
     self.CP.passive = False
     self.CP.lateralTuning.init('pid')
-    self.CP_SP = CarInterface.get_non_essential_params_sp(self.CP, CAR.HONDA_ACCORD)
-    self.CP_SP.enableGasInterceptor = False
-    base = ControlsHarness(unified=unified, supervised=supervised)
+    self.CP_SP = CarInterface.get_non_essential_params_sp(self.CP, platform)
+    self.CP_SP.enableGasInterceptor = interceptor
+    base = ControlsHarness(platform=platform, openpilot_long=openpilot_long, interceptor=interceptor)
     self.controls = base.control
     self.controls.CP = self.CP
     self.controls.CP_SP = self.CP_SP
-    self.controls.LoC = LongControl(self.CP, self.CP_SP, unified=unified, supervised=supervised)
+    self.controls.LoC = LongControl(self.CP, self.CP_SP)
 
     self.latest = {
       service: new_event(service, self.now_ns)
@@ -134,7 +126,7 @@ class StartupHarness:
 
   def restart_planner(self):
     # Match plannerd's production construction, including its default init_v.
-    self.planner = LongitudinalPlanner(self.CP, self.CP_SP, unified=self.unified, supervised=self.supervised)
+    self.planner = LongitudinalPlanner(self.CP, self.CP_SP)
     self.mpc_update = Mock(wraps=self.planner.mpc.update)
     self.planner.mpc.update = self.mpc_update
     self.planner_publisher = CapturingPublisher()
@@ -282,7 +274,7 @@ class StartupHarness:
 
 @pytest.mark.parametrize('unified', [False, True])
 def test_first_set_reaches_actual_card_initialization_without_an_entry_deadlock(unified):
-  harness = StartupHarness(unified=unified)
+  harness = StartupHarness(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
   harness.boot()
   requested = harness.first_set()
   assert requested['enabled'], harness.history[-3:]

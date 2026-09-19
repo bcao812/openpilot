@@ -17,7 +17,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlSt
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import cruise_state
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
 from openpilot.tools.longitudinal.replay_pedal_switches import switch_metrics
 
 
@@ -49,14 +49,15 @@ def rate_limit_evidence(raw_commands, wire_commands, automatic_pairs, rate_limit
 
 def simulate_following(
   *, scenario='moving', delay=0.5, response_time=0.4, duration=25.0, initial_speed=1.1, lead_speed=0.8, initial_gap=7.0,
-  offset=0.0, noise=0.0, diagnostics=None, unified=False
+  offset=0.0, noise=0.0, diagnostics=None, platform=CAR.HONDA_ACCORD, braking_bias=0.0
 ):
   """Ideal acceleration/lag plant, not a calibrated Honda or rollback model."""
-  params = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
+  params = CarInterface.get_non_essential_params(platform)
   params.openpilotLongitudinalControl = True
-  params_sp = CarInterface.get_non_essential_params_sp(params, CAR.HONDA_ACCORD)
-  planner = LongitudinalPlanner(params, params_sp, init_v=initial_speed, unified=unified)
-  longitudinal = LongControl(params, params_sp, unified=unified)
+  params_sp = CarInterface.get_non_essential_params_sp(params, platform)
+  planner = LongitudinalPlanner(params, params_sp, init_v=initial_speed)
+  longitudinal = LongControl(params, params_sp)
+  unified = longitudinal.unified
   controller = CarController({Bus.pt: DBC[params.carFingerprint][Bus.pt]}, params, params_sp)
   parser = CANParser(DBC[params.carFingerprint][Bus.pt], [('ACC_CONTROL', 50)], CanBus(params).pt)
   wrapper = SimpleNamespace(v_cruise_factor=1.0, is_metric=False, acc_hud={}, lkas_hud={}, stock_brake={})
@@ -73,7 +74,8 @@ def simulate_following(
 
   def update_targets(instance, state, v_ego, a_ego, v_cruise):
     instance.source = LongitudinalPlanSource.cruise
-    return v_cruise, a_ego
+    instance.cruise_target = CruiseTarget(instance.source, v_cruise, a_ego)
+    return instance.cruise_target
 
   with (
     patch.object(LongitudinalPlannerSP, 'update', return_value=None),
@@ -134,7 +136,7 @@ def simulate_following(
               'resolved_stop': longitudinal.resolved_should_stop,
               'intent_version': planner.motion_intent.version if unified else 0,
               'state': str(longitudinal.long_control_state),
-              'moving_lead_t': getattr(planner, 'moving_lead_t', 0.0),
+              'moving_lead_t': longitudinal.motion_supervisor.moving_lead_t if longitudinal.unified else 0.0,
               'mpc_v': float(planner.mpc.x0[1]),
             }
           )
@@ -169,7 +171,8 @@ def simulate_following(
         )
       applied = delayed.popleft()
       delayed.append(control.actuators.accel)
-      acceleration += (applied + offset - acceleration) * DT_CTRL / response_time
+      delivered = applied + offset + (braking_bias if applied < 0.0 else 0.0)
+      acceleration += (delivered - acceleration) * DT_CTRL / response_time
       speed = max(0.0, speed + acceleration * DT_CTRL)
       if speed == 0.0:
         acceleration = 0.0

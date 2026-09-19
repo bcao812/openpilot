@@ -5,7 +5,6 @@ import time
 import numpy as np
 
 import openpilot.cereal.messaging as messaging
-from opendbc.car.honda.values import CAR
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -24,7 +23,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource as LongitudinalPlanSourceSP
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -33,17 +32,10 @@ A_CRUISE_MIN = -1.2
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
-LOW_SPEED_STATE_ERROR = 0.2
-LOW_SPEED_STATE_BP = [2.0, 5.0]
 CLOSE_LEAD_STATE_SPEED_BP = [5.0, 10.0]
-CLOSE_LEAD_STATE_T_GAP_BP = [1.0, 2.0]
 CLOSE_LEAD_STATE_ACCEL_BP = [-1.0, -0.5]
-CRUISE_COAST_BP = [-0.3, -0.25, -0.15, -0.1]
-CRUISE_COAST_ACCEL = -0.19
-CRUISE_COAST_MIN_SPEED = 10.0
-CRUISE_COAST_MAX_SPEED_ERROR = 1.0 * CV.KPH_TO_MS
-CRUISE_COAST_RISK_ACCEL = -0.5
 CREEP_FOLLOW_MIN_GAP = 5.0
+CREEP_FOLLOW_MAX_SPEED = 2.0
 CREEP_FOLLOW_MIN_ACCEL = -0.3
 CREEP_FOLLOW_MODEL_MARGIN = 0.1
 CREEP_FOLLOW_MIN_LEAD_SPEED = 0.5
@@ -63,23 +55,8 @@ def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
 
 
-def constrain_braking_speed(v_desired: float, v_ego: float, a_target: float) -> float:
-  if a_target >= 0.0 or v_ego >= LOW_SPEED_STATE_BP[-1]:
-    return v_desired
-  correction = max(v_ego - LOW_SPEED_STATE_ERROR - v_desired, 0.0)
-  weight = float(np.interp(v_ego, LOW_SPEED_STATE_BP, [1.0, 0.0]))
-  return v_desired + weight * correction
-
-
-def get_cruise_coast_accel(a_cruise: float) -> float:
-  if not CRUISE_COAST_BP[0] < a_cruise < CRUISE_COAST_BP[-1]:
-    return a_cruise
-  return float(np.interp(a_cruise, CRUISE_COAST_BP,
-                         [CRUISE_COAST_BP[0], CRUISE_COAST_ACCEL, CRUISE_COAST_ACCEL, CRUISE_COAST_BP[-1]]))
-
-
 def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float) -> bool:
-  if not (math.isfinite(v_ego) and STOP_SPEED <= v_ego < LOW_SPEED_STATE_BP[0]
+  if not (math.isfinite(v_ego) and STOP_SPEED <= v_ego < CREEP_FOLLOW_MAX_SPEED
           and math.isfinite(actuator_delay) and 0.0 <= actuator_delay <= 1.0
           and radar_state.leadOne.present):
     return False
@@ -96,26 +73,6 @@ def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float) -> bo
         or abs(lead.vLead - v_ego - lead.vRel) > CREEP_FOLLOW_MAX_CLOSING_SPEED):
       return False
   return True
-
-
-def constrain_lead_braking_speed(v_desired: float, v_ego: float, a_target: float, radar_state) -> float:
-  if not all(math.isfinite(value) for value in (v_desired, v_ego, a_target)) or a_target >= CLOSE_LEAD_STATE_ACCEL_BP[-1]:
-    return v_desired
-  braking_weight = float(np.interp(a_target, CLOSE_LEAD_STATE_ACCEL_BP, [1.0, 0.0]))
-  speed_weight = float(np.interp(v_ego, CLOSE_LEAD_STATE_SPEED_BP, [0.0, 1.0]))
-  correction = max(v_ego - LOW_SPEED_STATE_ERROR - v_desired, 0.0)
-  if speed_weight == 0.0 or correction == 0.0:
-    return v_desired
-  lead_weight = 0.0
-  for lead in (radar_state.leadOne, radar_state.leadTwo):
-    if not lead.present or not all(math.isfinite(value) for value in (lead.dRel, lead.vRel, lead.modelProb)):
-      continue
-    if lead.dRel < 0.0 or not 0.95 <= lead.modelProb <= 1.0:
-      continue
-    gap_weight = float(np.interp(lead.dRel / v_ego, CLOSE_LEAD_STATE_T_GAP_BP, [1.0, 0.0]))
-    closing_weight = float(np.interp(lead.vRel, [-1.0, 0.0], [1.0, 0.0]))
-    lead_weight = max(lead_weight, gap_weight * closing_weight)
-  return v_desired + braking_weight * speed_weight * lead_weight * correction
 
 
 def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuator_delay: float) -> float:
@@ -250,7 +207,7 @@ def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, 
 
 
 class LongitudinalPlanner(LongitudinalPlannerSP):
-  def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, trace=None, unified=None, supervised=None, diagnostics=None):
+  def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, trace=None, diagnostics=None):
     self.CP = CP
     self.mpc = LongitudinalMpc(dt=dt)
     LongitudinalPlannerSP.__init__(self, self.CP, CP_SP, self.mpc)
@@ -262,9 +219,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.observation = PlannerObservation.create(CP, CP_SP, enabled=diagnostics)
     self.observation_attempt = None
     self.observation_result = None
-    self.longitudinal_mode = resolve_longitudinal_mode(CP, CP_SP, unified=unified, supervised=supervised)
+    self.longitudinal_mode = resolve_longitudinal_mode(CP, CP_SP)
     self.unified = self.longitudinal_mode == LongitudinalMode.UNIFIED
-    self.motion_enabled = self.longitudinal_mode != LongitudinalMode.LEGACY
+    self.motion_enabled = self.unified
 
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
     self.pitch_bias = PitchBiasEstimator(self.dt)
@@ -280,18 +237,15 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.creep_v = 0.0
       self.creep_stop = False
       self.creep_total_t = 0.0
-      self.moving_lead_t = 0.0
-      self.close_lead_stop = False
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
     if self.unified:
       from openpilot.selfdrive.controls.lib.reference_timing import ReferenceTimingProducer
+      from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import UnifiedLongitudinalPlanner
       self.reference_timing = ReferenceTimingProducer()
-    if self.motion_enabled:
-      from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import SupervisedLongitudinalPlanner, UnifiedLongitudinalPlanner
-      self.reference_planner = UnifiedLongitudinalPlanner(self) if self.unified else SupervisedLongitudinalPlanner(self)
+      self.reference_planner = UnifiedLongitudinalPlanner(self)
 
   def update(self, sm, *, now_ns=None):
     # Native execution samples its own monotonic clock. Replays must provide the
@@ -374,11 +328,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if self.unified:
       self.reference_planner.update(sm, now_ns=now_ns)
       return
-    if self.motion_enabled and self.reference_planner.prepare(sm) is None:
-      return
     return self._update_legacy_reference(sm)
 
   def _update_legacy_reference(self, sm):
+    # Generic reference path for platforms outside the supported UNIFIED gate.
     previous_target = self.output_a_target
     LongitudinalPlannerSP.update(self, sm)
 
@@ -388,7 +341,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       # Road grade, not raw pitch: the field carries a static mount residual that would otherwise
       # read as a permanent hill. See PitchBiasEstimator.
       pitch = sm['carControl'].orientationNED[1]
-      bias = self.pitch_bias.value if self.motion_enabled else self.pitch_bias.update(pitch, v_ego)
+      bias = self.pitch_bias.update(pitch, v_ego)
       accel_coast = get_coast_accel(pitch - bias)
     else:
       accel_coast = ACCEL_MAX
@@ -417,58 +370,24 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.v_desired_filter.x = v_ego
       self.output_a_target = np.clip(sm['carState'].aEgo, ACCEL_MIN, ACCEL_MAX)
       self.a_cruise = self.output_a_target
-      if not self.motion_enabled:
-        self.creep_t = 0.0
-        self.creep_stop = False
-        self.creep_total_t = 0.0
-        self.stop_latched = False
-        self.moving_lead_t = 0.0
-        self.close_lead_stop = False
+      self.creep_t = 0.0
+      self.creep_stop = False
+      self.creep_total_t = 0.0
+      self.stop_latched = False
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
-    if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
-        and not sm['carState'].gasPressed and not sm['carState'].brakePressed and not sm['carControl'].cruiseControl.override):
-      self.v_desired_filter.x = constrain_braking_speed(self.v_desired_filter.x, v_ego, self.output_a_target)
-      if (sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
-          and not sm['controlsState'].forceDecel
-          and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState'])):
-        self.v_desired_filter.x = constrain_lead_braking_speed(self.v_desired_filter.x, v_ego, self.output_a_target, sm['radarState'])
 
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
     # Get new v_cruise and a_target from Smart Cruise Control and Speed Limit Assist
-    v_cruise, self.output_a_target = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.output_a_target, v_cruise)
+    policy = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.output_a_target, v_cruise)
+    v_cruise, self.output_a_target = policy.speed, policy.acceleration
     self._observe(policyTargetKnown=True, policySpeed=float(v_cruise), policyAccel=float(self.output_a_target))
 
-    braking_urgency = 0.0
-    if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
-        and sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
-        and not sm['carControl'].cruiseControl.override
-        and not sm['carState'].gasPressed and not sm['carState'].brakePressed and not sm['controlsState'].forceDecel
-        and self.source == LongitudinalPlanSourceSP.cruise
-        and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState'])):
-      braking_urgency = get_lead_braking_urgency(v_ego, self.output_a_target, sm['radarState'], self.CP.longitudinalActuatorDelay)
-    self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality,
-                         a_change_scale=1.0 - (1.0 - LEAD_BRAKING_MIN_CHANGE_SCALE) * braking_urgency)
-    mpc_initial_speed, mpc_initial_accel = self.v_desired_filter.x, self.output_a_target
-    if self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl:
-      # One carState observation dates both physical initial-state components.
-      # Lead admission and policy/driver authority do not change that identity.
-      # Keep v_desired_filter for reference policy and mpc.a_prev for smoothing;
-      # neither is a substitute for motion the vehicle has actually reported.
-      measured_accel = sm['carState'].aEgo
-      if sm.all_checks(service_list=['carState']) and all(math.isfinite(value) for value in (v_ego, measured_accel)):
-        mpc_initial_speed = max(0.0, v_ego)
-        mpc_initial_accel = float(np.clip(measured_accel, ACCEL_MIN, ACCEL_MAX))
-        if mpc_initial_speed == 0.0:
-          mpc_initial_accel = max(0.0, mpc_initial_accel)
-      else:
-        # The shared MPC invalid-input sentinel reaches the existing braking
-        # retention path below. Do not solve a fabricated zero/request state.
-        mpc_initial_speed = mpc_initial_accel = float('nan')
-    self.mpc.set_cur_state(mpc_initial_speed, mpc_initial_accel)
+    self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality)
+    self.mpc.set_cur_state(self.v_desired_filter.x, self.output_a_target)
     if self.trace is not None:
       observe_trace(self.trace, "begin", self, sm, reset_state, v_cruise, accel_coast)
     observe(self.observation, "mpc_started", self.observation_attempt, self.mpc)
@@ -486,16 +405,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       if failure_e2e_allowed and sm.all_checks(service_list=['modelV2']) and math.isfinite(sm['modelV2'].action.desiredAcceleration):
         failure_target = min(failure_target, sm['modelV2'].action.desiredAcceleration)
       self.output_a_target = float(np.clip(failure_target, ACCEL_MIN, ACCEL_MAX))
-      if self.motion_enabled:
-        self.reference_planner.fail_mpc(sm, v_ego, previous_target)
-      else:
-        self.stop_latched = self.stop_latched or should_stop(v_ego, self.output_a_target)
-        self.output_should_stop = self.output_should_stop or self.stop_latched or sm['carState'].standstill
-        self.close_lead_stop = False
-        self.moving_lead_t = 0.0
+      self.stop_latched = self.stop_latched or should_stop(v_ego, self.output_a_target)
+      self.output_should_stop = self.output_should_stop or self.stop_latched or sm['carState'].standstill
       self.fcw = False
       self.v_desired_filter.x = max(0.0, v_ego) if math.isfinite(v_ego) else 0.0
-      if self.trace is not None and not self.motion_enabled:
+      if self.trace is not None:
         observe_trace(self.trace, "finish", self,
                       [(float('nan'), self.mpc.source, False), (float('nan'), LongitudinalPlanSource.cruise, False)], self.is_e2e(sm))
       return
@@ -524,41 +438,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                                      self.a_cruise, steer_angle_without_offset, self.CP, self.dt,
                                      accel_coast, self.allow_throttle)
     cruise_should_stop = should_stop(v_ego, self.a_cruise)
-    output_a_cruise = self.a_cruise
-    coast_transform_applied = False
-    if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
-        and sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
-        and not sm['carControl'].cruiseControl.override
-        and not sm['carState'].gasPressed and not sm['carState'].brakePressed
-        and not sm['controlsState'].forceDecel and not is_e2e and self.allow_throttle
-        and not self.fcw and not output_should_stop_mpc and not output_should_stop_e2e
-        and math.isfinite(output_a_target_mpc) and math.isfinite(output_a_target_e2e)
-        and output_a_target_e2e >= CRUISE_COAST_RISK_ACCEL
-        and self.source == LongitudinalPlanSourceSP.cruise and self.a_cruise <= output_a_target_mpc
-        and v_ego >= CRUISE_COAST_MIN_SPEED and abs(v_cruise - v_ego) <= CRUISE_COAST_MAX_SPEED_ERROR
-        and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState'])
-        and not (sm['radarState'].leadOne.present or sm['radarState'].leadTwo.present)):
-      output_a_cruise = get_cruise_coast_accel(self.a_cruise)
-      coast_transform_applied = True
 
     candidates = [(output_a_target_mpc, self.mpc.source, output_should_stop_mpc),
-                  (output_a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
+                  (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
     if is_e2e:
       candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
 
     observe(self.observation, "reference_candidates", self.observation_attempt, candidates, self.a_cruise,
-            output_a_target_e2e, output_should_stop_e2e, is_e2e, coast_transform_applied)
+            output_a_target_e2e, output_should_stop_e2e, is_e2e)
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     raw_should_stop = any(should_stop for _, _, should_stop in candidates)
-    if self.motion_enabled:
-      self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
-      self.reference_planner.finish_reference(sm, candidates, v_cruise, reset_state)
-      self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
-      if self.trace is not None:
-        observe_trace(self.trace, "finish_unified", self, is_e2e, candidates)
-      return
-
     # Hysteresis on the release side. should_stop() is a bare threshold, `v_ego < STOP_SPEED and
     # a_target < STOP_ACCEL`, and at launch a_target climbs across STOP_ACCEL from underneath while
     # the car is still below STOP_SPEED -- so the state machine can flip at frame rate. Every flip
@@ -595,25 +485,6 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     else:
       self.stop_latched = raw_should_stop and not reset_state
     self.output_should_stop = raw_should_stop or self.stop_latched
-
-    moving_lead = (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl
-                   and (not reset_state or long_control_off)
-                   and sm['controlsState'].longControlState in (LongCtrlState.off, LongCtrlState.pid)
-                   and sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
-                   and not sm['carControl'].cruiseControl.override
-                   and not sm['carState'].gasPressed and not sm['carState'].brakePressed
-                   and not sm['carState'].standstill and not sm['controlsState'].forceDecel
-                   and not self.fcw and self.mpc.solution_status == 0
-                   and not self.output_should_stop and not self.creep_stop and not output_should_stop_e2e
-                   and math.isfinite(output_a_target) and output_a_target >= CREEP_FOLLOW_MIN_ACCEL
-                   and math.isfinite(output_a_target_mpc) and output_a_target_mpc < CREEP_ACCEL
-                   and math.isfinite(output_a_target_e2e) and output_a_target_e2e >= CREEP_FOLLOW_MIN_ACCEL
-                   and output_a_target_e2e >= output_a_target_mpc - CREEP_FOLLOW_MODEL_MARGIN
-                   and self.source == LongitudinalPlanSourceSP.cruise and v_cruise >= CREEP_SPEED
-                   and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState'])
-                   and has_safe_moving_lead(sm['radarState'], v_ego, self.CP.longitudinalActuatorDelay))
-    self.moving_lead_t = min(self.moving_lead_t + self.dt, CREEP_STOP_T) if moving_lead else 0.0
-    following_moving_lead = self.moving_lead_t >= CREEP_STOP_T
 
     # Anti-creep fallback. should_stop() can only latch below STOP_SPEED, but a car whose actuator
     # has a dead band never gets there: Honda Bosch sends gas and clears BRAKE_REQUEST for any accel
@@ -659,7 +530,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # negative accel throughout -- aTarget below CREEP_SPEED has median -0.07 and p90 +0.12 -- so
     # requiring it to be negative costs no latch (31 -> 30 over 83 engaged min, median latch speed
     # 0.68 -> 0.72 m/s) and removes the launches.
-    if v_ego < CREEP_SPEED and output_a_target < CREEP_ACCEL and not following_moving_lead:
+    if v_ego < CREEP_SPEED and output_a_target < CREEP_ACCEL:
       if self.creep_t == 0.0:
         self.creep_v = v_ego
       self.creep_t += self.dt
@@ -678,22 +549,6 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.creep_total_t = 0.0
     self.output_should_stop = self.output_should_stop or self.creep_stop
 
-    close_lead_stop_allowed = (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not reset_state
-                              and math.isfinite(v_ego) and math.isfinite(output_a_target)
-                              and math.isfinite(self.CP.longitudinalActuatorDelay) and 0.0 <= self.CP.longitudinalActuatorDelay <= 1.0
-                              and sm['selfdriveState'].enabled and sm['carControl'].enabled and sm['carControl'].longActive
-                              and not sm['carControl'].cruiseControl.override
-                              and not sm['carState'].gasPressed and not sm['carState'].brakePressed
-                              and not sm['controlsState'].forceDecel and self.mpc.solution_status == 0
-                              and self.source == LongitudinalPlanSourceSP.cruise
-                              and sm.all_checks(service_list=['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState']))
-    if (not close_lead_stop_allowed or v_ego >= CLOSE_LEAD_STOP_SPEED
-        or output_a_target >= STOP_RELEASE_ACCEL or output_a_target <= ROLLING_STOP_ACCEL):
-      self.close_lead_stop = False
-    elif not self.close_lead_stop and not self.output_should_stop:
-      self.close_lead_stop = should_stop_for_close_lead(v_ego, output_a_target, sm['radarState'], self.CP.longitudinalActuatorDelay,
-                                                       a_ego=sm['carState'].aEgo)
-    self.output_should_stop = self.output_should_stop or self.close_lead_stop
 
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
@@ -733,6 +588,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     pm.send('longitudinalPlan', plan_send)
 
-    self.publish_longitudinal_plan_sp(sm, pm, parent_plan_mono_time=plan_send.logMonoTime)
+    self.publish_longitudinal_plan_sp(sm, pm, parent_plan_mono_time=plan_send.logMonoTime,
+                                      legacy_acceleration=None if self.unified else self.output_a_target)
     if self.trace is not None:
       observe_trace(self.trace, "publish", plan_send.logMonoTime)

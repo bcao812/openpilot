@@ -244,8 +244,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"VagAvoidEPSLockout", {PERSISTENT | BACKUP, BOOL, "0"}},
 
     {"DynamicExperimentalControl", {PERSISTENT | BACKUP, BOOL, "0"}},
-    {"LongitudinalMotionEnabled", {PERSISTENT | DEVELOPMENT_ONLY, BOOL, "0"}},
-    {"LongitudinalUnifiedEnabled", {PERSISTENT | DEVELOPMENT_ONLY, BOOL, "0"}},
     {"BlindSpot", {PERSISTENT | BACKUP, BOOL, "0"}},
 
     // sunnypilot model params

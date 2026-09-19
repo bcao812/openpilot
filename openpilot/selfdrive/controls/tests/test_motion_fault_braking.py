@@ -12,26 +12,18 @@ from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, DBC, CarControllerParams
 from opendbc.car.structs import car
 from openpilot.cereal import log, messaging
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
-from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
+from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
-from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.lib.motion_supervisor import DEGRADED_ACCEL, MOTION_INTENT_VERSION, PLAN_LEASE_NS, MotionIntent, MotionPhase, StopReason
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_modes import MOTION_MODES, mode_controls
-from openpilot.selfdrive.controls.tests.test_supervised_longitudinal_planner import make_supervised, make_supervised_state
 from openpilot.selfdrive.controls.tests.test_unified_controlsd import selfdrive_event_harness, serialized
 from openpilot.selfdrive.controls.tests.test_unified_longcontrol import ControlHarness, controller
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import Publisher, advance
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner_owner, make_handover_state
 
 
 MISSING_HEALTH = object()
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def brake_intent(expected_mode, **changes):
@@ -39,7 +31,7 @@ def brake_intent(expected_mode, **changes):
 
 
 def warm_controller(mode):
-  harness = ControlHarness(controller(unified=mode == LongitudinalMode.UNIFIED, supervised=mode == LongitudinalMode.SUPERVISED))
+  harness = ControlHarness(controller())
   harness.state.vEgo = 10.0
   assert harness.step(-0.4, harness.normal_intent()) == -0.4
   assert harness.control.motion_owner_established
@@ -106,7 +98,7 @@ def test_warm_protocol_fault_keeps_braking_and_disables_resume_through_real_hond
   if fault == 'v1':
     harness.plan.motionIntent.version = 1
   else:
-    harness.plan.motionIntent.mode = int(LongitudinalMode.UNIFIED if mode == LongitudinalMode.SUPERVISED else LongitudinalMode.SUPERVISED)
+    harness.plan.motionIntent.mode = int(LongitudinalMode.SUPERVISED)
   command, motion = harness.step()
   output, decoded = native_command(harness)
   assert command.longActive
@@ -233,7 +225,7 @@ def test_envelope_requires_explicit_health_gate_and_real_nonzero_solver_status(m
 @pytest.mark.parametrize('mode', MOTION_MODES)
 def test_a_structurally_valid_envelope_from_the_other_stage_cannot_deepen_braking(mode):
   harness = warm_controller(mode)
-  other_mode = LongitudinalMode.UNIFIED if mode == LongitudinalMode.SUPERVISED else LongitudinalMode.SUPERVISED
+  other_mode = LongitudinalMode.SUPERVISED
   intent = brake_intent(other_mode)
   assert intent.is_braking_valid()
   assert harness.step(-3.5, intent, plan_valid=False, solver_status=4, braking_plan_valid=True) == -0.4
@@ -521,15 +513,9 @@ def test_qualified_braking_watermarks_require_two_fresh_identities_and_keep_an_o
   assert not harness.control.LoC.motion_owner_established
 
 
-def e2e_actuation_arm(mode, speed, model_request):
-  supervised, supervised_owner = make_supervised(speed=speed, initial_accel=model_request)
-  if mode == LongitudinalMode.SUPERVISED:
-    planner, owner = supervised, supervised_owner
-  else:
-    planner = LongitudinalPlanner(supervised.CP, supervised_owner.CP_SP, init_v=speed, init_a=model_request,
-                                  unified=False, supervised=False)
-    owner = LongControl(supervised.CP, supervised_owner.CP_SP)
-  state = make_supervised_state(speed=speed, target=speed + 10.0, experimental=True)
+def e2e_actuation_arm(speed, model_request):
+  planner, owner = make_planner_owner(speed=speed, initial_accel=model_request)
+  state = make_handover_state(speed=speed, target=speed + 10.0, experimental=True)
   dbc_name = DBC[planner.CP.carFingerprint][Bus.pt]
   native = CarController({Bus.pt: dbc_name}, planner.CP, owner.CP_SP)
   parser = CANParser(dbc_name, [('ACC_CONTROL', 50)], CanBus(planner.CP).pt)
@@ -541,7 +527,7 @@ def e2e_actuation_arm(mode, speed, model_request):
     state['modelV2'].action.desiredAcceleration = model_request if frame < 30 else 1.0
     state['controlsState'].longControlState = owner.long_control_state
     timestamp = advance(state, frame)
-    planner.update(state)
+    planner.update(state, now_ns=timestamp)
     publisher = Publisher()
     planner.publish(state, publisher)
     published = publisher.messages['longitudinalPlan'].as_builder()
@@ -568,6 +554,7 @@ def e2e_actuation_arm(mode, speed, model_request):
       rows.append({
         'frame': frame, 'tick': tick, 'target': float(plan.aTarget), 'plan_valid': bool(event.valid),
         'solver_status': int(plan.solverStatus), 'raw_reasons': int(plan.motionIntent.reasons),
+        'release_allowed': bool(plan.motionIntent.releaseAllowed),
         'owned_reasons': int(owner.motion_reasons), 'request': float(output), 'applied': float(native_output.accel),
         'state': owner.long_control_state, 'phase': owner.motion_phase, 'degraded': owner.motion_degraded,
         'resolved_stop': owner.resolved_should_stop, 'can': decoded,
@@ -577,36 +564,40 @@ def e2e_actuation_arm(mode, speed, model_request):
 
 @pytest.mark.parametrize('speed', [1.99, 2.0, 2.01, 5.0, 20.0])
 @pytest.mark.parametrize('model_request', [-3.0, -0.5, -0.1, 0.3])
-def test_supervised_e2e_stop_preserves_legacy_braking_with_20_100_50_hz_execution_and_releases_on_withdrawal(speed, model_request):
-  legacy = e2e_actuation_arm(LongitudinalMode.LEGACY, speed, model_request)
-  supervised = e2e_actuation_arm(LongitudinalMode.SUPERVISED, speed, model_request)
-  assert len(legacy) == len(supervised) == 250
+def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_releases_on_qualified_withdrawal(speed, model_request):
+  rows = e2e_actuation_arm(speed, model_request)
+  assert len(rows) == 250
   stopping_can_frames = 0
-  for reference, candidate in zip(legacy, supervised, strict=True):
-    assert candidate['plan_valid'] and reference['plan_valid']
-    assert candidate['solver_status'] == reference['solver_status'] == 0
+  previous = None
+  for candidate in rows:
+    assert candidate['plan_valid']
+    assert candidate['solver_status'] == 0
     assert not candidate['degraded']
     if 10 <= candidate['frame'] < 30:
-      assert candidate['target'] == reference['target']
       assert candidate['raw_reasons'] & int(StopReason.E2E)
-      assert candidate['state'] == LongCtrlState.stopping
-      assert candidate['request'] <= reference['request'] + 1e-6
+      assert candidate['resolved_stop']
+      assert candidate['state'] == (LongCtrlState.stopping if speed < 2.0 else LongCtrlState.pid)
       assert candidate['request'] <= candidate['target'] + 1e-6
-      assert candidate['applied'] <= reference['applied'] + 1e-6
+      assert candidate['request'] <= 0.0 and candidate['applied'] <= 0.0
       if candidate['can'] is not None:
         stopping_can_frames += 1
         assert candidate['can']['GAS_COMMAND'] <= 0
-        assert candidate['can']['ACCEL_COMMAND'] <= reference['can']['ACCEL_COMMAND'] + 1e-6
+        assert candidate['can']['ACCEL_COMMAND'] <= 0.0
     elif candidate['frame'] >= 30:
       assert not candidate['raw_reasons'] & int(StopReason.E2E)
-      assert not candidate['owned_reasons'] & int(StopReason.E2E)
-      assert not candidate['resolved_stop']
+      if previous['resolved_stop'] and not candidate['resolved_stop']:
+        assert candidate['release_allowed'] and candidate['target'] > 0.0
+      if candidate['resolved_stop']:
+        assert candidate['request'] <= 0.0
+        if candidate['can'] is not None:
+          assert candidate['can']['GAS_COMMAND'] <= 0
+    previous = candidate
   assert stopping_can_frames == 50
-  assert supervised[-1]['phase'] == MotionPhase.TRACK
-  assert supervised[-1]['state'] == LongCtrlState.pid
+  assert rows[-1]['phase'] == MotionPhase.TRACK
+  assert rows[-1]['state'] == LongCtrlState.pid
 
 
-def test_unified_high_speed_e2e_execution_is_not_changed_by_the_supervised_compatibility_rule():
+def test_unified_high_speed_e2e_execution_tracks_the_braking_reference():
   harness = warm_controller(LongitudinalMode.UNIFIED)
   assert harness.step(-0.5, MotionIntent(reasons=StopReason.E2E)) == -0.5
   assert harness.control.long_control_state == LongCtrlState.pid
@@ -614,11 +605,11 @@ def test_unified_high_speed_e2e_execution_is_not_changed_by_the_supervised_compa
 
 
 @pytest.mark.parametrize('authority', ['gas', 'brake', 'disabled'])
-def test_driver_cancellation_wins_over_the_supervised_high_speed_e2e_stop_ramp(authority):
-  harness = warm_controller(LongitudinalMode.SUPERVISED)
+def test_driver_cancellation_wins_over_unified_high_speed_e2e_braking(authority):
+  harness = warm_controller(LongitudinalMode.UNIFIED)
   intent = harness.normal_intent(reasons=StopReason.E2E)
   harness.step(-0.5, intent)
-  assert harness.control.long_control_state == LongCtrlState.stopping
+  assert harness.control.long_control_state == LongCtrlState.pid
   if authority != 'disabled':
     setattr(harness.state, authority + 'Pressed', True)
   assert harness.step(-3.0, intent, active=authority != 'disabled') == 0.0

@@ -1,3 +1,8 @@
+"""Cruise/CAN plant regressions through the current Accord UNIFIED runtime.
+
+The original risk inputs, lag plant and absolute thresholds remain in force.
+"""
+
 from collections import deque
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,10 +18,14 @@ from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, DBC
 from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, make_handover_state
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
+from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.tools.longitudinal.replay_pedal_switches import switch_metrics
-from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import cruise_state
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
 
 
 def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady', speed_target=20.0, duration=80.0,
@@ -27,30 +36,34 @@ def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady'
   speed, acceleration = speed_target + 0.2, 0.0
   planner = LongitudinalPlanner(params, params_sp, init_v=speed)
   longitudinal = LongControl(params, params_sp)
+  assert planner.longitudinal_mode is longitudinal.longitudinal_mode is LongitudinalMode.UNIFIED
   controller = CarController({Bus.pt: DBC[params.carFingerprint][Bus.pt]}, params, params_sp)
   parser = CANParser(DBC[params.carFingerprint][Bus.pt], [('ACC_CONTROL', 50)], CanBus(params).pt)
   control_sp = structs.CarControlSP()
   car_wrapper = SimpleNamespace(v_cruise_factor=1.0, is_metric=False, acc_hud={}, lkas_hud={}, stock_brake={})
   delayed_commands = deque([0.0] * max(1, round(delay / DT_CTRL)))
-  state = cruise_state()
+  state = make_handover_state(speed=speed, target=speed_target)
   state['carState'].vCruise = speed_target * 3.6
   state['carState'].vCruiseCluster = speed_target * 3.6
   state['carState'].cruiseState.available = True
-  state['modelV2'] = state['modelV2'].as_builder()
   state['modelV2'].action.desiredAcceleration = 0.1
   gap, lead_speed = 100.0, speed_target
   command = 0.0
+  publisher = Publisher()
+  wire_plan = None
   history, can_rows = [], []
 
   def update_targets(instance, state, v_ego, a_ego, v_cruise):
     instance.source = LongitudinalPlanSource.cruise
-    return v_cruise, a_ego
+    instance.cruise_target = CruiseTarget(instance.source, v_cruise, a_ego)
+    return instance.cruise_target
 
   with patch.object(LongitudinalPlannerSP, 'update', return_value=None), \
        patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets), \
        patch.object(LongitudinalPlanner, 'is_e2e', return_value=False):
     for frame in range(round(duration / DT_CTRL)):
       timestamp = frame * DT_CTRL
+      now_ns = 1_000_000_000 + round(timestamp * 1e9)
       measured_speed = max(0.0, speed + noise * np.sin(2 * np.pi * 1.1 * timestamp))
       state['carState'].vEgo = float(measured_speed)
       state['carState'].aEgo = float(acceleration)
@@ -72,12 +85,25 @@ def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady'
       lead.aLeadK = lead_accel
       lead.aLeadTau = 1.5
       if frame % round(DT_MDL / DT_CTRL) == 0:
-        planner.update(state)
+        for service in state.logMonoTime:
+          state.logMonoTime[service] = now_ns
+        state['modelV2'].velocity.x = [float(measured_speed)] * len(ModelConstants.T_IDXS)
+        state['modelV2'].position.x = [float(measured_speed * sample) for sample in ModelConstants.T_IDXS]
+        planner.update(state, now_ns=now_ns)
         assert planner.mpc.solution_status == 0
-        command = float(np.float32(planner.output_a_target))
+        with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=now_ns + 500_000):
+          planner.publish(state, publisher)
+        wire_plan = publisher.messages['longitudinalPlan']
+        command = float(wire_plan.longitudinalPlan.aTarget)
       limits = CarInterface.get_pid_accel_limits(params, params_sp, measured_speed, speed_target)
       control = state['carControl'].as_reader().as_builder()
-      control.actuators.accel = float(longitudinal.update(active, state['carState'], command, planner.output_should_stop, limits))
+      plan = wire_plan.longitudinalPlan
+      control.actuators.accel = float(longitudinal.update(
+        active, state['carState'], command, plan.shouldStop, limits,
+        intent=MotionIntent.from_message(plan.motionIntent), plan_time_ns=wire_plan.logMonoTime,
+        model_time_ns=plan.modelMonoTime, now_ns=now_ns + 1_000_000,
+        plan_valid=wire_plan.valid, solver_status=plan.solverStatus, braking_plan_valid=state.all_checks(['carState']),
+      ))
       control.actuators.longControlState = longitudinal.long_control_state
       car_wrapper.out = state['carState']
       _, messages = controller.update(control.as_reader(), control_sp, car_wrapper, round(timestamp * 1e9))
@@ -95,7 +121,8 @@ def simulate_lead_cruise(*, offset=0.25, noise=0.0, delay=0.5, scenario='steady'
   values = np.array(history)
   steady = values[values[:, 0] >= duration - 20.0]
   braking = values[(values[:, 0] >= 25.0) & (values[:, 2] < -1.0), 0]
-  return {'speed_error_kph': float((np.mean(steady[:, 1]) - speed_target) * 3.6),
+  return {'runtime_mode': planner.longitudinal_mode.name, 'gas_interceptor': bool(params_sp.enableGasInterceptor),
+          'speed_error_kph': float((np.mean(steady[:, 1]) - speed_target) * 3.6),
           'minimum_speed': float(np.min(values[:, 1])),
           'speed_range_kph': float(np.ptp(steady[:, 1]) * 3.6), 'minimum_gap': float(np.min(values[:, 3])),
           'minimum_gap_time': float(values[np.argmin(values[:, 3]), 0]),

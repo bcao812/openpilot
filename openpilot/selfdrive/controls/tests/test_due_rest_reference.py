@@ -10,24 +10,18 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   MPC_GOAL_INFEASIBLE, N, REST_STATE_TOL, T_IDXS, LongitudinalMpc,
 )
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, SOURCE_NS, evidence, stopping_curve
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import StrictPlanTransportHarness, assign_curve, typed_reference
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import advance, make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 from openpilot.selfdrive.controls.tests.test_unified_model_reference_contract import model_stop_curve
 from openpilot.selfdrive.controls.tests.test_unified_startup import PLANNER_STEPS
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def continued_evidence(raw, speed=10.0, *, adapter=None, elapsed_ns=0):

@@ -9,9 +9,8 @@ from opendbc.car.honda.values import CAR
 from openpilot.cereal import custom
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState, ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
-from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
-from openpilot.selfdrive.controls.lib.motion_supervisor import (CREEP_INPUT_SERVICES, DEGRADED_ACCEL, MOTION_INTENT_VERSION, PLAN_LEASE_NS,
-                                                               CreepSample, MotionIntent, MotionPhase, StopReason)
+from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MOTION_INTENT_VERSION, PLAN_LEASE_NS,
+                                                               MotionIntent, MotionPhase, StopReason)
 from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import decoded_commands
 
 
@@ -20,11 +19,10 @@ ACCEL_LIMITS = (-3.5, 2.0)
 
 def normal_intent(mode, timestamp, speed, **changes):
   """Explicit healthy synthetic producer input; absent evidence is not repaired."""
-  sample = CreepSample((timestamp,) * len(CREEP_INPUT_SERVICES), speed, False) if mode == LongitudinalMode.SUPERVISED else None
-  return MotionIntent(mode=int(mode), creep_sample=sample, **changes)
+  return MotionIntent(mode=int(mode), **changes)
 
 
-def controller(*, unified=True, supervised=False, platform=CAR.HONDA_ACCORD, openpilot_long=True, interceptor=False, initial=0.0):
+def controller(*, platform=CAR.HONDA_ACCORD, openpilot_long=True, interceptor=False, initial=0.0):
   parameters = structs.CarParams()
   parameters.carFingerprint = platform
   parameters.openpilotLongitudinalControl = openpilot_long
@@ -33,7 +31,7 @@ def controller(*, unified=True, supervised=False, platform=CAR.HONDA_ACCORD, ope
   parameters.longitudinalTuning.kiV = [0.0]
   parameters_sp = custom.CarParamsSP.new_message()
   parameters_sp.enableGasInterceptor = interceptor
-  control = LongControl(parameters, parameters_sp, unified=unified, supervised=supervised)
+  control = LongControl(parameters, parameters_sp)
   control.last_output_accel = initial
   return control
 
@@ -112,13 +110,15 @@ def test_off_to_track_requires_actual_pedal_handover_and_observes_measured_motio
   # output golden value: handover comfort requires the separate vehicle model.
 
 
-def test_new_mode_requires_an_explicit_constructor_opt_in():
-  reference = controller(unified=False)
+def test_supported_vehicle_selects_unified_without_a_constructor_opt_in():
+  reference = controller()
   implicit = LongControl(reference.CP, reference.CP_SP)
-  assert not implicit.unified
-  assert implicit.motion_supervisor is None
+  assert implicit.unified
+  assert implicit.motion_supervisor is not None
   state = structs.CarState()
-  assert implicit.update(True, state, 1.0, False, ACCEL_LIMITS) == reference.update(True, state, 1.0, False, ACCEL_LIMITS)
+  implicit.update(True, state, 1.0, False, ACCEL_LIMITS)
+  assert implicit.motion_degraded
+  assert implicit.resolved_should_stop
 
 
 @pytest.mark.parametrize('platform,openpilot_long,interceptor', [
@@ -130,7 +130,7 @@ def test_new_mode_requires_an_explicit_constructor_opt_in():
 ])
 def test_constructor_cannot_expand_platform_or_actuation_authority(platform, openpilot_long, interceptor):
   candidate = controller(platform=platform, openpilot_long=openpilot_long, interceptor=interceptor)
-  reference = controller(unified=False, platform=platform, openpilot_long=openpilot_long, interceptor=interceptor)
+  reference = controller(platform=platform, openpilot_long=openpilot_long, interceptor=interceptor)
   state = structs.CarState()
   assert not candidate.unified
   for target in (1.0, -2.0, -0.15, 1.5):
@@ -138,7 +138,7 @@ def test_constructor_cannot_expand_platform_or_actuation_authority(platform, ope
 
 
 def test_legacy_path_ignores_new_protocol_and_remains_frame_equivalent():
-  reference, candidate = controller(unified=False), controller(unified=False)
+  reference, candidate = controller(platform=CAR.HONDA_CIVIC_BOSCH), controller(platform=CAR.HONDA_CIVIC_BOSCH)
   source = random.Random(71029)
   state = structs.CarState()
   for _ in range(1000):
@@ -352,9 +352,8 @@ def test_movement_permission_confirmation_cannot_delay_stronger_braking():
   assert command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0
 
 
-@pytest.mark.parametrize('supervised', [False, True])
-def test_early_departure_confirmation_preserves_held_braking_and_the_release_rate(supervised):
-  harness = ControlHarness(controller(unified=not supervised, supervised=supervised))
+def test_early_departure_confirmation_preserves_held_braking_and_the_release_rate():
+  harness = ControlHarness()
   harness.state.vEgo = 0.0
   harness.state.standstill = True
   for _ in range(150):

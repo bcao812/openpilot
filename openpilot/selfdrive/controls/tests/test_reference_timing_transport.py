@@ -166,8 +166,6 @@ def real_controls_harness():
   params = Params()
   params.put('CarParams', template.CP.to_bytes())
   params.put('CarParamsSP', template.CP_SP.to_bytes())
-  params.put_bool('LongitudinalUnifiedEnabled', True)
-  params.put_bool('LongitudinalMotionEnabled', False)
   # Execute ControlsExt.__init__ and the production SubMaster call unchanged.
   with patch('openpilot.cereal.messaging.Poller'), patch('openpilot.cereal.messaging.sub_sock'), \
        patch('openpilot.cereal.messaging.PubMaster', return_value=CapturingPublisher()), \
@@ -258,13 +256,13 @@ def test_qualified_failed_solver_braking_keeps_its_time_contract():
     assert not command.cruiseControl.resume
 
 
-@pytest.mark.parametrize('unified,supervised', [(False, False), (False, True)])
-def test_legacy_and_supervised_do_not_consume_unified_timing(unified, supervised):
+def test_legacy_does_not_consume_unified_timing():
+  from opendbc.car.honda.values import CAR
   from openpilot.common.prefix import OpenpilotPrefix
   from openpilot.selfdrive.controls.tests.test_unified_controlsd import ControlsHarness
 
   with OpenpilotPrefix():
-    harness = ControlsHarness(unified=unified, supervised=supervised)
+    harness = ControlsHarness(platform=CAR.HONDA_CIVIC_BOSCH)
     harness.plan.reference.timingVersion = REFERENCE_TIMING_VERSION + 1
     command, motion = harness.step()
     assert command.longActive and command.actuators.accel > 0.0
@@ -303,10 +301,10 @@ def production_planner_submaster():
 
 
 def test_plannerd_actual_subscription_call_keeps_all_provenance_sources():
-  from openpilot.selfdrive.controls.lib.motion_supervisor import CREEP_INPUT_SERVICES
+  from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import INPUT_SERVICES
 
   state = production_planner_submaster()
-  assert set(CREEP_INPUT_SERVICES).issubset(state.services)
+  assert set(INPUT_SERVICES).issubset(state.services)
   assert state.services.count('radarState') == 1
   assert 'modelV2' not in state.non_polled_services
 
@@ -333,7 +331,7 @@ def consume_serialized_plan(harness, plan_event, now_ns):
 def test_native_production_messages_keep_source_epoch_and_do_not_reseed_invalid_history(interruption):
   from openpilot.common.prefix import OpenpilotPrefix
   from openpilot.selfdrive.controls.tests.test_unified_controlsd import CapturingPublisher, new_event, serialized
-  from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import make_planner, make_state
+  from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state
 
   with OpenpilotPrefix():
     planner, _ = make_planner()

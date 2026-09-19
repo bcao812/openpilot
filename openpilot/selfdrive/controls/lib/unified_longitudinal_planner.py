@@ -8,27 +8,24 @@ from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_ACCEL, CREEP_SPEED, STOP_SPEED, should_stop, get_accel_from_plan
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_SPEED, should_stop, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
-from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, MPC_INVALID_INPUT,
-                                                                        MpcReference, T_IDXS)
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   CONTROL_N_T_IDX, ALLOW_THROTTLE_THRESHOLD, MIN_ALLOW_THROTTLE_SPEED,
   LEAD_BRAKING_MIN_CHANGE_SCALE, CREEP_FOLLOW_MIN_ACCEL, CREEP_FOLLOW_MODEL_MARGIN,
   CREEP_FOLLOW_MIN_GAP, CREEP_FOLLOW_MIN_LEAD_SPEED, CREEP_FOLLOW_MAX_CLOSING_SPEED,
-  CREEP_FINISH_T, COMFORT_BRAKE, LongitudinalPlanSource, LongitudinalPlanSourceSP,
+  CREEP_FINISH_T, COMFORT_BRAKE, LongitudinalPlanSource,
   _A_TOTAL_MAX_V, _A_TOTAL_MAX_BP, get_max_accel, get_coast_accel,
   get_lead_braking_urgency,
   has_safe_moving_lead, should_stop_for_close_lead,
 )
-from openpilot.selfdrive.controls.lib.motion_supervisor import (CREEP_INPUT_SERVICES, MOTION_INTENT_VERSION, CreepSample, MotionIntent,
-                                                               MotionReferenceKind, StopReason)
+from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VERSION, MotionIntent, MotionReferenceKind, StopReason,
+                                                               consumed_forward_reference)
 from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
-from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
 from openpilot.selfdrive.modeld.constants import ModelConstants
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource as LongitudinalPlanSourceSP
 
 
 INPUT_SERVICES = ['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState', 'vehicleParameters']
@@ -180,9 +177,7 @@ class UnifiedLongitudinalPlanner:
     raw_kind = self.describe_motion_reference(state)
     evidence_goal = self.model_evidence.rest_goal if self.model_evidence is not None else None
     goal_rejected = bool(raw_kind == MotionReferenceKind.REST and evidence_goal is not None and planner.mpc.rest_goal == evidence_goal
-                         and (planner.mpc.solution_status == MPC_GOAL_INFEASIBLE and planner.mpc.rest_goal_state in ('infeasible', 'unverified')
-                              or planner.mpc.solution_status == MPC_GOAL_UNSATISFIED
-                              and (planner.mpc.rest_goal_state == 'unsatisfied' or planner.mpc.effective_rest_state == 'unsatisfied')))
+                         and planner.mpc.outcome is MpcOutcome.REST_REJECTED)
     planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), allow_creep=False,
                                          valid=False, braking_accel=request, reference_kind=int(raw_kind),
                                          rest_goal_rejected=goal_rejected, producer_instance_ns=self.producer_instance_ns)
@@ -248,14 +243,12 @@ class UnifiedLongitudinalPlanner:
 
   @property
   def producer_instance_ns(self):
-    if self.planner.longitudinal_mode == LongitudinalMode.UNIFIED and self.planner.reference_timing.pending is not None:
+    if self.planner.reference_timing.pending is not None:
       return self.planner.reference_timing.pending.instance_ns
     return 0
 
   def describe_motion_reference(self, state):
     """Describe this admitted raw source without creating a goal or stop latch."""
-    if self.planner.longitudinal_mode != LongitudinalMode.UNIFIED:
-      return MotionReferenceKind.UNKNOWN
     evidence = self.model_evidence
     timing = self.planner.reference_timing.pending
     if (timing is None or evidence is None
@@ -360,7 +353,8 @@ class UnifiedLongitudinalPlanner:
     forced_decel = state['controlsState'].forceDecel
     if forced_decel:
       cruise_speed = 0.0
-    cruise_speed, policy_accel = LongitudinalPlannerSP.update_targets(planner, state, initial_speed, initial_accel, cruise_speed)
+    policy = LongitudinalPlannerSP.update_targets(planner, state, initial_speed, initial_accel, cruise_speed)
+    cruise_speed, policy_accel = policy.speed, policy.acceleration
     planner._observe(policyTargetKnown=True, policySpeed=float(cruise_speed), policyAccel=float(policy_accel))
     if not math.isfinite(cruise_speed) or not math.isfinite(policy_accel):
       self.model_reference_adapter.clear_rest_continuity()
@@ -498,30 +492,18 @@ class UnifiedLongitudinalPlanner:
     raw_kind = self.describe_motion_reference(state)
     control = state['carControl']
     controls = state['controlsState']
-    motion = controls.motionState
     control_ns = getattr(state, 'logMonoTime', {}).get('carControl')
     controls_ns = getattr(state, 'logMonoTime', {}).get('controlsState')
     executed_forward = (
-      planner.longitudinal_mode == LongitudinalMode.UNIFIED and reference_continuous
+      reference_continuous
       and active and healthy and not reset and not forced_decel and not planner.fcw and not reasons
       and not model.action.shouldStop and evidence is not None and evidence.unknown is None
       and raw_kind in (MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING)
       and not state['radarState'].leadOne.present and not state['radarState'].leadTwo.present
       and math.isfinite(output) and output >= 0.0
-      and controls.longControlState == LongCtrlState.pid and control.actuators.longControlState == LongCtrlState.pid
-      and motion.phase in ('release', 'track')
-      and not (motion.resolvedStop or motion.degraded or motion.waitingForFreshInput or motion.reasons)
-      and math.isfinite(control.actuators.accel)
-      and valid_timestamp(control_ns) and previous_producer_ns < control_ns < now_ns
-      and valid_timestamp(controls_ns) and previous_producer_ns < controls_ns <= now_ns
-      # Recent headers and PID alone do not identify which plan ran. Require
-      # the owner's successful consumption of this instance's prior reference.
-      and motion.referenceTimingVersion == REFERENCE_TIMING_VERSION and motion.referenceTimingValid
-      and motion.referenceProducerInstanceMonoTime == self.producer_instance_ns
-      and motion.referenceProducerMonoTime == previous_producer_ns
-      and motion.referenceSourceMonoTime == previous_source_ns and motion.referenceEpochMonoTime == previous_source_ns
-      and valid_timestamp(motion.referenceConsumerMonoTime)
-      and previous_producer_ns < motion.referenceConsumerMonoTime <= min(control_ns, controls_ns)
+      and consumed_forward_reference(control, controls, control_ns=control_ns, controls_ns=controls_ns,
+                                      source_ns=previous_source_ns, producer_ns=previous_producer_ns,
+                                      instance_ns=self.producer_instance_ns, now_ns=now_ns)
       and (raw_kind == MotionReferenceKind.FORWARD or self._forward_execution_instance_ns == self.producer_instance_ns)
     )
     # MOVING may continue this producer's confirmed FORWARD execution, but it
@@ -572,74 +554,11 @@ class UnifiedLongitudinalPlanner:
     message.motionIntent.ready = intent.ready
     message.motionIntent.brakingValid = intent.braking_accel is not None
     message.motionIntent.brakingAccel = float(intent.braking_accel) if intent.braking_accel is not None else 0.0
-    message.motionIntent.creepEvidenceValid = intent.creep_sample is not None
     message.motionIntent.referenceKind = int(intent.reference_kind)
     message.motionIntent.restGoalRejected = intent.rest_goal_rejected
     message.motionIntent.producerInstanceMonoTime = intent.producer_instance_ns
-    if intent.creep_sample is not None:
-      message.motionIntent.creepSourceMonoTimes = list(intent.creep_sample.source_times_ns)
-      message.motionIntent.creepMeasuredSpeed = float(intent.creep_sample.measured_speed)
-      message.motionIntent.creepReset = intent.creep_sample.reset
     message.reference.accel = self.reference_accel
     message.reference.constraintAccel = self.constraint_accel
     message.reference.overridden = self.reference_overridden
     message.reference.source = self.reference_source
     message.reference.constraintSource = self.constraint_source
-
-
-class SupervisedLongitudinalPlanner(UnifiedLongitudinalPlanner):
-  """Publish raw motion evidence without replacing the legacy reference calculation."""
-
-  def finish_reference(self, state, candidates, cruise_speed, reset):
-    planner = self.planner
-    car_state = state['carState']
-    model = state['modelV2']
-    speed = max(0.0, float(car_state.vEgo))
-    delay = planner.CP.longitudinalActuatorDelay
-    self.reference_accel = float(candidates[0][0])
-    self.reference_source = candidates[0][1]
-    constraint = min(candidates[1:], key=lambda candidate: candidate[0])
-    self.constraint_accel, self.constraint_source = float(constraint[0]), constraint[1]
-    self.reference_overridden = bool(planner.output_a_target != self.reference_accel)
-    self.e2e_allowed = planner.is_e2e(state)
-    healthy = state.all_checks(service_list=INPUT_SERVICES)
-    active = (state['selfdriveState'].enabled and state['carControl'].enabled and state['carControl'].longActive
-              and not car_state.gasPressed and not car_state.brakePressed and not state['carControl'].cruiseControl.override)
-    forced_decel = state['controlsState'].forceDecel
-    forward_reference = reference_requests_departure(planner.mpc.v_solution, planner.mpc.a_solution, planner.mpc.j_solution)
-    reasons = StopReason.NONE
-    for candidate, reason in zip(candidates, (StopReason.MPC, StopReason.CRUISE, StopReason.E2E), strict=False):
-      if candidate[2]:
-        reasons |= reason
-    if speed < STOP_SPEED and planner.mpc.v_solution[-1] < STOP_SPEED and not forward_reference:
-      reasons |= StopReason.MPC
-    if cruise_speed <= STOP_SPEED:
-      reasons |= StopReason.FORCE_DECEL if forced_decel else StopReason.CRUISE
-    qualified = (active and healthy and not reset and not forced_decel and not planner.fcw
-                 and planner.source == LongitudinalPlanSourceSP.cruise)
-    if qualified and should_stop_for_close_lead(speed, planner.output_a_target, state['radarState'], delay, a_ego=car_state.aEgo):
-      reasons |= StopReason.CLOSE_LEAD
-    no_model_risk = (not model.action.shouldStop and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL
-                     and model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN)
-    moving_lead = bool(qualified and not reasons and no_model_risk and not car_state.standstill
-                       and state['controlsState'].longControlState in (LongCtrlState.off, LongCtrlState.pid)
-                       and planner.output_a_target >= CREEP_FOLLOW_MIN_ACCEL and self.reference_accel < CREEP_ACCEL
-                       and cruise_speed >= CREEP_SPEED and has_safe_moving_lead(state['radarState'], speed, delay))
-    trajectory_departure = bool(active and healthy and not forced_decel and not planner.fcw and not reasons and forward_reference)
-    lead_departure = bool(qualified and not reasons and no_model_risk
-                          and cruise_speed >= CREEP_SPEED and has_departing_lead(state['radarState'], speed, delay))
-    observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
-            trajectory_departure, lead_departure, qualified, no_model_risk)
-    # Publish this frame's measured sources only. The consumer owns elapsed
-    # qualification, bounded off-sample compatibility and the stopping deadline.
-    source_times = tuple(getattr(state, 'logMonoTime', {}).get(service, 0) for service in CREEP_INPUT_SERVICES)
-    creep_sample = CreepSample(source_times, float(car_state.vEgo), state['controlsState'].longControlState == LongCtrlState.off)
-    planner.motion_intent = MotionIntent(
-      mode=int(planner.longitudinal_mode), reasons=int(reasons), moving_lead=moving_lead,
-      release_allowed=trajectory_departure or lead_departure, allow_creep=bool(active and healthy),
-      valid=bool(healthy and car_state.vCruise != V_CRUISE_UNSET and creep_sample.is_valid()),
-      creep_sample=creep_sample if creep_sample.is_valid() else None,
-    )
-    planner.output_should_stop = bool(reasons)
-    planner._observe(outcome="completed_supervised" if healthy else "completed_unhealthy_inputs",
-                     constraintKnown=True, constraintAccel=self.constraint_accel)

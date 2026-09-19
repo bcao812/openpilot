@@ -5,16 +5,13 @@ import numpy as np
 from opendbc.car.structs import car
 from opendbc.car.honda.values import CAR, CarControllerParams
 from openpilot.common.realtime import DT_CTRL
-from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED, CONTROL_N, STOP_SPEED
+from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
 from openpilot.common.pid import PIDController
 from openpilot.selfdrive.controls.lib.launch_response import LaunchResponse
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
 from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MAX_CONTROL_GAP_NS, MotionPhase, MotionReferenceKind,
                                                                MotionSupervisor, StopReason, ROLLING_STOP_ACCEL,
                                                                STARTING_ACCEL_RATE, STOPPING_DECEL_RATE)
-from openpilot.selfdrive.modeld.constants import ModelConstants
-
-CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 MPC_FAILURE_ACCEL = -0.5
@@ -49,7 +46,7 @@ def long_control_state_trans(CP_SP, active, long_control_state,
   return long_control_state
 
 class LongControl:
-  def __init__(self, CP, CP_SP, *, unified=False, supervised=False):
+  def __init__(self, CP, CP_SP):
     self.CP = CP
     self.CP_SP = CP_SP
     self.long_control_state = LongCtrlState.off
@@ -57,9 +54,9 @@ class LongControl:
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
     self.starting = False
-    self.longitudinal_mode = resolve_longitudinal_mode(CP, CP_SP, unified=unified, supervised=supervised)
-    self.unified = self.longitudinal_mode != LongitudinalMode.LEGACY
-    self.motion_supervisor = MotionSupervisor(mode=self.longitudinal_mode) if self.unified else None
+    self.longitudinal_mode = resolve_longitudinal_mode(CP, CP_SP)
+    self.unified = self.longitudinal_mode == LongitudinalMode.UNIFIED
+    self.motion_supervisor = MotionSupervisor() if self.unified else None
     self.resolved_should_stop = False
     # The host Bosch CAN encoder has no acceleration-error integrator. Do not
     # duplicate a tuned PID or the separately installed response experiment.
@@ -109,9 +106,6 @@ class LongControl:
       return self._update_unified(active, CS, a_target, accel_limits, intent=intent, plan_time_ns=plan_time_ns,
                                   model_time_ns=model_time_ns, now_ns=now_ns, plan_valid=plan_valid and solver_status == 0,
                                   braking_plan_valid=braking_plan_valid is True, solver_status=solver_status, standby_input=standby_input)
-    if (solver_status != 0 and self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl
-        and not self.CP_SP.enableGasInterceptor):
-      return self._update_mpc_failure(active, CS, a_target, should_stop, accel_limits)
     self.resolved_should_stop = bool(should_stop)
     self.pid.neg_limit = accel_limits[0]
     self.pid.pos_limit = accel_limits[1]
@@ -143,9 +137,6 @@ class LongControl:
       if output_accel > stop_accel:
         output_accel = min(output_accel, 0.0)
         output_accel -= STOPPING_DECEL_RATE * DT_CTRL
-      if (self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl and not CS.standstill
-          and STOP_SPEED <= CS.vEgo < CLOSE_LEAD_STOP_SPEED and np.isfinite(a_target)):
-        output_accel = min(output_accel, a_target)
       self.reset()
       # Whatever the ramp reached is where the next pid frame has to climb out from.
       self.starting = True
@@ -167,40 +158,8 @@ class LongControl:
           output_accel = limit
         else:
           self.starting = False
-      if self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl:
-        output_accel = min(output_accel, limit)
 
     self.last_output_accel = np.clip(output_accel, accel_limits[0], accel_limits[1])
-    return self.last_output_accel
-
-  def _update_mpc_failure(self, active, CS, a_target, should_stop, accel_limits):
-    self.reset()
-    if not active or CS.gasPressed or CS.brakePressed:
-      self.long_control_state = LongCtrlState.off
-      self.resolved_should_stop = False
-      self.starting = False
-      self.last_output_accel = 0.0
-      return 0.0
-
-    limits_valid = (accel_limits is not None and len(accel_limits) == 2
-                    and all(math.isfinite(value) for value in accel_limits)
-                    and CarControllerParams.BOSCH_ACCEL_MIN <= accel_limits[0] <= MPC_FAILURE_ACCEL
-                    and accel_limits[0] <= accel_limits[1] <= CarControllerParams.BOSCH_ACCEL_MAX)
-    if not limits_valid:
-      accel_limits = (CarControllerParams.BOSCH_ACCEL_MIN, MPC_FAILURE_ACCEL)
-    previous = self.last_output_accel if math.isfinite(self.last_output_accel) else MPC_FAILURE_ACCEL
-    requested = a_target if math.isfinite(a_target) else MPC_FAILURE_ACCEL
-    output_accel = min(previous, requested, MPC_FAILURE_ACCEL)
-    if CS.standstill:
-      hold_accel = self.CP.stopAccel
-      if not math.isfinite(hold_accel) or not CarControllerParams.BOSCH_ACCEL_MIN <= hold_accel <= MPC_FAILURE_ACCEL:
-        hold_accel = -2.0
-      output_accel = min(output_accel, hold_accel)
-    self.resolved_should_stop = bool(should_stop or CS.standstill or CS.vEgo < STOP_SPEED)
-    stopping = self.resolved_should_stop and (CS.standstill or CS.vEgo < CLOSE_LEAD_STOP_SPEED)
-    self.long_control_state = LongCtrlState.stopping if stopping else LongCtrlState.pid
-    self.starting = stopping
-    self.last_output_accel = float(np.clip(output_accel, accel_limits[0], accel_limits[1]))
     return self.last_output_accel
 
   def _update_unified(self, active, CS, a_target, accel_limits, *, intent, plan_time_ns, model_time_ns, now_ns,
@@ -208,8 +167,8 @@ class LongControl:
     active = active and not CS.gasPressed and not CS.brakePressed
     now_ns = time.monotonic_ns() if now_ns is None else now_ns
     if not active:
-      # SUPERVISED may retain one fresh measured off sample; observation never
-      # bypasses the immediate manual-override OFF/zero-output return below.
+      # Observe identities for rearm without bypassing the immediate
+      # manual-override OFF/zero-output return below.
       self.motion_supervisor.update(False, CS.vEgo, CS.aEgo, CS.standstill, a_target, intent,
                                     plan_time_ns=plan_time_ns, model_time_ns=model_time_ns, now_ns=now_ns,
                                     plan_valid=plan_valid, solver_status=solver_status, standby_input=standby_input)
@@ -249,8 +208,7 @@ class LongControl:
     protocol_hold = (CS.cruiseState.standstill
                      and (self.long_control_state in (LongCtrlState.off, LongCtrlState.stopping)
                           or self.motion_phase in (MotionPhase.HOLD, MotionPhase.RELEASE)))
-    supervised_e2e_stop = self.longitudinal_mode == LongitudinalMode.SUPERVISED and self.motion_reasons & StopReason.E2E
-    stopping = self.resolved_should_stop and (CS.standstill or CS.vEgo < CLOSE_LEAD_STOP_SPEED or supervised_e2e_stop)
+    stopping = self.resolved_should_stop and (CS.standstill or CS.vEgo < CLOSE_LEAD_STOP_SPEED)
     allocation = getattr(self, '_response_candidate', None)
     launch_feedback = (self.launch_response is not None and allocation is None and not self.motion_input_constrained
                        and not self.resolved_should_stop and not protocol_hold and not intent.reasons and a_target >= 0.0

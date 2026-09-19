@@ -49,32 +49,46 @@ def counter_fixture(monkeypatch, *, solve_delta=1, reset_delta=0, native_return=
 
 @pytest.mark.parametrize('parent_metadata', [False, True], ids=['legacy_bound_call', 'new_keyword_bound_call'])
 def test_actual_planner_publish_to_sp_noop_binding(monkeypatch, parent_metadata):
+  from openpilot.common.prefix import OpenpilotPrefix
+  from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent
+
   actual_planner = replay.planner_module.LongitudinalPlanner
-  messages, window, _, encoded, _ = replay_fixture(monkeypatch)
-  prepared_planner = replay.planner_module.LongitudinalPlanner
+  actual_decode = replay.decode_motion_intent
+  messages, window, _, encoded, _ = replay_fixture(monkeypatch, automatic_api=True)
   received_parent_ids = []
 
   class ActualPublishingPlanner(actual_planner):
-    def __init__(self, params, params_sp, *, unified=False, supervised=False):
-      prepared_planner.__init__(self, params, params_sp, unified=unified, supervised=supervised)
+    def update(self, state):
+      self.output_a_target = 0.15
+      self.output_should_stop = False
+      self.motion_intent = MotionIntent(valid=True)
+      self.mpc.solution_status = 0
+      self.mpc.source = 'cruise'
       self.mpc.solve_time = 0.0
-      self.v_desired_trajectory = np.asarray(self.v_desired_trajectory)
+      self.v_desired_trajectory = np.zeros(1)
       self.a_desired_trajectory = np.zeros(1)
       self.j_desired_trajectory = np.zeros(1)
       self.observation = self.observation_result = self.trace = None
 
-    def update(self, state):
-      return prepared_planner.update(self, state)
-
-    def publish_longitudinal_plan_sp(self, state, publisher, parent_plan_mono_time=0):
+    def publish_longitudinal_plan_sp(self, state, publisher, parent_plan_mono_time=0, *, legacy_acceleration=None):
       received_parent_ids.append(parent_plan_mono_time)
+      assert legacy_acceleration is None
       if parent_metadata:
-        return super().publish_longitudinal_plan_sp(state, publisher, parent_plan_mono_time=parent_plan_mono_time)
+        return super().publish_longitudinal_plan_sp(state, publisher, parent_plan_mono_time=parent_plan_mono_time,
+                                                    legacy_acceleration=legacy_acceleration)
       return super().publish_longitudinal_plan_sp(state, publisher)
 
   assert ActualPublishingPlanner.publish is actual_planner.publish
   monkeypatch.setattr(replay.planner_module, 'LongitudinalPlanner', ActualPublishingPlanner)
-  result = replay.replay_window(None, window, messages=messages, unified=False)
+  monkeypatch.setattr(replay, 'decode_motion_intent', actual_decode)
+  with OpenpilotPrefix():
+    params = replay.CarInterface.get_non_essential_params(replay.CAR.HONDA_ACCORD)
+    params.openpilotLongitudinalControl = True
+    params_sp = replay.CarInterface.get_non_essential_params_sp(params, replay.CAR.HONDA_ACCORD)
+    params_sp.enableGasInterceptor = False
+    next(message for message in messages if message.which() == 'carParams').carParams = params
+    next(message for message in messages if message.which() == 'carParamsSP').carParamsSP = params_sp
+    result = replay.replay_window(None, window, messages=messages, unified=True)
   assert received_parent_ids == [1_010_000_000]
   assert result['coverage'] == {'plans': 1, 'matched_plans': 1, 'controls': 1, 'matched_controls': 1,
                                 'sendcan': 1, 'matched_sendcan': 1}
@@ -83,7 +97,7 @@ def test_actual_planner_publish_to_sp_noop_binding(monkeypatch, parent_metadata)
   assert result['diagnostics']['status'] == 'COMPLETED'
 
 
-@pytest.mark.parametrize('calling_style', ['legacy', 'positional_metadata', 'keyword_metadata'])
+@pytest.mark.parametrize('calling_style', ['legacy', 'positional_metadata', 'keyword_metadata', 'typed_policy', 'legacy_acceleration'])
 def test_frozen_sp_publisher_does_not_read_or_publish_recorded_decisions(calling_style):
   class Unreadable:
     def __getattr__(self, name):
@@ -94,8 +108,11 @@ def test_frozen_sp_publisher_does_not_read_or_publish_recorded_decisions(calling
     result = replay.frozen_sp_publish(instance, state, publisher)
   elif calling_style == 'positional_metadata':
     result = replay.frozen_sp_publish(instance, state, publisher, 2 ** 53 + 17)
-  else:
+  elif calling_style == 'keyword_metadata':
     result = replay.frozen_sp_publish(instance, state, publisher, parent_plan_mono_time=2 ** 53 + 17)
+  else:
+    result = replay.frozen_sp_publish(instance, state, publisher, parent_plan_mono_time=2 ** 53 + 17,
+                                      legacy_acceleration=None if calling_style == 'typed_policy' else -0.123456789)
   assert result is None
 
 

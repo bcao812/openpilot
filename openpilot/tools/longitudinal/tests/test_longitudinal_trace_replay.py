@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,6 +29,7 @@ def prepare_results(root):
     'coverage': dict.fromkeys(('plans', 'matched_plans', 'controls', 'matched_controls', 'sendcan', 'matched_sendcan'), 1),
     'trace': {'attempted': 1, 'samples': 1, 'dropped': 0, 'failures': 0, 'disabled': False},
     'solver_failures': 0,
+    'capabilities': {'requested_mode': 2, 'planner_mode': 2, 'controller_mode': 2},
   }
   before = {kind: {field: np.zeros(1) for field in fields} for kind, fields in ROW_FIELDS.items()}
   after = {kind: {field: values.copy() for field, values in rows.items()} for kind, rows in before.items()}
@@ -36,7 +38,8 @@ def prepare_results(root):
 
 @pytest.mark.parametrize(
   'condition',
-  ['equal', 'plan_accel', 'control_accel', 'can_gas', 'time', 'stop', 'schema', 'native', 'missing_trace', 'window', 'lost_sample', 'failed_writer'],
+  ['equal', 'plan_accel', 'control_accel', 'can_gas', 'time', 'stop', 'schema', 'native', 'missing_trace', 'window', 'lost_sample', 'failed_writer',
+   'requested_mode', 'planner_mode', 'controller_mode'],
 )
 def test_sampled_trace_evaluation_rejects_any_control_or_input_drift(tmp_path, condition):
   selection, metadata, before, after = prepare_results(tmp_path)
@@ -60,7 +63,10 @@ def test_sampled_trace_evaluation_rejects_any_control_or_input_drift(tmp_path, c
     metadata['trace']['samples'] = 0
   elif condition == 'failed_writer':
     metadata['trace']['failures'] = 1
-  with patch.object(replay, 'load_window', side_effect=[(metadata, before), (metadata, after)]):
+  after_metadata = deepcopy(metadata)
+  if condition in ('requested_mode', 'planner_mode', 'controller_mode'):
+    after_metadata['capabilities'][condition] = 0
+  with patch.object(replay, 'load_window', side_effect=[(metadata, before), (after_metadata, after)]):
     if condition == 'equal':
       result = replay.evaluate(selection, tmp_path)
       assert result[0]['exact_equal']

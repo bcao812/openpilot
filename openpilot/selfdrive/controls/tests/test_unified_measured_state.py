@@ -5,18 +5,12 @@ import pytest
 
 from opendbc.car.honda.carstate import CarState as HondaCarState
 from opendbc.car.interfaces import ACCEL_MAX, ACCEL_MIN
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_following_scenarios import simulate_following
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import advance, make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def expected_motion(state):
@@ -188,7 +182,7 @@ def test_fixed_noisy_honda_kalman_pairs_are_consumed_without_a_second_speed_filt
 def test_speed_only_noise_stress_preserves_existing_following_and_stopping_gates(scenario):
   # This existing plant perturbs v only; keep that assumption separate from the
   # paired real-KF sample qualification above and from measured road experience.
-  result = simulate_following(unified=True, scenario=scenario, noise=0.05)
+  result = simulate_following(scenario=scenario, noise=0.05)
   assert result['minimum_gap'] > (5.0 if scenario == 'moving' else 2.0)
   assert result['minimum_command'] >= ACCEL_MIN
   assert result['maximum_command'] <= ACCEL_MAX

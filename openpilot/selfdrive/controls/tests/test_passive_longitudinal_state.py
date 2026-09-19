@@ -8,7 +8,7 @@ from opendbc.can import CANParser
 from opendbc.car import Bus
 from opendbc.car.honda.carcontroller import CarController
 from opendbc.car.honda.hondacan import CanBus
-from opendbc.car.honda.values import CarControllerParams, DBC
+from opendbc.car.honda.values import CAR, CarControllerParams, DBC
 from opendbc.car.structs import car
 from openpilot.cereal import custom
 from openpilot.common.hardware.hw import Paths
@@ -16,13 +16,12 @@ from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
-from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner, get_coast_accel, get_cruise_accel
+from openpilot.selfdrive.controls.lib.longitudinal_planner import ALLOW_THROTTLE_THRESHOLD, get_coast_accel
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionPhase
-from openpilot.selfdrive.controls.tests.test_supervised_longitudinal_planner import make_supervised
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import Publisher, advance, make_planner, make_state
+from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import cruise_accel_limit
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner, make_state
 
 
-MODES = (LongitudinalMode.SUPERVISED, LongitudinalMode.UNIFIED)
 ACCEL_LIMITS = (CarControllerParams.BOSCH_ACCEL_MIN, CarControllerParams.BOSCH_ACCEL_MAX)
 INPUT_AGE_NS = 100_000_000
 
@@ -35,18 +34,16 @@ def isolated_params(tmp_path, monkeypatch):
       yield
 
 
-def candidate(mode, speed=12.0):
-  if mode == LongitudinalMode.SUPERVISED:
-    return make_supervised(speed)
+def candidate(speed=12.0):
   planner, extension = make_planner(speed)
-  return planner, LongControl(planner.CP, extension, unified=True)
+  return planner, LongControl(planner.CP, extension)
 
 
-def measured_state(mode, speed=12.0):
+def measured_state(speed=12.0):
   state = make_state(speed=speed)
   state['carState'].canValid = True
   state['carControl'].orientationNED = [0.0, 0.02, 0.0]
-  state['controlsState'].motionState.planningMode = int(mode)
+  state['controlsState'].motionState.planningMode = int(LongitudinalMode.UNIFIED)
   return state
 
 
@@ -70,11 +67,11 @@ def pitch_snapshot(planner):
           planner.pitch_bias.diagnostic_calls, planner.pitch_bias.diagnostic_learn_calls)
 
 
-@pytest.mark.parametrize('mode', MODES)
-def test_cold_standby_learns_from_first_qualified_measurement_without_running_reference(mode):
-  planner, owner = candidate(mode)
-  legacy = LongitudinalPlanner(planner.CP, owner.CP_SP, unified=False, supervised=False)
-  state = measured_state(mode)
+def test_cold_standby_learns_from_first_qualified_measurement_without_running_reference():
+  planner, owner = candidate()
+  legacy, _ = make_planner(platform=CAR.HONDA_CIVIC_BOSCH)
+  assert legacy.longitudinal_mode == LongitudinalMode.LEGACY
+  state = measured_state()
   set_standby(state)
   samples = ((2.5, 0.05), (6.0, 0.02923324704170227), (9.0, 0.035), (0.0, 0.07), (12.0, 0.045))
   with patch.object(planner.mpc, 'update', wraps=planner.mpc.update) as mpc_update:
@@ -122,12 +119,12 @@ class HondaCommands:
     return [packet for packet in packets if packet[0] == 0x1df]
 
 
-def test_supervised_cold_to_set_then_throttle_threshold_keeps_coast_reference_and_honda_commands():
+def test_unified_cold_to_set_then_throttle_threshold_limits_reference_and_honda_commands():
   speed = 16.727760314941406
-  planner, owner = make_supervised(speed)
-  legacy = LongitudinalPlanner(planner.CP, owner.CP_SP, init_v=speed, unified=False, supervised=False)
-  legacy_owner = LongControl(planner.CP, owner.CP_SP, unified=False, supervised=False)
-  state = measured_state(LongitudinalMode.SUPERVISED, speed)
+  assert ALLOW_THROTTLE_THRESHOLD == 0.4
+  planner, owner = candidate(speed)
+  legacy, _ = make_planner(speed, platform=CAR.HONDA_CIVIC_BOSCH)
+  state = measured_state(speed)
   state['carState'].aEgo = -0.04944811016321182
   set_standby(state)
   for frame, pitch in enumerate(np.linspace(0.02923324704170227, 0.047564711421728134, 60)):
@@ -137,63 +134,70 @@ def test_supervised_cold_to_set_then_throttle_threshold_keeps_coast_reference_an
     update_at(planner, state, now)
   assert pitch_snapshot(planner) == pitch_snapshot(legacy)
 
-  # The first SET arrives while controlsState is still off. This is the existing
-  # reference initialization contract: current measured speed/accel, with no old
-  # acceleration-change constraint. The subsequent frame becomes executable.
+  # The first SET still uses current measured speed/accel with no invented
+  # acceleration history; execution starts after the owner becomes active.
   state['carState'].vCruise = (speed + 0.4) * 3.6
   state['selfdriveState'].enabled = state['carControl'].enabled = True
   now = advance(state, 60) + 5_000_000
   update_at(legacy, state, now)
-  update_at(planner, state, now)
-  assert planner.a_cruise == legacy.a_cruise
+  with patch.object(planner.mpc, 'set_weights', wraps=planner.mpc.set_weights) as weights:
+    update_at(planner, state, now)
+  assert not weights.call_args.args[0]
   assert planner.mpc.x0[1] == pytest.approx(speed)
   assert planner.mpc.x0[2] == pytest.approx(state['carState'].aEgo)
 
   state['controlsState'].longControlState = LongCtrlState.pid
   state['carControl'].longActive = True
   actual_can = HondaCommands(planner, owner.CP_SP)
-  expected_can = HondaCommands(legacy, owner.CP_SP)
   brake_rows = 0
   for frame, throttle in enumerate([0.5] * 5 + [0.399999] * 18 + [0.5] * 10, 61):
     now = advance(state, frame) + 5_000_000
     state['modelV2'].meta.disengagePredictions.gasPressProbs = [1.0, throttle, 1.0, 1.0, 1.0, 1.0]
-    with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_cruise_accel', wraps=get_cruise_accel) as cruise:
-      update_at(legacy, state, now)
+    update_at(legacy, state, now)
+    with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.cruise_accel_limit', wraps=cruise_accel_limit) as limit:
       update_at(planner, state, now)
-    assert cruise.call_count == 2
-    assert cruise.call_args_list[0].args[7] == cruise.call_args_list[1].args[7]
-    expected_coast = get_coast_accel(state['carControl'].orientationNED[1] - legacy.pitch_bias.filter.x)
-    assert cruise.call_args_list[1].args[7] == expected_coast
+    limit.assert_called_once()
+    expected_coast = get_coast_accel(state['carControl'].orientationNED[1] - legacy.pitch_bias.value)
+    assert limit.call_args.args[4] == expected_coast
     assert pitch_snapshot(planner) == pitch_snapshot(legacy)
-    assert planner.a_cruise == legacy.a_cruise
-    assert planner.output_a_target == legacy.output_a_target
+    assert planner.allow_throttle == (throttle > ALLOW_THROTTLE_THRESHOLD)
+    assert planner.mpc.solution_status == 0
+    np.testing.assert_array_equal(planner.mpc.x0[1:], [speed, state['carState'].aEgo])
+    if not planner.allow_throttle:
+      np.testing.assert_allclose(planner.mpc.params[:, 1], expected_coast, atol=1e-12, rtol=0.0)
+      assert planner.output_a_target <= expected_coast
     publisher = Publisher()
-    planner.publish(state, publisher)
+    with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=now):
+      planner.publish(state, publisher)
     publication = publisher.messages['longitudinalPlan']
     plan = publication.longitudinalPlan
-    legacy_publisher = Publisher()
-    legacy.publish(state, legacy_publisher)
-    legacy_plan = legacy_publisher.messages['longitudinalPlan'].longitudinalPlan
+    assert publication.valid and plan.motionIntent.valid
+    assert plan.allowThrottle == planner.allow_throttle
     for tick in range(5):
       control_now = now + 1_000_000 + tick * 10_000_000
-      expected = float(legacy_owner.update(True, state['carState'], legacy_plan.aTarget, legacy_plan.shouldStop, ACCEL_LIMITS))
       actual = float(owner.update(True, state['carState'], plan.aTarget, plan.shouldStop, ACCEL_LIMITS,
-                                 intent=MotionIntent.from_message(plan.motionIntent), plan_time_ns=now,
-                                 model_time_ns=state.logMonoTime['modelV2'], now_ns=control_now, plan_valid=publication.valid))
-      assert actual == expected
-      expected_packets = expected_can.update(state, legacy_owner, expected, control_now)
+                                 intent=MotionIntent.from_message(plan.motionIntent), plan_time_ns=publication.logMonoTime,
+                                 model_time_ns=plan.modelMonoTime, now_ns=control_now, plan_valid=publication.valid))
+      assert np.isfinite(actual) and ACCEL_LIMITS[0] <= actual <= ACCEL_LIMITS[1]
+      assert not owner.motion_degraded
+      if not planner.allow_throttle:
+        assert actual <= expected_coast
       actual_packets = actual_can.update(state, owner, actual, control_now)
-      assert actual_packets == expected_packets
       if actual_packets:
-        brake_rows += actual_can.parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] != 0
+        wire = actual_can.parser.vl['ACC_CONTROL']
+        # ACCEL_COMMAND has 0.01 m/s² wire resolution in the Honda Bosch DBC.
+        assert wire['ACCEL_COMMAND'] == pytest.approx(actual, abs=0.0051)
+        assert bool(wire['BRAKE_REQUEST']) == (actual < CarControllerParams.BOSCH_GAS_LOOKUP_BP[0])
+        if wire['BRAKE_REQUEST']:
+          assert wire['GAS_COMMAND'] <= 0.0
+          brake_rows += not planner.allow_throttle
   assert brake_rows > 0
 
 
-@pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('manual', ['gasPressed', 'brakePressed', 'override'])
-def test_passive_measurement_continues_under_manual_control_without_retaining_authority(mode, manual):
-  planner, owner = candidate(mode)
-  state = measured_state(mode)
+def test_passive_measurement_continues_under_manual_control_without_retaining_authority(manual):
+  planner, owner = candidate()
+  state = measured_state()
   now = advance(state, 0) + 5_000_000
   update_at(planner, state, now)
   previous = pitch_snapshot(planner)
@@ -216,11 +220,10 @@ def test_passive_measurement_continues_under_manual_control_without_retaining_au
   assert owner.long_control_state == LongCtrlState.off
 
 
-@pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('guard', ['owner_version', 'owner_enabled', 'owner_mode', 'model_shape'])
-def test_reference_admission_fault_does_not_freeze_independent_valid_measurements(mode, guard):
-  planner, _ = candidate(mode)
-  state = measured_state(mode)
+def test_reference_admission_fault_does_not_freeze_independent_valid_measurements(guard):
+  planner, _ = candidate()
+  state = measured_state()
   if guard == 'owner_version':
     state['controlsState'].motionState.version = 0
   elif guard == 'owner_enabled':
@@ -236,13 +239,12 @@ def test_reference_admission_fault_does_not_freeze_independent_valid_measurement
   assert planner.mpc.diagnostic_solve_calls == 0
 
 
-@pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('service', ['carState', 'carControl'])
 @pytest.mark.parametrize('fault', ['invalid', 'missing_id', 'zero_id', 'boolean_id', 'float_id', 'overflow_id',
                                   'future', 'stale', 'duplicate', 'out_of_order'])
-def test_bad_or_repeated_measurement_cannot_change_learned_bias(mode, service, fault):
-  planner, _ = candidate(mode)
-  state = measured_state(mode)
+def test_bad_or_repeated_measurement_cannot_change_learned_bias(service, fault):
+  planner, _ = candidate()
+  state = measured_state()
   now = advance(state, 0) + 5_000_000
   update_at(planner, state, now)
   before = pitch_snapshot(planner)
@@ -274,10 +276,9 @@ def test_bad_or_repeated_measurement_cannot_change_learned_bias(mode, service, f
   assert pitch_snapshot(planner) == before
 
 
-@pytest.mark.parametrize('mode', MODES)
-def test_expired_pair_cannot_define_its_own_clock_and_unrelated_future_service_cannot_spoil_a_fresh_pair(mode):
-  planner, _ = candidate(mode)
-  state = measured_state(mode)
+def test_expired_pair_cannot_define_its_own_clock_and_unrelated_future_service_cannot_spoil_a_fresh_pair():
+  planner, _ = candidate()
+  state = measured_state()
   timestamp = advance(state, 0)
   update_at(planner, state, timestamp + INPUT_AGE_NS)
   assert planner.pitch_bias.diagnostic_learn_calls == 0
@@ -288,20 +289,18 @@ def test_expired_pair_cannot_define_its_own_clock_and_unrelated_future_service_c
   assert planner.pitch_bias.diagnostic_learn_calls == 1
 
 
-@pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('age_ns,accepted', [(INPUT_AGE_NS - 1, True), (INPUT_AGE_NS, False), (INPUT_AGE_NS + 1, False)])
-def test_passive_sample_age_uses_explicit_consumer_time_at_boundary(mode, age_ns, accepted):
-  planner, _ = candidate(mode)
-  state = measured_state(mode)
+def test_passive_sample_age_uses_explicit_consumer_time_at_boundary(age_ns, accepted):
+  planner, _ = candidate()
+  state = measured_state()
   timestamp = advance(state, 0)
   update_at(planner, state, timestamp + age_ns)
   assert planner.pitch_bias.diagnostic_learn_calls == int(accepted)
 
 
-@pytest.mark.parametrize('mode', MODES)
-def test_invalid_sample_identity_cannot_be_repaired_in_place_and_future_ids_do_not_poison_recovery(mode):
-  planner, _ = candidate(mode)
-  state = measured_state(mode)
+def test_invalid_sample_identity_cannot_be_repaired_in_place_and_future_ids_do_not_poison_recovery():
+  planner, _ = candidate()
+  state = measured_state()
   now = advance(state, 0) + 5_000_000
   state.valid['carControl'] = False
   update_at(planner, state, now)
@@ -318,10 +317,9 @@ def test_invalid_sample_identity_cannot_be_repaired_in_place_and_future_ids_do_n
   assert planner.pitch_bias.diagnostic_learn_calls == 1
 
 
-@pytest.mark.parametrize('mode', MODES)
-def test_reversed_consumer_clock_cannot_admit_new_measurements(mode):
-  planner, _ = candidate(mode)
-  state = measured_state(mode)
+def test_reversed_consumer_clock_cannot_admit_new_measurements():
+  planner, _ = candidate()
+  state = measured_state()
   now = advance(state, 0) + 5_000_000
   update_at(planner, state, now)
   before = pitch_snapshot(planner)
@@ -332,21 +330,19 @@ def test_reversed_consumer_clock_cannot_admit_new_measurements(mode):
   assert pitch_snapshot(planner) == before
 
 
-@pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('now_ns', [0, -1, True, 1_005_000_000.0, float('nan'), 1 << 64])
-def test_invalid_consumer_clock_cannot_initialize_passive_state(mode, now_ns):
-  planner, _ = candidate(mode)
-  state = measured_state(mode)
+def test_invalid_consumer_clock_cannot_initialize_passive_state(now_ns):
+  planner, _ = candidate()
+  state = measured_state()
   advance(state, 0)
   update_at(planner, state, now_ns)
   assert planner.pitch_bias.diagnostic_calls == 0
   assert not planner.pitch_bias.filter.initialized
 
 
-@pytest.mark.parametrize('mode', MODES)
-def test_interleaved_new_and_duplicate_measurements_require_a_new_pair_to_recover(mode):
-  planner, _ = candidate(mode)
-  state = measured_state(mode)
+def test_interleaved_new_and_duplicate_measurements_require_a_new_pair_to_recover():
+  planner, _ = candidate()
+  state = measured_state()
   initial_time = advance(state, 0)
   update_at(planner, state, initial_time + 5_000_000)
   before = pitch_snapshot(planner)
@@ -362,23 +358,21 @@ def test_interleaved_new_and_duplicate_measurements_require_a_new_pair_to_recove
   assert planner.pitch_bias.diagnostic_learn_calls == before[-1] + 1
 
 
-@pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('service', ['carState', 'carControl'])
 @pytest.mark.parametrize('invalid_flag', [1, 'true', [True], None])
-def test_truthy_non_boolean_validity_is_not_measurement_evidence(mode, service, invalid_flag):
-  planner, _ = candidate(mode)
-  state = measured_state(mode)
+def test_truthy_non_boolean_validity_is_not_measurement_evidence(service, invalid_flag):
+  planner, _ = candidate()
+  state = measured_state()
   state.valid[service] = invalid_flag
   update_at(planner, state, advance(state, 0) + 5_000_000)
   assert planner.pitch_bias.diagnostic_learn_calls == 0
 
 
-@pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('field,value', [('pitch', float('nan')), ('pitch', float('inf')),
                                        ('speed', float('nan')), ('speed', float('inf')), ('speed', -1.0)])
-def test_nonfinite_or_negative_measurements_never_initialize_passive_state(mode, field, value):
-  planner, _ = candidate(mode)
-  state = measured_state(mode)
+def test_nonfinite_or_negative_measurements_never_initialize_passive_state(field, value):
+  planner, _ = candidate()
+  state = measured_state()
   # Refuse executable reference independently of the measurement. This keeps the
   # test focused on passive admission, including a physically invalid speed.
   state['controlsState'].motionState.enabled = False
@@ -393,9 +387,10 @@ def test_nonfinite_or_negative_measurements_never_initialize_passive_state(mode,
 
 
 def test_legacy_path_retains_existing_sampling_semantics():
-  supervised, owner = make_supervised()
-  planner = LongitudinalPlanner(supervised.CP, owner.CP_SP, unified=False, supervised=False)
-  state = measured_state(LongitudinalMode.LEGACY)
+  planner, _ = make_planner(platform=CAR.HONDA_CIVIC_BOSCH)
+  assert planner.longitudinal_mode == LongitudinalMode.LEGACY
+  state = measured_state()
+  state['controlsState'].motionState.planningMode = int(LongitudinalMode.LEGACY)
   now = advance(state, 0) + 5_000_000
   for pitch in (0.02, 0.03):
     state['carControl'].orientationNED = [0.0, pitch, 0.0]

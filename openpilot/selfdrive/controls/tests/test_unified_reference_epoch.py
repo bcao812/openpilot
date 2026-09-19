@@ -4,22 +4,17 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pytest
 
-from openpilot.common.prefix import OpenpilotPrefix
+from opendbc.car.honda.values import CAR
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
-from openpilot.selfdrive.controls.tests.test_unified_longitudinal_planner import make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state
 
 
 BASE_NS = 1_000_000_000
 STEP_NS = round(DT_MDL * 1e9)
-
-
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
 
 
 def native_reference(speed, initial_accel=0.0):
@@ -201,12 +196,11 @@ def test_interrupted_motion_cannot_supply_history_to_the_first_recovered_referen
   assert consumed[0] == pytest.approx(-0.7)
 
 
-@pytest.mark.parametrize('supervised', [False, True])
-def test_legacy_and_supervised_native_history_still_use_the_fixed_model_step(supervised):
+def test_legacy_native_history_still_uses_the_fixed_model_step():
   results = []
   for offsets in ((0, STEP_NS, 2 * STEP_NS), (0, 3 * STEP_NS, 7 * STEP_NS)):
-    template, extension = make_planner(enabled=False)
-    planner = LongitudinalPlanner(template.CP, extension, init_v=20.0, supervised=supervised)
+    template, extension = make_planner(platform=CAR.HONDA_CIVIC_BOSCH)
+    planner = LongitudinalPlanner(template.CP, extension, init_v=20.0)
     state = make_state()
     state['controlsState'].motionState.planningMode = int(planner.longitudinal_mode)
     consumed_history = []

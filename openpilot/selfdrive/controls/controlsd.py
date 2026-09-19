@@ -25,7 +25,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, S
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
-from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
+from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer
 from openpilot.selfdrive.modeld.constants import LAT_SMOOTH_SECONDS
@@ -65,9 +65,7 @@ class Controls(ControlsExt):
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
 
-    longitudinal_mode = resolve_longitudinal_mode(self.CP, self.CP_SP)
-    self.LoC = LongControl(self.CP, self.CP_SP, unified=longitudinal_mode == LongitudinalMode.UNIFIED,
-                          supervised=longitudinal_mode == LongitudinalMode.SUPERVISED)
+    self.LoC = LongControl(self.CP, self.CP_SP)
     self.reference_timing = ReferenceTimingConsumer()
     self.reference_timing_check = None
     self.longitudinal_observation = ControlObservation.create(self.CP, self.CP_SP)

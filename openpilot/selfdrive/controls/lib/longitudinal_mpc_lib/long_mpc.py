@@ -2,6 +2,7 @@
 import os
 import time
 from dataclasses import dataclass
+from enum import Enum
 from numbers import Integral
 import numpy as np
 from openpilot.cereal import log
@@ -74,6 +75,19 @@ REST_STATE_TOL = 1e-3
 # A numerical repair requires observed residuals this small. This is not the
 # native QP request tolerance, nor a change to the physical rest acceptance box.
 QP_FEASIBILITY_TOL = 1e-9
+
+
+class MpcOutcome(Enum):
+  """Planner acceptance, separate from the native solver's numeric diagnostics.
+
+  A rejected rest goal includes unverified goals and rejected trajectories;
+  it does not assert that every possible stopping trajectory is infeasible.
+  """
+  NOT_SOLVED = 'not_solved'
+  ACCEPTED = 'accepted'
+  REST_REJECTED = 'rejected_rest'
+  INPUT_REJECTED = 'rejected_input'
+  SOLVER_FAULT = 'solver_fault'
 
 
 @dataclass(frozen=True)
@@ -356,6 +370,22 @@ class LongitudinalMpc:
     self.x0 = np.zeros(X_DIM)
     self.set_weights()
 
+  @property
+  def outcome(self):
+    # Derive this from the current contract instead of storing a second status
+    # that could survive a reset or a producer's later input rejection.
+    if self.solution_status == 0:
+      return MpcOutcome.ACCEPTED if self.previous_solution_valid else MpcOutcome.NOT_SOLVED
+    if self.solution_status == MPC_INVALID_INPUT:
+      return MpcOutcome.INPUT_REJECTED
+    if self.rest_goal is not None and (
+      self.solution_status == MPC_GOAL_INFEASIBLE and self.rest_goal_state in ('infeasible', 'unverified')
+      or self.solution_status == MPC_GOAL_UNSATISFIED
+      and (self.rest_goal_state == 'unsatisfied' or self.effective_rest_state == 'unsatisfied')
+    ):
+      return MpcOutcome.REST_REJECTED
+    return MpcOutcome.SOLVER_FAULT
+
   @staticmethod
   def accel_change_cost_scale(times):
     return np.interp(times, [0.0, 1.0, 2.0], [1.0, 1.0, 0.0])
@@ -371,7 +401,7 @@ class LongitudinalMpc:
     """Align one preceding native reference with this consumer's real epoch.
 
     This is a smoothing reference, never an allocated or pending actuator
-    request. LEGACY/SUPERVISED continue to use run()'s original fixed-dt history.
+    request. LEGACY continues to use run()'s original fixed-dt history.
     A new epoch is committed only after the caller accepts a successful output.
     """
     epoch_ns = self._reference_epoch_ns
@@ -420,21 +450,23 @@ class LongitudinalMpc:
     self.a_prev[:] = 0.0
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
+    """Prepare base costs; update installs only the final reference problem."""
     self._cost_weights = np.asarray(cost_weights, dtype=float).copy()
-    W = np.asfortranarray(np.diag(cost_weights))
-    for i in range(N):
-      # TODO don't hardcode A_CHANGE_COST idx
-      # reduce the cost on (a-a_prev) later in the horizon.
-      W[4,4] = cost_weights[4] * self.accel_change_cost_scale(T_IDXS[i])
-      self.solver.cost_set(i, 'W', W)
-    # Setting the slice without the copy make the array not contiguous,
-    # causing issues with the C interface.
-    self.solver.cost_set(N, 'W', np.copy(W[:COST_E_DIM, :COST_E_DIM]))
+    self._constraint_cost_weights = np.asarray(constraint_cost_weights, dtype=float).copy()
+    self._costs_pending = True
 
-    # Set L2 slack cost on lower bound constraints
-    Zl = np.array(constraint_cost_weights)
-    for i in range(N):
-      self.solver.cost_set(i, 'Zl', Zl)
+  def stage_cost_weights(self):
+    weights = np.tile(self._cost_weights, (N+1, 1))
+    weights[:, 4] *= self.accel_change_cost_scale(T_IDXS)
+    return weights
+
+  def install_cost_weights(self, weights):
+    for stage in range(N+1):
+      dimension = COST_DIM if stage < N else COST_E_DIM
+      self.solver.cost_set(stage, 'W', np.asfortranarray(np.diag(weights[stage, :dimension])))
+      if stage < N:
+        self.solver.cost_set(stage, 'Zl', self._constraint_cost_weights)
+    self._costs_pending = False
 
   def set_weights(self, prev_accel_constraint=True, personality=log.LongitudinalPersonality.standard, a_change_scale=1.0):
     jerk_factor = get_jerk_factor(personality)
@@ -531,6 +563,12 @@ class LongitudinalMpc:
     return np.array([position + velocity * duration + (2.0 * acceleration + next_acceleration) * duration**2 / 6.0,
                      velocity + 0.5 * (acceleration + next_acceleration) * duration,
                      next_acceleration])
+
+  @classmethod
+  def trajectory_dynamics_defects(cls, states, jerks):
+    """Stored nodes minus their constant-jerk endpoints, without repairing them."""
+    return np.array([states[stage+1] - cls.integrate_jerk(states[stage], jerks[stage], duration)
+                     for stage, duration in enumerate(np.diff(T_IDXS))])
 
   @staticmethod
   def rest_acceleration_interval(state, duration, lower, upper):
@@ -668,8 +706,7 @@ class LongitudinalMpc:
         or not np.all(np.isfinite(states)) or not np.all(np.isfinite(jerks))
         or not np.all(np.isfinite(parameters[:, [0, 1, 2, 4, 5]]))):
       return 'invalid_scheduled_rest_trajectory'
-    defects = np.array([states[stage+1] - cls.integrate_jerk(states[stage], jerks[stage], duration)
-                        for stage, duration in enumerate(np.diff(T_IDXS))])
+    defects = cls.trajectory_dynamics_defects(states, jerks)
     if max(float(np.max(np.abs(defects))), float(np.max(np.abs(states[0] - initial_state)))) > tolerance:
       return 'scheduled_rest_dynamics_residual_exceeded'
     if (np.max(np.abs(states[1:, 1:])) > REFERENCE_BOUND + tolerance
@@ -882,8 +919,7 @@ class LongitudinalMpc:
     durations = np.diff(T_IDXS)
     lower, upper = self.diagnostic_reference_bounds
     raw_states, raw_jerks = self.x_sol, self.u_sol[:, 0]
-    defects = np.array([raw_states[stage+1] - self.integrate_jerk(raw_states[stage], raw_jerks[stage], duration)
-                        for stage, duration in enumerate(durations)])
+    defects = self.trajectory_dynamics_defects(raw_states, raw_jerks)
     maximum_defect = np.maximum(np.max(np.abs(defects), axis=0), np.abs(raw_states[0] - self.x0))
     maximum_violation = float(max(0.0, np.max(lower[1:] - raw_states[1:, 1:]),
                                   np.max(raw_states[1:, 1:] - upper[1:])))
@@ -1068,8 +1104,7 @@ class LongitudinalMpc:
     self.yref[:, :] = 0.0
     self.params[:, MODEL_V_REF:] = 0.0
     selected = np.argmin(x_obstacles, axis=1)
-    weights = np.tile(self._cost_weights, (N+1, 1))
-    weights[:, 4] *= self.accel_change_cost_scale(T_IDXS)
+    weights = self.stage_cost_weights()
     lower = np.full((N+1, 2), -REFERENCE_BOUND)
     upper = np.full((N+1, 2), REFERENCE_BOUND)
 
@@ -1217,8 +1252,8 @@ class LongitudinalMpc:
 
     self.set_continuous_rest_bounds()
 
+    self.install_cost_weights(weights)
     for stage in range(N+1):
-      self.solver.cost_set(stage, 'W', np.asfortranarray(np.diag(weights[stage, :COST_DIM if stage < N else COST_E_DIM])))
       self.solver.set(stage, 'yref', self.yref[stage, :COST_DIM if stage < N else COST_E_DIM])
       if stage:
         self.solver.constraints_set(stage, 'lbx', lower[stage])
@@ -1436,6 +1471,10 @@ class LongitudinalMpc:
     if not np.all(np.isfinite(self.params)) or not np.all(np.isfinite(self.yref)) or not np.all(np.isfinite(self.x0)):
       self.fail(MPC_INVALID_INPUT)
       return
+    if self._costs_pending:
+      # Direct run callers retain the base-cost contract. In normal update,
+      # the complete reference already installed its costs exactly once.
+      self.install_cost_weights(self.stage_cost_weights())
     for i in range(N+1):
       self.solver.set(i, 'p', self.params[i])
     self.solver.constraints_set(0, "lbx", self.x0)

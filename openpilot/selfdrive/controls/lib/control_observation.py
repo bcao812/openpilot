@@ -10,19 +10,13 @@ def _stored_identity(name, timestamp):
   }
 
 
-def _creep_snapshot(sample):
-  if sample is None:
-    return {"known": False}
-  return {"known": True, "sourceMonoTimes": list(sample.source_times_ns),
-          "measuredSpeed": float(sample.measured_speed), "reset": bool(sample.reset)}
-
-
 def supervisor_snapshot(controller):
   """Copy stored state only: observers must never run eligibility or rearm methods."""
   supervisor = controller.motion_supervisor
   if supervisor is None:
     return {"known": False}
-  pending = supervisor._pending_off_creep
+  # Retired SUPERVISED sample/off-credit fields keep schema defaults only;
+  # observing the live owner never reads state that no longer exists.
   return {
     "known": True,
     "phase": supervisor.phase.text,
@@ -33,11 +27,6 @@ def supervisor_snapshot(controller):
     "creepT": float(supervisor.creep_t),
     "creepTotalT": float(supervisor.creep_total_t),
     "creepV": float(supervisor.creep_v),
-    "creepWindowNs": int(supervisor._creep_window_ns),
-    "creepTotalNs": int(supervisor._creep_total_ns),
-    "creepOffCreditNs": int(supervisor._creep_off_credit_ns),
-    "creepWindowOffCreditNs": int(supervisor._creep_window_off_credit_ns),
-    "creepAutoStartSpeed": float(supervisor._creep_auto_start_speed),
     "movingLeadT": float(supervisor.moving_lead_t),
     "releaseLeadT": float(supervisor.release_lead_t),
     "requireNewInput": bool(supervisor._require_new_input),
@@ -47,12 +36,7 @@ def supervisor_snapshot(controller):
       ("lastNow", supervisor._last_now_ns), ("lastBrakingPlan", supervisor._last_braking_plan_time_ns),
       ("lastBrakingModel", supervisor._last_braking_model_time_ns), ("lastCreepObservation", supervisor._last_creep_observation_ns),
       ("rearmPlan", supervisor._rearm_plan_time_ns), ("rearmModel", supervisor._rearm_model_time_ns),
-      ("pendingOffPlan", pending[1] if pending is not None else None),
-      ("pendingOffModel", pending[2] if pending is not None else None),
     )],
-    "lastCreepSample": _creep_snapshot(supervisor._last_creep_sample),
-    "independentCreepSample": _creep_snapshot(supervisor._last_independent_creep_sample),
-    "pendingOffCreep": _creep_snapshot(pending[0] if pending is not None else None),
   }
 
 

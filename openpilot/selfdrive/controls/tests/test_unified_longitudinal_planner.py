@@ -3,83 +3,24 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pytest
 
-from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR
 from openpilot.cereal import log, messaging
 from openpilot.common.params import Params
-from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
-from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace, MOTION_TRACE_SCHEMA, UNIFIED_TRACE_FIELDS
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent, StopReason
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import model_reference_from_velocity
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state, advance, Publisher
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_following_scenarios import simulate_following
-from openpilot.selfdrive.controls.tests.test_longitudinal_planner_state import braking_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanSource as SPSource
 
 
-@pytest.fixture(autouse=True)
-def isolated_params():
-  with OpenpilotPrefix():
-    yield
-
-
-def make_planner(speed=20.0, *, enabled=True, platform=CAR.HONDA_ACCORD, stock=False, interceptor=False, trace=None):
-  params = CarInterface.get_non_essential_params(platform)
-  params.openpilotLongitudinalControl = not stock
-  extension = CarInterface.get_non_essential_params_sp(params, platform)
-  extension.enableGasInterceptor = interceptor
-  return LongitudinalPlanner(params, extension, init_v=speed, unified=enabled, trace=trace), extension
-
-
-def make_state(speed=20.0, target=22.0, experimental=False):
-  state = braking_state(speed)
-  for service in ('modelV2', 'selfdriveState'):
-    state[service] = state[service].as_builder()
-  state['carState'].vCruise = target * 3.6
-  state['carState'].vCruiseCluster = target * 3.6
-  state['carState'].standstill = speed == 0.0
-  state['carState'].aEgo = 0.0
-  state['carControl'].enabled = True
-  state['carControl'].longActive = True
-  state['controlsState'].motionState.version = MOTION_INTENT_VERSION
-  state['controlsState'].motionState.planningMode = int(LongitudinalMode.UNIFIED)
-  state['controlsState'].motionState.enabled = True
-  state['selfdriveState'].enabled = True
-  state['selfdriveState'].experimentalMode = experimental
-  model = state['modelV2']
-  model.position.x = [float(speed * sample) for sample in ModelConstants.T_IDXS]
-  model.velocity.x = [float(speed)] * len(ModelConstants.T_IDXS)
-  model.acceleration.x = [0.0] * len(ModelConstants.T_IDXS)
-  model.orientation.x = [0.0] * len(ModelConstants.T_IDXS)
-  model.orientationRate.z = [0.001] * len(ModelConstants.T_IDXS)
-  model.action.desiredAcceleration = 0.5
-  model.meta.disengagePredictions.gasPressProbs = [1.0] * 6
-  for service in state.logMonoTime:
-    state.logMonoTime[service] = 1_000_000_000
-  return state
-
-
-def advance(state, frame):
-  timestamp = 1_000_000_000 + frame * 50_000_000
-  for service in state.logMonoTime:
-    state.logMonoTime[service] = timestamp
-  return timestamp
-
-
-class Publisher:
-  def __init__(self):
-    self.messages = {}
-
-  def send(self, service, message):
-    self.messages[service] = message.as_reader()
-
-
-def test_candidate_is_default_off_and_platform_gated():
-  assert not Params().get_bool('LongitudinalUnifiedEnabled')
+def test_unified_is_selected_by_vehicle_capabilities():
+  planner, extension = make_planner()
+  assert planner.unified and LongControl(planner.CP, extension).unified
   for platform, stock, interceptor in (
     (CAR.HONDA_CIVIC, False, False),
     (CAR.HONDA_CIVIC_BOSCH, False, False),
@@ -88,13 +29,13 @@ def test_candidate_is_default_off_and_platform_gated():
   ):
     planner, extension = make_planner(platform=platform, stock=stock, interceptor=interceptor)
     assert not planner.unified
-    assert not LongControl(planner.CP, extension, unified=True).unified
+    assert not LongControl(planner.CP, extension).unified
 
 
 def test_candidate_does_not_allocate_legacy_stop_owners():
   planner, extension = make_planner()
   assert planner.unified
-  assert LongControl(planner.CP, extension, unified=True).unified
+  assert LongControl(planner.CP, extension).unified
   for name in ('stop_latched', 'creep_t', 'creep_stop', 'close_lead_stop', 'moving_lead_t'):
     assert not hasattr(planner, name)
 
@@ -268,7 +209,7 @@ def test_real_cruise_targets_reach_the_optimizer(target):
 @pytest.mark.parametrize('delay,response_time', [(0.1, 0.2), (0.3, 0.4), (0.5, 0.4), (0.8, 0.6)])
 def test_new_following_chain_keeps_existing_behavior_gates(delay, response_time):
   diagnostics = []
-  result = simulate_following(unified=True, delay=delay, response_time=response_time, diagnostics=diagnostics)
+  result = simulate_following(delay=delay, response_time=response_time, diagnostics=diagnostics)
   assert result['stopping_seconds'] == 0.0
   assert result['minimum_speed'] > 0.3
   assert result['speed_error'] < 0.15
@@ -280,7 +221,7 @@ def test_new_following_chain_keeps_existing_behavior_gates(delay, response_time)
 
 @pytest.mark.parametrize('scenario', ['lead_stop', 'cut_in', 'model_stop', 'override', 'lead_loss'])
 def test_new_stop_chain_keeps_existing_risk_gates(scenario):
-  result = simulate_following(unified=True, scenario=scenario)
+  result = simulate_following(scenario=scenario)
   assert result['minimum_gap'] > 2.0
   assert result['minimum_command'] >= -3.5
   assert result['maximum_command'] <= 2.0
@@ -331,7 +272,7 @@ def test_near_stop_model_rebound_is_not_misclassified_as_a_solver_failure(speed,
     assert planner.mpc.solution_status == 0
     assert planner.motion_intent.valid
     assert planner.motion_intent.reasons & int(StopReason.E2E)
-  control = LongControl(planner.CP, extension, unified=True)
+  control = LongControl(planner.CP, extension)
   output = control.update(
     True, state['carState'], planner.output_a_target, planner.output_should_stop, (-3.5, 2.0),
     intent=planner.motion_intent, plan_time_ns=state.logMonoTime['modelV2'],
@@ -356,7 +297,7 @@ def test_finite_kalman_stop_undershoot_is_projected_without_mutating_car_state(e
   assert planner.mpc.x0[1] == 0.0
   assert planner.mpc.solution_status == 0
   assert planner.motion_intent.valid
-  control = LongControl(planner.CP, extension, unified=True)
+  control = LongControl(planner.CP, extension)
   output = control.update(
     True, state['carState'], planner.output_a_target, planner.output_should_stop, (-3.5, 2.0),
     intent=planner.motion_intent, plan_time_ns=state.logMonoTime['modelV2'],
@@ -391,7 +332,7 @@ def test_zero_forward_speed_and_negative_acceleration_cannot_invent_a_release(es
   assert planner.motion_intent.valid
   assert planner.motion_intent.reasons & int(StopReason.MPC)
   assert planner.output_a_target < 0.2
-  controller = LongControl(planner.CP, extension, unified=True)
+  controller = LongControl(planner.CP, extension)
   output = controller.update(
     True, state['carState'], planner.output_a_target, planner.output_should_stop, (-3.5, 2.0),
     intent=planner.motion_intent, plan_time_ns=state.logMonoTime['modelV2'],

@@ -99,7 +99,7 @@ class PlannerObservation:
     if attempt is not None:
       attempt["values"]["analysis"].update(values)
 
-  def reference_candidates(self, attempt, candidates, cruise_raw, model_accel, model_stop, admitted, coast_applied):
+  def reference_candidates(self, attempt, candidates, cruise_raw, model_accel, model_stop, admitted):
     if attempt is not None:
       mpc_accel, mpc_source, mpc_stop = candidates[0]
       cruise_accel, _, cruise_stop = candidates[1]
@@ -107,7 +107,6 @@ class PlannerObservation:
         "known": True, "mpcAccel": float(mpc_accel), "mpcSource": mpc_source, "mpcShouldStop": bool(mpc_stop),
         "cruiseRawAccel": float(cruise_raw), "cruiseAccel": float(cruise_accel), "cruiseShouldStop": bool(cruise_stop),
         "e2eAccel": float(model_accel), "e2eShouldStop": bool(model_stop), "e2eAdmitted": bool(admitted),
-        "coastTransformApplied": bool(coast_applied),
       }
 
   def departure(self, attempt, forward_reference, velocity, trajectory_departure, lead_departure, qualified, no_model_risk):

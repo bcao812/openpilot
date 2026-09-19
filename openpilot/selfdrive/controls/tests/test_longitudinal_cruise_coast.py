@@ -1,5 +1,4 @@
-from unittest.mock import patch
-import json
+"""Current cruise/owner and native CAN contracts after retiring scalar coast remapping."""
 
 import numpy as np
 import pytest
@@ -8,23 +7,10 @@ from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.honda.hondacan import CanBus, create_acc_commands
 from opendbc.car.honda.values import CAR, DBC, CarControllerParams, HondaFlags
-from openpilot.cereal import custom
-from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.controls.lib.longcontrol import LongControl, MPC_FAILURE_ACCEL
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import MPC_INVALID_INPUT
-from openpilot.selfdrive.controls.lib.longitudinal_planner import (CRUISE_COAST_ACCEL, LongitudinalPlanner,
-                                                                 LongitudinalPlanSource, get_cruise_coast_accel)
-from openpilot.selfdrive.controls.tests.test_longitudinal_planner_state import braking_planner, braking_state
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import braking_state, consume, make_handover_state, make_planner_owner
+from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.tools.longitudinal.replay_longitudinal_regressions import debounced_flips
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource as PlanSourceSP
-
-
-def cruise_planner(platform=CAR.HONDA_ACCORD):
-  planner = braking_planner(platform)
-  planner.v_desired_filter.x = 20.2
-  planner.a_cruise = -0.2
-  planner.output_a_target = -0.2
-  return planner
 
 
 def cruise_state():
@@ -33,133 +19,6 @@ def cruise_state():
   state['carState'].vCruiseCluster = 72.0
   state['carControl'].longActive = True
   return state
-
-
-def update_cruise(planner, state, a_cruise=-0.23, a_mpc=1.0, e2e=False, source=PlanSourceSP.cruise):
-  def update_targets(instance, state, v_ego, a_ego, v_cruise):
-    instance.source = source
-    return v_cruise, a_ego
-
-  with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_cruise_accel', return_value=a_cruise), \
-       patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_accel_from_plan', return_value=a_mpc), \
-       patch.object(LongitudinalPlanner, 'is_e2e', return_value=e2e), \
-       patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets):
-    planner.update(state)
-  return planner.output_a_target
-
-
-def assert_invalid_motion_preserves_braking(planner, state, previous_target):
-  assert planner.mpc.solution_status == MPC_INVALID_INPUT
-  assert planner.mpc.failure_reason == 'invalid_input'
-  assert np.isfinite(planner.output_a_target)
-  assert planner.output_a_target <= min(previous_target, MPC_FAILURE_ACCEL)
-  assert planner.moving_lead_t == 0.0
-
-  controller = LongControl(planner.CP, custom.CarParamsSP.new_message())
-  controller.last_output_accel = -1.5
-  output = controller.update(True, state['carState'], planner.output_a_target, planner.output_should_stop,
-                             (-3.5, 2.0), solver_status=planner.mpc.solution_status)
-  assert np.isfinite(output) and output <= -1.5
-  wire = decoded_commands([output])[0]
-  assert wire['BRAKE_REQUEST'] and wire['GAS_COMMAND'] <= 0.0
-  # An invalid plan does not grant control when longitudinal control is inactive.
-  assert controller.update(False, state['carState'], planner.output_a_target, planner.output_should_stop,
-                           (-3.5, 2.0), solver_status=planner.mpc.solution_status) == 0.0
-
-
-@pytest.mark.parametrize('accel', [-3.5, -1.2, -0.3, -0.1, 0.0, 0.2, 2.0])
-def test_requests_outside_small_coasting_band_are_exactly_preserved(accel):
-  assert get_cruise_coast_accel(accel) == accel
-
-
-def test_coast_mapping_is_continuous_monotonic_and_bounded():
-  requests = np.linspace(-0.4, 0.1, 2001)
-  mapped = np.array([get_cruise_coast_accel(float(request)) for request in requests])
-  assert np.all(np.diff(mapped) >= -1e-12)
-  assert max(abs(mapped - requests)) <= 0.06 + 1e-12
-  for boundary in (-0.3, -0.25, -0.15, -0.1):
-    assert abs(get_cruise_coast_accel(boundary + 1e-7) - get_cruise_coast_accel(boundary - 1e-7)) < 1e-6
-
-
-def test_qualified_cruise_is_mapped_but_internal_jerk_state_is_not():
-  planner = cruise_planner()
-  assert update_cruise(planner, cruise_state()) == CRUISE_COAST_ACCEL
-  assert planner.a_cruise == -0.23
-  assert planner.mpc.source == LongitudinalPlanSource.cruise
-
-
-@pytest.mark.parametrize('a_mpc', [-2.0, -0.24, -0.22, -0.2])
-def test_mpc_can_never_be_weakened(a_mpc):
-  planner = cruise_planner()
-  assert update_cruise(planner, cruise_state(), a_mpc=a_mpc) <= a_mpc
-
-
-def test_e2e_braking_bypasses_coasting():
-  planner = cruise_planner()
-  state = cruise_state()
-  state['modelV2'] = state['modelV2'].as_builder()
-  state['modelV2'].action.desiredAcceleration = -2.0
-  assert update_cruise(planner, state, e2e=True) == -2.0
-  assert planner.mpc.source == LongitudinalPlanSource.e2e
-
-
-@pytest.mark.parametrize('lead_name', ['leadOne', 'leadTwo'])
-def test_any_lead_bypasses_coasting(lead_name):
-  planner = cruise_planner()
-  state = cruise_state()
-  getattr(state['radarState'], lead_name).present = True
-  assert update_cruise(planner, state) == -0.23
-
-
-def test_default_planner_does_not_allocate_experimental_controllers():
-  planner = cruise_planner()
-  assert not hasattr(planner, 'experimental_coast_with_lead')
-  assert not hasattr(planner, 'cruise_smoother')
-
-
-@pytest.mark.parametrize('platform', [CAR.HONDA_CIVIC, CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CRV_HYBRID])
-def test_other_platforms_are_unchanged(platform):
-  assert update_cruise(cruise_planner(platform), cruise_state()) == -0.23
-
-
-@pytest.mark.parametrize('condition', ['gas', 'brake', 'override', 'inactive', 'force_decel', 'low_speed',
-                                       'far_from_target', 'unhealthy', 'stock_long', 'throttle_veto'])
-def test_coast_preconditions_are_required(condition):
-  planner = cruise_planner()
-  state = cruise_state()
-  previous_target = planner.output_a_target
-  if condition == 'gas':
-    state['carState'].gasPressed = True
-  elif condition == 'brake':
-    state['carState'].brakePressed = True
-  elif condition == 'override':
-    state['carControl'].cruiseControl.override = True
-  elif condition == 'inactive':
-    state['carControl'].longActive = False
-  elif condition == 'force_decel':
-    state['controlsState'].forceDecel = True
-  elif condition == 'low_speed':
-    state['carState'].vEgo = 2.0
-    state['carState'].vCruise = 7.2
-  elif condition == 'far_from_target':
-    state['carState'].vEgo = 22.0
-  elif condition == 'unhealthy':
-    state.all_checks = lambda service_list=None: False
-  elif condition == 'stock_long':
-    planner.CP.openpilotLongitudinalControl = False
-  elif condition == 'throttle_veto':
-    state['modelV2'] = state['modelV2'].as_builder()
-    state['modelV2'].meta.disengagePredictions.gasPressProbs = [0.0, 0.0]
-  output = update_cruise(planner, state)
-  if condition == 'unhealthy':
-    assert_invalid_motion_preserves_braking(planner, state, previous_target)
-  else:
-    assert output == -0.23
-
-
-@pytest.mark.parametrize('source', [PlanSourceSP.sccVision, PlanSourceSP.sccMap, PlanSourceSP.speedLimitAssist])
-def test_non_cruise_speed_constraints_are_not_weakened(source):
-  assert update_cruise(cruise_planner(), cruise_state(), source=source) == -0.23
 
 
 def decoded_commands(accelerations):
@@ -184,7 +43,7 @@ def decoded_commands(accelerations):
 
 
 def test_float32_and_real_can_remain_consistent():
-  values = decoded_commands([-0.23, CRUISE_COAST_ACCEL, -1.2, 0.1])
+  values = decoded_commands([-0.23, -0.19, -1.2, 0.1])
   assert values[1]['ACCEL_COMMAND'] == pytest.approx(-0.19)
   assert values[1]['BRAKE_REQUEST'] == 0
   assert values[1]['BRAKE_LIGHTS'] == 0
@@ -192,27 +51,6 @@ def test_float32_and_real_can_remain_consistent():
   assert values[2]['BRAKE_REQUEST'] == 1
   assert values[2]['GAS_COMMAND'] == -30000
   assert values[2]['ACCEL_COMMAND'] == pytest.approx(-1.2)
-
-
-def test_small_oscillation_does_not_switch_can_braking():
-  requests = [-0.2 + 0.045 * np.sin(index * np.pi / 10) for index in range(200)]
-  before = decoded_commands(requests)
-  after = decoded_commands([get_cruise_coast_accel(request) for request in requests])
-  before_flips = sum(previous['BRAKE_REQUEST'] != current['BRAKE_REQUEST']
-                     for previous, current in zip(before, before[1:], strict=False))
-  after_flips = sum(previous['BRAKE_REQUEST'] != current['BRAKE_REQUEST']
-                    for previous, current in zip(after, after[1:], strict=False))
-  assert before_flips >= 18
-  assert after_flips == 0
-  assert all(value['BRAKE_REQUEST'] == 0 for value in after)
-
-
-def test_risk_request_bypasses_after_a_coasting_frame():
-  planner = cruise_planner()
-  state = cruise_state()
-  assert update_cruise(planner, state) == CRUISE_COAST_ACCEL
-  assert update_cruise(planner, state, a_cruise=-1.2) == -1.2
-  assert update_cruise(planner, state, a_mpc=-2.0) == -2.0
 
 
 def test_event_comparison_ignores_short_pulses():
@@ -225,73 +63,37 @@ def test_event_comparison_ignores_short_pulses():
   assert debounced_flips([]) == 0
 
 
-def simulate_cruise(platform, acceleration_offset):
-  planner = cruise_planner(platform)
-  speed, acceleration = 20.2, 0.0
-  history = []
+@pytest.mark.parametrize('a_mpc', [-2.0, -0.24, -0.22, -0.2])
+def test_admitted_braking_reference_is_not_weakened_by_the_current_owner(a_mpc):
+  from openpilot.selfdrive.controls.tests.test_unified_longcontrol import warm_tracking_harness
 
-  def update_targets(instance, state, v_ego, a_ego, v_cruise):
-    instance.source = PlanSourceSP.cruise
-    return v_cruise, a_ego
-
-  with patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets):
-    for _ in range(int(60.0 / DT_MDL)):
-      state = cruise_state()
-      state['carState'].vEgo = float(speed)
-      state['carState'].aEgo = float(acceleration)
-      planner.update(state)
-      assert planner.mpc.solution_status == 0
-      command = float(planner.output_a_target)
-      acceleration += (command + acceleration_offset - acceleration) * DT_MDL / 0.5
-      speed += acceleration * DT_MDL
-      history.append((speed, command))
-  steady = history[-int(20.0 / DT_MDL):]
-  return {'speed_error_kph': (speed - 20.0) * 3.6,
-          'speed_range_kph': (max(row[0] for row in steady) - min(row[0] for row in steady)) * 3.6,
-          'minimum_command': min(row[1] for row in history),
-          'maximum_command': max(row[1] for row in history)}
+  harness = warm_tracking_harness(20.2, -0.2)
+  output = harness.step(a_mpc, MotionIntent(allow_creep=False))
+  assert output <= a_mpc
+  command = decoded_commands([output])[0]
+  assert not (command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0)
 
 
-def assert_cruise_candidate_envelope(candidate):
-  """The existing absolute engineering bounds, independent of reference error."""
-  assert abs(candidate['speed_error_kph']) <= 1.1
-  assert candidate['speed_range_kph'] < 0.01
-  assert candidate['minimum_command'] >= -3.5
-  assert candidate['maximum_command'] <= 2.0
-
-
-def coast_reference_diagnostic(baseline, candidate):
-  signed_difference = candidate['speed_error_kph'] - baseline['speed_error_kph']
-  former_pass = abs(signed_difference) <= 0.22
-  return {'baseline_platform': str(CAR.HONDA_CIVIC_BOSCH), 'candidate_platform': str(CAR.HONDA_ACCORD),
-          'identity': 'cross-platform reference; not a paired controller oracle or a pooled population',
-          'baseline': baseline, 'candidate': candidate,
-          'signed_speed_error_difference_kph': signed_difference,
-          'absolute_speed_error_change_kph': abs(candidate['speed_error_kph']) - abs(baseline['speed_error_kph']),
-          'former_relative_limit_kph': 0.22, 'former_relative_gate': 'PASS' if former_pass else 'FAIL',
-          'status': 'NO_FLAG' if former_pass else 'REVIEW',
-          'interpretation': 'Relative difference is diagnostic; only the declared candidate envelope is a hard test contract'}
+def test_current_model_braking_cap_reaches_owner_and_can():
+  planner, owner = make_planner_owner(speed=20.2)
+  state = make_handover_state(speed=20.2, target=20.0, experimental=True)
+  state['modelV2'].action.desiredAcceleration = -2.0
+  plan, outputs = consume(planner, owner, state, 0)
+  assert plan.motionIntent.valid
+  assert plan.aTarget <= -2.0
+  assert max(outputs) <= -2.0
+  assert all(row['BRAKE_REQUEST'] and row['GAS_COMMAND'] <= 0 for row in decoded_commands(outputs))
 
 
 @pytest.mark.parametrize('acceleration_offset', [0.0, 0.2, 0.25, 0.3])
-def test_closed_loop_coasting_does_not_accumulate_speed_error(acceleration_offset, record_property):
-  baseline = simulate_cruise(CAR.HONDA_CIVIC_BOSCH, acceleration_offset)
-  candidate = simulate_cruise(CAR.HONDA_ACCORD, acceleration_offset)
-  diagnostic = coast_reference_diagnostic(baseline, candidate)
-  record_property('cross_platform_coast_diagnostic', json.dumps(diagnostic))
-  record_property('acceleration_offset_mps2', acceleration_offset)
-  assert_cruise_candidate_envelope(candidate)
+def test_current_cruise_does_not_accumulate_speed_error(acceleration_offset):
+  from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_scenarios import simulate_lead_cruise
 
-
-def test_coast_candidate_improvement_is_not_rejected_by_cross_platform_reference():
-  baseline = {'speed_error_kph': 1.0, 'speed_range_kph': 0.0, 'minimum_command': -0.2, 'maximum_command': 0.2}
-  candidate = baseline | {'speed_error_kph': 0.0}
-  diagnostic = coast_reference_diagnostic(baseline, candidate)
-  assert diagnostic['former_relative_gate'] == 'FAIL'
-  assert diagnostic['status'] == 'REVIEW'
-  assert diagnostic['absolute_speed_error_change_kph'] < 0.0
-  assert_cruise_candidate_envelope(candidate)
-  # Removing the relative veto does not relax an absolute safety/experience
-  # bound; an out-of-envelope candidate must still fail the same contract.
-  with pytest.raises(AssertionError):
-    assert_cruise_candidate_envelope(candidate | {'speed_error_kph': 1.2})
+  # Preserve the old no-lead initial speed, offset, first-order response and
+  # absolute limits, through the current owner and real Honda CAN path.
+  result = simulate_lead_cruise(scenario='no_lead', offset=acceleration_offset, delay=0.0, response_time=0.5, duration=60.0)
+  assert abs(result['speed_error_kph']) <= 1.1
+  assert result['speed_range_kph'] < 0.01
+  assert result['minimum_command'] >= -3.5
+  assert result['maximum_command'] <= 2.0
+  assert result['conflicts'] == 0

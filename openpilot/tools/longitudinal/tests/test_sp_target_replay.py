@@ -5,7 +5,7 @@ import pytest
 from openpilot.cereal import messaging
 from openpilot.common.constants import CV
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP
 from openpilot.tools.longitudinal import replay_longitudinal_regressions
 from openpilot.tools.longitudinal.replay_pedal_switches import recorded_sp_targets
 
@@ -68,6 +68,51 @@ def test_unknown_source_is_not_silently_replaced_with_the_final_output():
     recorded_sp_targets(SimpleNamespace(longitudinalPlanSource='unknown', aTarget=-2.0), 0.0, 17.0)
 
 
+@pytest.mark.parametrize('source', ['cruise', 'sccVision', 'sccMap', 'speedLimitAssist'])
+def test_frozen_target_uses_the_current_policy_type_without_overwriting_final_output(source):
+  plan = decision(source)
+  speed, accel = recorded_sp_targets(plan, 0.123456789, 60.0 * CV.KPH_TO_MS)
+  planner = SimpleNamespace(output_a_target=-9.0)
+  target_type = replay_longitudinal_regressions.sp_target_return_type(LongitudinalPlannerSP.update_targets)
+  assert target_type is CruiseTarget
+  target = replay_longitudinal_regressions.frozen_sp_target(planner, plan.longitudinalPlanSource, speed, accel, target_type)
+  assert target == CruiseTarget(plan.longitudinalPlanSource, speed, accel)
+  assert planner.cruise_target is target
+  assert planner.source == plan.longitudinalPlanSource
+  assert planner.output_v_target == speed
+  assert planner.output_a_target == -9.0
+
+
+def test_historical_tuple_target_contract_is_explicitly_preserved():
+  def historical_targets(instance, state, v_ego, a_ego, v_cruise) -> tuple[float, float]:
+    raise AssertionError('Selecting the API must not execute SP')
+
+  target_type = replay_longitudinal_regressions.sp_target_return_type(historical_targets)
+  assert target_type is None
+  planner = SimpleNamespace(output_a_target=-9.0)
+  assert replay_longitudinal_regressions.frozen_sp_target(planner, 'cruise', 17.0, 0.123456789, target_type) == (17.0, 0.123456789)
+  assert planner.source == 'cruise'
+  assert planner.output_a_target == -9.0
+
+
+def test_unknown_target_contract_is_rejected_before_replay():
+  def unknown_targets(instance, state, v_ego, a_ego, v_cruise) -> dict:
+    raise AssertionError('Selecting the API must not execute SP')
+
+  with pytest.raises(ValueError, match='Unsupported SP target return contract'):
+    replay_longitudinal_regressions.sp_target_return_type(unknown_targets)
+
+
+def test_planner_only_replay_rejects_motion_runtime_without_consumer_ack(monkeypatch, tmp_path):
+  segment = tmp_path / 'test-route--0'
+  segment.mkdir()
+  (segment / 'rlog.zst').touch()
+  monkeypatch.setattr(replay_longitudinal_regressions, 'route_metadata', lambda paths: (None, None, 0.0))
+  monkeypatch.setattr(replay_longitudinal_regressions, 'LongitudinalPlanner', lambda *arguments: SimpleNamespace(motion_enabled=True))
+  with pytest.raises(ValueError, match='no motion-consumer ACK'):
+    replay_longitudinal_regressions.replay(tmp_path, 'test-route', 0.0, 1.0)
+
+
 @pytest.mark.parametrize('cruise_speed,published_speed', CRUISE_SPEED_CASES)
 def test_cruise_only_replay_preserves_the_callback_speed(monkeypatch, tmp_path, cruise_speed, published_speed):
   route = 'test-route'
@@ -98,4 +143,4 @@ def test_cruise_only_replay_preserves_the_callback_speed(monkeypatch, tmp_path, 
                       lambda paths, origin, start, end, coverage: iter([(0.0, {}, None, plan_sp, True, 0)]))
   with pytest.raises(TargetObserved):
     replay_longitudinal_regressions.replay(tmp_path, route, 0.0, 1.0)
-  assert observed == [(cruise_speed, previous_accel)]
+  assert observed == [CruiseTarget(plan_sp.longitudinalPlanSource, cruise_speed, previous_accel)]
