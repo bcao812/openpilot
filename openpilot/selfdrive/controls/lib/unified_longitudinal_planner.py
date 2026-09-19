@@ -21,7 +21,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_lead_braking_urgency,
   has_safe_moving_lead, should_stop_for_close_lead,
 )
-from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VERSION, MotionIntent, MotionReferenceKind, StopReason,
+from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VERSION, MotionIntent, MotionReferenceKind, MotionResponseKind, StopReason,
                                                                consumed_forward_reference)
 from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -528,10 +528,31 @@ class UnifiedLongitudinalPlanner:
     observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
             trajectory_departure, lead_departure, qualified, no_model_risk)
     release_allowed = bool(trajectory_departure or lead_departure)
+    response_kind = MotionResponseKind.NONE
+    if (active and healthy and not reset and not forced_decel and not reasons and not self.reference_overridden
+        and planner.source == LongitudinalPlanSourceSP.cruise):
+      lead_sources = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
+      lead_index = lead_sources.index(planner.mpc.source) if planner.mpc.source in lead_sources else None
+      selected_lead = (state['radarState'].leadOne, state['radarState'].leadTwo)[lead_index] if lead_index is not None else None
+      if ((not planner.fcw or output < 0.0) and not self.e2e_allowed and evidence is None
+          and (planner.mpc.source == LongitudinalPlanSource.cruise or selected_lead is not None and selected_lead.present)):
+        # Ordinary ACC owns an absolute speed/lead target. Missing model
+        # semantics alone are not this certificate; policy, health and the
+        # current unoverridden target must all retain their qualification.
+        # FCW rejects positive feedback, not an absolute braking target;
+        # the consumer already forbids positive I for every negative target.
+        response_kind = MotionResponseKind.ABSOLUTE_ACC
+      elif (selected_lead is not None and output < 0.0
+            and get_lead_braking_urgency(speed, output, state['radarState'], delay, lead_index=lead_index) > 0.0):
+        # MPC source names one obstacle, not a causal braking proof. Require
+        # that same fresh lead's independently measured closing/gap demand.
+        # FCW blocks drive qualification, not this negative response. This
+        # deliberately covers only the existing urgency subset.
+        response_kind = MotionResponseKind.LEAD_BRAKING
     planner.motion_intent = MotionIntent(
       mode=int(planner.longitudinal_mode), reasons=int(reasons), moving_lead=moving_lead, release_allowed=release_allowed,
       allow_creep=bool(active and healthy), valid=bool(healthy and car_state.vCruise != V_CRUISE_UNSET),
-      reference_kind=int(raw_kind), producer_instance_ns=self.producer_instance_ns,
+      reference_kind=int(raw_kind), producer_instance_ns=self.producer_instance_ns, response_kind=int(response_kind),
     )
     planner.output_a_target = output
     planner.output_should_stop = bool(reasons)
@@ -557,6 +578,7 @@ class UnifiedLongitudinalPlanner:
     message.motionIntent.referenceKind = int(intent.reference_kind)
     message.motionIntent.restGoalRejected = intent.rest_goal_rejected
     message.motionIntent.producerInstanceMonoTime = intent.producer_instance_ns
+    message.motionIntent.responseKind = int(intent.response_kind)
     message.reference.accel = self.reference_accel
     message.reference.constraintAccel = self.constraint_accel
     message.reference.overridden = self.reference_overridden

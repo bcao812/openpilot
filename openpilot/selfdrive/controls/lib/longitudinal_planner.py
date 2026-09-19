@@ -75,7 +75,9 @@ def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float) -> bo
   return True
 
 
-def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuator_delay: float) -> float:
+def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuator_delay: float, *, lead_index: int | None = None) -> float:
+  if lead_index is not None and (type(lead_index) is not int or lead_index not in (0, 1)):
+    return 0.0
   if not all(math.isfinite(value) for value in (v_ego, a_target, actuator_delay)):
     return 0.0
   if v_ego <= CLOSE_LEAD_STATE_SPEED_BP[0] or a_target >= CLOSE_LEAD_STATE_ACCEL_BP[-1] or not 0.0 <= actuator_delay <= 1.0:
@@ -83,7 +85,9 @@ def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuato
   braking_weight = float(np.interp(a_target, CLOSE_LEAD_STATE_ACCEL_BP, [1.0, 0.0]))
   speed_weight = float(np.interp(v_ego, CLOSE_LEAD_STATE_SPEED_BP, [0.0, 1.0]))
   urgency = 0.0
-  for lead in (radar_state.leadOne, radar_state.leadTwo):
+  for index, lead in enumerate((radar_state.leadOne, radar_state.leadTwo)):
+    if lead_index is not None and index != lead_index:
+      continue
     values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb)
     if not lead.present or not all(math.isfinite(value) for value in values):
       continue

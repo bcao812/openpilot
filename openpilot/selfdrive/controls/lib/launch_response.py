@@ -6,6 +6,7 @@ gains and permissions, then commit only correction present in the final output.
 """
 
 import math
+from enum import IntEnum
 
 
 LAUNCH_RESPONSE_KI = 1.0  # 1/s; candidate for the frozen short-response engineering tests
@@ -14,6 +15,13 @@ LAUNCH_RESPONSE_KI = 1.0  # 1/s; candidate for the frozen short-response enginee
 # delay<=1 s, response<=.8 s; coupled MPC/mode changes require separate tests.
 # This is an engineering envelope, not identified Honda response or calibration.
 TRACKING_RESPONSE_KI = 0.4
+
+
+class ResponseDomain(IntEnum):
+  NONE = 0
+  MODEL = 1
+  ABSOLUTE_ACC = 2
+  LEAD_BRAKING = 3
 
 
 class LaunchResponse:
@@ -28,6 +36,7 @@ class LaunchResponse:
     self._pid.i = 0.0
     self.producer_instance_ns = 0
     self._domain = None
+    self._response_domain = ResponseDomain.NONE
     self._positive_authorized = False
     self._last_now_ns = None
     self._pending = None
@@ -73,9 +82,11 @@ class LaunchResponse:
       self._pid.i = 0.0
       if arm:
         self._domain = 'launch'
+        self._response_domain = ResponseDomain.MODEL
         self._positive_authorized = True
       elif not self.armed:
         self._domain = None
+        self._response_domain = ResponseDomain.NONE
         self._positive_authorized = False
 
   def _valid_values(self, *values):
@@ -114,7 +125,7 @@ class LaunchResponse:
     return self._propose_output(base_output, min(self.bias, 0.0), upper_limit)
 
   def propose(self, base_output, a_target, a_ego, upper_limit, *, producer_instance_ns, now_ns,
-              forward, rolling=False, positive_allowed=False, continuation_allowed=True):
+              response_domain=ResponseDomain.NONE, forward=False, rolling=False, positive_allowed=False):
     """Propose correction from a base EXCLUDING pid.i; do not accumulate yet.
 
     A qualified launch uses its original gain until first rolling motion,
@@ -123,26 +134,37 @@ class LaunchResponse:
     that producer instance. MOVING only retains/unwinds existing positive I.
     Rolling alone grants no drive permission. Near rest, ordinary tracking
     retains/unwinds its existing correction without learning another one.
-    Normal ACC has no admitted model motion reference (UNKNOWN); its measured
-    response can justify braking correction, but cannot inherit drive effort.
-    A model movement preference is not an absolute cruise target: FORWARD and
-    MOVING retain nonnegative correction only, including after an ACC handoff.
+    An explicit absolute ACC target admits signed tracking correction while
+    rolling; a negative target still cannot spend positive correction.
+    Independently qualified lead braking admits only nonpositive correction
+    while its target remains negative. Model movement retains its original
+    nonnegative permission and cannot inherit either domain's correction.
     """
     self._pending = None
     lower_limit = self._pid.neg_limit
     if (not self._valid_values(base_output, a_target, a_ego, upper_limit)
         or lower_limit > upper_limit
-        or any(type(value) is not bool for value in (forward, rolling, positive_allowed, continuation_allowed))):
+        or not isinstance(response_domain, ResponseDomain)
+        or any(type(value) is not bool for value in (forward, rolling, positive_allowed))
+        or response_domain == ResponseDomain.NONE
+        or response_domain == ResponseDomain.LEAD_BRAKING and a_target >= 0.0):
       self.reset()
       return base_output
 
-    if continuation_allowed:
-      # A model reference cannot inherit or accumulate ACC braking correction.
-      # Otherwise an estimator startup transient can turn a rolling preference
-      # into sustained braking without an absolute speed target to recover to.
+    model_response = response_domain == ResponseDomain.MODEL
+    if model_response:
+      if self._response_domain != ResponseDomain.MODEL:
+        # A different target's effort is not a qualified model launch history.
+        self._pid.i = 0.0
+        self._positive_authorized = False
+        self._domain = None
       self._pid.i = max(self.bias, 0.0)
-    if a_target < 0.0 or not continuation_allowed:
-      # A new braking target/lost launch context cannot spend positive effort.
+    else:
+      self._positive_authorized = False
+      if self.armed:
+        self._domain = None
+    if a_target < 0.0 or response_domain == ResponseDomain.LEAD_BRAKING:
+      # A new braking target cannot spend previous positive effort.
       self._pid.i = min(self.bias, 0.0)
       self._positive_authorized = False
       if self.armed:
@@ -156,6 +178,7 @@ class LaunchResponse:
     elapsed = self._advance(producer_instance_ns, now_ns, start=rolling)
     if elapsed is None:
       return base_output
+    self._response_domain = response_domain
     if self._domain is None:
       self._domain = 'tracking'
 
@@ -167,15 +190,16 @@ class LaunchResponse:
       return base_output
     minimum = min(0.0, lower_limit - base_output)
     maximum = max(0.0, upper_limit - base_output)
-    can_learn_positive = continuation_allowed and forward and (positive_allowed or self._positive_authorized) and rolling
+    can_learn_positive = rolling and (response_domain == ResponseDomain.ABSOLUTE_ACC
+                                     or model_response and forward and (positive_allowed or self._positive_authorized))
     if self.armed:
       minimum = 0.0
       if not forward:
         change = min(change, 0.0)
     else:
-      if continuation_allowed:
+      if model_response:
         minimum = 0.0
-      if a_target < 0.0:
+      if a_target < 0.0 or response_domain == ResponseDomain.LEAD_BRAKING:
         maximum = min(maximum, 0.0)
       elif not can_learn_positive:
         # Permission is independent of speed and reference kind. Continuing
@@ -188,7 +212,7 @@ class LaunchResponse:
     stored = min(maximum, max(minimum, self.bias))
     candidate = min(maximum, max(minimum, stored + change))
     return self._propose_output(base_output, candidate, upper_limit,
-                                qualify=bool(continuation_allowed and forward and positive_allowed and a_target >= 0.0))
+                                qualify=bool(model_response and forward and positive_allowed and a_target >= 0.0))
 
   def confirm_output(self, output_accel):
     """Back-calculate after all LongControl limits, including the upward ramp.

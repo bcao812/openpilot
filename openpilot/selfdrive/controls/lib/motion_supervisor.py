@@ -10,7 +10,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_ACCEL, CREEP_F
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
 
-MOTION_INTENT_VERSION = 4
+MOTION_INTENT_VERSION = 5
 PLAN_LEASE_NS = 250_000_000
 MODEL_LEASE_NS = 250_000_000
 MAX_CONTROL_GAP_NS = 100_000_000
@@ -29,6 +29,14 @@ class MotionReferenceKind(IntEnum):
   FORWARD = 3
   NO_FORWARD = 4
   MOVING = 5
+
+
+class MotionResponseKind(IntEnum):
+  # These describe the current target's response contract, not permission to
+  # release a stop. NONE leaves only independently qualified model feedback.
+  NONE = 0
+  ABSOLUTE_ACC = 1
+  LEAD_BRAKING = 2
 
 
 class StopReason(IntFlag):
@@ -95,6 +103,8 @@ class MotionIntent:
   reference_kind and rest_goal_rejected describe this source and failure;
   they grant no departure permission. producer_instance_ns binds UNIFIED
   evidence to the separately qualified measured-reference producer.
+  response_kind declares a separate current-target contract; UNKNOWN model
+  semantics alone grant no acceleration-response permission.
   """
 
   version: int = MOTION_INTENT_VERSION
@@ -109,6 +119,7 @@ class MotionIntent:
   reference_kind: int = int(MotionReferenceKind.UNKNOWN)
   rest_goal_rejected: bool = False
   producer_instance_ns: int = 0
+  response_kind: int = int(MotionResponseKind.NONE)
 
   @classmethod
   def from_message(cls, message):
@@ -125,7 +136,8 @@ class MotionIntent:
                  braking_accel=message.brakingAccel if braking_valid else None,
                  reference_kind=getattr(message, 'referenceKind', int(MotionReferenceKind.UNKNOWN)),
                  rest_goal_rejected=getattr(message, 'restGoalRejected', False),
-                 producer_instance_ns=getattr(message, 'producerInstanceMonoTime', 0))
+                 producer_instance_ns=getattr(message, 'producerInstanceMonoTime', 0),
+                 response_kind=getattr(message, 'responseKind', int(MotionResponseKind.NONE)))
     except (AttributeError, TypeError):
       return cls(version=0, valid=False)
 
@@ -138,11 +150,16 @@ class MotionIntent:
             and all(type(value) is bool for value in (self.moving_lead, self.release_allowed, self.allow_creep, self.valid, self.ready))
             and isinstance(self.reference_kind, int) and not isinstance(self.reference_kind, bool)
             and self.reference_kind in tuple(MotionReferenceKind)
+            and isinstance(self.response_kind, int) and not isinstance(self.response_kind, bool)
+            and self.response_kind in tuple(MotionResponseKind)
+            and (self.response_kind != MotionResponseKind.ABSOLUTE_ACC or self.reference_kind == MotionReferenceKind.UNKNOWN)
             and (self.reference_kind not in (MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.REST, MotionReferenceKind.NO_FORWARD)
                  or not self.release_allowed and not self.moving_lead)
             and type(self.rest_goal_rejected) is bool
             and type(self.producer_instance_ns) is int and 0 <= self.producer_instance_ns < (1 << 64)
             and (self.reference_kind == MotionReferenceKind.UNKNOWN or self.producer_instance_ns > 0)
+            and (self.response_kind == MotionResponseKind.NONE
+                 or self.valid and self.ready and not self.reasons and self.braking_accel is None and self.producer_instance_ns > 0)
             and (not self.rest_goal_rejected
                  or self.reference_kind == MotionReferenceKind.REST
                  and not self.valid and self.braking_accel is not None and self.producer_instance_ns > 0)

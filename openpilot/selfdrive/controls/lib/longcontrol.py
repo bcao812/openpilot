@@ -7,9 +7,9 @@ from opendbc.car.honda.values import CAR, CarControllerParams
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED, CONTROL_N, STOP_SPEED
 from openpilot.common.pid import PIDController
-from openpilot.selfdrive.controls.lib.launch_response import LaunchResponse
+from openpilot.selfdrive.controls.lib.launch_response import LaunchResponse, ResponseDomain
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
-from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MAX_CONTROL_GAP_NS, MotionPhase, MotionReferenceKind,
+from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MAX_CONTROL_GAP_NS, MotionPhase, MotionReferenceKind, MotionResponseKind,
                                                                MotionSupervisor, StopReason, ROLLING_STOP_ACCEL,
                                                                STARTING_ACCEL_RATE, STOPPING_DECEL_RATE)
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -216,15 +216,21 @@ class LongControl:
     stopping = self.resolved_should_stop and (CS.standstill or CS.vEgo < CLOSE_LEAD_STOP_SPEED)
     allocation = getattr(self, '_response_candidate', None)
     response_available = self.launch_response is not None and allocation is None and not self.motion_input_constrained
-    # Normal ACC has no admitted model motion kind. Its healthy TRACK may
-    # correct excess acceleration; UNKNOWN never inherits positive effort.
-    # FORWARD/MOVING retain only their independently qualified nonnegative
-    # correction: a rolling model preference cannot learn ACC braking bias.
-    response_feedback = (response_available and not self.resolved_should_stop and not protocol_hold and not intent.reasons
-                         and self.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
-                         and (intent.reference_kind in (MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING)
-                              or self.motion_phase == MotionPhase.TRACK and intent.reference_kind == MotionReferenceKind.UNKNOWN)
-                         and self.motion_supervisor.rest_braking_accel_limit is None)
+    # The accepted same-frame intent declares a target domain. UNKNOWN alone
+    # grants none; model launch/continuation keeps its separate qualification.
+    response_domain = ResponseDomain.NONE
+    if (response_available and not self.resolved_should_stop and not protocol_hold and not intent.reasons
+        and self.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
+        and self.motion_supervisor.rest_braking_accel_limit is None):
+      if intent.response_kind == MotionResponseKind.ABSOLUTE_ACC and self.motion_phase == MotionPhase.TRACK:
+        response_domain = ResponseDomain.ABSOLUTE_ACC
+      elif (intent.response_kind == MotionResponseKind.LEAD_BRAKING and self.motion_phase == MotionPhase.TRACK
+            and a_target < 0.0):
+        response_domain = ResponseDomain.LEAD_BRAKING
+      elif (intent.response_kind == MotionResponseKind.NONE
+            and intent.reference_kind in (MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING)):
+        response_domain = ResponseDomain.MODEL
+    response_feedback = response_domain != ResponseDomain.NONE
     braking_feedback = (response_available and self.motion_phase == MotionPhase.APPROACH and not stopping and not protocol_hold)
     if self.launch_response is not None and not (response_feedback or braking_feedback):
       self.launch_response.reset()
@@ -256,7 +262,7 @@ class LongControl:
           output_accel = self.launch_response.propose(
             base_output, a_target, CS.aEgo, accel_limits[1], producer_instance_ns=intent.producer_instance_ns, now_ns=now_ns,
             forward=bool(intent.reference_kind == MotionReferenceKind.FORWARD), rolling=bool(not CS.standstill and CS.vEgo >= STOP_SPEED),
-            positive_allowed=intent.release_allowed, continuation_allowed=intent.reference_kind != MotionReferenceKind.UNKNOWN)
+            positive_allowed=intent.release_allowed, response_domain=response_domain)
         elif braking_feedback:
           # Do not weaken an accepted braking response just because TRACK
           # entered APPROACH. Only its actual nonpositive I may carry over;

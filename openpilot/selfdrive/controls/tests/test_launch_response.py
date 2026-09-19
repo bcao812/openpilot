@@ -6,7 +6,7 @@ from collections import deque
 import pytest
 
 from openpilot.common.pid import PIDController
-from openpilot.selfdrive.controls.lib.launch_response import LaunchResponse
+from openpilot.selfdrive.controls.lib.launch_response import LaunchResponse, ResponseDomain
 
 
 INSTANCE_NS = 1_000_000_000
@@ -25,11 +25,11 @@ class FeedbackHarness:
     self.response.freeze_release(INSTANCE_NS, self.now_ns, arm=arm)
 
   def step(self, *, base=0.25, target=0.25, measured=0.0, upper=2.0, forward=True, final=None, elapsed_ns=STEP_NS,
-           rolling=False, positive_allowed=False, continuation_allowed=True):
+           rolling=False, positive_allowed=False, response_domain=ResponseDomain.MODEL):
     self.now_ns += elapsed_ns
     proposed = self.response.propose(base, target, measured, upper, producer_instance_ns=INSTANCE_NS,
                                      now_ns=self.now_ns, forward=forward, rolling=rolling, positive_allowed=positive_allowed,
-                                     continuation_allowed=continuation_allowed)
+                                     response_domain=response_domain)
     self.response.confirm_output(proposed if final is None else final)
     return proposed
 
@@ -138,7 +138,7 @@ def test_unconfirmed_proposal_and_duplicate_confirmation_do_not_accumulate():
   harness = FeedbackHarness()
   harness.release()
   proposed = harness.response.propose(0.25, 0.25, 0.0, 2.0, producer_instance_ns=INSTANCE_NS,
-                                      now_ns=harness.now_ns + STEP_NS, forward=True)
+                                      now_ns=harness.now_ns + STEP_NS, forward=True, response_domain=ResponseDomain.MODEL)
   assert proposed > 0.25
   assert harness.response.bias == 0.0
   harness.response.confirm_output(0.25)
@@ -154,7 +154,8 @@ def test_bad_clock_discards_session_before_extra_effort(clock):
     harness.step()
   now = {'duplicate': harness.now_ns, 'backward': harness.now_ns - 1, 'gap': harness.now_ns + 100_000_001,
          'noninteger': float(harness.now_ns + STEP_NS)}[clock]
-  assert harness.response.propose(0.25, 0.25, 0.0, 2.0, producer_instance_ns=INSTANCE_NS, now_ns=now, forward=True) == 0.25
+  assert harness.response.propose(0.25, 0.25, 0.0, 2.0, producer_instance_ns=INSTANCE_NS, now_ns=now,
+                                  forward=True, response_domain=ResponseDomain.MODEL) == 0.25
   assert not harness.response.armed and harness.response.bias == 0.0
 
 
@@ -165,7 +166,7 @@ def test_another_instance_cannot_inherit_tracking_correction(instance):
   for _ in range(50):
     harness.step()
   assert harness.response.propose(0.25, 0.25, 0.0, 2.0, producer_instance_ns=instance,
-                                  now_ns=harness.now_ns + STEP_NS, forward=True) == 0.25
+                                  now_ns=harness.now_ns + STEP_NS, forward=True, response_domain=ResponseDomain.MODEL) == 0.25
   assert not harness.response.armed and harness.response.bias == 0.0
 
 
@@ -204,15 +205,43 @@ def test_rolling_without_departure_permission_cannot_learn_positive_correction(f
   assert harness.pid.i == 0.0
 
 
-def test_unknown_reference_can_only_learn_nonpositive_tracking_correction():
+@pytest.mark.parametrize('measured', [-0.25, 0.25])
+def test_missing_response_domain_cannot_infer_acc_from_measurement(measured):
   harness = FeedbackHarness()
   for _ in range(100):
-    assert harness.step(rolling=True, forward=False, continuation_allowed=False) == 0.25
+    assert harness.step(base=0.0, target=0.0, measured=measured, rolling=True, response_domain=ResponseDomain.NONE) == 0.0
+  assert harness.pid.i == 0.0
+
+
+@pytest.mark.parametrize('measured', [-0.25, 0.25])
+def test_explicit_absolute_acc_learns_both_signs_without_departure_permission(measured):
+  harness = FeedbackHarness()
   for _ in range(100):
-    harness.step(base=0.0, target=0.0, measured=0.25, rolling=True, forward=False, continuation_allowed=False)
-  assert harness.pid.i < 0.0
-  assert harness.step(base=0.0, target=0.0, measured=0.25, rolling=True, forward=False) == 0.0
-  assert harness.pid.i == 0.0  # returning to a model preference retires ACC I
+    harness.step(base=0.0, target=0.0, measured=measured, rolling=True, forward=False, response_domain=ResponseDomain.ABSOLUTE_ACC)
+  assert harness.pid.i * measured < 0.0
+  assert harness.step(base=0.0, target=0.0, measured=measured, rolling=True, forward=False) == 0.0
+  assert harness.pid.i == 0.0  # model preference inherits neither ACC sign
+
+
+@pytest.mark.parametrize('response_domain', [ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING])
+def test_explicit_rolling_domains_do_not_create_feedback_near_rest(response_domain):
+  harness = FeedbackHarness()
+  for _ in range(100):
+    assert harness.step(base=-0.25, target=-0.25, measured=0.0, response_domain=response_domain) == -0.25
+  assert harness.pid.i == 0.0
+
+
+def test_lead_domain_retires_positive_effort_and_ends_with_its_negative_target():
+  harness = FeedbackHarness()
+  for _ in range(100):
+    harness.step(rolling=True, response_domain=ResponseDomain.ABSOLUTE_ACC)
+  assert harness.pid.i > 0.0
+  for _ in range(100):
+    assert harness.step(base=-0.5, target=-0.5, rolling=True, response_domain=ResponseDomain.LEAD_BRAKING) < -0.5
+    assert harness.pid.i < 0.0
+  for target in (0.0, 0.25):
+    assert harness.step(base=target, target=target, rolling=True, response_domain=ResponseDomain.LEAD_BRAKING) == target
+    assert harness.pid.i == 0.0
 
 
 def test_departure_permission_is_independent_of_reference_kind_and_confirmed_output():
@@ -255,9 +284,9 @@ def test_raw_saturated_feedforward_cannot_hide_or_manufacture_correction(base):
   harness = FeedbackHarness()
   for _ in range(200):
     harness.step(base=0.0, target=0.0, measured=math.copysign(0.3, -base), rolling=True, positive_allowed=True,
-                 continuation_allowed=base >= 0.0)
+                 response_domain=ResponseDomain.ABSOLUTE_ACC)
   assert harness.pid.i != 0.0
-  output = harness.step(base=base, target=base, measured=base, rolling=True, positive_allowed=True, continuation_allowed=base >= 0.0)
+  output = harness.step(base=base, target=base, measured=base, rolling=True, response_domain=ResponseDomain.ABSOLUTE_ACC)
   assert output == (-3.5 if base < 0 else 2.0)
   assert harness.pid.i == 0.0
   assert harness.step(base=0.0, target=0.0, measured=0.0, rolling=True) == 0.0
@@ -266,7 +295,7 @@ def test_raw_saturated_feedforward_cannot_hide_or_manufacture_correction(base):
 def braking_feedback():
   harness = FeedbackHarness()
   for _ in range(1000):
-    harness.step(base=0.0, target=0.0, measured=0.6, rolling=True, forward=False, continuation_allowed=False)
+    harness.step(base=0.0, target=0.0, measured=0.6, rolling=True, forward=False, response_domain=ResponseDomain.ABSOLUTE_ACC)
   assert harness.pid.i < -2.0
   return harness
 
@@ -278,7 +307,7 @@ def test_approach_freezes_only_delivered_braking_and_keeps_its_clock_current():
   for _ in range(40):
     assert harness.approach(elapsed_ns=50_000_000) == pytest.approx(-1.0)
     assert harness.pid.i == pytest.approx(-0.5)
-  harness.step(base=0.0, target=0.0, measured=0.25, rolling=True, continuation_allowed=False)
+  harness.step(base=0.0, target=0.0, measured=0.25, rolling=True, response_domain=ResponseDomain.ABSOLUTE_ACC)
   assert harness.pid.i == pytest.approx(-0.501)  # only this 10 ms TRACK sample
   harness.pid.neg_limit = -0.2
   assert harness.approach(base=0.0) == -0.2
@@ -301,8 +330,8 @@ def test_approach_cannot_freeze_braking_across_invalid_identity_or_time(fault):
 
 @pytest.mark.parametrize('delay,response_time', [(0.3, 0.2), (0.5, 0.4), (1.0, 0.8)])
 @pytest.mark.parametrize('offset', [-0.25, 0.0, 0.25])
-@pytest.mark.parametrize('model_reference', [False, True])
-def test_fixed_reference_delayed_response_respects_domain_through_disturbance_reversal(delay, response_time, offset, model_reference):
+@pytest.mark.parametrize('response_domain', [ResponseDomain.MODEL, ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING])
+def test_fixed_reference_delayed_response_respects_domain_through_disturbance_reversal(delay, response_time, offset, response_domain):
   """One fixed permission domain; unsupported correction signs stay forbidden.
 
   Offsets, delay/lag, reversal and convergence tolerance are unchanged. This
@@ -312,17 +341,25 @@ def test_fixed_reference_delayed_response_respects_domain_through_disturbance_re
   dt = STEP_NS / 1e9
   commands = deque([0.0] * round(delay / dt))
   measured = 0.0
+  target = -0.5 if response_domain == ResponseDomain.LEAD_BRAKING else 0.0
   for disturbance in (offset, 0.0, -offset):
     tail = deque(maxlen=100)
     for _ in range(2500):
-      command = harness.step(base=0.0, target=0.0, measured=measured, rolling=True, forward=model_reference,
-                             positive_allowed=model_reference, continuation_allowed=model_reference)
+      command = harness.step(base=target, target=target, measured=measured, rolling=True, forward=True,
+                             positive_allowed=True, response_domain=response_domain)
       commands.append(command)
       measured += (commands.popleft() + disturbance - measured) * (1.0 - math.exp(-dt / response_time))
       tail.append(measured)
       assert -3.5 <= command <= 2.0
       assert harness.response.bias == harness.pid.i
-      assert harness.pid.i >= 0.0 if model_reference else harness.pid.i <= 0.0
-    expected_correction = max(-disturbance, 0.0) if model_reference else min(-disturbance, 0.0)
-    assert max(abs(value - disturbance - expected_correction) for value in tail) < 0.005
+      if response_domain == ResponseDomain.MODEL:
+        assert harness.pid.i >= 0.0
+      elif response_domain == ResponseDomain.LEAD_BRAKING:
+        assert harness.pid.i <= 0.0
+    expected_correction = -disturbance
+    if response_domain == ResponseDomain.MODEL:
+      expected_correction = max(expected_correction, 0.0)
+    elif response_domain == ResponseDomain.LEAD_BRAKING:
+      expected_correction = min(expected_correction, 0.0)
+    assert max(abs(value - target - disturbance - expected_correction) for value in tail) < 0.005
     assert harness.pid.i == pytest.approx(expected_correction, abs=0.005)

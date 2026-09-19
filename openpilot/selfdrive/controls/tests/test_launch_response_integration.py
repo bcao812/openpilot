@@ -17,7 +17,8 @@ from opendbc.car.honda.values import CAR
 from openpilot.cereal import custom
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
-from openpilot.selfdrive.controls.lib.motion_supervisor import DEGRADED_ACCEL, MotionIntent, MotionPhase, MotionReferenceKind, StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MotionIntent, MotionPhase, MotionReferenceKind, MotionResponseKind,
+                                                               StopReason)
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, controller
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
@@ -28,6 +29,11 @@ INSTANCE_NS = 1_000_000_000
 
 def forward_intent(**changes):
   return replace(MotionIntent(release_allowed=True, allow_creep=False, reference_kind=int(MotionReferenceKind.FORWARD),
+                              producer_instance_ns=INSTANCE_NS), **changes)
+
+
+def absolute_intent(**changes):
+  return replace(MotionIntent(allow_creep=False, response_kind=int(MotionResponseKind.ABSOLUTE_ACC),
                               producer_instance_ns=INSTANCE_NS), **changes)
 
 
@@ -115,7 +121,7 @@ def rolling_feedback(*, braking=False):
   harness = ControlHarness()
   harness.state.vEgo = 20.0
   harness.state.aEgo = 0.5 if braking else 0.0
-  intent = forward_intent(reference_kind=int(MotionReferenceKind.UNKNOWN), release_allowed=False) if braking else forward_intent()
+  intent = absolute_intent() if braking else forward_intent()
   for _ in range(200):
     target = 0.0 if braking else 0.3
     output = harness.step(target, intent)
@@ -173,7 +179,7 @@ def test_qualified_rolling_feedback_uses_pid_i_once_and_moving_does_not_ratchet_
   assert 0.0 < harness.control.pid.i < learned
 
 
-def test_unknown_acc_reference_revokes_old_drive_and_only_learns_nonpositive_correction():
+def test_unknown_reference_without_response_contract_revokes_feedback_and_cannot_learn():
   harness = rolling_feedback()
   unknown = forward_intent(reference_kind=int(MotionReferenceKind.UNKNOWN))
   for _ in range(100):
@@ -181,26 +187,27 @@ def test_unknown_acc_reference_revokes_old_drive_and_only_learns_nonpositive_cor
     assert harness.control.pid.i == 0.0
   assert not harness.control.launch_response.armed
   # UNKNOWN erased the previous FORWARD qualification, even though the raw
-  # ACC releaseAllowed field was true. A kind alone cannot restore it.
+  # releaseAllowed field was true. A kind alone cannot restore it.
   for _ in range(20):
     harness.step(0.3, forward_intent(release_allowed=False))
     assert harness.control.pid.i == 0.0
   harness.state.aEgo = 0.6
   for _ in range(20):
     assert harness.step(0.3, unknown) <= 0.3
-  assert harness.control.pid.i < 0.0
+  assert harness.control.pid.i == 0.0
 
 
-def test_real_acc_publication_without_model_reference_reaches_braking_feedback():
-  """Normal ACC uses UNKNOWN by design; do not relabel it as model FORWARD."""
+@pytest.mark.parametrize('speed,correction_sign', [(20.8, -1), (19.2, 1)])
+def test_real_acc_publication_without_model_reference_declares_signed_response(speed, correction_sign):
+  """Ordinary ACC declares its absolute target without relabeling a model."""
   def update_targets(instance, state, v_ego, a_ego, v_cruise):
     instance.source = LongitudinalPlanSource.cruise
     instance.cruise_target = CruiseTarget(instance.source, v_cruise, a_ego)
     return instance.cruise_target
 
   with OpenpilotPrefix():
-    planner, control = make_planner_owner(speed=20.8)
-    state = make_state(speed=20.8, target=20.0)
+    planner, control = make_planner_owner(speed=speed)
+    state = make_state(speed=speed, target=20.0)
     with patch.object(planner, 'is_e2e', return_value=False), \
          patch.object(LongitudinalPlannerSP, 'update', return_value=None), \
          patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets), \
@@ -210,12 +217,14 @@ def test_real_acc_publication_without_model_reference_reaches_braking_feedback()
         plan, outputs = consume(planner, control, state, frame)
         assert planner.reference_planner.model_evidence is None
         assert plan.motionIntent.referenceKind == MotionReferenceKind.UNKNOWN
+        assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
         assert plan.motionIntent.valid and plan.solverStatus == 0
         assert control.motion_phase == MotionPhase.TRACK
         assert not control.motion_input_constrained
-        assert all(output <= plan.aTarget for output in outputs)
+        if correction_sign < 0:
+          assert all(output <= plan.aTarget for output in outputs)
       assert feedback.call_count == 100
-      assert control.pid.i < 0.0
+      assert control.pid.i * correction_sign > 0.0
       assert not control.launch_response.armed
 
 
@@ -258,6 +267,94 @@ def test_negative_target_without_stop_flag_removes_correction_in_the_same_frame(
   assert harness.step(-0.3, forward_intent(release_allowed=False)) == -0.3
   assert harness.control.pid.i == 0.0
   assert not harness.control.launch_response.armed
+
+
+@pytest.mark.parametrize('kind', [MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING])
+def test_explicit_lead_braking_can_correct_a_model_target_then_retires_at_model_handoff(kind):
+  harness = rolling_feedback()
+  assert harness.control.pid.i > 0.0
+  lead = forward_intent(reference_kind=int(kind), response_kind=int(MotionResponseKind.LEAD_BRAKING), release_allowed=False)
+  for _ in range(100):
+    assert harness.step(-0.5, lead) < -0.5
+    assert harness.control.pid.i < 0.0
+    assert harness.control.motion_phase == MotionPhase.TRACK
+  model = replace(lead, response_kind=int(MotionResponseKind.NONE))
+  before = harness.control.last_output_accel
+  assert harness.step(0.3, model) <= before + 0.08 + 1e-12
+  assert harness.control.pid.i == 0.0
+  for _ in range(30):
+    harness.step(0.3, model)
+    assert harness.control.pid.i == 0.0
+
+
+@pytest.mark.parametrize('target', [0.0, 0.3])
+def test_lead_contract_cannot_continue_learning_after_negative_target_ends(target):
+  harness = rolling_feedback(braking=True)
+  lead = forward_intent(reference_kind=int(MotionReferenceKind.MOVING), response_kind=int(MotionResponseKind.LEAD_BRAKING),
+                        release_allowed=False)
+  harness.step(-0.5, lead)
+  assert harness.control.pid.i < 0.0
+  harness.step(target, lead)
+  assert harness.control.pid.i == 0.0
+  assert not harness.control.motion_input_constrained
+
+
+def test_acc_positive_effort_is_not_model_departure_history_and_cannot_reduce_a_braking_target():
+  harness = ControlHarness()
+  harness.state.vEgo = 20.0
+  for _ in range(100):
+    harness.step(0.3, absolute_intent())
+  assert harness.control.pid.i > 0.0
+  for _ in range(20):
+    harness.step(0.3, forward_intent(release_allowed=False))
+    assert harness.control.pid.i == 0.0
+  for _ in range(100):
+    harness.step(0.3, absolute_intent())
+  assert harness.control.pid.i > 0.0
+  assert harness.step(-0.5, absolute_intent()) <= -0.5
+  assert harness.control.pid.i <= 0.0
+
+
+def test_absolute_response_does_not_release_hold_or_learn_during_release():
+  harness = ControlHarness()
+  harness.hold()
+  for _ in range(50):
+    assert harness.step(0.3, absolute_intent()) <= -0.2
+    assert harness.control.motion_phase == MotionPhase.HOLD
+    assert harness.control.pid.i == 0.0
+  for _ in range(50):
+    harness.step(0.3, absolute_intent(release_allowed=True))
+    assert harness.control.pid.i == 0.0
+    assert not harness.control.launch_response.armed
+    if harness.control.motion_phase == MotionPhase.TRACK:
+      break
+  assert harness.control.motion_phase == MotionPhase.TRACK
+
+
+@pytest.mark.parametrize('boundary', ['inactive', 'gas', 'brake', 'stale', 'mutated_contract'])
+def test_new_acc_permission_still_obeys_manual_transport_and_same_plan_identity(boundary):
+  harness = ControlHarness()
+  harness.state.vEgo = 20.0
+  intent = absolute_intent()
+  for _ in range(100):
+    harness.step(0.3, intent)
+  assert harness.control.pid.i > 0.0
+  options = {}
+  if boundary in ('gas', 'brake'):
+    setattr(harness.state, boundary + 'Pressed', True)
+  elif boundary == 'inactive':
+    options['active'] = False
+  elif boundary == 'stale':
+    options.update(plan_time_ns=harness.now_ns - 2_000_000_000, model_time_ns=harness.now_ns - 2_000_000_000)
+  else:
+    options['new_input'] = False
+    intent = replace(intent, response_kind=int(MotionResponseKind.NONE))
+  output = harness.step(0.3, intent, **options)
+  assert harness.control.pid.i == 0.0
+  if boundary in ('inactive', 'gas', 'brake'):
+    assert output == 0.0 and harness.control.motion_phase == MotionPhase.OFF
+  else:
+    assert output <= DEGRADED_ACCEL and harness.control.motion_input_constrained
 
 
 @pytest.mark.parametrize('override', ['inactive', 'gas', 'brake'])
@@ -384,7 +481,8 @@ def test_fault_clears_signed_feedback_after_owned_braking_takes_over(fault):
 def test_restarting_producer_or_manual_reentry_cannot_inherit_signed_feedback(braking):
   harness = rolling_feedback(braking=braking)
   restarted = forward_intent(producer_instance_ns=INSTANCE_NS + 1, release_allowed=not braking,
-                             reference_kind=int(MotionReferenceKind.UNKNOWN if braking else MotionReferenceKind.FORWARD))
+                             reference_kind=int(MotionReferenceKind.UNKNOWN if braking else MotionReferenceKind.FORWARD),
+                             response_kind=int(MotionResponseKind.ABSOLUTE_ACC if braking else MotionResponseKind.NONE))
   harness.step(0.0 if braking else 0.3, restarted)
   assert harness.control.pid.i == 0.0
   assert not harness.control.launch_response.armed
@@ -462,7 +560,7 @@ def test_cold_approach_or_prior_positive_output_does_not_gain_a_braking_handoff(
   if learned_i_with_positive_output:
     harness.state.aEgo = 0.6
     for _ in range(200):
-      harness.step(0.5, forward_intent(reference_kind=int(MotionReferenceKind.UNKNOWN), release_allowed=False))
+      harness.step(0.5, absolute_intent())
     assert harness.control.pid.i < 0.0
     assert harness.control.last_output_accel > 0.0
   braking = forward_intent(reasons=StopReason.E2E, release_allowed=False, producer_instance_ns=INSTANCE_NS + 1)

@@ -173,14 +173,14 @@ def test_goal_from_another_frame_cannot_label_the_current_brake_as_a_rest_reject
 
 
 @pytest.mark.parametrize('intent', [zero_intent(), rejected_intent(), MotionIntent()])
-def test_protocol_four_roundtrip_keeps_descriptions_and_instance_without_adding_stop_reasons(intent):
+def test_current_protocol_roundtrip_keeps_descriptions_and_instance_without_adding_stop_reasons(intent):
   planner, owner, _ = source_description(np.zeros(len(MODEL_TIMES)))
   planner.motion_intent = intent
   message = log.LongitudinalPlan.new_message()
   owner.publish(message)
   with log.LongitudinalPlan.from_bytes(message.to_bytes()) as decoded:
     assert MotionIntent.from_message(decoded.motionIntent) == intent
-    assert decoded.motionIntent.version == MOTION_INTENT_VERSION == 4
+    assert decoded.motionIntent.version == MOTION_INTENT_VERSION == 5
     assert decoded.motionIntent.reasons == intent.reasons == 0
 
 
