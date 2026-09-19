@@ -1,9 +1,11 @@
 """Feedback-state contracts; these tests do not claim vehicle-response fidelity."""
 
 import math
+from collections import deque
 
 import pytest
 
+from openpilot.common.pid import PIDController
 from openpilot.selfdrive.controls.lib.launch_response import LaunchResponse
 
 
@@ -14,19 +16,27 @@ STEP_NS = 10_000_000
 
 class FeedbackHarness:
   def __init__(self):
-    self.response = LaunchResponse(max_gap_ns=100_000_000)
+    self.pid = PIDController(0.0, 0.0, neg_limit=-3.5, pos_limit=2.0)
+    self.response = LaunchResponse(self.pid, max_gap_ns=100_000_000)
     self.now_ns = START_NS
 
   def release(self, *, arm=True):
     self.now_ns += STEP_NS
     self.response.freeze_release(INSTANCE_NS, self.now_ns, arm=arm)
 
-  def step(self, *, base=0.25, target=0.25, measured=0.0, upper=2.0, forward=True, final=None, elapsed_ns=STEP_NS):
+  def step(self, *, base=0.25, target=0.25, measured=0.0, upper=2.0, forward=True, final=None, elapsed_ns=STEP_NS,
+           rolling=False, positive_allowed=False):
     self.now_ns += elapsed_ns
     proposed = self.response.propose(base, target, measured, upper, producer_instance_ns=INSTANCE_NS,
-                                     now_ns=self.now_ns, forward=forward)
+                                     now_ns=self.now_ns, forward=forward, rolling=rolling, positive_allowed=positive_allowed)
     self.response.confirm_output(proposed if final is None else final)
     return proposed
+
+  def approach(self, *, base=-0.5, upper=2.0, elapsed_ns=STEP_NS):
+    self.now_ns += elapsed_ns
+    output = self.response.freeze_braking(base, upper, producer_instance_ns=INSTANCE_NS, now_ns=self.now_ns)
+    self.response.confirm_output(output)
+    return output
 
 
 @pytest.mark.parametrize('forward', [False, True])
@@ -178,3 +188,119 @@ def test_negative_target_or_invalid_final_output_removes_positive_correction():
   harness.release()
   harness.step(final=math.nan)
   assert not harness.response.armed and harness.response.bias == 0.0
+
+
+@pytest.mark.parametrize('forward', [False, True])
+def test_rolling_without_departure_permission_cannot_learn_positive_correction(forward):
+  harness = FeedbackHarness()
+  for _ in range(100):
+    assert harness.step(rolling=True, forward=forward) == 0.25
+    assert harness.pid.i == 0.0
+  # The same unqualified rolling reference can oppose excess acceleration.
+  for _ in range(100):
+    harness.step(base=0.0, target=0.0, measured=0.25, rolling=True, forward=forward)
+  assert harness.pid.i < 0.0
+
+
+def test_departure_permission_is_independent_of_reference_kind_and_confirmed_output():
+  harness = FeedbackHarness()
+  for _ in range(100):
+    assert harness.step(rolling=True, forward=False, positive_allowed=True) == 0.25
+  for _ in range(100):
+    harness.step(rolling=True, positive_allowed=True)
+  learned = harness.pid.i
+  assert learned > 0.0
+  # A continuing FORWARD may learn; MOVING may keep/unwind, never ratchet up.
+  harness.step(rolling=True, positive_allowed=False)
+  assert harness.pid.i > learned
+  learned = harness.pid.i
+  for _ in range(100):
+    harness.step(rolling=True, forward=False)
+    assert harness.pid.i == pytest.approx(learned)
+
+
+def test_launch_to_rolling_changes_gain_once_without_jumping_the_single_integral():
+  harness = FeedbackHarness()
+  harness.release()
+  for _ in range(50):
+    harness.step()
+  learned = harness.pid.i
+  assert harness.response.armed
+  assert harness.step(rolling=True, measured=0.25) == pytest.approx(0.25 + learned)
+  assert not harness.response.armed
+  assert harness.pid.i == pytest.approx(learned)
+  for rolling in (False, True, False, True):
+    harness.step(rolling=rolling, forward=False)
+    assert harness.pid.i == pytest.approx(learned)
+  harness.step(rolling=True)
+  assert harness.pid.i - learned == pytest.approx(0.001)
+  assert harness.response.bias == harness.pid.i
+
+
+@pytest.mark.parametrize('base', [-4.0, 3.0])
+def test_raw_saturated_feedforward_cannot_hide_or_manufacture_correction(base):
+  harness = FeedbackHarness()
+  for _ in range(200):
+    harness.step(base=0.0, target=0.0, measured=math.copysign(0.3, -base), rolling=True, positive_allowed=True)
+  assert harness.pid.i != 0.0
+  output = harness.step(base=base, target=base, measured=base, rolling=True, positive_allowed=True)
+  assert output == (-3.5 if base < 0 else 2.0)
+  assert harness.pid.i == 0.0
+  assert harness.step(base=0.0, target=0.0, measured=0.0, rolling=True) == 0.0
+
+
+def braking_feedback():
+  harness = FeedbackHarness()
+  for _ in range(1000):
+    harness.step(base=0.0, target=0.0, measured=0.6, rolling=True, forward=False)
+  assert harness.pid.i < -2.0
+  return harness
+
+
+def test_approach_freezes_only_delivered_braking_and_keeps_its_clock_current():
+  harness = braking_feedback()
+  assert harness.approach(base=-3.0) == -3.5
+  assert harness.pid.i == pytest.approx(-0.5)
+  for _ in range(40):
+    assert harness.approach(elapsed_ns=50_000_000) == pytest.approx(-1.0)
+    assert harness.pid.i == pytest.approx(-0.5)
+  harness.step(base=0.0, target=0.0, measured=0.25, rolling=True)
+  assert harness.pid.i == pytest.approx(-0.501)  # only this 10 ms TRACK sample
+  harness.pid.neg_limit = -0.2
+  assert harness.approach(base=0.0) == -0.2
+  harness.pid.neg_limit = -3.5
+  assert harness.approach(base=0.0) == -0.2
+
+
+@pytest.mark.parametrize('fault', ['instance', 'clock', 'backward', 'gap'])
+def test_approach_cannot_freeze_braking_across_invalid_identity_or_time(fault):
+  harness = braking_feedback()
+  instance = INSTANCE_NS + 1 if fault == 'instance' else INSTANCE_NS
+  timestamp = {'instance': harness.now_ns + STEP_NS, 'clock': harness.now_ns,
+               'backward': harness.now_ns - 1, 'gap': harness.now_ns + 100_000_001}[fault]
+  output = harness.response.freeze_braking(-0.5, 2.0, producer_instance_ns=instance, now_ns=timestamp)
+  harness.response.confirm_output(output)
+  assert output == -0.5
+  assert harness.pid.i == 0.0
+  assert not harness.response.armed
+
+
+@pytest.mark.parametrize('delay,response_time', [(0.3, 0.2), (0.5, 0.4), (1.0, 0.8)])
+@pytest.mark.parametrize('offset', [-0.25, 0.0, 0.25])
+def test_fixed_reference_delayed_response_rejects_and_relearns_independent_disturbance(delay, response_time, offset):
+  """Declared engineering plant, separate from the required coupled MPC tests."""
+  harness = FeedbackHarness()
+  dt = STEP_NS / 1e9
+  commands = deque([0.0] * round(delay / dt))
+  measured = 0.0
+  for disturbance in (offset, 0.0, -offset):
+    tail = deque(maxlen=100)
+    for _ in range(2500):
+      command = harness.step(base=0.0, target=0.0, measured=measured, rolling=True, positive_allowed=True)
+      commands.append(command)
+      measured += (commands.popleft() + disturbance - measured) * (1.0 - math.exp(-dt / response_time))
+      tail.append(measured)
+      assert -3.5 <= command <= 2.0
+      assert harness.response.bias == harness.pid.i
+    assert max(abs(value) for value in tail) < 0.005
+    assert harness.pid.i == pytest.approx(-disturbance, abs=0.005)

@@ -5,16 +5,19 @@ import numpy as np
 from opendbc.car.structs import car
 from opendbc.car.honda.values import CAR, CarControllerParams
 from openpilot.common.realtime import DT_CTRL
-from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
+from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED, CONTROL_N, STOP_SPEED
 from openpilot.common.pid import PIDController
 from openpilot.selfdrive.controls.lib.launch_response import LaunchResponse
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
 from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MAX_CONTROL_GAP_NS, MotionPhase, MotionReferenceKind,
                                                                MotionSupervisor, StopReason, ROLLING_STOP_ACCEL,
                                                                STARTING_ACCEL_RATE, STOPPING_DECEL_RATE)
+from openpilot.selfdrive.modeld.constants import ModelConstants
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 MPC_FAILURE_ACCEL = -0.5
+# The frozen source-epoch replay consumes this public grid for plan transport.
+CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 def long_control_state_trans(CP_SP, active, long_control_state,
                              should_stop, brake_pressed, cruise_standstill):
@@ -60,10 +63,10 @@ class LongControl:
     self.resolved_should_stop = False
     # The host Bosch CAN encoder has no acceleration-error integrator. Do not
     # duplicate a tuned PID or the separately installed response experiment.
-    launch_feedback = (self.longitudinal_mode == LongitudinalMode.UNIFIED and CP.carFingerprint == CAR.HONDA_ACCORD
-                       and CP.openpilotLongitudinalControl and not CP_SP.enableGasInterceptor
-                       and all(gain == 0.0 for gain in CP.longitudinalTuning.kiV))
-    self.launch_response = LaunchResponse(max_gap_ns=MAX_CONTROL_GAP_NS) if launch_feedback else None
+    response_feedback = (self.longitudinal_mode == LongitudinalMode.UNIFIED and CP.carFingerprint == CAR.HONDA_ACCORD
+                         and CP.openpilotLongitudinalControl and not CP_SP.enableGasInterceptor
+                         and all(gain == 0.0 for gain in CP.longitudinalTuning.kiV))
+    self.launch_response = LaunchResponse(self.pid, max_gap_ns=MAX_CONTROL_GAP_NS) if response_feedback else None
 
   @property
   def motion_phase(self):
@@ -210,12 +213,13 @@ class LongControl:
                           or self.motion_phase in (MotionPhase.HOLD, MotionPhase.RELEASE)))
     stopping = self.resolved_should_stop and (CS.standstill or CS.vEgo < CLOSE_LEAD_STOP_SPEED)
     allocation = getattr(self, '_response_candidate', None)
-    launch_feedback = (self.launch_response is not None and allocation is None and not self.motion_input_constrained
-                       and not self.resolved_should_stop and not protocol_hold and not intent.reasons and a_target >= 0.0
-                       and self.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
-                       and intent.reference_kind in (MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING)
-                       and self.motion_supervisor.rest_braking_accel_limit is None)
-    if self.launch_response is not None and not launch_feedback:
+    response_available = self.launch_response is not None and allocation is None and not self.motion_input_constrained
+    response_feedback = (response_available and not self.resolved_should_stop and not protocol_hold and not intent.reasons
+                         and self.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
+                         and intent.reference_kind in (MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING)
+                         and self.motion_supervisor.rest_braking_accel_limit is None)
+    braking_feedback = (response_available and self.motion_phase == MotionPhase.APPROACH and not stopping and not protocol_hold)
+    if self.launch_response is not None and not (response_feedback or braking_feedback):
       self.launch_response.reset()
     if stopping or protocol_hold:
       self.long_control_state = LongCtrlState.stopping
@@ -232,16 +236,26 @@ class LongControl:
         self.reset()
         output_accel = a_target
       else:
+        if response_feedback and self.motion_phase == MotionPhase.RELEASE:
+          # Freeze before PID evaluation, so RELEASE cannot spend an old I.
+          self.launch_response.freeze_release(
+            intent.producer_instance_ns, now_ns, arm=bool(intent.reference_kind == MotionReferenceKind.FORWARD and intent.release_allowed))
         output_accel = self.pid.update(a_target - CS.aEgo, speed=CS.vEgo, feedforward=a_target,
-                                       freeze_integrator=self.motion_phase == MotionPhase.RELEASE)
-        if launch_feedback:
-          forward = intent.reference_kind == MotionReferenceKind.FORWARD
-          if self.motion_phase == MotionPhase.RELEASE:
-            self.launch_response.freeze_release(intent.producer_instance_ns, now_ns, arm=bool(forward and intent.release_allowed))
-          else:
-            output_accel = self.launch_response.propose(
-              float(output_accel), a_target, CS.aEgo, accel_limits[1], producer_instance_ns=intent.producer_instance_ns,
-              now_ns=now_ns, forward=forward)
+                                       freeze_integrator=self.launch_response is not None or self.motion_phase == MotionPhase.RELEASE)
+        # The helper owns the existing pid.i, not an extra correction added
+        # after a PID which already included I. Preserve unsaturated P+D+F.
+        base_output = float(self.pid.p + self.pid.d + self.pid.f)
+        if response_feedback and self.motion_phase == MotionPhase.TRACK:
+          output_accel = self.launch_response.propose(
+            base_output, a_target, CS.aEgo, accel_limits[1], producer_instance_ns=intent.producer_instance_ns, now_ns=now_ns,
+            forward=bool(intent.reference_kind == MotionReferenceKind.FORWARD), rolling=bool(not CS.standstill and CS.vEgo >= STOP_SPEED),
+            positive_allowed=intent.release_allowed)
+        elif braking_feedback:
+          # Do not weaken an accepted braking response just because TRACK
+          # entered APPROACH. Only its actual nonpositive I may carry over;
+          # HOLD and faults already inherit last_output_accel before reset.
+          output_accel = self.launch_response.freeze_braking(
+            base_output, accel_limits[1], producer_instance_ns=intent.producer_instance_ns, now_ns=now_ns)
         # Isolated experiment only: one optional allocation stage after the
         # existing owner has accepted TRACK, before the existing upward limit.
         # It receives no authority to release, resume or change the intent.

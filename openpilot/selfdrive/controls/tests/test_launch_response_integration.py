@@ -91,13 +91,55 @@ def test_flat_or_zero_input_cannot_arm_feedback_from_hold(kind):
     assert not harness.control.launch_response.armed
 
 
-def test_tracking_without_an_owner_release_cannot_start_feedback():
+@pytest.mark.parametrize('speed', [0.29, 0.31, 2.01, 20.0])
+@pytest.mark.parametrize('kind', [MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING, MotionReferenceKind.UNKNOWN])
+def test_tracking_without_qualified_departure_cannot_learn_positive_feedback(speed, kind):
   harness = ControlHarness()
+  harness.state.vEgo = speed
   for _ in range(100):
-    output = harness.step(0.3, forward_intent())
+    output = harness.step(0.3, forward_intent(reference_kind=int(kind), release_allowed=False))
     assert output <= 0.3
     assert harness.control.motion_phase == MotionPhase.TRACK
     assert not harness.control.launch_response.armed
+    assert harness.control.pid.i == 0.0
+
+
+def rolling_feedback(*, braking=False):
+  harness = ControlHarness()
+  harness.state.vEgo = 20.0
+  harness.state.aEgo = 0.5 if braking else 0.0
+  for _ in range(200):
+    target = 0.0 if braking else 0.3
+    output = harness.step(target, forward_intent())
+  assert abs(harness.control.pid.i) > 0.1
+  assert output == pytest.approx(target + harness.control.pid.i)
+  return harness
+
+
+def test_qualified_rolling_feedback_uses_pid_i_once_and_moving_does_not_ratchet_it():
+  harness = rolling_feedback()
+  learned = harness.control.pid.i
+  assert harness.control.launch_response.bias == learned
+  moving = forward_intent(reference_kind=int(MotionReferenceKind.MOVING), release_allowed=False)
+  for speed in (20.0, 2.01, 0.31, 0.29, 0.31, 20.0):
+    harness.state.vEgo = speed
+    assert harness.step(0.3, moving) == pytest.approx(0.3 + learned)
+    assert harness.control.pid.i == pytest.approx(learned)
+  harness.state.aEgo = 0.6
+  harness.step(0.3, moving)
+  assert 0.0 < harness.control.pid.i < learned
+
+
+def test_qualified_launch_to_rolling_keeps_one_integral_without_a_threshold_jump():
+  harness = learned_feedback()
+  learned = harness.control.pid.i
+  harness.state.aEgo = 0.3
+  harness.state.standstill = False
+  for speed in (0.29, 0.30, 0.31, 0.29, 20.0):
+    harness.state.vEgo = speed
+    assert harness.step(0.3, forward_intent()) == pytest.approx(0.3 + learned)
+    assert harness.control.pid.i == pytest.approx(learned)
+  assert not harness.control.launch_response.armed
 
 
 @pytest.mark.parametrize('kind', [MotionReferenceKind.REST, MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.NO_FORWARD,
@@ -123,8 +165,11 @@ def test_negative_target_without_stop_flag_removes_correction_in_the_same_frame(
   harness = learned_feedback()
   harness.state.vEgo = 1.0
   harness.state.standstill = False
-  assert harness.step(-0.3, forward_intent(release_allowed=False)) == -0.3
-  assert harness.control.launch_response.bias == 0.0
+  # The signed TRACK correction may strengthen braking in this frame; it
+  # must never spend old positive I to weaken the new nominal request.
+  assert harness.step(-0.3, forward_intent(release_allowed=False)) <= -0.3
+  assert harness.control.pid.i <= 0.0
+  assert not harness.control.launch_response.armed
 
 
 @pytest.mark.parametrize('override', ['inactive', 'gas', 'brake'])
@@ -192,6 +237,7 @@ def test_experimental_allocator_and_configured_integrator_are_not_combined_with_
   harness.control._response_candidate = lambda *args, **kwargs: 0.3
   assert harness.step(0.3, forward_intent()) == 0.3
   assert not harness.control.launch_response.armed
+  assert harness.control.pid.i == 0.0
   parameters = structs.CarParams()
   parameters.carFingerprint = CAR.HONDA_ACCORD
   parameters.openpilotLongitudinalControl = True
@@ -203,8 +249,58 @@ def test_experimental_allocator_and_configured_integrator_are_not_combined_with_
 
 
 @pytest.mark.parametrize('changes', [
-  {'unified': False}, {'unified': False, 'supervised': True}, {'platform': CAR.HONDA_CIVIC},
+  {'platform': CAR.HONDA_CIVIC_BOSCH}, {'platform': CAR.HONDA_CRV_HYBRID}, {'platform': CAR.HONDA_CIVIC},
   {'openpilot_long': False}, {'interceptor': True},
 ])
 def test_mode_platform_and_authority_scope_remains_explicit(changes):
   assert controller(**changes).launch_response is None
+
+
+def test_approach_freezes_actual_negative_feedback_then_hands_it_to_low_speed_stop():
+  harness = rolling_feedback(braking=True)
+  braking = forward_intent(reasons=StopReason.E2E, release_allowed=False)
+  correction = harness.control.pid.i
+  assert harness.step(-3.0, braking) == pytest.approx(-3.0 + correction)
+  assert harness.control.motion_phase == MotionPhase.APPROACH
+  assert harness.control.pid.i == pytest.approx(correction)
+  assert harness.step(-3.0, braking, accel_limits=(-3.1, 2.0)) == -3.1
+  assert harness.control.pid.i == pytest.approx(-0.1)
+  for _ in range(50):
+    harness.step(-0.5, braking)
+    assert harness.control.pid.i == pytest.approx(-0.1)
+  assert harness.control.last_output_accel == pytest.approx(-0.6)
+  before = harness.control.last_output_accel
+  harness.state.vEgo = 0.2
+  assert harness.step(-0.5, braking) <= before
+  assert harness.control.pid.i == 0.0
+  harness.state.vEgo = 0.0
+  harness.state.standstill = True
+  assert harness.step(-0.5, braking) <= before
+  assert harness.control.motion_phase == MotionPhase.HOLD
+  assert harness.control.pid.i == 0.0
+
+
+@pytest.mark.parametrize('fault', ['plan_invalid', 'clock', 'gap'])
+def test_fault_clears_signed_feedback_after_owned_braking_takes_over(fault):
+  harness = rolling_feedback(braking=True)
+  braking = forward_intent(reasons=StopReason.E2E, release_allowed=False)
+  before = harness.step(-0.5, braking)
+  options = {'plan_invalid': {'plan_valid': False}, 'clock': {'now_ns': harness.now_ns},
+             'gap': {'now_ns': harness.now_ns + 100_000_001}}[fault]
+  assert harness.step(0.3, forward_intent(), **options) <= before
+  assert harness.control.pid.i == 0.0
+  assert harness.control.motion_input_constrained
+
+
+@pytest.mark.parametrize('braking', [False, True])
+def test_restarting_producer_or_manual_reentry_cannot_inherit_signed_feedback(braking):
+  harness = rolling_feedback(braking=braking)
+  restarted = forward_intent(producer_instance_ns=INSTANCE_NS + 1)
+  harness.step(0.0 if braking else 0.3, restarted)
+  assert harness.control.pid.i == 0.0
+  assert not harness.control.launch_response.armed
+  harness.step(0.3, restarted, active=False)
+  assert harness.control.pid.i == 0.0
+  assert harness.control.motion_phase == MotionPhase.OFF
+  harness.step(0.3, restarted)
+  assert harness.control.pid.i == 0.0
