@@ -218,6 +218,8 @@ class LongControl:
     response_available = self.launch_response is not None and allocation is None and not self.motion_input_constrained
     # Normal ACC has no admitted model motion kind. Its healthy TRACK may
     # correct excess acceleration; UNKNOWN never inherits positive effort.
+    # FORWARD/MOVING retain only their independently qualified nonnegative
+    # correction: a rolling model preference cannot learn ACC braking bias.
     response_feedback = (response_available and not self.resolved_should_stop and not protocol_hold and not intent.reasons
                          and self.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
                          and (intent.reference_kind in (MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING)

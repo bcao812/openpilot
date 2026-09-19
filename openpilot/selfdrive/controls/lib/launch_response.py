@@ -125,6 +125,8 @@ class LaunchResponse:
     retains/unwinds its existing correction without learning another one.
     Normal ACC has no admitted model motion reference (UNKNOWN); its measured
     response can justify braking correction, but cannot inherit drive effort.
+    A model movement preference is not an absolute cruise target: FORWARD and
+    MOVING retain nonnegative correction only, including after an ACC handoff.
     """
     self._pending = None
     lower_limit = self._pid.neg_limit
@@ -134,6 +136,11 @@ class LaunchResponse:
       self.reset()
       return base_output
 
+    if continuation_allowed:
+      # A model reference cannot inherit or accumulate ACC braking correction.
+      # Otherwise an estimator startup transient can turn a rolling preference
+      # into sustained braking without an absolute speed target to recover to.
+      self._pid.i = max(self.bias, 0.0)
     if a_target < 0.0 or not continuation_allowed:
       # A new braking target/lost launch context cannot spend positive effort.
       self._pid.i = min(self.bias, 0.0)
@@ -166,6 +173,8 @@ class LaunchResponse:
       if not forward:
         change = min(change, 0.0)
     else:
+      if continuation_allowed:
+        minimum = 0.0
       if a_target < 0.0:
         maximum = min(maximum, 0.0)
       elif not can_learn_positive:

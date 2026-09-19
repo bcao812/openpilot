@@ -8,13 +8,14 @@ import pytest
 from opendbc.can import CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.honda.carcontroller import CarController
+from opendbc.car.honda.carstate import CarState
 from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, DBC
 from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
-from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
+from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionReferenceKind
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.tests.test_longitudinal_cruise_coast import cruise_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
@@ -49,12 +50,14 @@ def rate_limit_evidence(raw_commands, wire_commands, automatic_pairs, rate_limit
 
 def simulate_following(
   *, scenario='moving', delay=0.5, response_time=0.4, duration=25.0, initial_speed=1.1, lead_speed=0.8, initial_gap=7.0,
-  offset=0.0, noise=0.0, diagnostics=None, platform=CAR.HONDA_ACCORD, braking_bias=0.0
+  offset=0.0, noise=0.0, diagnostics=None, platform=CAR.HONDA_ACCORD, braking_bias=0.0, measurement_filter=False
 ):
   """Ideal acceleration/lag plant, not a calibrated Honda or rollback model."""
   params = CarInterface.get_non_essential_params(platform)
   params.openpilotLongitudinalControl = True
   params_sp = CarInterface.get_non_essential_params_sp(params, platform)
+  speed_estimator = CarState(params, params_sp) if measurement_filter else None
+  moving_preference = scenario == 'moving_preference'
   planner = LongitudinalPlanner(params, params_sp, init_v=initial_speed)
   longitudinal = LongControl(params, params_sp)
   unified = longitudinal.unified
@@ -80,27 +83,31 @@ def simulate_following(
   with (
     patch.object(LongitudinalPlannerSP, 'update', return_value=None),
     patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets),
-    patch.object(LongitudinalPlanner, 'is_e2e', return_value=scenario == 'model_stop'),
+    patch.object(LongitudinalPlanner, 'is_e2e', return_value=scenario == 'model_stop' or moving_preference),
   ):
     for frame in range(round(duration / DT_CTRL)):
       timestamp = frame * DT_CTRL
       now_ns = round((timestamp + 1.0) * 1e9)
       active = not (scenario == 'override' and 5.0 <= timestamp < 6.0)
       measured_speed = max(0.0, speed + noise * np.sin(2.0 * np.pi * 1.1 * timestamp))
+      measured_acceleration = acceleration
+      if speed_estimator is not None:
+        measured_speed, measured_acceleration = speed_estimator.update_speed_kf(measured_speed)
       state['carState'].vEgo = float(measured_speed)
-      state['carState'].aEgo = float(acceleration)
+      state['carState'].aEgo = float(measured_acceleration)
       state['carState'].standstill = speed <= 0.001
       state['carControl'].longActive = active
       state['carControl'].cruiseControl.override = not active
       state['controlsState'].longControlState = longitudinal.long_control_state
       state['modelV2'].action.shouldStop = scenario == 'model_stop' and timestamp >= 5.0
-      state['modelV2'].action.desiredAcceleration = -1.0 if state['modelV2'].action.shouldStop else 0.2
+      state['modelV2'].action.desiredAcceleration = -1.0 if state['modelV2'].action.shouldStop else 0.6 if moving_preference else 0.2
       if unified:
         state['controlsState'].motionState.version = MOTION_INTENT_VERSION
         state['controlsState'].motionState.planningMode = int(longitudinal.longitudinal_mode)
         state['controlsState'].motionState.enabled = True
-        state['modelV2'].velocity.x = [float(speed + 0.5)] * len(ModelConstants.T_IDXS)
-        state['modelV2'].position.x = [float((speed + 0.5) * sample) for sample in ModelConstants.T_IDXS]
+        model_speed = speed + (0.4 if moving_preference else 0.5)
+        state['modelV2'].velocity.x = [float(model_speed)] * len(ModelConstants.T_IDXS)
+        state['modelV2'].position.x = [float(model_speed * sample) for sample in ModelConstants.T_IDXS]
         state['modelV2'].acceleration.x = [0.0] * len(ModelConstants.T_IDXS)
         state['modelV2'].orientationRate.z = [0.001] * len(ModelConstants.T_IDXS)
       if scenario == 'cut_in' and frame == round(5.0 / DT_CTRL):
@@ -178,7 +185,9 @@ def simulate_following(
         acceleration = 0.0
       gap += (lead_speed - speed) * DT_CTRL
       history.append(
-        (timestamp, speed, acceleration, command, control.actuators.accel, gap, lead_speed, longitudinal.long_control_state == LongCtrlState.stopping, active)
+        (timestamp, speed, acceleration, command, control.actuators.accel, gap, lead_speed,
+         longitudinal.long_control_state == LongCtrlState.stopping, active, longitudinal.pid.i, measured_acceleration,
+         planner.motion_intent.reference_kind if unified else MotionReferenceKind.UNKNOWN)
       )
   values = np.asarray(history)
   steady = values[:, 0] >= duration - 10.0
@@ -195,6 +204,10 @@ def simulate_following(
     'minimum_command': float(np.min(values[:, 4])),
     'maximum_command': float(np.max(values[:, 4])),
     'maximum_jerk_up': float(np.max(jerk)),
+    'minimum_integral': float(np.min(values[:, 9])),
+    'maximum_integral': float(np.max(values[:, 9])),
+    'maximum_measured_acceleration': float(np.max(values[:, 10])),
+    'reference_kinds': sorted(set(values[:, 11].astype(int).tolist())),
     **rate_limit_evidence(raw_commands, values[:, 4], automatic_pairs),
     'minimum_jerk_down': float(np.min(jerk)),
     'brake_response': float(braking[0] - 5.0) if len(braking) else None,
@@ -210,6 +223,22 @@ def test_moving_lead_is_followed_without_an_unnecessary_stop(delay, response_tim
   assert result['minimum_speed'] > 0.3
   assert result['speed_error'] < 0.15
   assert result['minimum_gap'] > 5.0
+  assert result['conflicts'] == 0
+
+
+@pytest.mark.parametrize('delay,response_time', [(0.1, 0.2), (0.3, 0.4), (0.5, 0.4), (0.8, 0.6)])
+def test_model_moving_following_retains_progress_through_unwarmed_measurements(delay, response_time):
+  """Fast ideal-plant regression; the frozen CAN-driven six-plant case remains mandatory."""
+  result = simulate_following(scenario='moving_preference', initial_speed=2.0, lead_speed=2.0, initial_gap=11.0,
+                              duration=20.0, delay=delay, response_time=response_time, measurement_filter=True)
+  assert result['maximum_measured_acceleration'] > 10.0
+  assert result['reference_kinds'] == [MotionReferenceKind.MOVING]
+  assert result['minimum_integral'] == result['maximum_integral'] == 0.0
+  assert result['stopping_seconds'] == 0.0
+  assert result['minimum_speed'] > 0.3
+  assert result['minimum_gap'] > 2.0
+  assert result['wire_is_float32_raw']
+  assert result['raw_rate_violations'] == result['wire_rate_violations'] == 0
   assert result['conflicts'] == 0
 
 

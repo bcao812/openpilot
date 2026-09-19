@@ -25,10 +25,11 @@ class FeedbackHarness:
     self.response.freeze_release(INSTANCE_NS, self.now_ns, arm=arm)
 
   def step(self, *, base=0.25, target=0.25, measured=0.0, upper=2.0, forward=True, final=None, elapsed_ns=STEP_NS,
-           rolling=False, positive_allowed=False):
+           rolling=False, positive_allowed=False, continuation_allowed=True):
     self.now_ns += elapsed_ns
     proposed = self.response.propose(base, target, measured, upper, producer_instance_ns=INSTANCE_NS,
-                                     now_ns=self.now_ns, forward=forward, rolling=rolling, positive_allowed=positive_allowed)
+                                     now_ns=self.now_ns, forward=forward, rolling=rolling, positive_allowed=positive_allowed,
+                                     continuation_allowed=continuation_allowed)
     self.response.confirm_output(proposed if final is None else final)
     return proposed
 
@@ -196,10 +197,22 @@ def test_rolling_without_departure_permission_cannot_learn_positive_correction(f
   for _ in range(100):
     assert harness.step(rolling=True, forward=forward) == 0.25
     assert harness.pid.i == 0.0
-  # The same unqualified rolling reference can oppose excess acceleration.
+  # Model motion is a preference, so it cannot acquire braking correction
+  # from excess measured acceleration either.
   for _ in range(100):
-    harness.step(base=0.0, target=0.0, measured=0.25, rolling=True, forward=forward)
+    assert harness.step(base=0.0, target=0.0, measured=0.25, rolling=True, forward=forward) == 0.0
+  assert harness.pid.i == 0.0
+
+
+def test_unknown_reference_can_only_learn_nonpositive_tracking_correction():
+  harness = FeedbackHarness()
+  for _ in range(100):
+    assert harness.step(rolling=True, forward=False, continuation_allowed=False) == 0.25
+  for _ in range(100):
+    harness.step(base=0.0, target=0.0, measured=0.25, rolling=True, forward=False, continuation_allowed=False)
   assert harness.pid.i < 0.0
+  assert harness.step(base=0.0, target=0.0, measured=0.25, rolling=True, forward=False) == 0.0
+  assert harness.pid.i == 0.0  # returning to a model preference retires ACC I
 
 
 def test_departure_permission_is_independent_of_reference_kind_and_confirmed_output():
@@ -241,9 +254,10 @@ def test_launch_to_rolling_changes_gain_once_without_jumping_the_single_integral
 def test_raw_saturated_feedforward_cannot_hide_or_manufacture_correction(base):
   harness = FeedbackHarness()
   for _ in range(200):
-    harness.step(base=0.0, target=0.0, measured=math.copysign(0.3, -base), rolling=True, positive_allowed=True)
+    harness.step(base=0.0, target=0.0, measured=math.copysign(0.3, -base), rolling=True, positive_allowed=True,
+                 continuation_allowed=base >= 0.0)
   assert harness.pid.i != 0.0
-  output = harness.step(base=base, target=base, measured=base, rolling=True, positive_allowed=True)
+  output = harness.step(base=base, target=base, measured=base, rolling=True, positive_allowed=True, continuation_allowed=base >= 0.0)
   assert output == (-3.5 if base < 0 else 2.0)
   assert harness.pid.i == 0.0
   assert harness.step(base=0.0, target=0.0, measured=0.0, rolling=True) == 0.0
@@ -252,7 +266,7 @@ def test_raw_saturated_feedforward_cannot_hide_or_manufacture_correction(base):
 def braking_feedback():
   harness = FeedbackHarness()
   for _ in range(1000):
-    harness.step(base=0.0, target=0.0, measured=0.6, rolling=True, forward=False)
+    harness.step(base=0.0, target=0.0, measured=0.6, rolling=True, forward=False, continuation_allowed=False)
   assert harness.pid.i < -2.0
   return harness
 
@@ -264,7 +278,7 @@ def test_approach_freezes_only_delivered_braking_and_keeps_its_clock_current():
   for _ in range(40):
     assert harness.approach(elapsed_ns=50_000_000) == pytest.approx(-1.0)
     assert harness.pid.i == pytest.approx(-0.5)
-  harness.step(base=0.0, target=0.0, measured=0.25, rolling=True)
+  harness.step(base=0.0, target=0.0, measured=0.25, rolling=True, continuation_allowed=False)
   assert harness.pid.i == pytest.approx(-0.501)  # only this 10 ms TRACK sample
   harness.pid.neg_limit = -0.2
   assert harness.approach(base=0.0) == -0.2
@@ -287,8 +301,13 @@ def test_approach_cannot_freeze_braking_across_invalid_identity_or_time(fault):
 
 @pytest.mark.parametrize('delay,response_time', [(0.3, 0.2), (0.5, 0.4), (1.0, 0.8)])
 @pytest.mark.parametrize('offset', [-0.25, 0.0, 0.25])
-def test_fixed_reference_delayed_response_rejects_and_relearns_independent_disturbance(delay, response_time, offset):
-  """Declared engineering plant, separate from the required coupled MPC tests."""
+@pytest.mark.parametrize('model_reference', [False, True])
+def test_fixed_reference_delayed_response_respects_domain_through_disturbance_reversal(delay, response_time, offset, model_reference):
+  """One fixed permission domain; unsupported correction signs stay forbidden.
+
+  Offsets, delay/lag, reversal and convergence tolerance are unchanged. This
+  does not claim either one-sided domain rejects both signs of disturbance.
+  """
   harness = FeedbackHarness()
   dt = STEP_NS / 1e9
   commands = deque([0.0] * round(delay / dt))
@@ -296,11 +315,14 @@ def test_fixed_reference_delayed_response_rejects_and_relearns_independent_distu
   for disturbance in (offset, 0.0, -offset):
     tail = deque(maxlen=100)
     for _ in range(2500):
-      command = harness.step(base=0.0, target=0.0, measured=measured, rolling=True, positive_allowed=True)
+      command = harness.step(base=0.0, target=0.0, measured=measured, rolling=True, forward=model_reference,
+                             positive_allowed=model_reference, continuation_allowed=model_reference)
       commands.append(command)
       measured += (commands.popleft() + disturbance - measured) * (1.0 - math.exp(-dt / response_time))
       tail.append(measured)
       assert -3.5 <= command <= 2.0
       assert harness.response.bias == harness.pid.i
-    assert max(abs(value) for value in tail) < 0.005
-    assert harness.pid.i == pytest.approx(-disturbance, abs=0.005)
+      assert harness.pid.i >= 0.0 if model_reference else harness.pid.i <= 0.0
+    expected_correction = max(-disturbance, 0.0) if model_reference else min(-disturbance, 0.0)
+    assert max(abs(value - disturbance - expected_correction) for value in tail) < 0.005
+    assert harness.pid.i == pytest.approx(expected_correction, abs=0.005)

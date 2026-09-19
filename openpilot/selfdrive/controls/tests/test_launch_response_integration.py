@@ -11,6 +11,8 @@ from unittest.mock import patch
 import pytest
 
 from opendbc.car import structs
+from opendbc.car.honda.carstate import CarState
+from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR
 from openpilot.cereal import custom
 from openpilot.common.prefix import OpenpilotPrefix
@@ -113,12 +115,48 @@ def rolling_feedback(*, braking=False):
   harness = ControlHarness()
   harness.state.vEgo = 20.0
   harness.state.aEgo = 0.5 if braking else 0.0
+  intent = forward_intent(reference_kind=int(MotionReferenceKind.UNKNOWN), release_allowed=False) if braking else forward_intent()
   for _ in range(200):
     target = 0.0 if braking else 0.3
-    output = harness.step(target, forward_intent())
+    output = harness.step(target, intent)
   assert abs(harness.control.pid.i) > 0.1
   assert output == pytest.approx(target + harness.control.pid.i)
   return harness
+
+
+def test_cold_moving_reference_cannot_integrate_the_real_speed_filter_startup_transient():
+  parameters = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
+  parameters_sp = CarInterface.get_non_essential_params_sp(parameters, CAR.HONDA_ACCORD)
+  measurement = CarState(parameters, parameters_sp)
+  harness = ControlHarness()
+  moving = forward_intent(reference_kind=int(MotionReferenceKind.MOVING), release_allowed=False)
+  measured_accelerations = []
+  for _ in range(200):
+    # No warm-up or estimator reset: a real constant 2 m/s input exercises the
+    # startup transient seen in the frozen low-speed following reproduction.
+    harness.state.vEgo, harness.state.aEgo = measurement.update_speed_kf(2.0)
+    measured_accelerations.append(harness.state.aEgo)
+    before = harness.control.last_output_accel
+    output = harness.step(0.6, moving)
+    assert output == pytest.approx(min(0.6, before + 0.08))
+    assert harness.control.pid.i == 0.0
+    assert harness.control.motion_phase == MotionPhase.TRACK
+  assert max(measured_accelerations) > 10.0  # retain the trigger, not a warmed sensor
+
+
+@pytest.mark.parametrize('kind', [MotionReferenceKind.FORWARD, MotionReferenceKind.MOVING])
+@pytest.mark.parametrize('target', [-0.1, 0.3])
+def test_acc_to_model_reference_retires_negative_i_but_keeps_the_upward_slew_limit(kind, target):
+  harness = rolling_feedback(braking=True)
+  assert harness.control.pid.i < -0.1
+  model = forward_intent(reference_kind=int(kind), release_allowed=False)
+  for _ in range(30):
+    before = harness.control.last_output_accel
+    output = harness.step(target, model)
+    assert harness.control.pid.i == 0.0
+    assert output == pytest.approx(min(target, before + 0.08))
+    assert harness.control.motion_phase == MotionPhase.TRACK
+  assert harness.control.last_output_accel == pytest.approx(target)
 
 
 def test_qualified_rolling_feedback_uses_pid_i_once_and_moving_does_not_ratchet_it():
@@ -216,10 +254,9 @@ def test_negative_target_without_stop_flag_removes_correction_in_the_same_frame(
   harness = learned_feedback()
   harness.state.vEgo = 1.0
   harness.state.standstill = False
-  # The signed TRACK correction may strengthen braking in this frame; it
-  # must never spend old positive I to weaken the new nominal request.
-  assert harness.step(-0.3, forward_intent(release_allowed=False)) <= -0.3
-  assert harness.control.pid.i <= 0.0
+  # Model TRACK revokes positive I without adding a new braking correction.
+  assert harness.step(-0.3, forward_intent(release_allowed=False)) == -0.3
+  assert harness.control.pid.i == 0.0
   assert not harness.control.launch_response.armed
 
 
@@ -346,7 +383,8 @@ def test_fault_clears_signed_feedback_after_owned_braking_takes_over(fault):
 @pytest.mark.parametrize('braking', [False, True])
 def test_restarting_producer_or_manual_reentry_cannot_inherit_signed_feedback(braking):
   harness = rolling_feedback(braking=braking)
-  restarted = forward_intent(producer_instance_ns=INSTANCE_NS + 1)
+  restarted = forward_intent(producer_instance_ns=INSTANCE_NS + 1, release_allowed=not braking,
+                             reference_kind=int(MotionReferenceKind.UNKNOWN if braking else MotionReferenceKind.FORWARD))
   harness.step(0.0 if braking else 0.3, restarted)
   assert harness.control.pid.i == 0.0
   assert not harness.control.launch_response.armed
@@ -424,7 +462,7 @@ def test_cold_approach_or_prior_positive_output_does_not_gain_a_braking_handoff(
   if learned_i_with_positive_output:
     harness.state.aEgo = 0.6
     for _ in range(200):
-      harness.step(0.5, forward_intent())
+      harness.step(0.5, forward_intent(reference_kind=int(MotionReferenceKind.UNKNOWN), release_allowed=False))
     assert harness.control.pid.i < 0.0
     assert harness.control.last_output_accel > 0.0
   braking = forward_intent(reasons=StopReason.E2E, release_allowed=False, producer_instance_ns=INSTANCE_NS + 1)
