@@ -268,7 +268,7 @@ def component_options(component, unified, supervised=False):
 def require_component_mode(component, mode, name):
   actual_mode = component_mode(component)
   if actual_mode != mode or int(getattr(component, 'mode', actual_mode)) != mode:
-    raise ValueError(f'Requested replay mode {mode} is not enabled on the actual {name} (runtime mode {actual_mode}); '
+    raise ValueError(f'Requested replay mode {mode} is not enabled on the actual {name} (runtime mode {actual_mode}); ' +
                      'select a source tree that implements the requested mode')
   return actual_mode
 

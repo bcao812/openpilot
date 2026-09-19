@@ -234,8 +234,8 @@ class TestStopReleaseHysteresis:
     road already refuted does not.
     """
     assert STOP_ACCEL < STOP_RELEASE_ACCEL <= self.A_TARGET_DEPARTING_LEAD_PEAK, \
-        (f"STOP_RELEASE_ACCEL {STOP_RELEASE_ACCEL} does not clear the logged departing-lead peak "
-         f"{self.A_TARGET_DEPARTING_LEAD_PEAK}; re-derive it against the release ladder in "
+        (f"STOP_RELEASE_ACCEL {STOP_RELEASE_ACCEL} does not clear the logged departing-lead peak " +
+         f"{self.A_TARGET_DEPARTING_LEAD_PEAK}; re-derive it against the release ladder in " +
          f"_logs/stopshape.py before moving it")
 
   def test_the_release_boundary_is_where_the_constant_says(self):
