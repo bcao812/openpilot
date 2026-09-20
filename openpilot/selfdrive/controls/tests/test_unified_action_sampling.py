@@ -1,4 +1,4 @@
-"""Action sampling in qualified low-speed following and at braking boundaries."""
+"""Native trajectory readout, with separate producer and braking checks."""
 
 from unittest.mock import patch
 
@@ -9,7 +9,6 @@ from openpilot.cereal import log
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, T_IDXS
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
-from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import following_sample_weight
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -20,8 +19,7 @@ def calm_following_state(speed, target, *, experimental=False):
   lead = state['radarState'].leadOne
   lead.present = True
   lead.dRel, lead.vLead, lead.vRel = 20.0, speed + 0.2, 0.2
-  # Isolate speed/risk/acceleration gates at full confidence in these fixtures.
-  # The native confidence-boundary regression below uses nonsaturated values.
+  # The native confidence regression below also exercises unsaturated values.
   lead.aLeadK, lead.aLeadTau, lead.modelProb, lead.yRel = 0.0, 1.5, 1.0, 0.0
   return state
 
@@ -99,7 +97,9 @@ def test_sustained_native_braking_is_not_filtered_or_rate_limited_by_sampling():
   'short_gap', 'risk_deficit',
   'high_speed', 'no_lead', 'model_stop', 'model_brake', 'raw_unknown',
 ])
-def test_braking_or_unqualified_following_retains_existing_delay_compensation(condition):
+def test_given_trajectory_has_one_readout_across_following_and_risk_contexts(condition):
+  # This substituted trajectory isolates interpretation, not obstacle safety.
+  # Actual newly observed lead braking is exercised separately without mocks.
   speed = 12.0 if condition == 'high_speed' else 3.0
   planner, _ = make_planner(speed=speed)
   state = calm_following_state(speed, speed + 1.0, experimental=condition in ('model_stop', 'model_brake', 'raw_unknown'))
@@ -138,19 +138,21 @@ def test_braking_or_unqualified_following_retains_existing_delay_compensation(co
   legacy = get_accel_from_plan(np.interp(control_times, T_IDXS, planner.mpc.v_solution),
                                np.interp(control_times, T_IDXS, acceleration), control_times,
                                action_t=planner.CP.longitudinalActuatorDelay + DT_MDL)
-  assert legacy < -0.2  # The direct-only experiment would have lost this brake.
-  assert planner.reference_planner.reference_accel == legacy
-  assert planner.output_a_target <= legacy
+  native = np.interp(planner.CP.longitudinalActuatorDelay + DT_MDL, T_IDXS, acceleration)
+  assert legacy < -0.2 < native  # The single-ramp interpretation reverses this trajectory's sign.
+  assert planner.reference_planner.reference_accel == pytest.approx(native)
+  assert planner.output_a_target <= planner.reference_planner.constraint_accel
 
 
-def test_real_producer_blends_the_two_actions_at_partial_following_weight():
+@pytest.mark.parametrize('relative_speed', [-0.6, -0.25, 0.2])
+def test_same_trajectory_has_no_extra_readout_response_to_relative_speed(relative_speed):
   speed = 3.0
   acceleration = 0.1 + 1.2 * np.exp(-T_IDXS / 0.18)
   planner, _ = make_planner(speed=speed, initial_accel=float(acceleration[0]))
   state = calm_following_state(speed, 4.0)
   state['carState'].aEgo = float(acceleration[0])
-  state['radarState'].leadOne.vLead = 2.75
-  state['radarState'].leadOne.vRel = -0.25
+  state['radarState'].leadOne.vLead = speed + relative_speed
+  state['radarState'].leadOne.vRel = relative_speed
   with patch.object(planner.mpc, 'update', side_effect=lambda *_args, **_kwargs:
                     solve_given_acceleration(planner, acceleration, speed, *_args, **_kwargs)):
     planner.update(state, now_ns=advance(state, 0))
@@ -160,7 +162,7 @@ def test_real_producer_blends_the_two_actions_at_partial_following_weight():
                                np.interp(control_times, T_IDXS, acceleration), control_times, action_t=action_time)
   native = np.interp(action_time, T_IDXS, acceleration)
   assert legacy < 0.0 < native
-  assert planner.reference_planner.reference_accel == pytest.approx(0.5 * (legacy + native))
+  assert planner.reference_planner.reference_accel == pytest.approx(native)
 
 
 def test_real_producer_does_not_jump_between_actions_at_the_risk_boundary():
@@ -180,18 +182,18 @@ def test_real_producer_does_not_jump_between_actions_at_the_risk_boundary():
                       solve_given_acceleration(planner, acceleration, speed, *_args, **_kwargs)):
       planner.update(state, now_ns=advance(state, 0))
     targets.append(planner.reference_planner.reference_accel)
-  assert targets[0] < targets[1] < 0.0
-  assert targets[1] - targets[0] < 0.01
+  expected = np.interp(planner.CP.longitudinalActuatorDelay + DT_MDL, T_IDXS, acceleration)
+  assert targets == pytest.approx([expected, expected])
 
 
 @pytest.mark.parametrize('confidence_lead', ['leadOne', 'leadTwo'])
 @pytest.mark.parametrize('initial_acceleration', [-0.68, 0.68])
 def test_native_mpc_readout_is_continuous_at_either_lead_confidence_boundary(confidence_lead, initial_acceleration):
   references, targets, native_solutions = [], [], []
-  # Same independent native solver histories. Only the final confidence differs;
-  # the initial acceleration step is around the logged low-speed p95 magnitude.
-  # The old hard gate changes the request by about 0.32 m/s² in this setting.
-  for confidence in (0.94975, 0.95025):
+  # Same independent native solver histories. Presence remains true across a
+  # wide confidence range, including the former readout boundary. The initial
+  # acceleration step is around the logged low-speed p95 magnitude.
+  for confidence in (0.55, 0.8, 0.94975, 0.95025, 1.0):
     planner, _ = make_planner(speed=2.5)
     state = calm_following_state(2.5, 4.0)
     state['selfdriveState'].personality = log.LongitudinalPersonality.standard
@@ -211,32 +213,25 @@ def test_native_mpc_readout_is_continuous_at_either_lead_confidence_boundary(con
     references.append(planner.reference_planner.reference_accel)
     targets.append(planner.output_a_target)
     native_solutions.append(planner.mpc.a_solution.copy())
-  np.testing.assert_array_equal(native_solutions[0], native_solutions[1])
-  assert 0.0 < abs(references[1] - references[0]) < 0.01
-  assert 0.0 < abs(targets[1] - targets[0]) < 0.01
+  for solution in native_solutions[1:]:
+    np.testing.assert_array_equal(native_solutions[0], solution)
+  assert references == pytest.approx([references[0]] * len(references))
+  assert targets == pytest.approx([targets[0]] * len(targets))
 
 
-def test_following_weight_tapers_before_closing_and_speed_boundaries():
-  state = calm_following_state(3.0, 4.0)
+@pytest.mark.parametrize('lead_speed,lead_acceleration', [(1.0, 0.0), (3.0, -2.0)])
+def test_new_closing_lead_reaches_the_request_without_sampling_history(lead_speed, lead_acceleration):
+  planner, _ = make_planner(speed=6.0)
+  state = calm_following_state(6.0, 8.0)
+  for frame in range(40):
+    planner.update(state, now_ns=advance(state, frame))
+    assert planner.mpc.solution_status == 0
   lead = state['radarState'].leadOne
-  assert following_sample_weight(state['radarState'], 3.0, risk_margin=2.0) == 1.0
-  for relative_speed, expected in ((0.0, 1.0), (-0.25, 0.5), (-0.5, 0.0)):
-    lead.vLead, lead.vRel = 3.0 + relative_speed, relative_speed
-    assert following_sample_weight(state['radarState'], 3.0, risk_margin=2.0) == pytest.approx(expected)
-  for speed_kph, expected in ((15.0, 1.0), (17.5, 0.5), (20.0, 0.0)):
-    speed = speed_kph / 3.6
-    lead.vLead, lead.vRel = speed + 0.2, 0.2
-    assert following_sample_weight(state['radarState'], speed, risk_margin=2.0) == pytest.approx(expected)
-
-
-@pytest.mark.parametrize('risk_margin', [-2.3125, -0.001, float('nan'), float('inf')])
-def test_close_or_unknown_risk_margin_cannot_acquire_following_sampling(risk_margin):
-  state = calm_following_state(3.0, 4.0)
-  state['radarState'].leadOne.dRel = 5.0
-  assert following_sample_weight(state['radarState'], 3.0, risk_margin=risk_margin) == 0.0
-
-
-@pytest.mark.parametrize('risk_margin,expected', [(0.0, 0.0), (0.125, 0.25), (0.25, 0.5), (0.5, 1.0)])
-def test_sampling_enters_gradually_only_on_the_positive_side_of_original_risk(risk_margin, expected):
-  state = calm_following_state(3.0, 4.0)
-  assert following_sample_weight(state['radarState'], 3.0, risk_margin=risk_margin) == pytest.approx(expected)
+  lead.dRel, lead.vLead, lead.vRel = 10.0, lead_speed, lead_speed - 6.0
+  lead.aLeadK = lead_acceleration
+  # Keep the real MPC and current measurements: no synthetic trajectory or
+  # smoothed obstacle can replace the newly observed closing target.
+  planner.update(state, now_ns=advance(state, 40))
+  assert planner.mpc.solution_status == 0
+  assert planner.reference_planner.reference_accel < -0.2
+  assert planner.output_a_target <= planner.reference_planner.reference_accel

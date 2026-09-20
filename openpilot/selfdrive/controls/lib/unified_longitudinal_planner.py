@@ -8,10 +8,10 @@ from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_SPEED, should_stop, get_accel_from_plan
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_SPEED, should_stop
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS, get_safe_obstacle_distance,
+  LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS,
 )
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter, stationary_lead_departure_compatible
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
@@ -88,48 +88,16 @@ def low_speed_follow_distance(speed):
   return float(np.interp(speed * CV.MS_TO_KPH, [15.0, 30.0], [4.0, 6.0]))
 
 
-def following_sample_weight(radar_state, speed, *, risk_margin):
-  """Limit response smoothing to slow, coherent following of moving leads.
+def sample_reference_acceleration(acceleration, action_t):
+  """Read the accepted piecewise-jerk trajectory at the actuator horizon.
 
-  Closing or braking leads retain the existing response compensation. Smooth
-  weights avoid a new request step at the speed/relative-motion boundaries.
-  This is an applicability gate, not a replacement collision or stop guard.
+  Acceleration is linear within each native interval. A single-ramp inverse
+  of the velocity increment has a different meaning when jerk varies, and
+  subtracts the instantaneous measured initial acceleration from the request.
+  Lead confidence and geometry must not select between those two meanings
+  after the MPC has already incorporated the current obstacle observations.
   """
-  if (not math.isfinite(speed) or not STOP_SPEED < speed < 20.0 * CV.KPH_TO_MS
-      or not math.isfinite(risk_margin) or risk_margin < 0.0 or not radar_state.leadOne.present):
-    return 0.0
-  # Enter gradually on the positive side of the original risk boundary.
-  # A hard switch at zero would recreate an action jump from tiny gap changes.
-  weight = min(float(np.interp(speed, [STOP_SPEED, 0.5, 15.0 * CV.KPH_TO_MS, 20.0 * CV.KPH_TO_MS], [0.0, 1.0, 1.0, 0.0])),
-               float(np.interp(risk_margin, [0.0, 0.5], [0.0, 1.0])))
-  for lead in (radar_state.leadOne, radar_state.leadTwo):
-    if not lead.present:
-      continue
-    values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb, lead.yRel)
-    if (not all(math.isfinite(value) for value in values)
-        or lead.dRel < CREEP_FOLLOW_MIN_GAP or not 0.95 <= lead.modelProb <= 1.0
-        or abs(lead.yRel) > 1.8 or lead.vLead < CREEP_FOLLOW_MIN_LEAD_SPEED
-        or abs(lead.vLead - speed - lead.vRel) > CREEP_FOLLOW_MAX_CLOSING_SPEED
-        or lead.vLead + min(lead.aLeadK, 0.0) * CREEP_FINISH_T < STOP_SPEED):
-      return 0.0
-    weight = min(weight,
-                 # Retain the existing compensation at the admission boundary.
-                 # A confidence threshold must not switch between two different
-                 # actions while the native MPC trajectory remains unchanged.
-                 float(np.interp(lead.modelProb, [0.95, 1.0], [0.0, 1.0])),
-                 float(np.interp(lead.vRel, [-CREEP_FOLLOW_MAX_CLOSING_SPEED, 0.0], [0.0, 1.0])),
-                 float(np.interp(lead.aLeadK, [-CREEP_FOLLOW_MAX_CLOSING_SPEED, 0.0], [0.0, 1.0])))
-  return weight
-
-
-def sample_reference_acceleration(acceleration, action_t, *, inverse_acceleration, following_weight):
-  """Blend native sampling only inside the qualified slow-following domain."""
-  if following_weight <= 0.0:
-    return float(inverse_acceleration)
-  native_acceleration = float(np.interp(action_t, T_IDXS, acceleration))
-  if following_weight >= 1.0:
-    return native_acceleration
-  return float(inverse_acceleration + following_weight * (native_acceleration - inverse_acceleration))
+  return float(np.interp(action_t, T_IDXS, acceleration))
 
 
 def cruise_accel_limit(params, speed, steering_angle, e2e_allowed, coast_accel, allow_throttle):
@@ -479,22 +447,12 @@ class UnifiedLongitudinalPlanner:
     planner.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS, planner.mpc.a_solution)
     planner.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS[:-1], planner.mpc.j_solution)
     planner._observe(actionHorizonKnown=True, actionHorizon=float(delay + DT_MDL))
-    inverse_acceleration = float(get_accel_from_plan(
-      planner.v_desired_trajectory, planner.a_desired_trajectory, CONTROL_N_T_IDX, action_t=delay + DT_MDL))
-    # Native a(t) avoids amplifying a rapidly changing measured response in
-    # calm low-speed following. Applying it to every approach weakened braking
-    # in the weak-response downhill regression, so those contexts retain the
-    # original delay compensation and independent model/lead envelopes.
-    model_permits_following = (not self.e2e_allowed or (
-      self.model_evidence is not None and self.model_evidence.allows_external_departure
-      and not model.action.shouldStop and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL))
-    initial_risk_margin = float(planner.mpc.params[0, 2] - planner.mpc.x0[0]
-                                - planner.mpc.params[0, 5] * get_safe_obstacle_distance(planner.mpc.x0[1], planner.mpc.params[0, 4]))
-    following_weight = (following_sample_weight(state['radarState'], speed, risk_margin=initial_risk_margin)
-                        if active and healthy and not reset and not forced_decel and planner.mpc.crash_cnt <= 2
-                        and planner.source == LongitudinalPlanSourceSP.cruise and model_permits_following else 0.0)
+    # Keep the existing actuator preview and the measured MPC initial state.
+    # The accepted trajectory already carries its qualified continuity cost;
+    # read it consistently instead of modulating a second inverse with noisy
+    # lead estimates. Braking and motion-authority constraints remain separate.
     self.reference_accel = sample_reference_acceleration(
-      planner.mpc.a_solution, delay + DT_MDL, inverse_acceleration=inverse_acceleration, following_weight=following_weight)
+      planner.mpc.a_solution, delay + DT_MDL)
     planner._observe(sampledAccelKnown=True, sampledAccel=self.reference_accel)
     if not math.isfinite(self.reference_accel):
       self.invalidate(speed, "nonfinite_sampled_accel")
