@@ -313,6 +313,37 @@ def test_available_model_after_carstate_proxy_does_not_create_a_cruise_fault(lea
     np.testing.assert_array_equal(planner.mpc.params[:, TYPED_MODEL_MODE], 0.0)
 
 
+@pytest.mark.parametrize('publication_offset_ns', [1, 5_000_000])
+@pytest.mark.parametrize('raw_speed', [9.4, 10.0, 10.6])
+def test_constant_model_bias_cannot_turn_publication_order_into_braking(raw_speed, publication_offset_ns):
+  """A clock-order change adds no braking evidence to this equilibrium.
+
+  P's action input is zero; a constant velocity-origin offset is not a
+  deceleration or a stop. The existing cruise-equilibrium tolerance is 1e-4.
+  Exercise each order for twelve actual native updates so reference history
+  and smoothing participate in the comparison.
+  """
+  trajectories = []
+  for order in (-1, 1):
+    planner, _ = make_planner(speed=10.0)
+    state = make_state(speed=10.0, target=10.0, experimental=True)
+    assign_curve(state, np.full(len(MODEL_TIMES), raw_speed))
+    state['modelV2'].action.desiredAcceleration = 0.0
+    rows = []
+    for frame in range(12):
+      anchor = advance(state, frame)
+      state.logMonoTime['modelV2'] = anchor + order * publication_offset_ns
+      planner.update(state, now_ns=anchor + 10_000_000)
+      assert planner.motion_intent.valid and planner.mpc.solution_status == 0
+      assert not planner.motion_intent.release_allowed
+      rows.append(np.concatenate(([planner.output_a_target], planner.mpc.v_solution,
+                                  planner.mpc.a_solution, planner.mpc.j_solution)))
+    trajectories.append(np.array(rows))
+  for trajectory in trajectories:
+    np.testing.assert_allclose(trajectory[:, 0], 0.0, atol=1e-4, rtol=0.0)
+  np.testing.assert_allclose(trajectories[1], trajectories[0], atol=1e-4, rtol=0.0)
+
+
 def test_later_publication_raw_forward_can_release_actual_held_owner_and_honda_can():
   harness = StrictPlanTransportHarness(speed=5.0)
   harness.hold()
