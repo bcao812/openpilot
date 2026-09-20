@@ -273,6 +273,24 @@ def test_discontinuous_moving_lead_samples_do_not_spend_the_unobserved_gap(perio
   assert harness.supervisor.reasons & StopReason.CREEP
 
 
+def test_first_departure_sample_does_not_credit_the_preceding_unqualified_gap():
+  harness = MotionHarness()
+  harness.stopped()
+  for _ in range(9):
+    assert harness.step(MotionIntent(reasons=StopReason.MPC), v_ego=0.0, standstill=True,
+                        new_plan=False, new_model=False)
+  intent = MotionIntent(release_allowed=True, allow_creep=False)
+  # A new 100 ms producer period is healthy, but its first positive sample
+  # cannot credit the whole preceding interval, which had no departure.
+  for frame in range(51):
+    new_input = frame % 10 == 0
+    stopped = harness.step(intent, a_target=0.15, v_ego=0.0, standstill=True,
+                           new_plan=new_input, new_model=new_input)
+    assert not harness.supervisor.degraded
+    assert stopped == (frame < 50)
+  assert harness.supervisor.phase == MotionPhase.RELEASE
+
+
 @pytest.mark.parametrize('periods', [(5,), (6,), (8,), (10,), (5, 6, 4, 7, 8)])
 def test_healthy_moving_follow_uses_the_same_elapsed_time_as_creep(periods):
   """A fresh, continuous lead must not lose a race to the wall-clock creep window.
