@@ -150,7 +150,7 @@ def test_future_constant_preference_does_not_create_model_departure_permission(r
 
 
 @pytest.mark.parametrize('speed', [STOP_SPEED - 0.001, STOP_SPEED, STOP_SPEED + 0.001])
-def test_future_nonforward_preference_preserves_existing_stop_band_compatibility(speed):
+def test_future_nonforward_preference_does_not_switch_at_the_stop_band(speed):
   raw = np.full(len(MODEL_TIMES), 1.0)
   reference = evidence(raw, speed, model_ns=SOURCE_NS + 5_000_000,
                        anchor_ns=SOURCE_NS, now_ns=SOURCE_NS + 10_000_000)
@@ -158,11 +158,8 @@ def test_future_nonforward_preference_preserves_existing_stop_band_compatibility
   assert reference.raw_motion.kind == 'moving'
   assert not reference.allows_departure and reference.allows_external_departure
   np.testing.assert_array_equal(reference.raw_velocity, raw)
-  if speed < STOP_SPEED:
-    assert reference.moving is None and not reference.has_future_moving_preference
-  else:
-    assert reference.has_future_moving_preference
-    np.testing.assert_allclose(reference.moving.velocity, speed, atol=1e-13)
+  assert reference.has_future_moving_preference
+  np.testing.assert_allclose(reference.moving.velocity, speed, atol=1e-13)
 
 
 @pytest.mark.parametrize('kind', ['negative_prefix', 'no_forward', 'rest', 'single_zero'])

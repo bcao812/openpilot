@@ -1149,12 +1149,14 @@ class LongitudinalMpc:
     lower = np.full((N+1, 2), -REFERENCE_BOUND)
     upper = np.full((N+1, 2), REFERENCE_BOUND)
 
-    qualified = typed is not None and (typed.unknown is None or typed.has_future_moving_preference)
-    if qualified:
+    aligned = typed is not None and typed.unknown is None
+    future_preference = typed is not None and typed.has_future_moving_preference
+    if aligned or future_preference:
       # The measured state remains fixed. Forward prediction nodes cannot use
       # a soft negative-speed excursion to make a typed rest goal economical;
       # the exact interval-extremum check below remains a separate requirement.
-      lower[1:, 0] = 0.0
+      if aligned:
+        lower[1:, 0] = 0.0
       preference_time = float(reference.preference_time_s)
       if not np.isfinite(preference_time) or preference_time <= 0.0:
         raise ValueError('Invalid preference time scale')
@@ -1163,7 +1165,11 @@ class LongitudinalMpc:
       weights[:, 1] = 0.0
       weights[:, 2] = self._cost_weights[5] / preference_time**4
       weights[:, 3] = self._cost_weights[5] / preference_time**2
-      self.params[:, TYPED_MODEL_MODE] = 1.0
+      # A future partial preference does not take ownership of the target.
+      # Keep ordinary cruise/real-lead attraction and bounds while consuming
+      # only its supported soft velocity/acceleration reference. In particular,
+      # constant measured speed must not erase a departing lead's target.
+      self.params[:, TYPED_MODEL_MODE] = float(aligned)
       if typed.moving is not None:
         moving = typed.moving
         if (any(values.shape != (N+1,) for values in (moving.position, moving.velocity, moving.acceleration, moving.supported))
@@ -1175,11 +1181,11 @@ class LongitudinalMpc:
         weights[~moving.supported, 1:4] = 0.0
       elif not typed.no_forward:
         weights[:, 1:4] = 0.0
-      # Cruise is a limiting envelope while the model owns the preference.
-      # Real lead distance cost and its risk slack remain active independently
-      # of model direction, with the same weights as the original problem.
+      # Only an aligned model owns the target and makes cruise an envelope.
+      # Future partial preferences retain the existing distance attraction.
+      # Lead risk slack remains independent of either model preference.
       for stage, obstacle_index in enumerate(selected):
-        if sources[comfort_selected[stage]] == LongitudinalPlanSource.cruise:
+        if aligned and sources[comfort_selected[stage]] == LongitudinalPlanSource.cruise:
           weights[stage, 0] = 0.0
         if typed.moving is not None and sources[obstacle_index] in MPC_SOURCES:
           # This compares a stated ego preference with independently admitted
@@ -1188,7 +1194,7 @@ class LongitudinalMpc:
                                  + get_safe_obstacle_distance(max(typed.moving.velocity[stage], 0.0), t_follow))
           if x_obstacles[stage, obstacle_index] <= preference_obstacle:
             self.params[stage, MODEL_BRAKING_PRIORITY] = 1.0
-      if self.source == LongitudinalPlanSource.cruise:
+      if aligned and self.source == LongitudinalPlanSource.cruise:
         self.source = LongitudinalPlanSource.e2e
 
     if self.rest_goal is not None:

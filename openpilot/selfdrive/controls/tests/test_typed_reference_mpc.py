@@ -17,7 +17,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   J_EGO_COST, MODEL_A_REF, MODEL_BRAKING_PRIORITY, MODEL_V_REF, MPC_GOAL_INFEASIBLE,
-  PARAM_DIM, REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, MpcReference,
+  PARAM_DIM, REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, LongitudinalPlanSource, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.model_reference import moving_preference
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
@@ -306,27 +306,22 @@ def test_later_moving_preference_keeps_unknown_epoch_and_real_lead_risk(delay_ns
   assert typed.source.proxy_age_s is None and typed.source.physical_prediction_epoch_ns is None
   assert future.rest_goal_state == 'none' and future.rest_goal_braking_accel is None
   assert action(future) <= action(lead_only) + 1e-4
-  np.testing.assert_array_equal(future.params[:, TYPED_MODEL_MODE], 1.0)
+  np.testing.assert_array_equal(future.params[:, TYPED_MODEL_MODE], 0.0)
   np.testing.assert_array_equal(future.diagnostic_reference_weights[~typed.moving.supported, 1:4], 0.0)
 
 
 @pytest.mark.parametrize('speed', [STOP_SPEED - 0.001, STOP_SPEED + 0.001])
-def test_later_nonforward_preference_matches_the_declared_stop_band_domain_with_a_lead(speed):
+def test_later_nonforward_preference_retains_forward_following_on_both_sides_of_the_stop_band(speed):
   raw = np.full(len(MODEL_TIMES), 1.0)
   typed = evidence(raw, speed, model_ns=SOURCE_NS + 5_000_000, now_ns=SOURCE_NS + 10_000_000)
   reference = typed_reference(raw, speed, typed=typed)
   radar = radar_state(distance=7.0, speed=1.5)
   actual = solve_reference(speed, reference, radar=radar)
-  if speed < STOP_SPEED:
-    expected = solve_reference(speed, replace(reference, typed_model=None), radar=radar)
-    assert typed.moving is None
-    np.testing.assert_array_equal(actual.params[:, TYPED_MODEL_MODE], 0.0)
-  else:
-    expected = solve_reference(speed, typed_reference(raw, speed), radar=radar)
-    assert typed.has_future_moving_preference
-    np.testing.assert_array_equal(actual.params[:, TYPED_MODEL_MODE], 1.0)
-  # This declares two retained domains, not equivalence across the stop band.
-  assert action(actual) == pytest.approx(action(expected), abs=1e-4)
+  assert typed.has_future_moving_preference and not typed.allows_departure
+  assert action(actual) > 0.0 and actual.v_solution[-1] > speed
+  assert actual.source in (LongitudinalPlanSource.lead0, LongitudinalPlanSource.cruise)
+  np.testing.assert_array_equal(actual.params[:, TYPED_MODEL_MODE], 0.0)
+  assert np.all(actual.diagnostic_reference_weights[:, 0] > 0.0)
 
 
 @pytest.mark.parametrize('lead_present', [False, True])
@@ -345,7 +340,7 @@ def test_available_model_after_carstate_proxy_does_not_create_a_cruise_fault(lea
     assert planner.reference_planner.model_fallback_reason == 'model_proxy_after_initial_state'
     assert not planner.motion_intent.release_allowed
     assert abs(planner.output_a_target) < 1e-4
-    np.testing.assert_array_equal(planner.mpc.params[:, TYPED_MODEL_MODE], 1.0)
+    np.testing.assert_array_equal(planner.mpc.params[:, TYPED_MODEL_MODE], 0.0)
     np.testing.assert_array_equal(planner.mpc.diagnostic_reference_weights[0, 1:4], 0.0)
 
 
@@ -450,7 +445,7 @@ def test_qualified_departing_lead_is_independent_of_missing_aligned_or_raw_growt
   curve = (raw * MODEL_TIMES, raw, np.zeros(len(raw)))
   _, plans, rows, can_rows = harness.exercise(curve, action_accel=0.5)
   evidence = harness.planner.reference_planner.model_evidence
-  assert evidence.moving is None and evidence.raw_motion.kind == 'moving'
+  assert evidence.has_future_moving_preference and evidence.raw_motion.kind == 'moving'
   assert not evidence.allows_departure and evidence.allows_external_departure
   assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
   negative_plan_times = {int(event.logMonoTime) for event in plans if event.longitudinalPlan.aTarget <= 0.0}
