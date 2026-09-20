@@ -562,7 +562,16 @@ class UnifiedLongitudinalPlanner:
             trajectory_departure, lead_departure, qualified, no_model_risk)
     release_allowed = bool(trajectory_departure or lead_departure)
     response_kind = MotionResponseKind.NONE
-    if (active and healthy and not reset and not forced_decel and not reasons and not self.reference_overridden
+    # An ACC cruise cap still describes an absolute acceleration target. Track
+    # that final target with nonpositive correction instead of erasing braking
+    # effort whenever the native trajectory crosses its own acceleration cap.
+    # Independent model constraints and policy overrides retain their guards.
+    ordinary_acc_cap = (not self.e2e_allowed and evidence is None
+                        and self.constraint_source == LongitudinalPlanSource.cruise
+                        and self.reference_accel > self.constraint_accel
+                        and output == self.constraint_accel)
+    if (active and healthy and not reset and not forced_decel and not reasons
+        and (not self.reference_overridden or ordinary_acc_cap)
         and planner.source == LongitudinalPlanSourceSP.cruise):
       lead_sources = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
       lead_index = lead_sources.index(planner.mpc.source) if planner.mpc.source in lead_sources else None
@@ -571,17 +580,17 @@ class UnifiedLongitudinalPlanner:
           and (planner.mpc.source == LongitudinalPlanSource.cruise or selected_lead is not None and selected_lead.present)):
         # Ordinary ACC owns an absolute speed/lead target. Missing model
         # semantics alone are not this certificate; policy, health and the
-        # current unoverridden target must all retain their qualification.
+        # final target must all retain their absolute-acceleration meaning.
         # Ordinary ACC retains only braking correction, including for excess
         # response to a positive target. FCW does not revoke this negative I.
         response_kind = MotionResponseKind.ABSOLUTE_ACC
-        if (not planner.fcw and planner.mpc.source == LongitudinalPlanSource.cruise
+        if (not self.reference_overridden and not planner.fcw and planner.mpc.source == LongitudinalPlanSource.cruise
             and not state['radarState'].leadOne.present and not state['radarState'].leadTwo.present):
           # With no lead/model risk owner, correct net cruise acceleration in
           # both directions. Its disturbance I may cross the target's zero;
           # the appearance of either lead immediately withdraws this domain.
           response_kind = MotionResponseKind.PURE_CRUISE
-      elif (selected_lead is not None and output < 0.0
+      elif (not self.reference_overridden and selected_lead is not None and output < 0.0
             and get_lead_braking_urgency(speed, output, state['radarState'], delay, lead_index=lead_index) > 0.0):
         # MPC source names one obstacle, not a causal braking proof. Require
         # that same fresh lead's independently measured closing/gap demand.

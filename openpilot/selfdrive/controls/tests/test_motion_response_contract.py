@@ -196,7 +196,7 @@ def test_ordinary_acc_with_a_lead_cannot_gain_positive_i_before_or_during_fcw(se
       assert all(output <= plan.aTarget for output in outputs)
 
 
-@pytest.mark.parametrize('boundary', ['leadOne', 'leadTwo', 'fcw', 'force_decel', 'model', 'override', 'unhealthy', 'manual'])
+@pytest.mark.parametrize('boundary', ['leadOne', 'leadTwo', 'fcw', 'force_decel', 'model', 'acc_cap', 'unhealthy', 'manual'])
 def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boundary, ordinary_policy):
   planner, control = make_planner_owner()
   state = make_state()
@@ -223,7 +223,7 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
           state['controlsState'].forceDecel = True
         elif boundary == 'model':
           e2e = True
-        elif boundary == 'override':
+        elif boundary == 'acc_cap':
           target = 3.0
         elif boundary == 'unhealthy':
           healthy = False
@@ -238,12 +238,15 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
         assert plan.motionIntent.responseKind == MotionResponseKind.PURE_CRUISE
         assert control.pid.i > 0.0
       else:
-        expected = MotionResponseKind.ABSOLUTE_ACC if boundary in ('leadOne', 'leadTwo', 'fcw') else MotionResponseKind.NONE
+        expected = MotionResponseKind.ABSOLUTE_ACC if boundary in ('leadOne', 'leadTwo', 'fcw', 'acc_cap') else MotionResponseKind.NONE
         assert plan.motionIntent.responseKind == expected
         assert control.pid.i == 0.0
         if boundary == 'model':
           assert plan.motionIntent.referenceKind == MotionReferenceKind.MOVING
-        if boundary in ('leadOne', 'leadTwo', 'fcw', 'model'):
+        if boundary == 'acc_cap':
+          assert planner.reference_planner.reference_overridden
+          assert plan.aTarget == planner.reference_planner.constraint_accel
+        if boundary in ('leadOne', 'leadTwo', 'fcw', 'model', 'acc_cap'):
           assert all(output <= plan.aTarget for output in outputs)
 
 
