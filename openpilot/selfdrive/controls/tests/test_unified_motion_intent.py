@@ -180,13 +180,15 @@ def test_distant_stationary_lead_uses_fresh_confirmation_before_a_small_positive
     assert plan.motionIntent.releaseAllowed
     assert 0.0 < plan.aTarget < STOP_RELEASE_ACCEL
     confirmation = consumer.control.LoC.motion_supervisor.release_lead_t
-    if not released:
-      if confirmation < CREEP_STOP_T - 1e-9:
-        assert_kept_stop(command, motion)
-      else:
-        assert motion.phase == 'release' and not motion.resolvedStop
-        assert -2.0 < command.actuators.accel <= -2.0 + 0.08 + 1e-6
-        released = True
+    if frame < 10:
+      assert confirmation == pytest.approx((frame + 1) * DT_MDL)
+    if frame < 9:
+      assert_kept_stop(command, motion)
+    elif frame == 9:
+      assert confirmation == pytest.approx(CREEP_STOP_T)
+      assert motion.phase == 'release' and not motion.resolvedStop
+      assert -2.0 < command.actuators.accel <= -2.0 + 0.08 + 1e-6
+      released = True
     for tick in range(5):
       if tick:
         command, motion = consumer.step(new_plan=False)
@@ -195,6 +197,8 @@ def test_distant_stationary_lead_uses_fresh_confirmation_before_a_small_positive
           assert_kept_stop(command, motion)
       assert command.actuators.accel - previous_request <= 0.08 + 1e-6
       assert command.longActive and not motion.degraded
+      if released:
+        assert not motion.resolvedStop
       previous_request = command.actuators.accel
   assert released and not motion.resolvedStop
   assert motion.phase == 'track' and command.actuators.accel > 0.0
