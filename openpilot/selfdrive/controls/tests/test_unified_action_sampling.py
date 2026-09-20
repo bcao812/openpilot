@@ -165,6 +165,7 @@ def test_real_producer_does_not_jump_between_actions_at_the_risk_boundary():
   for gap in (7.3115, 7.3135):
     planner, _ = make_planner(speed=speed, initial_accel=float(acceleration[0]))
     state = calm_following_state(speed, 4.0)
+    state['selfdriveState'].personality = log.LongitudinalPersonality.standard
     state['carState'].aEgo = float(acceleration[0])
     lead = state['radarState'].leadOne
     lead.dRel, lead.vLead, lead.vRel = gap, speed, 0.0
