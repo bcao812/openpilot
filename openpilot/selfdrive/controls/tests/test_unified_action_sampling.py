@@ -156,6 +156,26 @@ def test_real_producer_blends_the_two_actions_at_partial_following_weight():
   assert planner.reference_planner.reference_accel == pytest.approx(0.5 * (legacy + native))
 
 
+def test_real_producer_does_not_jump_between_actions_at_the_risk_boundary():
+  speed = 3.0
+  acceleration = 0.1 + 1.2 * np.exp(-T_IDXS / 0.18)
+  targets = []
+  # Equal 3 m/s speeds put the unchanged risk boundary at 7.3125 m.
+  # Cross it by 2 mm without changing any velocity or acceleration evidence.
+  for gap in (7.3115, 7.3135):
+    planner, _ = make_planner(speed=speed, initial_accel=float(acceleration[0]))
+    state = calm_following_state(speed, 4.0)
+    state['carState'].aEgo = float(acceleration[0])
+    lead = state['radarState'].leadOne
+    lead.dRel, lead.vLead, lead.vRel = gap, speed, 0.0
+    with patch.object(planner.mpc, 'update', side_effect=lambda *_args, **_kwargs:
+                      solve_given_acceleration(planner, acceleration, speed, *_args, **_kwargs)):
+      planner.update(state, now_ns=advance(state, 0))
+    targets.append(planner.reference_planner.reference_accel)
+  assert targets[0] < targets[1] < 0.0
+  assert targets[1] - targets[0] < 0.01
+
+
 def test_following_weight_tapers_before_closing_and_speed_boundaries():
   state = calm_following_state(3.0, 4.0)
   lead = state['radarState'].leadOne
@@ -174,3 +194,9 @@ def test_close_or_unknown_risk_margin_cannot_acquire_following_sampling(risk_mar
   state = calm_following_state(3.0, 4.0)
   state['radarState'].leadOne.dRel = 5.0
   assert following_sample_weight(state['radarState'], 3.0, risk_margin=risk_margin) == 0.0
+
+
+@pytest.mark.parametrize('risk_margin,expected', [(0.0, 0.0), (0.125, 0.25), (0.25, 0.5), (0.5, 1.0)])
+def test_sampling_enters_gradually_only_on_the_positive_side_of_original_risk(risk_margin, expected):
+  state = calm_following_state(3.0, 4.0)
+  assert following_sample_weight(state['radarState'], 3.0, risk_margin=risk_margin) == pytest.approx(expected)

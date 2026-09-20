@@ -199,7 +199,8 @@ def test_reused_mpc_restores_default_distance_after_compact_following(with_refer
   mpc.set_cur_state(speed, 0.0)
   mpc.update(radar, reference=MpcReference(30.0, comfort_stop_distance=4.0))
   assert mpc.solution_status == 0
-  np.testing.assert_array_equal(mpc.params[:, COMFORT_STOP_DISTANCE], 4.0)
+  np.testing.assert_allclose(mpc.params[:, COMFORT_STOP_DISTANCE], 4.0,
+                             rtol=0.0, atol=4 * np.finfo(float).eps * STOP_DISTANCE)
   mpc.update(radar, reference=MpcReference(30.0) if with_reference else None)
   assert mpc.solution_status == 0
   np.testing.assert_array_equal(mpc.params[:, COMFORT_STOP_DISTANCE], 6.0)

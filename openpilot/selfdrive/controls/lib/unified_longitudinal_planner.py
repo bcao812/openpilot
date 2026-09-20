@@ -98,7 +98,10 @@ def following_sample_weight(radar_state, speed, *, risk_margin):
   if (not math.isfinite(speed) or not STOP_SPEED < speed < 20.0 * CV.KPH_TO_MS
       or not math.isfinite(risk_margin) or risk_margin < 0.0 or not radar_state.leadOne.present):
     return 0.0
-  weight = float(np.interp(speed, [STOP_SPEED, 0.5, 15.0 * CV.KPH_TO_MS, 20.0 * CV.KPH_TO_MS], [0.0, 1.0, 1.0, 0.0]))
+  # Enter gradually on the positive side of the original risk boundary.
+  # A hard switch at zero would recreate an action jump from tiny gap changes.
+  weight = min(float(np.interp(speed, [STOP_SPEED, 0.5, 15.0 * CV.KPH_TO_MS, 20.0 * CV.KPH_TO_MS], [0.0, 1.0, 1.0, 0.0])),
+               float(np.interp(risk_margin, [0.0, 0.5], [0.0, 1.0])))
   for lead in (radar_state.leadOne, radar_state.leadTwo):
     if not lead.present:
       continue
