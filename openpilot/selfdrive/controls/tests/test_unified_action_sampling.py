@@ -178,8 +178,8 @@ def test_real_producer_does_not_jump_between_actions_at_the_risk_boundary():
     state['carState'].aEgo = float(acceleration[0])
     lead = state['radarState'].leadOne
     lead.dRel, lead.vLead, lead.vRel = gap, speed, 0.0
-    with patch.object(planner.mpc, 'update', side_effect=lambda *_args, **_kwargs:
-                      solve_given_acceleration(planner, acceleration, speed, *_args, **_kwargs)):
+    with patch.object(planner.mpc, 'update', side_effect=lambda *_args, _planner=planner, **_kwargs:
+                      solve_given_acceleration(_planner, acceleration, speed, *_args, **_kwargs)):
       planner.update(state, now_ns=advance(state, 0))
     targets.append(planner.reference_planner.reference_accel)
   expected = np.interp(planner.CP.longitudinalActuatorDelay + DT_MDL, T_IDXS, acceleration)
