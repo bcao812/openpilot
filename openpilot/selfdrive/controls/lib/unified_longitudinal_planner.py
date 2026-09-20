@@ -8,7 +8,7 @@ from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_SPEED, should_stop
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED, should_stop
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS,
@@ -553,7 +553,15 @@ class UnifiedLongitudinalPlanner:
     model_allows_external_departure = (evidence is None or evidence.allows_external_departure
                                       or stationary_lead_departure_compatible(
                                         evidence, actual_standstill=bool(car_state.standstill), measured_speed=float(car_state.vEgo)))
-    model_allows_trajectory_departure = evidence is None or evidence.allows_departure
+    # P's ordinary action can request departure without raw speed growth.
+    # Certify that request only after every current target cap and raw veto;
+    # the owner still controls HOLD, freshness and the actual brake release.
+    ordinary_absolute_departure = (
+      ordinary_model_motion and raw_kind == MotionReferenceKind.MOVING
+      and evidence.allows_external_departure and not model.action.shouldStop
+      and model.action.desiredAcceleration >= STOP_RELEASE_ACCEL and output >= STOP_RELEASE_ACCEL
+    )
+    model_allows_trajectory_departure = evidence is None or evidence.allows_departure or ordinary_absolute_departure
     no_model_risk = (model_allows_external_departure and not model.action.shouldStop
                      and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL
                      and model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN)
