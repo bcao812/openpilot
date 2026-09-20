@@ -8,10 +8,10 @@ from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_SPEED, should_stop, get_accel_from_plan
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_SPEED, should_stop
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS
-from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
+from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter, stationary_lead_departure_compatible
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   CONTROL_N_T_IDX, ALLOW_THROTTLE_THRESHOLD, MIN_ALLOW_THROTTLE_SPEED,
   LEAD_BRAKING_MIN_CHANGE_SCALE, CREEP_FOLLOW_MIN_ACCEL, CREEP_FOLLOW_MODEL_MARGIN,
@@ -427,9 +427,12 @@ class UnifiedLongitudinalPlanner:
     planner.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS, planner.mpc.a_solution)
     planner.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS[:-1], planner.mpc.j_solution)
     planner._observe(actionHorizonKnown=True, actionHorizon=float(delay + DT_MDL))
-    self.reference_accel = float(get_accel_from_plan(
-      planner.v_desired_trajectory, planner.a_desired_trajectory, CONTROL_N_T_IDX, action_t=delay + DT_MDL,
-    ))
+    # The native trajectory has piecewise-constant jerk, so acceleration is
+    # linear within each native interval. Sample that acceleration at actuation
+    # time. Reconstructing it as 2 * average_accel - initial_accel assumes one
+    # constant jerk over the entire delay and can reverse the sign of a valid
+    # braking trajectory when measured acceleration changes quickly.
+    self.reference_accel = float(np.interp(delay + DT_MDL, T_IDXS, planner.mpc.a_solution))
     planner._observe(sampledAccelKnown=True, sampledAccel=self.reference_accel)
     if not math.isfinite(self.reference_accel):
       self.invalidate(speed, "nonfinite_sampled_accel")
@@ -511,7 +514,9 @@ class UnifiedLongitudinalPlanner:
     self._forward_execution_instance_ns = self.producer_instance_ns if executed_forward else 0
     if low_speed_preference_stop and not executed_forward:
       reasons |= StopReason.MPC
-    model_allows_external_departure = evidence is None or evidence.allows_external_departure
+    model_allows_external_departure = (evidence is None or evidence.allows_external_departure
+                                      or stationary_lead_departure_compatible(
+                                        evidence, actual_standstill=bool(car_state.standstill), measured_speed=float(car_state.vEgo)))
     model_allows_trajectory_departure = evidence is None or evidence.allows_departure
     no_model_risk = (model_allows_external_departure and not model.action.shouldStop
                      and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL

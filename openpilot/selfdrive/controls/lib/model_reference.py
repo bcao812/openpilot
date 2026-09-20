@@ -13,6 +13,7 @@ import numpy as np
 
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, STOP_SPEED
 from openpilot.selfdrive.controls.lib.motion_supervisor import MODEL_LEASE_NS
+from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_MAX_AGE_NS, finite_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 
@@ -227,6 +228,67 @@ def moving_preference(raw_velocity, native_times, measured_speed, *, proxy_age_s
 
 def _timestamp(value):
   return isinstance(value, Integral) and not isinstance(value, bool) and 0 < value < (1 << 64)
+
+
+def stationary_lead_departure_compatible(evidence, *, actual_standstill, measured_speed):
+  """Bounded model compatibility for an independently qualified lead departure.
+
+  This supplies neither model departure permission nor a FORWARD classification.
+  The caller must still qualify the lead, current positive target and model risk;
+  the motion owner retains confirmation and brake-release authority. The speed,
+  duration and displacement bounds are a conservative engineering domain for
+  this stationary case, not calibrated sensor/model error bounds.
+  """
+  if (actual_standstill is not True or not finite_state((measured_speed,)) or not 0.0 <= measured_speed <= 0.05
+      or evidence is None or evidence.raw_velocity is None or evidence.raw_motion is None):
+    return False
+  source = evidence.source
+  model_ns, anchor_ns, consumed_ns = source.model_mono_time_ns, source.anchor_mono_time_ns, source.consumed_mono_time_ns
+  if (source.epoch_basis != 'publication_proxy' or source.physical_prediction_epoch_ns is not None
+      or not all(_timestamp(value) for value in (model_ns, anchor_ns, consumed_ns))
+      or not 0 <= consumed_ns - model_ns <= MODEL_LEASE_NS
+      or not 0 <= consumed_ns - anchor_ns <= REFERENCE_MAX_AGE_NS):
+    return False
+  raw_unknown = Unknown('backward_then_forward_is_ambiguous')
+  if model_ns > anchor_ns:
+    if source.proxy_age_s is not None or evidence.events != (Unknown('model_proxy_after_initial_state'),):
+      return False
+    elapsed_s = 0.0
+  else:
+    elapsed_s = (anchor_ns - model_ns) / 1e9
+    if (not finite_state((source.proxy_age_s,)) or source.proxy_age_s != elapsed_s
+        or evidence.events != (raw_unknown,)):
+      return False
+  # A mutation/regression or any other Unknown from the adapter cannot enter
+  # this branch, even if its raw data happened to resemble a departure.
+  if evidence.moving is not None or evidence.raw_motion != RawMotionEvidence(unknown=raw_unknown):
+    return False
+  times = np.asarray(ModelConstants.T_IDXS, dtype=float)
+  raw = evidence.raw_velocity
+  if raw.shape != times.shape or not np.all(np.isfinite(raw)) or not -0.05 <= raw[0] < 0.0:
+    return False
+  positive = np.flatnonzero(raw > 0.0)
+  if not len(positive):
+    return False
+  first_positive = int(positive[0])
+  if (times[first_positive] > 1.0 or np.min(raw[:first_positive]) < -0.05
+      or np.any(raw[:first_positive] >= 0.0) or np.any(raw[first_positive:] <= 0.0)):
+    return False
+  # Integrate the negative part of the piecewise-linear velocity, including
+  # the fractional final interval up to its zero crossing.
+  prefix = raw[:first_positive]
+  reverse_distance = -float(np.sum(0.5 * (prefix[:-1] + prefix[1:]) * np.diff(times[:first_positive])))
+  crossing_duration = (times[first_positive] - times[first_positive - 1]) * -prefix[-1] / (raw[first_positive] - prefix[-1])
+  reverse_distance += 0.5 * -prefix[-1] * crossing_duration
+  if reverse_distance > 0.02:
+    return False
+  # Retain the ordinary forward-evidence horizon and speed scale, but do not
+  # translate away the prefix or change the original UNKNOWN evidence.
+  end_s = elapsed_s + FORWARD_HORIZON_S
+  support = np.concatenate(([elapsed_s], times[(times > elapsed_s) & (times < end_s)], [end_s]))
+  progress = np.interp(support, times, raw)
+  distance = float(np.sum(0.5 * (progress[:-1] + progress[1:]) * np.diff(support)))
+  return bool(np.isfinite(distance) and distance > 0.0 and np.max(progress) > max(float(progress[0]), STOP_SPEED))
 
 
 class ModelReferenceAdapter:
