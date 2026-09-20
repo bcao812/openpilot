@@ -10,7 +10,7 @@ import pytest
 
 from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import should_stop
-from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionReferenceKind, MotionResponseKind, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import serialized
 from openpilot.selfdrive.controls.tests.test_unified_startup import CONTROL_STEP_NS, PLANNER_STEPS, StartupHarness
@@ -184,7 +184,15 @@ def test_actual_forward_model_departure_can_release_the_same_hold_and_reach_hond
   references, plans, rows, can_rows = harness.exercise(model_departure_curve(measured_speed), action_accel=0.5)
 
   assert not harness.latest['modelV2'].modelV2.action.shouldStop
-  assert all(reference.model_velocity[-1] > measured_speed for reference in references)
+  evidence = harness.planner.reference_planner.model_evidence
+  assert evidence.raw_motion.kind == 'forward' and evidence.allows_departure
+  assert evidence.raw_velocity[-1] > measured_speed
+  np.testing.assert_array_equal(evidence.raw_velocity, harness.latest['modelV2'].modelV2.velocity.x)
+  assert all(reference.model_position is None and reference.model_velocity is None
+             and reference.model_acceleration is None and reference.typed_model is None
+             and reference.cruise_speed > 0.0 for reference in references)
+  assert all(event.longitudinalPlan.motionIntent.referenceKind == MotionReferenceKind.FORWARD
+             and event.longitudinalPlan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC for event in plans)
   assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
   assert any(row['phase'] == 'release' and not row['resolved_stop'] for row in rows)
   assert any(row['accel'] > 0.0 for row in rows)

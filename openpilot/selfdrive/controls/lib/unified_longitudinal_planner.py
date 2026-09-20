@@ -407,6 +407,11 @@ class UnifiedLongitudinalPlanner:
           # input. The same MPC still consumes independently valid real leads
           # and cruise; its invalid output cannot authorize forward movement.
           model_position = model_velocity = model_acceleration = None
+          # Losing this source also changes the admitted objective. Do not
+          # smooth independent current lead braking against a preceding
+          # acceleration trajectory whose model contract is now invalid.
+          planner.mpc.discard_prepared_reference_cost()
+          previous_reference_valid = False
       if self.model_reference_mode != 'invalid' and model.action.shouldStop:
         cruise_speed = 0.0
     evidence = self.model_evidence
