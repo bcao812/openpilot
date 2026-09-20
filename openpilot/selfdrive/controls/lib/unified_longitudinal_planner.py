@@ -604,8 +604,7 @@ class UnifiedLongitudinalPlanner:
     # Independent model constraints and policy overrides retain their guards.
     ordinary_acc_cap = (not self.e2e_allowed and evidence is None
                         and self.constraint_source == LongitudinalPlanSource.cruise
-                        and self.constraint_accel == maximum_accel
-                        and self.reference_accel > self.constraint_accel
+                        and self.reference_accel > maximum_accel
                         and output == self.constraint_accel)
     # The cruise response is a net acceleration target, not an independent
     # actuator limit. Keep its ordinary disturbance-response domain while
@@ -613,7 +612,7 @@ class UnifiedLongitudinalPlanner:
     cruise_response_bound = (not self.e2e_allowed and evidence is None
                              and self.constraint_source == LongitudinalPlanSource.cruise
                              and self.constraint_accel == cruise_ceiling < maximum_accel
-                             and self.reference_accel > cruise_ceiling and output == cruise_ceiling)
+                             and cruise_ceiling < self.reference_accel <= maximum_accel and output == cruise_ceiling)
     if (ordinary_model_motion and raw_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
         and active and healthy and not forced_decel and not reasons):
       # This producer installed only absolute lead/cruise targets. An action
