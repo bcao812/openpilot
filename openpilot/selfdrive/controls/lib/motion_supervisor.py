@@ -398,7 +398,12 @@ class MotionSupervisor:
     if new_input:
       if plan_step is None or max(plan_step, model_step) > 2.0 * DT_MDL + 1e-9:
         return DT_MDL
-      return min(CREEP_STOP_T, previous + min(DT_MDL, plan_step, model_step))
+      # The creep window uses elapsed control time. Continuous producer pairs
+      # must use that same clock: capping every 60 ms sample at 50 ms lets the
+      # creep deadline win even while a healthy moving lead is confirmed.
+      # Both identities must advance; the existing gap bound still restarts
+      # confirmation instead of crediting an unobserved interval.
+      return min(CREEP_STOP_T, previous + min(plan_step, model_step))
     return previous
 
   def _update_creep(self, v_ego, a_target, allowed, elapsed, *, movement_evidence=False, fresh_input=False):

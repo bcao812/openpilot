@@ -262,6 +262,17 @@ def test_fresh_moving_lead_confirms_before_anti_creep_can_stop_a_follow():
   assert harness.supervisor.creep_total_t == 0.0
 
 
+@pytest.mark.parametrize('period', [11, 20])
+def test_discontinuous_moving_lead_samples_do_not_spend_the_unobserved_gap(period):
+  harness = MotionHarness()
+  intent = MotionIntent(moving_lead=True)
+  for frame in range(70):
+    new_input = frame % period == 0
+    harness.step(intent, v_ego=1.0, a_target=-0.2, new_plan=new_input, new_model=new_input)
+    assert harness.supervisor.moving_lead_t <= DT_MDL
+  assert harness.supervisor.reasons & StopReason.CREEP
+
+
 @pytest.mark.parametrize('periods', [(5,), (6,), (8,), (10,), (5, 6, 4, 7, 8)])
 def test_healthy_moving_follow_uses_the_same_elapsed_time_as_creep(periods):
   """A fresh, continuous lead must not lose a race to the wall-clock creep window.
