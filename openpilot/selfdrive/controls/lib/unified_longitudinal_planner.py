@@ -10,7 +10,9 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_SPEED, should_stop, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS, get_safe_obstacle_distance,
+)
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter, stationary_lead_departure_compatible
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   CONTROL_N_T_IDX, ALLOW_THROTTLE_THRESHOLD, MIN_ALLOW_THROTTLE_SPEED,
@@ -86,14 +88,15 @@ def low_speed_follow_distance(speed):
   return float(np.interp(speed * CV.MS_TO_KPH, [15.0, 30.0], [4.0, 6.0]))
 
 
-def following_sample_weight(radar_state, speed):
+def following_sample_weight(radar_state, speed, *, risk_margin):
   """Limit response smoothing to slow, coherent following of moving leads.
 
   Closing or braking leads retain the existing response compensation. Smooth
   weights avoid a new request step at the speed/relative-motion boundaries.
   This is an applicability gate, not a replacement collision or stop guard.
   """
-  if not math.isfinite(speed) or not STOP_SPEED < speed < 20.0 * CV.KPH_TO_MS or not radar_state.leadOne.present:
+  if (not math.isfinite(speed) or not STOP_SPEED < speed < 20.0 * CV.KPH_TO_MS
+      or not math.isfinite(risk_margin) or risk_margin < 0.0 or not radar_state.leadOne.present):
     return 0.0
   weight = float(np.interp(speed, [STOP_SPEED, 0.5, 15.0 * CV.KPH_TO_MS, 20.0 * CV.KPH_TO_MS], [0.0, 1.0, 1.0, 0.0]))
   for lead in (radar_state.leadOne, radar_state.leadTwo):
@@ -478,7 +481,9 @@ class UnifiedLongitudinalPlanner:
     model_permits_following = (not self.e2e_allowed or (
       self.model_evidence is not None and self.model_evidence.allows_external_departure
       and not model.action.shouldStop and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL))
-    following_weight = (following_sample_weight(state['radarState'], speed)
+    initial_risk_margin = float(planner.mpc.params[0, 2] - planner.mpc.x0[0]
+                                - planner.mpc.params[0, 5] * get_safe_obstacle_distance(planner.mpc.x0[1], planner.mpc.params[0, 4]))
+    following_weight = (following_sample_weight(state['radarState'], speed, risk_margin=initial_risk_margin)
                         if active and healthy and not reset and not forced_decel and planner.mpc.crash_cnt <= 2
                         and planner.source == LongitudinalPlanSourceSP.cruise and model_permits_following else 0.0)
     self.reference_accel = sample_reference_acceleration(
@@ -571,8 +576,16 @@ class UnifiedLongitudinalPlanner:
     no_model_risk = (model_allows_external_departure and not model.action.shouldStop
                      and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL
                      and model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN)
+    # This confirms continued rolling; it grants neither release nor extra
+    # throttle. Keep the original reaction/stopping reserve and lead guards,
+    # while aligning its base with the compact goal and the unchanged native
+    # standstill risk boundary. Otherwise the old 5 m base forces a stop when
+    # a correctly followed compact lead crosses the old confirmation budget.
+    moving_gap_base = max(LEAD_DANGER_FACTOR * STOP_DISTANCE,
+                          min(CREEP_FOLLOW_MIN_GAP, reference.comfort_stop_distance))
     moving_lead = bool(qualified and not admission_reasons and no_model_risk and output >= CREEP_FOLLOW_MIN_ACCEL
-                       and cruise_speed >= CREEP_SPEED and has_safe_moving_lead(state['radarState'], speed, delay))
+                       and cruise_speed >= CREEP_SPEED and has_safe_moving_lead(
+                         state['radarState'], speed, delay, minimum_gap_base=moving_gap_base))
     trajectory_departure = (active and healthy and not forced_decel and not planner.fcw and not admission_reasons
                             and forward_reference and model_allows_trajectory_departure)
     # Independent lead departure may be confirmed while the MPC reference is

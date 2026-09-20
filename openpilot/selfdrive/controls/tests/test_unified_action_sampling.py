@@ -7,7 +7,7 @@ import pytest
 
 from openpilot.cereal import log
 from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, T_IDXS
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import following_sample_weight
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
@@ -24,8 +24,10 @@ def calm_following_state(speed, target, *, experimental=False):
   return state
 
 
-def solve_given_acceleration(planner, acceleration, speed):
-  """Install a dynamically consistent native trajectory with changing jerk."""
+def solve_given_acceleration(planner, acceleration, speed, *args, **kwargs):
+  """Preserve real risk geometry, then isolate the action-sampling trajectory."""
+  LongitudinalMpc.update(planner.mpc, *args, **kwargs)
+  assert planner.mpc.solution_status == 0
   acceleration = np.asarray(acceleration, dtype=float)
   planner.mpc.a_solution = acceleration
   planner.mpc.v_solution = np.r_[speed, speed + np.cumsum(
@@ -45,7 +47,7 @@ def test_nonconstant_jerk_cannot_reverse_a_uniform_acceleration_request(directio
   state = calm_following_state(speed=3.0, target=4.0)
   state['carState'].aEgo = float(acceleration[0])
   with patch.object(planner.mpc, 'update', side_effect=lambda *_args, **_kwargs:
-                    solve_given_acceleration(planner, acceleration, 3.0)):
+                    solve_given_acceleration(planner, acceleration, 3.0, *_args, **_kwargs)):
     planner.update(state, now_ns=advance(state, 0))
   assert planner.motion_intent.valid
   assert direction * planner.reference_planner.reference_accel > 0.0
@@ -61,7 +63,7 @@ def test_constant_jerk_retains_the_analytic_action_time_acceleration():
   jerk = 0.08
   acceleration = -0.2 + jerk * T_IDXS
   with patch.object(planner.mpc, 'update', side_effect=lambda *_args, **_kwargs:
-                    solve_given_acceleration(planner, acceleration, 3.0)):
+                    solve_given_acceleration(planner, acceleration, 3.0, *_args, **_kwargs)):
     planner.update(state, now_ns=advance(state, 0))
   assert planner.reference_planner.reference_accel == pytest.approx(
     -0.2 + jerk * (planner.CP.longitudinalActuatorDelay + DT_MDL))
@@ -72,7 +74,7 @@ def test_direct_action_sampling_preserves_the_independent_model_braking_envelope
   state = make_state(speed=5.0, target=8.0, experimental=True)
   state['modelV2'].action.desiredAcceleration = -1.8
   with patch.object(planner.mpc, 'update', side_effect=lambda *_args, **_kwargs:
-                    solve_given_acceleration(planner, np.full_like(T_IDXS, 0.4), 5.0)):
+                    solve_given_acceleration(planner, np.full_like(T_IDXS, 0.4), 5.0, *_args, **_kwargs)):
     planner.update(state, now_ns=advance(state, 0))
   assert planner.reference_planner.reference_accel == pytest.approx(0.4)
   assert planner.reference_planner.constraint_accel == pytest.approx(-1.8)
@@ -85,16 +87,19 @@ def test_sustained_native_braking_is_not_filtered_or_rate_limited_by_sampling():
   state = make_state(speed=30.0, target=20.0)
   state['carState'].aEgo = -2.5
   with patch.object(planner.mpc, 'update', side_effect=lambda *_args, **_kwargs:
-                    solve_given_acceleration(planner, np.full_like(T_IDXS, -2.5), 30.0)):
+                    solve_given_acceleration(planner, np.full_like(T_IDXS, -2.5), 30.0, *_args, **_kwargs)):
     planner.update(state, now_ns=advance(state, 0))
   assert planner.output_a_target == pytest.approx(-2.5)
 
 
-@pytest.mark.parametrize('condition', ['stationary', 'closing', 'decelerating', 'uncertain_second', 'short_gap', 'high_speed', 'no_lead', 'model_stop'])
+@pytest.mark.parametrize('condition', [
+  'stationary', 'closing', 'decelerating', 'uncertain_second', 'short_gap', 'risk_deficit',
+  'high_speed', 'no_lead', 'model_stop', 'model_brake', 'raw_unknown',
+])
 def test_braking_or_unqualified_following_retains_existing_delay_compensation(condition):
   speed = 12.0 if condition == 'high_speed' else 3.0
   planner, _ = make_planner(speed=speed)
-  state = calm_following_state(speed, speed + 1.0, experimental=condition == 'model_stop')
+  state = calm_following_state(speed, speed + 1.0, experimental=condition in ('model_stop', 'model_brake', 'raw_unknown'))
   lead = state['radarState'].leadOne
   if condition == 'stationary':
     lead.vLead, lead.vRel = 0.0, -speed
@@ -107,14 +112,20 @@ def test_braking_or_unqualified_following_retains_existing_delay_compensation(co
     state['radarState'].leadTwo.modelProb = 0.8
   elif condition == 'short_gap':
     lead.dRel = 4.9
+  elif condition == 'risk_deficit':
+    lead.dRel = 5.1  # Passes the fixed 5 m gate, but has insufficient native risk margin.
   elif condition == 'no_lead':
     lead.present = False
   elif condition == 'model_stop':
     state['modelV2'].action.shouldStop = True
+  elif condition == 'model_brake':
+    state['modelV2'].action.desiredAcceleration = -1.8
+  elif condition == 'raw_unknown':
+    state['modelV2'].velocity.x = np.linspace(-0.02, 5.0, len(ModelConstants.T_IDXS)).tolist()
   acceleration = 0.1 + 1.2 * np.exp(-T_IDXS / 0.18)
   state['carState'].aEgo = float(acceleration[0])
   with patch.object(planner.mpc, 'update', side_effect=lambda *_args, **_kwargs:
-                    solve_given_acceleration(planner, acceleration, speed)):
+                    solve_given_acceleration(planner, acceleration, speed, *_args, **_kwargs)):
     planner.update(state, now_ns=advance(state, 0))
   control_times = ModelConstants.T_IDXS[:CONTROL_N]
   legacy = get_accel_from_plan(np.interp(control_times, T_IDXS, planner.mpc.v_solution),
@@ -125,14 +136,41 @@ def test_braking_or_unqualified_following_retains_existing_delay_compensation(co
   assert planner.output_a_target <= legacy
 
 
+def test_real_producer_blends_the_two_actions_at_partial_following_weight():
+  speed = 3.0
+  acceleration = 0.1 + 1.2 * np.exp(-T_IDXS / 0.18)
+  planner, _ = make_planner(speed=speed, initial_accel=float(acceleration[0]))
+  state = calm_following_state(speed, 4.0)
+  state['carState'].aEgo = float(acceleration[0])
+  state['radarState'].leadOne.vLead = 2.75
+  state['radarState'].leadOne.vRel = -0.25
+  with patch.object(planner.mpc, 'update', side_effect=lambda *_args, **_kwargs:
+                    solve_given_acceleration(planner, acceleration, speed, *_args, **_kwargs)):
+    planner.update(state, now_ns=advance(state, 0))
+  control_times = ModelConstants.T_IDXS[:CONTROL_N]
+  action_time = planner.CP.longitudinalActuatorDelay + DT_MDL
+  legacy = get_accel_from_plan(np.interp(control_times, T_IDXS, planner.mpc.v_solution),
+                               np.interp(control_times, T_IDXS, acceleration), control_times, action_t=action_time)
+  native = np.interp(action_time, T_IDXS, acceleration)
+  assert legacy < 0.0 < native
+  assert planner.reference_planner.reference_accel == pytest.approx(0.5 * (legacy + native))
+
+
 def test_following_weight_tapers_before_closing_and_speed_boundaries():
   state = calm_following_state(3.0, 4.0)
   lead = state['radarState'].leadOne
-  assert following_sample_weight(state['radarState'], 3.0) == 1.0
+  assert following_sample_weight(state['radarState'], 3.0, risk_margin=2.0) == 1.0
   for relative_speed, expected in ((0.0, 1.0), (-0.25, 0.5), (-0.5, 0.0)):
     lead.vLead, lead.vRel = 3.0 + relative_speed, relative_speed
-    assert following_sample_weight(state['radarState'], 3.0) == pytest.approx(expected)
+    assert following_sample_weight(state['radarState'], 3.0, risk_margin=2.0) == pytest.approx(expected)
   for speed_kph, expected in ((15.0, 1.0), (17.5, 0.5), (20.0, 0.0)):
     speed = speed_kph / 3.6
     lead.vLead, lead.vRel = speed + 0.2, 0.2
-    assert following_sample_weight(state['radarState'], speed) == pytest.approx(expected)
+    assert following_sample_weight(state['radarState'], speed, risk_margin=2.0) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize('risk_margin', [-2.3125, -0.001, float('nan'), float('inf')])
+def test_close_or_unknown_risk_margin_cannot_acquire_following_sampling(risk_margin):
+  state = calm_following_state(3.0, 4.0)
+  state['radarState'].leadOne.dRel = 5.0
+  assert following_sample_weight(state['radarState'], 3.0, risk_margin=risk_margin) == 0.0

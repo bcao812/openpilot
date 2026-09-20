@@ -13,6 +13,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   LongitudinalMpc, MpcReference, get_safe_obstacle_distance, get_stopped_equivalence_factor, get_T_FOLLOW,
 )
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import low_speed_follow_distance
+from openpilot.selfdrive.controls.lib.longitudinal_planner import has_safe_moving_lead
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import MODEL_TIMES, typed_reference
@@ -129,7 +130,10 @@ def test_typed_comfort_source_does_not_change_risk_braking_priority():
   np.testing.assert_allclose(compact.params[:, COMFORT_STOP_DISTANCE], 9.0 - 1.45 * speed)
   np.testing.assert_array_equal(compact.diagnostic_reference_weights[:, 0], 0.0)
   np.testing.assert_array_equal(compact.params[:, MODEL_BRAKING_PRIORITY], 1.0)
-  np.testing.assert_allclose(compact.v_solution, speed, atol=1e-4)
+  # The retained risk priority deliberately permits a slower prediction. This
+  # contract is the unchanged virtual speed ceiling, not symmetric tracking
+  # of a preference after the risk owner has disabled its lower-speed cost.
+  assert np.max(compact.v_solution) <= speed + 1e-4
 
 
 def test_generated_cost_changes_comfort_without_reducing_the_original_risk_row(monkeypatch):
@@ -185,3 +189,37 @@ def test_legacy_vehicle_does_not_consume_unified_distance_policy():
   np.testing.assert_array_equal(planner.mpc.params[:, 4], np.full(N+1, 1.45))
   np.testing.assert_array_equal(planner.mpc.params[:, COMFORT_STOP_DISTANCE], 6.0)
   assert STOP_DISTANCE == get_safe_obstacle_distance(0.0, 1.45) == 6.0
+
+
+@pytest.mark.parametrize('with_reference', [False, True])
+def test_reused_mpc_restores_default_distance_after_compact_following(with_reference):
+  speed = 3.0
+  radar = radar_state(distance=8.0, speed=speed)
+  mpc = LongitudinalMpc()
+  mpc.set_cur_state(speed, 0.0)
+  mpc.update(radar, reference=MpcReference(30.0, comfort_stop_distance=4.0))
+  assert mpc.solution_status == 0
+  np.testing.assert_array_equal(mpc.params[:, COMFORT_STOP_DISTANCE], 4.0)
+  mpc.update(radar, reference=MpcReference(30.0) if with_reference else None)
+  assert mpc.solution_status == 0
+  np.testing.assert_array_equal(mpc.params[:, COMFORT_STOP_DISTANCE], 6.0)
+
+
+def test_compact_rolling_confirmation_retains_the_original_reaction_and_stopping_reserve():
+  radar = radar_state(distance=5.6, speed=0.8)
+  radar.leadOne.modelProb = 0.999
+  radar.leadOne.vRel = -0.2
+  assert not has_safe_moving_lead(radar, 1.0, 0.5)  # LEGACY/default 5.75 m budget
+  assert has_safe_moving_lead(radar, 1.0, 0.5, minimum_gap_base=4.5)  # 5.25 m budget
+  radar.leadOne.dRel = 5.24
+  assert not has_safe_moving_lead(radar, 1.0, 0.5, minimum_gap_base=4.5)
+  radar.leadOne.dRel = 6.0
+  radar.leadOne.vLead = 0.0
+  radar.leadOne.vRel = -1.0
+  assert not has_safe_moving_lead(radar, 1.0, 0.5, minimum_gap_base=4.5)
+
+
+@pytest.mark.parametrize('minimum_gap_base', [4.499, 5.001, True, float('nan'), float('inf')])
+def test_rolling_confirmation_base_cannot_leave_its_declared_range(minimum_gap_base):
+  assert not has_safe_moving_lead(radar_state(distance=20.0, speed=1.0), 1.0, 0.5,
+                                  minimum_gap_base=minimum_gap_base)

@@ -13,7 +13,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL, ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, LEAD_DANGER_FACTOR, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_observation import PlannerObservation, observe_trace
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
@@ -55,12 +55,14 @@ def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
 
 
-def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float) -> bool:
+def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float, *, minimum_gap_base: float = CREEP_FOLLOW_MIN_GAP) -> bool:
   if not (math.isfinite(v_ego) and STOP_SPEED <= v_ego < CREEP_FOLLOW_MAX_SPEED
           and math.isfinite(actuator_delay) and 0.0 <= actuator_delay <= 1.0
+          and not isinstance(minimum_gap_base, bool) and math.isfinite(minimum_gap_base)
+          and LEAD_DANGER_FACTOR * STOP_DISTANCE <= minimum_gap_base <= CREEP_FOLLOW_MIN_GAP
           and radar_state.leadOne.present):
     return False
-  minimum_gap = CREEP_FOLLOW_MIN_GAP + v_ego * (actuator_delay + DT_MDL) + v_ego ** 2 / (2.0 * COMFORT_BRAKE)
+  minimum_gap = minimum_gap_base + v_ego * (actuator_delay + DT_MDL) + v_ego ** 2 / (2.0 * COMFORT_BRAKE)
   for lead in (radar_state.leadOne, radar_state.leadTwo):
     if not lead.present:
       continue
