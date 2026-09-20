@@ -14,14 +14,14 @@ import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.common.realtime import DT_CTRL
-from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   J_EGO_COST, MODEL_A_REF, MODEL_BRAKING_PRIORITY, MODEL_V_REF, MPC_GOAL_INFEASIBLE,
-  PARAM_DIM, REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, LongitudinalPlanSource, MpcReference,
+  PARAM_DIM, REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.model_reference import moving_preference
-from openpilot.selfdrive.controls.lib.motion_supervisor import STARTING_ACCEL_RATE, StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VERSION, MotionReferenceKind,
+                                                               MotionResponseKind, STARTING_ACCEL_RATE, StopReason)
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import model_reference_from_velocity
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, SOURCE_NS, evidence, stopping_curve
@@ -107,12 +107,9 @@ def test_matching_generated_solver_has_real_path_and_terminal_slots():
 
 
 @pytest.mark.parametrize('preference_time', [1.25, 2.5, 5.0])
-@pytest.mark.parametrize('after_anchor', [False, True])
-def test_nonzero_native_weights_and_changed_targets_change_the_solution(preference_time, after_anchor):
-  timing = {'model_ns': SOURCE_NS + 5_000_000, 'now_ns': SOURCE_NS + 10_000_000} if after_anchor else {}
-  slower_raw, faster_raw = 10.0 - 0.6 * MODEL_TIMES, 10.0 + 0.6 * MODEL_TIMES
-  decelerating = typed_reference(slower_raw, 10.0, preference_time=preference_time, typed=evidence(slower_raw, 10.0, **timing))
-  accelerating = typed_reference(faster_raw, 10.0, preference_time=preference_time, typed=evidence(faster_raw, 10.0, **timing))
+def test_nonzero_native_weights_and_changed_targets_change_the_solution(preference_time):
+  decelerating = typed_reference(10.0 - 0.6 * MODEL_TIMES, 10.0, preference_time=preference_time)
+  accelerating = typed_reference(10.0 + 0.6 * MODEL_TIMES, 10.0, preference_time=preference_time)
   slower = solve_reference(10.0, decelerating)
   faster = LongitudinalMpc()
   faster.solver = Mock(wraps=faster.solver)
@@ -219,80 +216,35 @@ def test_future_restart_cannot_cancel_current_rest_even_with_a_departing_real_le
 
 
 @pytest.mark.parametrize('after_anchor', [False, True])
-def test_real_far_lead_does_not_disable_model_deceleration_with_positive_action(after_anchor):
-  planner, _ = make_planner(speed=20.0)
-  state = make_state(speed=20.0, target=30.0, experimental=True)
-  assign_curve(state, 20.0 - 0.6 * MODEL_TIMES)
-  assign_lead(state, distance=200.0, speed=20.0, relative_speed=0.0)
-  for frame in range(12):
-    anchor = advance(state, frame)
-    if after_anchor:
-      state.logMonoTime['modelV2'] = anchor + 5_000_000
-    planner.update(state, now_ns=anchor + 10_000_000)
-    assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
-  assert state['modelV2'].action.desiredAcceleration > 0.0
-  assert np.any(planner.mpc.diagnostic_reference_weights[:, 2:4] > 0.0)
-  assert planner.output_a_target < -0.1
-
-
-@pytest.mark.parametrize('after_anchor', [False, True])
-def test_neutral_model_preserves_acceleration_toward_a_departing_low_speed_lead(after_anchor):
-  # Rounded from L's 12 s loss-of-following frame: no stop, fault or standstill,
-  # but an opening real-lead gap while a constant model preference stays neutral.
-  speed, acceleration = 1.15, -0.02
-  planner, _ = make_planner(speed=speed, initial_accel=acceleration)
-  state = make_state(speed=speed, target=4.0, experimental=True)
-  state['carState'].aEgo = acceleration
-  assign_curve(state, np.full(len(MODEL_TIMES), speed + 0.4))
-  state['modelV2'].action.desiredAcceleration = 0.6
-  assign_lead(state, distance=10.23, speed=2.0, relative_speed=2.0 - speed)
-  targets = []
-  for frame in range(12):
-    anchor = advance(state, frame)
-    if after_anchor:
-      state.logMonoTime['modelV2'] = anchor + 5_000_000
-    planner.update(state, now_ns=anchor + 10_000_000)
-    assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
-    assert not planner.output_should_stop
-    targets.append(planner.output_a_target)
-  # Resolve an actual positive request beyond the existing steady-state
-  # numerical budget, not a solver residual on the wrong side of zero.
-  assert min(targets[-4:]) > 1e-4, targets
-
-
-@pytest.mark.parametrize('after_anchor', [False, True])
-def test_near_zero_model_slope_round_trips_do_not_switch_control_targets(after_anchor):
-  """Tiny slope changes must not turn numerical signs into a new target owner.
-
-  Each arm uses the same real planner/Controls/CAN history. The 1e-6 m/s²
-  perturbation is below the existing 1e-4 output budget; production's upward
-  controller rate remains +8 m/s³. Negative steps are compared with the
-  matching neutral arm, so that unbounded extra braking cannot hide here.
-  """
-  def run(slopes):
-    harness = StrictPlanTransportHarness(speed=10.0)
-    harness.model_publication_after_state = after_anchor
-    harness.engage()
-    raw = np.full(len(MODEL_TIMES), 10.4)
-    harness.exercise((raw * MODEL_TIMES, raw, np.zeros(len(raw))), action_accel=0.5)
-    history_start = len(harness.history)
+@pytest.mark.parametrize('action_accel', [-1.0, 0.5])
+def test_ordinary_model_velocity_preserves_p_lead_cruise_and_action_arbitration(after_anchor, action_accel):
+  # P sends only lead geometry into its MPC and arbitrates the independent
+  # action head with lead/cruise targets. An ordinary raw speed curve is not
+  # a separate brake request; explicit raw rest remains covered below.
+  trajectories = []
+  for raw in (np.full(len(MODEL_TIMES), 20.0), 20.0 - 0.6 * MODEL_TIMES):
+    planner, _ = make_planner(speed=20.0)
+    state = make_state(speed=20.0, target=30.0, experimental=True)
+    assign_curve(state, raw)
+    state['modelV2'].action.desiredAcceleration = action_accel
+    assign_lead(state, distance=200.0, speed=20.0, relative_speed=0.0)
     targets = []
-    for slope in slopes:
-      raw = 10.4 + slope * MODEL_TIMES
-      _, plans, _, _ = harness.exercise((raw * MODEL_TIMES, raw, np.full(len(raw), slope)),
-                                        action_accel=0.5, seconds=0.4)
-      targets.extend(float(event.longitudinalPlan.aTarget) for event in plans)
-    rows = harness.history[history_start:]
-    assert all(row['long_active'] and not row['degraded'] and row['phase'] == 'track' for row in rows)
-    output = np.array([row['accel'] for row in rows])
-    assert np.max(np.diff(output)) <= STARTING_ACCEL_RATE * DT_CTRL + 1e-4
-    return np.array(targets), output
-
-  slopes = [-1e-6, 0.0, 1e-6, 0.0] * 2
-  neutral, neutral_output = run([0.0] * len(slopes))
-  perturbed, perturbed_output = run(slopes)
-  np.testing.assert_allclose(perturbed, neutral, atol=1e-4, rtol=0.0)
-  np.testing.assert_allclose(perturbed_output, neutral_output, atol=1e-4, rtol=0.0)
+    for frame in range(12):
+      anchor = advance(state, frame)
+      if after_anchor:
+        state.logMonoTime['modelV2'] = anchor + 5_000_000
+      planner.update(state, now_ns=anchor + 10_000_000)
+      assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
+      assert planner.motion_intent.response_kind == MotionResponseKind.ABSOLUTE_ACC
+      assert planner.motion_intent.reference_kind == MotionReferenceKind.MOVING
+      assert planner.output_a_target == pytest.approx(min(planner.reference_planner.reference_accel, action_accel), abs=1e-4)
+      targets.append(planner.output_a_target)
+    trajectories.append(np.array(targets))
+  np.testing.assert_allclose(trajectories[0], trajectories[1], atol=1e-4, rtol=0.0)
+  if action_accel > 0.0:
+    assert np.min(trajectories) > 1e-4
+  else:
+    np.testing.assert_allclose(trajectories, action_accel, atol=1e-4, rtol=0.0)
 
 
 def test_new_rest_semantics_discard_cruise_history_once_and_reentry_discards_again():
@@ -327,35 +279,28 @@ def test_new_rest_semantics_discard_cruise_history_once_and_reentry_discards_aga
   assert planner.reference_planner.entered_rest_goal
 
 
-@pytest.mark.parametrize('after_anchor', [False, True])
-def test_lead_priority_uses_tighter_geometry_and_keeps_stronger_model_braking_available(after_anchor):
-  timing = {'model_ns': SOURCE_NS + 5_000_000, 'now_ns': SOURCE_NS + 10_000_000} if after_anchor else {}
-  far_raw = 20.0 - 0.6 * MODEL_TIMES
-  far = solve_reference(20.0, typed_reference(far_raw, 20.0, typed=evidence(far_raw, 20.0, **timing)),
+def test_lead_priority_uses_tighter_geometry_and_keeps_stronger_model_braking_available():
+  far = solve_reference(20.0, typed_reference(20.0 - 0.6 * MODEL_TIMES, 20.0),
                         radar=radar_state(distance=200.0, speed=20.0))
   assert np.all(far.params[:, MODEL_BRAKING_PRIORITY] == 0.0)
-  assert action(far) < 0.0
   np.testing.assert_array_equal(far.params[:, TYPED_MODEL_MODE], 1.0)
+  assert action(far) < 0.0
   radar = radar_state(distance=30.0, speed=20.0, acceleration=-3.0)
   lead_only = solve_reference(20.0, MpcReference(40.0), radar=radar, acceleration=-1.0)
-  strong_raw = np.maximum(20.0 - 3.0 * MODEL_TIMES, 0.0)
-  strong_model = solve_reference(20.0, typed_reference(strong_raw, 20.0, cruise=40.0,
-                                                     typed=evidence(strong_raw, 20.0, **timing)),
+  strong_model = solve_reference(20.0, typed_reference(np.maximum(20.0 - 3.0 * MODEL_TIMES, 0.0), 20.0, cruise=40.0),
                                 radar=radar, acceleration=-1.0)
-  if not after_anchor:
-    assert np.any(strong_model.diagnostic_reference_weights[:, 2:4] > 0.0)
-  # A later raw rest retains its existing compatibility risk problem. The
-  # stronger-braking requirement applies in both representations.
+  assert np.any(strong_model.diagnostic_reference_weights[:, 2:4] > 0.0)
   assert action(strong_model) < action(lead_only) - 0.05
 
 
-@pytest.mark.parametrize('unknown_kind', ['backward_then_forward', 'single_zero'])
-@pytest.mark.parametrize('after_anchor', [False, True])
-def test_unknown_retains_compatible_model_and_lead_risk_without_new_typed_problem(unknown_kind, after_anchor):
+@pytest.mark.parametrize('unknown_kind', ['backward_then_forward', 'single_zero', 'model_after_anchor'])
+def test_unknown_retains_compatible_model_and_lead_risk_without_new_typed_problem(unknown_kind):
   raw = -0.4 + 0.6 * MODEL_TIMES if unknown_kind == 'backward_then_forward' else np.full(len(MODEL_TIMES), 10.0)
   if unknown_kind == 'single_zero':
     raw[16] = 0.0
-  timing = {'model_ns': SOURCE_NS + 1, 'now_ns': SOURCE_NS + 2} if after_anchor else {}
+  elif unknown_kind == 'model_after_anchor':
+    raw = 10.0 + 0.6 * MODEL_TIMES
+  timing = {'model_ns': SOURCE_NS + 1, 'now_ns': SOURCE_NS + 2} if unknown_kind == 'model_after_anchor' else {}
   reference = typed_reference(raw, 10.0, typed=evidence(raw, 10.0, **timing))
   radar = radar_state(distance=20.0, speed=0.0)
   old_risk = solve_reference(10.0, replace(reference, typed_model=None), radar=radar)
@@ -365,39 +310,9 @@ def test_unknown_retains_compatible_model_and_lead_risk_without_new_typed_proble
   for name in ('params', 'yref', 'x_sol', 'u_sol'):
     np.testing.assert_allclose(getattr(old_risk, name), getattr(unknown, name), atol=1e-9, rtol=0.0)
   assert reference.typed_model.moving is None
-  assert not reference.typed_model.allows_departure
+  assert reference.typed_model.allows_departure == (unknown_kind == 'model_after_anchor')
   np.testing.assert_array_equal(unknown.params[:, MODEL_V_REF:TYPED_MODEL_MODE+1], 0.0)
   np.testing.assert_array_equal(unknown.diagnostic_reference_weights[:, 1:4], 0.0)
-
-
-@pytest.mark.parametrize('delay_ns', [1, 5_000_000])
-def test_later_moving_preference_keeps_unknown_epoch_and_real_lead_risk(delay_ns):
-  raw = 10.0 + 0.6 * MODEL_TIMES
-  typed = evidence(raw, 10.0, model_ns=SOURCE_NS + delay_ns, now_ns=SOURCE_NS + delay_ns + 1)
-  reference = typed_reference(raw, 10.0, typed=typed)
-  radar = radar_state(distance=20.0, speed=0.0)
-  lead_only = solve_reference(10.0, MpcReference(30.0), radar=radar)
-  future = solve_reference(10.0, reference, radar=radar)
-  assert typed.unknown.reason == 'model_proxy_after_initial_state'
-  assert typed.source.proxy_age_s is None and typed.source.physical_prediction_epoch_ns is None
-  assert future.rest_goal_state == 'none' and future.rest_goal_braking_accel is None
-  assert action(future) <= action(lead_only) + 1e-4
-  np.testing.assert_array_equal(future.params[:, TYPED_MODEL_MODE], 0.0)
-  np.testing.assert_array_equal(future.diagnostic_reference_weights[~typed.moving.supported, 1:4], 0.0)
-
-
-@pytest.mark.parametrize('speed', [STOP_SPEED - 0.001, STOP_SPEED + 0.001])
-def test_later_nonforward_preference_retains_forward_following_on_both_sides_of_the_stop_band(speed):
-  raw = np.full(len(MODEL_TIMES), 1.0)
-  typed = evidence(raw, speed, model_ns=SOURCE_NS + 5_000_000, now_ns=SOURCE_NS + 10_000_000)
-  reference = typed_reference(raw, speed, typed=typed)
-  radar = radar_state(distance=7.0, speed=1.5)
-  actual = solve_reference(speed, reference, radar=radar)
-  assert typed.has_future_moving_preference and not typed.allows_departure
-  assert action(actual) > 0.0 and actual.v_solution[-1] > speed
-  assert actual.source in (LongitudinalPlanSource.lead0, LongitudinalPlanSource.cruise)
-  np.testing.assert_array_equal(actual.params[:, TYPED_MODEL_MODE], 0.0)
-  assert np.all(actual.diagnostic_reference_weights[:, 0] > 0.0)
 
 
 @pytest.mark.parametrize('lead_present', [False, True])
@@ -412,56 +327,11 @@ def test_available_model_after_carstate_proxy_does_not_create_a_cruise_fault(lea
     state.logMonoTime['modelV2'] = anchor + 5_000_000
     planner.update(state, now_ns=anchor + 10_000_000)
     assert planner.motion_intent.valid and planner.mpc.solution_status == 0
-    assert planner.reference_planner.model_reference_mode == 'future_supported_moving'
+    assert planner.reference_planner.model_reference_mode == 'action_capped_absolute'
     assert planner.reference_planner.model_fallback_reason == 'model_proxy_after_initial_state'
     assert not planner.motion_intent.release_allowed
     assert abs(planner.output_a_target) < 1e-4
     np.testing.assert_array_equal(planner.mpc.params[:, TYPED_MODEL_MODE], 0.0)
-    np.testing.assert_array_equal(planner.mpc.diagnostic_reference_weights[0, 1:4], 0.0)
-
-
-@pytest.mark.parametrize('publication_offset_ns', [1, 5_000_000])
-@pytest.mark.parametrize('raw_speed', [9.4, 10.0, 10.6])
-def test_constant_model_bias_cannot_turn_publication_order_into_braking(raw_speed, publication_offset_ns):
-  """A clock-order change adds no braking evidence to this equilibrium.
-
-  P's action input is zero; a constant velocity-origin offset is not a
-  deceleration or a stop. The existing cruise-equilibrium tolerance is 1e-4.
-  Exercise each order for twelve actual native updates so reference history
-  and smoothing participate in the comparison.
-  """
-  trajectories = []
-  for order in (-1, 1):
-    planner, _ = make_planner(speed=10.0)
-    state = make_state(speed=10.0, target=10.0, experimental=True)
-    assign_curve(state, np.full(len(MODEL_TIMES), raw_speed))
-    state['modelV2'].action.desiredAcceleration = 0.0
-    rows = []
-    for frame in range(12):
-      anchor = advance(state, frame)
-      state.logMonoTime['modelV2'] = anchor + order * publication_offset_ns
-      planner.update(state, now_ns=anchor + 10_000_000)
-      assert planner.motion_intent.valid and planner.mpc.solution_status == 0
-      assert not planner.motion_intent.release_allowed
-      rows.append(planner.output_a_target)
-    trajectories.append(np.array(rows))
-  for trajectory in trajectories:
-    np.testing.assert_allclose(trajectory, 0.0, atol=1e-4, rtol=0.0)
-  np.testing.assert_allclose(trajectories[1], trajectories[0], atol=1e-4, rtol=0.0)
-
-
-def test_future_supported_moving_preference_does_not_weaken_model_action_braking():
-  planner, _ = make_planner(speed=10.0)
-  state = make_state(speed=10.0, target=20.0, experimental=True)
-  assign_curve(state, 10.6 + 0.6 * MODEL_TIMES)
-  state['modelV2'].action.desiredAcceleration = -1.0
-  for frame in range(12):
-    anchor = advance(state, frame)
-    state.logMonoTime['modelV2'] = anchor + 5_000_000
-    planner.update(state, now_ns=anchor + 10_000_000)
-    assert planner.motion_intent.valid and planner.mpc.solution_status == 0
-    assert planner.reference_planner.model_reference_mode == 'future_supported_moving'
-    assert planner.output_a_target <= -1.0
 
 
 def test_later_publication_raw_forward_can_release_actual_held_owner_and_honda_can():
@@ -474,8 +344,8 @@ def test_later_publication_raw_forward_can_release_actual_held_owner_and_honda_c
   raw = 0.2 + 0.6 * MODEL_TIMES
   curve = (0.2 * MODEL_TIMES + 0.3 * MODEL_TIMES**2, raw, np.full(len(raw), 0.6))
   _, plans, rows, can_rows = harness.exercise(curve, action_accel=0.5)
-  assert harness.planner.reference_planner.model_reference_mode == 'future_supported_moving'
-  assert harness.planner.reference_planner.model_evidence.has_future_moving_preference
+  assert harness.planner.reference_planner.model_reference_mode == 'action_capped_absolute'
+  assert harness.planner.reference_planner.model_evidence.moving is None
   assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
   assert any(row['phase'] == 'release' and not row['resolved_stop'] for row in rows)
   assert any(command['STANDSTILL_RELEASE'] and not command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0.0
@@ -521,7 +391,7 @@ def test_qualified_departing_lead_is_independent_of_missing_aligned_or_raw_growt
   curve = (raw * MODEL_TIMES, raw, np.zeros(len(raw)))
   _, plans, rows, can_rows = harness.exercise(curve, action_accel=0.5)
   evidence = harness.planner.reference_planner.model_evidence
-  assert evidence.has_future_moving_preference and evidence.raw_motion.kind == 'moving'
+  assert evidence.moving is None and evidence.raw_motion.kind == 'moving'
   assert not evidence.allows_departure and evidence.allows_external_departure
   assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
   negative_plan_times = {int(event.logMonoTime) for event in plans if event.longitudinalPlan.aTarget <= 0.0}
@@ -716,3 +586,96 @@ def test_true_lead_pointwise_comparison_remains_a_diagnostic(lead_index, distanc
   record_property('reference_action_mps2', float(action(original)))
   record_property('candidate_action_mps2', float(action(candidate)))
   record_property('pointwise_difference_mps2', float(action(candidate) - action(original)))
+
+
+@pytest.mark.parametrize('after_anchor', [False, True])
+def test_neutral_model_preserves_acceleration_toward_a_departing_low_speed_lead(after_anchor):
+  # Rounded from L's 12 s loss-of-following frame: no stop, fault or standstill,
+  # but an opening real-lead gap while a constant model preference stays neutral.
+  speed, acceleration = 1.15, -0.02
+  planner, _ = make_planner(speed=speed, initial_accel=acceleration)
+  state = make_state(speed=speed, target=4.0, experimental=True)
+  state['carState'].aEgo = acceleration
+  assign_curve(state, np.full(len(MODEL_TIMES), speed + 0.4))
+  state['modelV2'].action.desiredAcceleration = 0.6
+  assign_lead(state, distance=10.23, speed=2.0, relative_speed=2.0 - speed)
+  targets = []
+  for frame in range(12):
+    anchor = advance(state, frame)
+    if after_anchor:
+      state.logMonoTime['modelV2'] = anchor + 5_000_000
+    planner.update(state, now_ns=anchor + 10_000_000)
+    assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
+    assert not planner.output_should_stop
+    targets.append(planner.output_a_target)
+  # Resolve an actual positive request beyond the existing steady-state
+  # numerical budget, not a solver residual on the wrong side of zero.
+  assert min(targets[-4:]) > 1e-4, targets
+
+
+@pytest.mark.parametrize('after_anchor', [False, True])
+def test_near_zero_model_slope_round_trips_do_not_switch_control_targets(after_anchor):
+  """Tiny slope changes must not turn numerical signs into a new target owner.
+
+  Each arm uses the same real planner/Controls/CAN history. The 1e-6 m/s²
+  perturbation is below the existing 1e-4 output budget; production's upward
+  controller rate remains +8 m/s³. Negative steps are compared with the
+  matching neutral arm, so that unbounded extra braking cannot hide here.
+  """
+  def run(slopes):
+    harness = StrictPlanTransportHarness(speed=10.0)
+    harness.model_publication_after_state = after_anchor
+    harness.engage()
+    raw = np.full(len(MODEL_TIMES), 10.4)
+    harness.exercise((raw * MODEL_TIMES, raw, np.zeros(len(raw))), action_accel=0.5)
+    history_start = len(harness.history)
+    targets = []
+    for slope in slopes:
+      raw = 10.4 + slope * MODEL_TIMES
+      _, plans, _, _ = harness.exercise((raw * MODEL_TIMES, raw, np.full(len(raw), slope)),
+                                        action_accel=0.5, seconds=0.4)
+      assert all(event.longitudinalPlan.motionIntent.version == MOTION_INTENT_VERSION
+                 and event.longitudinalPlan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC for event in plans)
+      assert harness.controls.LoC.pid.i <= 0.0
+      targets.extend(float(event.longitudinalPlan.aTarget) for event in plans)
+    rows = harness.history[history_start:]
+    assert all(row['long_active'] and not row['degraded'] and row['phase'] == 'track' for row in rows)
+    output = np.array([row['accel'] for row in rows])
+    assert np.max(np.diff(output)) <= STARTING_ACCEL_RATE * DT_CTRL + 1e-4
+    return np.array(targets), output
+
+  slopes = [-1e-6, 0.0, 1e-6, 0.0] * 2
+  neutral, neutral_output = run([0.0] * len(slopes))
+  perturbed, perturbed_output = run(slopes)
+  np.testing.assert_allclose(perturbed, neutral, atol=1e-4, rtol=0.0)
+  np.testing.assert_allclose(perturbed_output, neutral_output, atol=1e-4, rtol=0.0)
+
+
+@pytest.mark.parametrize('publication_offset_ns', [1, 5_000_000])
+@pytest.mark.parametrize('raw_speed', [9.4, 10.0, 10.6])
+def test_constant_model_bias_cannot_turn_publication_order_into_braking(raw_speed, publication_offset_ns):
+  """A clock-order change adds no braking evidence to this equilibrium.
+
+  P's action input is zero; a constant velocity-origin offset is not a
+  deceleration or a stop. The existing cruise-equilibrium tolerance is 1e-4.
+  Exercise each order for twelve actual native updates so reference history
+  and smoothing participate in the comparison.
+  """
+  trajectories = []
+  for order in (-1, 1):
+    planner, _ = make_planner(speed=10.0)
+    state = make_state(speed=10.0, target=10.0, experimental=True)
+    assign_curve(state, np.full(len(MODEL_TIMES), raw_speed))
+    state['modelV2'].action.desiredAcceleration = 0.0
+    rows = []
+    for frame in range(12):
+      anchor = advance(state, frame)
+      state.logMonoTime['modelV2'] = anchor + order * publication_offset_ns
+      planner.update(state, now_ns=anchor + 10_000_000)
+      assert planner.motion_intent.valid and planner.mpc.solution_status == 0
+      assert not planner.motion_intent.release_allowed
+      rows.append(planner.output_a_target)
+    trajectories.append(np.array(rows))
+  for trajectory in trajectories:
+    np.testing.assert_allclose(trajectory, 0.0, atol=1e-4, rtol=0.0)
+  np.testing.assert_allclose(trajectories[1], trajectories[0], atol=1e-4, rtol=0.0)

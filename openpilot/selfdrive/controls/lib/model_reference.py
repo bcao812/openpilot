@@ -146,14 +146,6 @@ class ModelReferenceEvidence:
     return next((event for event in self.events if isinstance(event, Unknown)), None)
 
   @property
-  def has_future_moving_preference(self):
-    # This qualifies a numerical preference on its supported future nodes;
-    # it does not qualify an initial-state alignment or a physical epoch.
-    return (self.moving is not None and self.unknown is not None
-            and self.unknown.reason == 'model_proxy_after_initial_state'
-            and self.raw_motion is not None and self.raw_motion.does_not_veto_departure)
-
-  @property
   def allows_departure(self):
     return (self.allows_external_departure and self.raw_motion.forward_intent is not None)
 
@@ -211,26 +203,24 @@ def raw_motion_from_velocity(raw_velocity, *, elapsed_s=0.0):
 def moving_preference(raw_velocity, native_times, measured_speed, *, proxy_age_s=0.0):
   """Only this preference is invariant to a constant raw-speed translation.
 
-  A negative proxy age denotes a later publication. Nodes before that proxy
-  are finite placeholders with no tracking weight; no model value is
-  extrapolated back to the initial state. Unsupported head/tail values are
-  neither motion evidence nor departure permission.
+  Unsupported tail values remain finite for the native API, but their weights
+  are disabled. They are not extrapolated evidence or departure permission.
   """
   times = np.asarray(ModelConstants.T_IDXS, dtype=float)
   raw = np.asarray(raw_velocity, dtype=float)
   native_times = np.asarray(native_times, dtype=float)
   if (raw.shape != times.shape or not np.all(np.isfinite(raw)) or not np.isfinite(measured_speed)
-      or not np.isfinite(proxy_age_s) or not -times[-1] <= proxy_age_s <= times[-1]
+      or not np.isfinite(proxy_age_s) or not 0.0 <= proxy_age_s <= times[-1]
       or native_times.ndim != 1 or len(native_times) < 2 or native_times[0] != 0.0
       or not np.all(np.isfinite(native_times)) or np.any(np.diff(native_times) <= 0.0)):
     raise ValueError('Invalid moving preference')
   sample_times = native_times + proxy_age_s
-  raw_anchor = float(np.interp(max(0.0, proxy_age_s), times, raw))
+  raw_anchor = float(np.interp(proxy_age_s, times, raw))
   velocity = measured_speed + np.interp(sample_times, times, raw) - raw_anchor
   acceleration = np.concatenate((np.diff(velocity) / np.diff(native_times), [0.0]))
   position = np.concatenate(([0.0], np.cumsum(0.5 * (velocity[:-1] + velocity[1:]) * np.diff(native_times))))
-  supported = (sample_times >= 0.0) & (sample_times <= times[-1])
-  # An interval slope needs both endpoints. Never weight a partial head or
+  supported = sample_times <= times[-1]
+  # An interval slope also needs the next endpoint. Never weight a partial
   # tail interval as if it were a complete observed model preference.
   supported[:-1] &= supported[1:]
   return MovingPreference(position, velocity, acceleration, supported)
@@ -354,14 +344,7 @@ class ModelReferenceAdapter:
       # epoch or extrapolating a moving preference back to the carState.
       self.clear_rest_continuity()
       raw_motion = raw_motion_from_velocity(raw)
-      moving = None
-      if raw_motion.does_not_veto_departure:
-        try:
-          moving = moving_preference(raw, native_times, measured_speed,
-                                     proxy_age_s=(anchor_mono_time_ns - model_mono_time_ns) / 1e9)
-        except ValueError:
-          return unknown('unsupported_model_reference_epoch')
-      return ModelReferenceEvidence(source, moving, (Unknown('model_proxy_after_initial_state'),), raw, raw_motion)
+      return ModelReferenceEvidence(source, None, (Unknown('model_proxy_after_initial_state'),), raw, raw_motion)
     age = (anchor_mono_time_ns - model_mono_time_ns) / 1e9
     source = ModelSource(int(model_mono_time_ns), int(anchor_mono_time_ns), int(consumed_mono_time_ns), age)
     try:

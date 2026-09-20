@@ -5,7 +5,6 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
 from openpilot.selfdrive.controls.lib.model_reference import (
   ModelReferenceAdapter, NoForward, Unknown, moving_preference,
 )
@@ -108,58 +107,13 @@ def test_unknown_time_does_not_invent_a_prediction_epoch(model_ns, anchor_ns, no
   assert not reference.allows_departure
 
 
-def test_fresh_later_model_publication_has_future_preference_without_claiming_initial_alignment():
+def test_fresh_later_model_publication_has_raw_forward_evidence_without_aligned_motion():
   reference = evidence(0.03 + 0.6 * MODEL_TIMES, 0.0, model_ns=SOURCE_NS + 5_000_000,
                        anchor_ns=SOURCE_NS, now_ns=SOURCE_NS + 10_000_000)
   assert reference.unknown.reason == 'model_proxy_after_initial_state'
-  assert reference.has_future_moving_preference
-  assert not reference.moving.supported[0] and np.all(reference.moving.supported[1:])
-  assert reference.source.proxy_age_s is None and reference.source.physical_prediction_epoch_ns is None
+  assert reference.moving is None and reference.source.physical_prediction_epoch_ns is None
   assert reference.raw_motion.kind == 'forward'
   assert reference.allows_departure and reference.allows_external_departure
-
-
-@pytest.mark.parametrize('delay_ns', [1, 5_000_000, 100_000_000])
-@pytest.mark.parametrize('bias', [-0.6, 0.0, 0.6])
-def test_future_preference_is_bias_invariant_only_on_source_supported_intervals(delay_ns, bias):
-  delay = delay_ns / 1e9
-  raw = 10.0 + bias + 0.6 * MODEL_TIMES
-  reference = evidence(raw, 10.0, model_ns=SOURCE_NS + delay_ns,
-                       anchor_ns=SOURCE_NS, now_ns=SOURCE_NS + delay_ns + 10_000_000)
-  assert reference.events == (Unknown('model_proxy_after_initial_state'),)
-  assert reference.source.proxy_age_s is None and reference.source.physical_prediction_epoch_ns is None
-  assert reference.raw_motion.kind == 'forward' and reference.allows_departure
-  supported = TIMES >= delay
-  supported[:-1] &= supported[1:]
-  np.testing.assert_array_equal(reference.moving.supported, supported)
-  assert not reference.moving.supported[0]
-  np.testing.assert_allclose(reference.moving.velocity[supported], 10.0 + 0.6 * (TIMES[supported] - delay), atol=1e-13)
-  np.testing.assert_allclose(reference.moving.acceleration[:-1][supported[:-1]], 0.6, atol=1e-13)
-  assert np.all(np.isfinite([reference.moving.position, reference.moving.velocity, reference.moving.acceleration]))
-
-
-@pytest.mark.parametrize('raw_speed', [9.4, 10.0, 10.6])
-def test_future_constant_preference_does_not_create_model_departure_permission(raw_speed):
-  reference = evidence(np.full(len(MODEL_TIMES), raw_speed), 10.0, model_ns=SOURCE_NS + 5_000_000,
-                       anchor_ns=SOURCE_NS, now_ns=SOURCE_NS + 10_000_000)
-  assert reference.has_future_moving_preference
-  assert reference.raw_motion.kind == 'moving'
-  assert not reference.allows_departure
-  np.testing.assert_allclose(reference.moving.velocity, 10.0, atol=1e-13)
-  np.testing.assert_allclose(reference.moving.acceleration, 0.0, atol=1e-13)
-
-
-@pytest.mark.parametrize('speed', [STOP_SPEED - 0.001, STOP_SPEED, STOP_SPEED + 0.001])
-def test_future_nonforward_preference_does_not_switch_at_the_stop_band(speed):
-  raw = np.full(len(MODEL_TIMES), 1.0)
-  reference = evidence(raw, speed, model_ns=SOURCE_NS + 5_000_000,
-                       anchor_ns=SOURCE_NS, now_ns=SOURCE_NS + 10_000_000)
-  assert reference.events == (Unknown('model_proxy_after_initial_state'),)
-  assert reference.raw_motion.kind == 'moving'
-  assert not reference.allows_departure and reference.allows_external_departure
-  np.testing.assert_array_equal(reference.raw_velocity, raw)
-  assert reference.has_future_moving_preference
-  np.testing.assert_allclose(reference.moving.velocity, speed, atol=1e-13)
 
 
 @pytest.mark.parametrize('kind', ['negative_prefix', 'no_forward', 'rest', 'single_zero'])

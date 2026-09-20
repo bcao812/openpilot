@@ -20,6 +20,7 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VE
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import UnifiedLongitudinalPlanner
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
+from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource as PolicySource
 
 
@@ -33,7 +34,7 @@ def test_response_permission_survives_real_wire_roundtrip(kind):
   planner.motion_intent = MotionIntent(response_kind=int(kind), producer_instance_ns=INSTANCE_NS)
   message = log.LongitudinalPlan.new_message()
   producer.publish(message)
-  assert MOTION_INTENT_VERSION == 6
+  assert MOTION_INTENT_VERSION == 7
   with log.LongitudinalPlan.from_bytes(message.to_bytes()) as decoded:
     assert decoded.motionIntent.responseKind == kind
     assert MotionIntent.from_message(decoded.motionIntent) == planner.motion_intent
@@ -41,16 +42,18 @@ def test_response_permission_survives_real_wire_roundtrip(kind):
 
 
 @pytest.mark.parametrize('changes', [
-  {'version': 4}, {'version': 5}, {'response_kind': True}, {'response_kind': 1.0}, {'response_kind': -1}, {'response_kind': 4},
+  {'version': 4}, {'version': 5}, {'version': 6}, {'response_kind': True}, {'response_kind': 1.0}, {'response_kind': -1}, {'response_kind': 4},
   {'producer_instance_ns': 0}, {'producer_instance_ns': None}, {'ready': False}, {'valid': False},
-  {'reasons': int(StopReason.FORCE_DECEL)}, {'reference_kind': int(MotionReferenceKind.MOVING)}, {'braking_accel': -0.5},
+  {'reasons': int(StopReason.FORCE_DECEL)}, {'braking_accel': -0.5},
+  {'reference_kind': int(MotionReferenceKind.REST)}, {'reference_kind': int(MotionReferenceKind.NO_FORWARD)},
+  {'reference_kind': int(MotionReferenceKind.EXACT_ZERO)},
 ])
 def test_bad_absolute_response_contract_is_rejected(changes):
   intent = MotionIntent(response_kind=int(MotionResponseKind.ABSOLUTE_ACC), producer_instance_ns=INSTANCE_NS)
   assert not replace(intent, **changes).is_valid()
 
 
-@pytest.mark.parametrize('old_version', [4, 5])
+@pytest.mark.parametrize('old_version', [4, 5, 6])
 def test_missing_field_and_old_version_never_acquire_an_absolute_response_contract(old_version):
   message = SimpleNamespace(version=MOTION_INTENT_VERSION, reasons=0, movingLead=False, releaseAllowed=False,
                             allowCreep=False, valid=True, mode=int(LongitudinalMode.UNIFIED), producerInstanceMonoTime=INSTANCE_NS)
@@ -59,6 +62,28 @@ def test_missing_field_and_old_version_never_acquire_an_absolute_response_contra
   message.version = old_version
   message.responseKind = int(MotionResponseKind.ABSOLUTE_ACC)
   assert not MotionIntent.from_message(message).is_valid()
+
+
+@pytest.mark.parametrize('reference', [MotionReferenceKind.UNKNOWN, MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD])
+def test_absolute_target_contract_preserves_raw_reference_facts_without_granting_release(reference):
+  intent = MotionIntent(response_kind=int(MotionResponseKind.ABSOLUTE_ACC), reference_kind=int(reference),
+                        producer_instance_ns=INSTANCE_NS)
+  assert intent.is_valid() and not intent.release_allowed
+  planner = SimpleNamespace(longitudinal_mode=LongitudinalMode.UNIFIED)
+  producer = UnifiedLongitudinalPlanner(planner)
+  planner.motion_intent = intent
+  message = log.LongitudinalPlan.new_message()
+  producer.publish(message)
+  with log.LongitudinalPlan.from_bytes(message.to_bytes()) as decoded:
+    assert MotionIntent.from_message(decoded.motionIntent) == intent
+    assert MotionIntent.from_message(decoded.motionIntent).is_valid()
+
+
+@pytest.mark.parametrize('reference', [MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD])
+def test_raw_model_facts_cannot_acquire_pure_cruise_positive_response(reference):
+  intent = MotionIntent(response_kind=int(MotionResponseKind.PURE_CRUISE), reference_kind=int(reference),
+                        producer_instance_ns=INSTANCE_NS)
+  assert not intent.is_valid()
 
 
 def set_lead(lead, *, present=True, closing=10.0, gap=35.0):
@@ -114,6 +139,9 @@ def ordinary_policy():
 def test_negative_source_label_requires_same_lead_geometry_and_current_contract(selected, case, expected, ordinary_policy):
   planner, control = make_planner_owner()
   state = make_state(experimental=True)
+  # An ambiguous raw model still uses the model-risk problem. Its source
+  # label cannot establish the new ordinary absolute-target contract.
+  state['modelV2'].velocity.x[16] = 0.0
   leads = (state['radarState'].leadOne, state['radarState'].leadTwo)
   set_lead(leads[selected], present=case not in ('missing', 'model_source'), closing=0.5 if case in ('weak_closing', 'other_only') else 10.0)
   set_lead(leads[1 - selected], present=case == 'other_only')
@@ -136,7 +164,7 @@ def test_negative_source_label_requires_same_lead_geometry_and_current_contract(
   assert plan.motionIntent.responseKind == expected
   if expected == MotionResponseKind.LEAD_BRAKING:
     assert plan.aTarget < 0.0
-    assert plan.motionIntent.referenceKind == MotionReferenceKind.MOVING
+    assert plan.motionIntent.referenceKind == MotionReferenceKind.UNKNOWN
     assert control.motion_phase == MotionPhase.TRACK
     assert control.pid.i < 0.0
 
@@ -163,8 +191,7 @@ def test_fcw_does_not_withdraw_existing_qualified_braking(selected, e2e, target,
       crash_count = 0 if frame < 3 else 4
       before = control.pid.i
       plan, outputs = consume(planner, control, state, frame)
-      expected = MotionResponseKind.LEAD_BRAKING if e2e else MotionResponseKind.ABSOLUTE_ACC
-      assert plan.motionIntent.responseKind == expected
+      assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
       assert planner.fcw == (frame >= 3)
       if not e2e:
         assert planner.reference_planner.model_evidence is None
@@ -240,7 +267,7 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
         assert plan.motionIntent.responseKind == MotionResponseKind.PURE_CRUISE
         assert control.pid.i > 0.0
       else:
-        expected = MotionResponseKind.ABSOLUTE_ACC if boundary in ('leadOne', 'leadTwo', 'fcw', 'acc_cap') else MotionResponseKind.NONE
+        expected = MotionResponseKind.ABSOLUTE_ACC if boundary in ('leadOne', 'leadTwo', 'fcw', 'model', 'acc_cap') else MotionResponseKind.NONE
         assert plan.motionIntent.responseKind == expected
         assert control.pid.i == 0.0
         if boundary == 'model':
@@ -255,6 +282,7 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
 def test_lead_loss_threshold_crossing_and_slot_change_recompute_permission_without_hidden_i(ordinary_policy):
   planner, control = make_planner_owner()
   state = make_state(experimental=True)
+  state['modelV2'].velocity.x[16] = 0.0
   native_update = planner.mpc.update
   selected = 0
 
@@ -284,3 +312,21 @@ def test_lead_loss_threshold_crossing_and_slot_change_recompute_permission_witho
       for output in outputs:
         assert output - before <= 0.08 + 1e-12
         before = output
+
+
+@pytest.mark.parametrize('slope', [-1e-6, 0.0, 1e-6])
+@pytest.mark.parametrize('action_accel', [-0.3, 0.05])
+def test_ordinary_model_action_cap_remains_absolute_and_cannot_learn_positive_i(slope, action_accel, ordinary_policy):
+  planner, control = make_planner_owner()
+  state = make_state(experimental=True)
+  state['modelV2'].velocity.x = (20.4 + slope * np.asarray(ModelConstants.T_IDXS)).tolist()
+  state['modelV2'].action.desiredAcceleration = action_accel
+  state['carState'].aEgo = -0.5 if action_accel > 0.0 else 0.5
+  for frame in range(8):
+    plan, outputs = consume(planner, control, state, frame)
+    assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+    assert plan.motionIntent.referenceKind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
+    assert plan.aTarget <= action_accel + 1e-7
+    assert control.pid.i <= 0.0
+    assert all(output <= plan.aTarget + 1e-7 for output in outputs)
+  assert planner.reference_planner.reference_overridden

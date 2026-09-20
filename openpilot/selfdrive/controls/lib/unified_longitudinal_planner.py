@@ -401,8 +401,7 @@ class UnifiedLongitudinalPlanner:
       self.model_reference_mode = 'typed'
       if unknown is not None:
         self.model_fallback_reason = unknown.reason
-        self.model_reference_mode = ('future_supported_moving' if self.model_evidence.has_future_moving_preference else
-                                     'compatibility_risk_only' if unknown.reason in COMPATIBLE_MODEL_UNKNOWNS else 'invalid')
+        self.model_reference_mode = ('compatibility_risk_only' if unknown.reason in COMPATIBLE_MODEL_UNKNOWNS else 'invalid')
         if self.model_reference_mode == 'invalid':
           # A future/expired/mutated source has no qualified new model risk
           # input. The same MPC still consumes independently valid real leads
@@ -410,6 +409,17 @@ class UnifiedLongitudinalPlanner:
           model_position = model_velocity = model_acceleration = None
       if self.model_reference_mode != 'invalid' and model.action.shouldStop:
         cruise_speed = 0.0
+    evidence = self.model_evidence
+    ordinary_model_motion = (evidence is not None and not evidence.has_rest_intent and not evidence.no_forward
+                             and (evidence.unknown is None
+                                  or evidence.unknown.reason == 'model_proxy_after_initial_state'
+                                  and evidence.raw_motion is not None and evidence.raw_motion.does_not_veto_departure))
+    if ordinary_model_motion:
+      # P's ordinary driving policy follows absolute lead/cruise targets and
+      # the independent action cap. Preserve raw model facts for the owner,
+      # without adding a second ordinary velocity target to this same MPC.
+      model_position = model_velocity = model_acceleration = None
+      self.model_reference_mode = 'action_capped_absolute'
     has_rest_goal = self.model_evidence is not None and self.model_evidence.rest_goal is not None
     self.entered_rest_goal = has_rest_goal and not self._model_rest_active
     self._model_rest_active = has_rest_goal
@@ -422,7 +432,7 @@ class UnifiedLongitudinalPlanner:
     reference = MpcReference(
       cruise_speed=cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
-      typed_model=self.model_evidence, allow_future_rest_reschedule=True,
+      typed_model=None if ordinary_model_motion else self.model_evidence, allow_future_rest_reschedule=True,
       comfort_stop_distance=low_speed_follow_distance(speed),
     )
     urgency = 0.0
@@ -571,7 +581,14 @@ class UnifiedLongitudinalPlanner:
                         and self.constraint_source == LongitudinalPlanSource.cruise
                         and self.reference_accel > self.constraint_accel
                         and output == self.constraint_accel)
-    if (active and healthy and not reset and not forced_decel and not reasons
+    if (ordinary_model_motion and raw_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
+        and active and healthy and not forced_decel and not reasons):
+      # This producer installed only absolute lead/cruise targets. An action
+      # cap and a factual raw FORWARD label do not change that target domain.
+      # Declare it even on admission/reset so cached first-frame plans cannot
+      # acquire MODEL positive-I permission merely from a tiny raw slope.
+      response_kind = MotionResponseKind.ABSOLUTE_ACC
+    elif (active and healthy and not reset and not forced_decel and not reasons
         and (not self.reference_overridden or ordinary_acc_cap)
         and planner.source == LongitudinalPlanSourceSP.cruise):
       lead_sources = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)

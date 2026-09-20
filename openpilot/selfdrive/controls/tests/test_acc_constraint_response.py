@@ -112,7 +112,7 @@ def test_cap_projection_withdraws_positive_i_on_the_first_control_tick():
 
 
 @pytest.mark.parametrize('constraint', ['policy', 'model'])
-def test_independent_constraint_cannot_inherit_capped_acc_response(constraint):
+def test_policy_override_and_ordinary_model_cap_keep_their_declared_response_domains(constraint):
   with controlled_acc() as run:
     cap = learn_negative_response(run)
     for _ in range(4):
@@ -127,16 +127,21 @@ def test_independent_constraint_cannot_inherit_capped_acc_response(constraint):
       run.state['modelV2'].action.desiredAcceleration = -0.3
     plan, outputs = run.step()
     assert plan.reference.overridden
-    assert plan.motionIntent.responseKind == MotionResponseKind.NONE
     assert plan.motionIntent.valid and not plan.motionIntent.reasons
-    assert run.control.pid.i == 0.0
     if constraint == 'policy':
+      assert plan.motionIntent.responseKind == MotionResponseKind.NONE
+      assert run.control.pid.i == 0.0
       assert run.planner.cruise_target.speed < run.state['carState'].vEgo
       assert plan.aTarget == pytest.approx(cap)
+      assert outputs == pytest.approx([plan.aTarget] * 5, abs=1e-7)
     else:
+      # An ordinary model action caps the same absolute target; its raw
+      # moving description must not reset braking I into a MODEL domain.
+      assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+      assert run.control.pid.i < 0.0
       assert run.planner.reference_planner.constraint_source == LongitudinalPlanSource.e2e
       assert plan.aTarget == pytest.approx(-0.3)
-    assert outputs == pytest.approx([plan.aTarget] * 5, abs=1e-7)
+      assert all(output <= plan.aTarget for output in outputs)
 
 
 def test_global_lower_clip_cannot_masquerade_as_an_acc_upper_cap():
