@@ -321,7 +321,9 @@ def test_early_failure_clears_execution_before_a_later_moving_reference(monkeypa
     planner.mpc.solution_status = 4
     planner.mpc.failure_reason = 'native_failure_fixture'
   elif failure == 'sampled_accel':
-    planner.mpc.v_solution[:] = float('nan')
+    # The accepted native acceleration is the sampler input. This fixture
+    # bypasses MPC.update and its separate whole-solution finite checks.
+    planner.mpc.a_solution[:] = float('nan')
   planner.update(state, now_ns=now_ns)
   assert not planner.motion_intent.valid
   assert planner.reference_planner._forward_execution_instance_ns == 0
