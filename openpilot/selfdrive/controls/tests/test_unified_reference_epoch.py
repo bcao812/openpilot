@@ -180,7 +180,7 @@ def test_interrupted_motion_cannot_supply_history_to_the_first_recovered_referen
   elif interruption == 'uninitialized':
     planner.reference_planner.reference_initialized = False
   if interruption == 'invalid_output':
-    with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan', return_value=float('nan')):
+    with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=float('nan')):
       update_with_native_reference(planner, state, BASE_NS + 2 * STEP_NS)
     assert not planner.motion_intent.valid
   else:

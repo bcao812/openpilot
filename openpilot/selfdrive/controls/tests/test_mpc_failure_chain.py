@@ -16,7 +16,7 @@ from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState, STARTING_ACCEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  MPC_INVALID_INPUT, MPC_INVALID_SOLUTION, MPC_SOLVER_ERROR, T_IDXS, LongitudinalMpc, MpcReference,
+  COMFORT_STOP_DISTANCE, STOP_DISTANCE, MPC_INVALID_INPUT, MPC_INVALID_SOLUTION, MPC_SOLVER_ERROR, T_IDXS, LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, StopReason
@@ -64,7 +64,7 @@ def inject_failure(planner, failure):
 
 @pytest.mark.parametrize('speed', [0.0, 0.001, 0.05, 0.2, 0.29, 1.0, 10.0])
 @pytest.mark.parametrize('acceleration', [-3.5, -1.5, -0.1, 0.0, 0.5])
-@pytest.mark.parametrize('reference', [None, MpcReference(20.0)])
+@pytest.mark.parametrize('reference', [None, MpcReference(20.0), MpcReference(20.0, comfort_stop_distance=4.0)])
 def test_failure_is_a_zero_sentinel_not_a_synthesized_deceleration(speed, acceleration, reference):
   planner = LongitudinalMpc()
   planner.set_cur_state(speed, acceleration)
@@ -74,9 +74,14 @@ def test_failure_is_a_zero_sentinel_not_a_synthesized_deceleration(speed, accele
   assert planner.solution_status == planner.last_solver_status == 4
   assert planner.failure_reason == 'solver_status'
   assert np.isfinite(planner.solve_time) and planner.solve_time > 0.0
-  for field in ('x0', 'x_sol', 'u_sol', 'v_solution', 'a_solution', 'j_solution', 'a_prev', 'params', 'yref'):
+  for field in ('x0', 'x_sol', 'u_sol', 'v_solution', 'a_solution', 'j_solution', 'a_prev', 'yref'):
     values = getattr(planner, field)
     np.testing.assert_array_equal(values, np.zeros_like(values))
+  # The failed solve clears every motion/reference parameter, including a
+  # previous compact gap, while restoring the configured default distance.
+  expected_parameters = np.zeros_like(planner.params)
+  expected_parameters[:, COMFORT_STOP_DISTANCE] = STOP_DISTANCE
+  np.testing.assert_array_equal(planner.params, expected_parameters)
   for delay in (0.05, 0.1, 0.55, 1.0):
     assert get_accel_from_plan(planner.v_solution, planner.a_solution, T_IDXS, action_t=delay) == 0.0
 
