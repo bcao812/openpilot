@@ -16,6 +16,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode,
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, LEAD_DANGER_FACTOR, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_observation import PlannerObservation, observe_trace
+from openpilot.selfdrive.controls.lib.cruise_response import A_CRUISE_MIN, A_CRUISE_MAX_BP, J_CRUISE_VALS
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED, CREEP_STOP_T
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL, STOP_SPEED
@@ -26,9 +27,6 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
-A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
-J_CRUISE_VALS = [1.6, 1.2, 0.8, 0.6]
-A_CRUISE_MIN = -1.2
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
@@ -251,7 +249,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       from openpilot.selfdrive.controls.lib.reference_timing import ReferenceTimingProducer
       from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import UnifiedLongitudinalPlanner
       self.reference_timing = ReferenceTimingProducer()
-      self.reference_planner = UnifiedLongitudinalPlanner(self)
+      self.reference_planner = UnifiedLongitudinalPlanner(self, init_a=init_a)
 
   def update(self, sm, *, now_ns=None):
     # Native execution samples its own monotonic clock. Replays must provide the

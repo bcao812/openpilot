@@ -8,6 +8,7 @@ from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
+from openpilot.selfdrive.controls.lib.cruise_response import CruiseResponse
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED, should_stop
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
@@ -133,7 +134,7 @@ def has_departing_lead(radar_state, speed, delay):
 
 
 class UnifiedLongitudinalPlanner:
-  def __init__(self, planner):
+  def __init__(self, planner, *, init_a=0.0):
     self.planner = planner
     self.reference_accel = 0.0
     self.constraint_accel = ACCEL_MAX
@@ -144,6 +145,7 @@ class UnifiedLongitudinalPlanner:
     self.reference_initialized = False
     self.reference_source_epoch_ns = None
     self._forward_execution_instance_ns = 0
+    self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
     self.model_reference_adapter = ModelReferenceAdapter()
     self.model_evidence = None
     self.model_reference_mode = 'not_admitted'
@@ -157,6 +159,7 @@ class UnifiedLongitudinalPlanner:
 
   def invalidate(self, speed, reason):
     planner = self.planner
+    self.cruise_response.clear()
     self.reference_initialized = False
     self.reference_source_epoch_ns = None
     self._forward_execution_instance_ns = 0
@@ -382,6 +385,12 @@ class UnifiedLongitudinalPlanner:
     cruise_speed = max(0.0, cruise_speed)
     steering = car_state.steeringAngleDeg - state['vehicleParameters'].angleOffsetDeg
     maximum_accel = cruise_accel_limit(planner.CP, speed, steering, self.e2e_allowed, coast_accel, planner.allow_throttle)
+    if healthy:
+      cruise_ceiling = self.cruise_response.update(
+        cruise_speed, speed, maximum_accel, measured_accel=measured_accel, reset=reset)
+    else:
+      self.cruise_response.clear()
+      cruise_ceiling = maximum_accel
     model_position = model_velocity = model_acceleration = None
     self.model_evidence = None
     if self.e2e_allowed:
@@ -473,7 +482,10 @@ class UnifiedLongitudinalPlanner:
     if not math.isfinite(self.reference_accel):
       self.invalidate(speed, "nonfinite_sampled_accel")
       return
-    self.constraint_accel = maximum_accel
+    # The selected policy owns its response history. It supplies one current
+    # target bound, without rewriting the measured MPC initial state or
+    # introducing another final-output decision or stop owner.
+    self.constraint_accel = min(maximum_accel, cruise_ceiling)
     self.constraint_source = LongitudinalPlanSource.cruise
     self.reference_source = planner.mpc.source
     if cruise_speed <= STOP_SPEED:
