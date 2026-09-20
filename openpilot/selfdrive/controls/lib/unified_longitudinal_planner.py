@@ -113,6 +113,10 @@ def following_sample_weight(radar_state, speed, *, risk_margin):
         or lead.vLead + min(lead.aLeadK, 0.0) * CREEP_FINISH_T < STOP_SPEED):
       return 0.0
     weight = min(weight,
+                 # Retain the existing compensation at the admission boundary.
+                 # A confidence threshold must not switch between two different
+                 # actions while the native MPC trajectory remains unchanged.
+                 float(np.interp(lead.modelProb, [0.95, 1.0], [0.0, 1.0])),
                  float(np.interp(lead.vRel, [-CREEP_FOLLOW_MAX_CLOSING_SPEED, 0.0], [0.0, 1.0])),
                  float(np.interp(lead.aLeadK, [-CREEP_FOLLOW_MAX_CLOSING_SPEED, 0.0], [0.0, 1.0])))
   return weight

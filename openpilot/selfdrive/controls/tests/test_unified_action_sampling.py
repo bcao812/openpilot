@@ -1,4 +1,4 @@
-"""A native motion reference must not become its opposite at the actuator."""
+"""Action sampling in qualified low-speed following and at braking boundaries."""
 
 from unittest.mock import patch
 
@@ -20,7 +20,9 @@ def calm_following_state(speed, target, *, experimental=False):
   lead = state['radarState'].leadOne
   lead.present = True
   lead.dRel, lead.vLead, lead.vRel = 20.0, speed + 0.2, 0.2
-  lead.aLeadK, lead.aLeadTau, lead.modelProb, lead.yRel = 0.0, 1.5, 0.999, 0.0
+  # Isolate speed/risk/acceleration gates at full confidence in these fixtures.
+  # The native confidence-boundary regression below uses nonsaturated values.
+  lead.aLeadK, lead.aLeadTau, lead.modelProb, lead.yRel = 0.0, 1.5, 1.0, 0.0
   return state
 
 
@@ -93,7 +95,8 @@ def test_sustained_native_braking_is_not_filtered_or_rate_limited_by_sampling():
 
 
 @pytest.mark.parametrize('condition', [
-  'stationary', 'closing', 'decelerating', 'uncertain_second', 'short_gap', 'risk_deficit',
+  'stationary', 'closing', 'decelerating', 'uncertain_first', 'uncertain_second', 'invalid_probability',
+  'short_gap', 'risk_deficit',
   'high_speed', 'no_lead', 'model_stop', 'model_brake', 'raw_unknown',
 ])
 def test_braking_or_unqualified_following_retains_existing_delay_compensation(condition):
@@ -107,9 +110,13 @@ def test_braking_or_unqualified_following_retains_existing_delay_compensation(co
     lead.vLead, lead.vRel = speed - 0.6, -0.6
   elif condition == 'decelerating':
     lead.aLeadK = -0.6
+  elif condition == 'uncertain_first':
+    lead.modelProb = 0.949
   elif condition == 'uncertain_second':
     state['radarState'].leadTwo = lead
     state['radarState'].leadTwo.modelProb = 0.8
+  elif condition == 'invalid_probability':
+    lead.modelProb = 1.01
   elif condition == 'short_gap':
     lead.dRel = 4.9
   elif condition == 'risk_deficit':
@@ -175,6 +182,38 @@ def test_real_producer_does_not_jump_between_actions_at_the_risk_boundary():
     targets.append(planner.reference_planner.reference_accel)
   assert targets[0] < targets[1] < 0.0
   assert targets[1] - targets[0] < 0.01
+
+
+@pytest.mark.parametrize('confidence_lead', ['leadOne', 'leadTwo'])
+@pytest.mark.parametrize('initial_acceleration', [-0.68, 0.68])
+def test_native_mpc_readout_is_continuous_at_either_lead_confidence_boundary(confidence_lead, initial_acceleration):
+  references, targets, native_solutions = [], [], []
+  # Same independent native solver histories. Only the final confidence differs;
+  # the initial acceleration step is around the logged low-speed p95 magnitude.
+  # The old hard gate changes the request by about 0.32 m/s² in this setting.
+  for confidence in (0.94975, 0.95025):
+    planner, _ = make_planner(speed=2.5)
+    state = calm_following_state(2.5, 4.0)
+    state['selfdriveState'].personality = log.LongitudinalPersonality.standard
+    lead = state['radarState'].leadOne
+    lead.dRel, lead.vLead, lead.vRel = 11.0, 2.5, 0.0
+    lead.aLeadTau, lead.modelProb = 0.3, 0.999
+    if confidence_lead == 'leadTwo':
+      state['radarState'].leadTwo = lead
+    for frame in range(40):
+      planner.update(state, now_ns=advance(state, frame))
+      assert planner.mpc.solution_status == 0
+    state['carState'].aEgo = initial_acceleration
+    getattr(state['radarState'], confidence_lead).modelProb = confidence
+    # This calls the actual native MPC; no solved trajectory is substituted.
+    planner.update(state, now_ns=advance(state, 40))
+    assert planner.mpc.solution_status == 0
+    references.append(planner.reference_planner.reference_accel)
+    targets.append(planner.output_a_target)
+    native_solutions.append(planner.mpc.a_solution.copy())
+  np.testing.assert_array_equal(native_solutions[0], native_solutions[1])
+  assert 0.0 < abs(references[1] - references[0]) < 0.01
+  assert 0.0 < abs(targets[1] - targets[0]) < 0.01
 
 
 def test_following_weight_tapers_before_closing_and_speed_boundaries():
