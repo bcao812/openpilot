@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from openpilot.common.realtime import DT_CTRL, DT_MDL
-from openpilot.selfdrive.controls.lib.drive_helpers import should_stop
+from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL, should_stop
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionReferenceKind, MotionResponseKind, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import serialized
@@ -198,4 +198,58 @@ def test_actual_forward_model_departure_can_release_the_same_hold_and_reach_hond
   assert any(row['accel'] > 0.0 for row in rows)
   assert any(command['STANDSTILL_RELEASE'] and not command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0
              for command in can_rows)
+  assert all(not command['BRAKE_REQUEST'] or command['GAS_COMMAND'] <= 0 for command in can_rows)
+
+
+@pytest.mark.parametrize('measured_speed', [0.0, 0.2])
+@pytest.mark.parametrize('action_accel', [
+  pytest.param(STOP_RELEASE_ACCEL, id='at_p_release_threshold'),
+  pytest.param(0.6, id='positive_action'),
+  pytest.param(float(np.nextafter(np.float32(STOP_RELEASE_ACCEL), np.float32(-np.inf))), id='float32_below_threshold'),
+  pytest.param(0.0, id='zero_action'),
+  pytest.param(-0.5, id='negative_action'),
+])
+def test_constant_raw_moving_uses_p_final_target_to_release_the_actual_hold(measured_speed, action_accel):
+  """P releases its stop latch at 0.2 without requiring raw speed growth.
+
+  The model remains MOVING evidence. Only the final absolute target may
+  qualify this departure; the existing owner still confirms it and limits
+  the command rise before Honda CAN can request positive torque.
+  """
+  assert STOP_RELEASE_ACCEL == 0.2
+  harness = held_harness(measured_speed)
+  raw = np.full(len(ModelConstants.T_IDXS), measured_speed + 0.8)
+  curve = (raw * np.asarray(ModelConstants.T_IDXS), raw, np.zeros(len(raw)))
+  _, plans, rows, can_rows = harness.exercise(curve, action_accel=action_accel, seconds=1.2)
+
+  evidence = harness.planner.reference_planner.model_evidence
+  assert evidence.raw_motion.kind == 'moving' and not evidence.allows_departure
+  assert evidence.allows_external_departure
+  assert np.all(evidence.raw_velocity == evidence.raw_velocity[0]) and evidence.raw_velocity[0] > 0.0
+  assert all(event.longitudinalPlan.motionIntent.referenceKind == MotionReferenceKind.MOVING for event in plans)
+  targets = {int(event.logMonoTime): float(event.longitudinalPlan.aTarget) for event in plans}
+  # Compare the actual Float32 action and wire target, including the sample
+  # immediately below the P threshold. Decimal 0.2 rounds upward on this wire.
+  wire_action = float(harness.latest['modelV2'].modelV2.action.desiredAcceleration)
+  assert (wire_action >= STOP_RELEASE_ACCEL) == (action_accel >= STOP_RELEASE_ACCEL)
+  assert all(not event.longitudinalPlan.motionIntent.releaseAllowed
+             or event.longitudinalPlan.aTarget >= STOP_RELEASE_ACCEL for event in plans)
+  assert all(row['resolved_stop'] and not row['resume'] for row in rows
+             if targets[row['consumed_plan_mono']] < STOP_RELEASE_ACCEL)
+
+  if wire_action >= STOP_RELEASE_ACCEL:
+    assert not harness.latest['modelV2'].modelV2.action.shouldStop
+    assert all(event.longitudinalPlan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC for event in plans)
+    assert max(targets.values()) >= STOP_RELEASE_ACCEL
+    assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
+    assert any(row['phase'] == 'release' and not row['resolved_stop'] for row in rows)
+    assert any(row['accel'] > 0.0 for row in rows)
+    assert any(command['STANDSTILL_RELEASE'] and not command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0
+               for command in can_rows)
+  else:
+    assert max(targets.values()) < STOP_RELEASE_ACCEL
+    assert all(not event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
+    assert all(row['resolved_stop'] and not row['resume'] for row in rows)
+    assert all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0 and not command['STANDSTILL_RELEASE']
+               and not command['resume'] for command in can_rows)
   assert all(not command['BRAKE_REQUEST'] or command['GAS_COMMAND'] <= 0 for command in can_rows)
