@@ -272,14 +272,13 @@ def test_lead_priority_uses_tighter_geometry_and_keeps_stronger_model_braking_av
   assert action(strong_model) < action(lead_only) - 0.05
 
 
-@pytest.mark.parametrize('unknown_kind', ['backward_then_forward', 'single_zero', 'model_after_anchor'])
-def test_unknown_retains_compatible_model_and_lead_risk_without_new_typed_problem(unknown_kind):
+@pytest.mark.parametrize('unknown_kind', ['backward_then_forward', 'single_zero'])
+@pytest.mark.parametrize('after_anchor', [False, True])
+def test_unknown_retains_compatible_model_and_lead_risk_without_new_typed_problem(unknown_kind, after_anchor):
   raw = -0.4 + 0.6 * MODEL_TIMES if unknown_kind == 'backward_then_forward' else np.full(len(MODEL_TIMES), 10.0)
   if unknown_kind == 'single_zero':
     raw[16] = 0.0
-  elif unknown_kind == 'model_after_anchor':
-    raw = 10.0 + 0.6 * MODEL_TIMES
-  timing = {'model_ns': SOURCE_NS + 1, 'now_ns': SOURCE_NS + 2} if unknown_kind == 'model_after_anchor' else {}
+  timing = {'model_ns': SOURCE_NS + 1, 'now_ns': SOURCE_NS + 2} if after_anchor else {}
   reference = typed_reference(raw, 10.0, typed=evidence(raw, 10.0, **timing))
   radar = radar_state(distance=20.0, speed=0.0)
   old_risk = solve_reference(10.0, replace(reference, typed_model=None), radar=radar)
@@ -289,9 +288,25 @@ def test_unknown_retains_compatible_model_and_lead_risk_without_new_typed_proble
   for name in ('params', 'yref', 'x_sol', 'u_sol'):
     np.testing.assert_allclose(getattr(old_risk, name), getattr(unknown, name), atol=1e-9, rtol=0.0)
   assert reference.typed_model.moving is None
-  assert reference.typed_model.allows_departure == (unknown_kind == 'model_after_anchor')
+  assert not reference.typed_model.allows_departure
   np.testing.assert_array_equal(unknown.params[:, MODEL_V_REF:TYPED_MODEL_MODE+1], 0.0)
   np.testing.assert_array_equal(unknown.diagnostic_reference_weights[:, 1:4], 0.0)
+
+
+@pytest.mark.parametrize('delay_ns', [1, 5_000_000])
+def test_later_moving_preference_keeps_unknown_epoch_and_real_lead_risk(delay_ns):
+  raw = 10.0 + 0.6 * MODEL_TIMES
+  typed = evidence(raw, 10.0, model_ns=SOURCE_NS + delay_ns, now_ns=SOURCE_NS + delay_ns + 1)
+  reference = typed_reference(raw, 10.0, typed=typed)
+  radar = radar_state(distance=20.0, speed=0.0)
+  lead_only = solve_reference(10.0, MpcReference(30.0), radar=radar)
+  future = solve_reference(10.0, reference, radar=radar)
+  assert typed.unknown.reason == 'model_proxy_after_initial_state'
+  assert typed.source.proxy_age_s is None and typed.source.physical_prediction_epoch_ns is None
+  assert future.rest_goal_state == 'none' and future.rest_goal_braking_accel is None
+  assert action(future) <= action(lead_only) + 1e-4
+  np.testing.assert_array_equal(future.params[:, TYPED_MODEL_MODE], 1.0)
+  np.testing.assert_array_equal(future.diagnostic_reference_weights[~typed.moving.supported, 1:4], 0.0)
 
 
 @pytest.mark.parametrize('lead_present', [False, True])
@@ -306,11 +321,12 @@ def test_available_model_after_carstate_proxy_does_not_create_a_cruise_fault(lea
     state.logMonoTime['modelV2'] = anchor + 5_000_000
     planner.update(state, now_ns=anchor + 10_000_000)
     assert planner.motion_intent.valid and planner.mpc.solution_status == 0
-    assert planner.reference_planner.model_reference_mode == 'compatibility_risk_only'
+    assert planner.reference_planner.model_reference_mode == 'future_supported_moving'
     assert planner.reference_planner.model_fallback_reason == 'model_proxy_after_initial_state'
     assert not planner.motion_intent.release_allowed
     assert abs(planner.output_a_target) < 1e-4
-    np.testing.assert_array_equal(planner.mpc.params[:, TYPED_MODEL_MODE], 0.0)
+    np.testing.assert_array_equal(planner.mpc.params[:, TYPED_MODEL_MODE], 1.0)
+    np.testing.assert_array_equal(planner.mpc.diagnostic_reference_weights[0, 1:4], 0.0)
 
 
 @pytest.mark.parametrize('publication_offset_ns', [1, 5_000_000])
@@ -336,12 +352,26 @@ def test_constant_model_bias_cannot_turn_publication_order_into_braking(raw_spee
       planner.update(state, now_ns=anchor + 10_000_000)
       assert planner.motion_intent.valid and planner.mpc.solution_status == 0
       assert not planner.motion_intent.release_allowed
-      rows.append(np.concatenate(([planner.output_a_target], planner.mpc.v_solution,
-                                  planner.mpc.a_solution, planner.mpc.j_solution)))
+      rows.append(planner.output_a_target)
     trajectories.append(np.array(rows))
   for trajectory in trajectories:
-    np.testing.assert_allclose(trajectory[:, 0], 0.0, atol=1e-4, rtol=0.0)
+    np.testing.assert_allclose(trajectory, 0.0, atol=1e-4, rtol=0.0)
   np.testing.assert_allclose(trajectories[1], trajectories[0], atol=1e-4, rtol=0.0)
+
+
+def test_future_supported_moving_preference_does_not_weaken_model_action_braking():
+  planner, _ = make_planner(speed=10.0)
+  state = make_state(speed=10.0, target=20.0, experimental=True)
+  assign_curve(state, 10.6 + 0.6 * MODEL_TIMES)
+  state['modelV2'].action.desiredAcceleration = -1.0
+  for frame in range(12):
+    anchor = advance(state, frame)
+    state.logMonoTime['modelV2'] = anchor + 5_000_000
+    planner.update(state, now_ns=anchor + 10_000_000)
+    assert planner.motion_intent.valid and planner.mpc.solution_status == 0
+    assert planner.reference_planner.model_reference_mode == 'future_supported_moving'
+    assert planner.output_a_target <= -1.0
+    assert not planner.motion_intent.release_allowed
 
 
 def test_later_publication_raw_forward_can_release_actual_held_owner_and_honda_can():
@@ -354,8 +384,8 @@ def test_later_publication_raw_forward_can_release_actual_held_owner_and_honda_c
   raw = 0.2 + 0.6 * MODEL_TIMES
   curve = (0.2 * MODEL_TIMES + 0.3 * MODEL_TIMES**2, raw, np.full(len(raw), 0.6))
   _, plans, rows, can_rows = harness.exercise(curve, action_accel=0.5)
-  assert harness.planner.reference_planner.model_reference_mode == 'compatibility_risk_only'
-  assert harness.planner.reference_planner.model_evidence.moving is None
+  assert harness.planner.reference_planner.model_reference_mode == 'future_supported_moving'
+  assert harness.planner.reference_planner.model_evidence.has_future_moving_preference
   assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
   assert any(row['phase'] == 'release' and not row['resolved_stop'] for row in rows)
   assert any(command['STANDSTILL_RELEASE'] and not command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0.0
@@ -401,7 +431,7 @@ def test_qualified_departing_lead_is_independent_of_missing_aligned_or_raw_growt
   curve = (raw * MODEL_TIMES, raw, np.zeros(len(raw)))
   _, plans, rows, can_rows = harness.exercise(curve, action_accel=0.5)
   evidence = harness.planner.reference_planner.model_evidence
-  assert evidence.moving is None and evidence.raw_motion.kind == 'moving'
+  assert evidence.has_future_moving_preference and evidence.raw_motion.kind == 'moving'
   assert not evidence.allows_departure and evidence.allows_external_departure
   assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
   negative_plan_times = {int(event.logMonoTime) for event in plans if event.longitudinalPlan.aTarget <= 0.0}

@@ -572,7 +572,8 @@ class LongitudinalMpc:
         raise ValueError("Invalid model reference")
       # Compatibility snapshots remain independently inspectable. The typed
       # production path consumes its model as ego evidence, never as a lead.
-      if reference.typed_model is None or reference.typed_model.unknown is not None:
+      if (reference.typed_model is None
+          or reference.typed_model.unknown is not None and not reference.typed_model.has_future_moving_preference):
         obstacles.append(model_position - model_position[0] + get_safe_obstacle_distance(model_velocity, t_follow))
         sources.append(LongitudinalPlanSource.e2e)
     return obstacles, sources, accel_min, accel_max
@@ -1148,7 +1149,7 @@ class LongitudinalMpc:
     lower = np.full((N+1, 2), -REFERENCE_BOUND)
     upper = np.full((N+1, 2), REFERENCE_BOUND)
 
-    qualified = typed is not None and typed.unknown is None
+    qualified = typed is not None and (typed.unknown is None or typed.has_future_moving_preference)
     if qualified:
       # The measured state remains fixed. Forward prediction nodes cannot use
       # a soft negative-speed excursion to make a typed rest goal economical;

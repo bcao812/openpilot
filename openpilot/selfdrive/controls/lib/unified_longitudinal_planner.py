@@ -401,7 +401,8 @@ class UnifiedLongitudinalPlanner:
       self.model_reference_mode = 'typed'
       if unknown is not None:
         self.model_fallback_reason = unknown.reason
-        self.model_reference_mode = ('compatibility_risk_only' if unknown.reason in COMPATIBLE_MODEL_UNKNOWNS else 'invalid')
+        self.model_reference_mode = ('future_supported_moving' if self.model_evidence.has_future_moving_preference else
+                                     'compatibility_risk_only' if unknown.reason in COMPATIBLE_MODEL_UNKNOWNS else 'invalid')
         if self.model_reference_mode == 'invalid':
           # A future/expired/mutated source has no qualified new model risk
           # input. The same MPC still consumes independently valid real leads
