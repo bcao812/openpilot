@@ -542,8 +542,9 @@ def e2e_actuation_arm(speed, model_request, *, withdrawal):
     state['modelV2'].action.shouldStop = 10 <= frame < 30
     state['modelV2'].action.desiredAcceleration = model_request if frame < 30 else 1.0
     if frame >= 30 and withdrawal == 'forward':
-      # A rising source trajectory is independent departure evidence. Clearing
-      # shouldStop while leaving the original flat MOVING source is not.
+      # A rising source trajectory supplies departure evidence. A flat MOVING
+      # source can instead withdraw an obsolete stop while already rolling;
+      # it still cannot authorize departure from an owned standstill.
       model = state['modelV2']
       model.velocity.x = [float(speed + sample) for sample in ModelConstants.T_IDXS]
       model.position.x = [float(speed * sample + 0.5 * sample ** 2) for sample in ModelConstants.T_IDXS]
@@ -576,6 +577,7 @@ def e2e_actuation_arm(speed, model_request, *, withdrawal):
         decoded = dict(parser.vl['ACC_CONTROL'])
       rows.append({
         'frame': frame, 'tick': tick, 'target': float(plan.aTarget), 'plan_valid': bool(event.valid),
+        'plan_ns': int(event.logMonoTime), 'model_ns': int(plan.modelMonoTime),
         'solver_status': int(plan.solverStatus), 'raw_reasons': int(plan.motionIntent.reasons),
         'release_allowed': bool(plan.motionIntent.releaseAllowed),
         'reference_kind': int(plan.motionIntent.referenceKind),
@@ -614,11 +616,14 @@ def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_only
       assert candidate['reference_kind'] == expected_kind
       if withdrawal == 'moving':
         assert not candidate['release_allowed']
-        assert candidate['resolved_stop']
+      assert not candidate['resolved_stop']
       if previous['resolved_stop'] and not candidate['resolved_stop']:
         # Every case is still rolling. Qualified withdrawal may end APPROACH
         # while the reference still requests braking; that is not propulsion.
-        assert candidate['release_allowed']
+        assert speed >= 0.3 and previous['phase'] == MotionPhase.APPROACH
+        assert not previous['owned_reasons'] & int(StopReason.HOLD)
+        assert candidate['tick'] == 0
+        assert candidate['plan_ns'] > previous['plan_ns'] and candidate['model_ns'] > previous['model_ns']
         assert candidate['phase'] in (MotionPhase.RELEASE, MotionPhase.TRACK)
         if candidate['target'] < 0.0:
           assert candidate['request'] <= candidate['target'] + 1e-6
@@ -627,6 +632,8 @@ def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_only
         assert candidate['request'] <= 0.0
         if candidate['can'] is not None:
           assert candidate['can']['GAS_COMMAND'] <= 0
+    if previous is not None:
+      assert candidate['request'] - previous['request'] <= 0.08 + 1e-12
     previous = candidate
   assert stopping_can_frames == 50
   assert all(not row['can']['BRAKE_REQUEST'] or row['can']['GAS_COMMAND'] <= 0 for row in rows if row['can'] is not None)
@@ -634,12 +641,10 @@ def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_only
     # The frozen one-second budget concerns stop ownership / TRACK, not a
     # positive acceleration target or positive native gas by that deadline.
     assert any(row['release_allowed'] for row in rows if row['frame'] >= 30)
-    assert rows[-1]['phase'] == MotionPhase.TRACK
-    assert rows[-1]['state'] == LongCtrlState.pid
-    assert not rows[-1]['resolved_stop']
-    assert not rows[-1]['owned_reasons'] & int(StopReason.E2E)
-  else:
-    assert rows[-1]['phase'] == MotionPhase.APPROACH
+  assert rows[-1]['phase'] == MotionPhase.TRACK
+  assert rows[-1]['state'] == LongCtrlState.pid
+  assert not rows[-1]['resolved_stop']
+  assert not rows[-1]['owned_reasons'] & int(StopReason.E2E)
 
 
 def test_unified_high_speed_e2e_execution_tracks_the_braking_reference():
