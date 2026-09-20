@@ -81,6 +81,11 @@ def reference_requests_departure(velocity, acceleration, jerk):
           and max(progress_speeds) > max(float(velocity[0]), STOP_SPEED))
 
 
+def sample_native_acceleration(acceleration, action_t):
+  """Read the native piecewise-linear acceleration at the actuation horizon."""
+  return float(np.interp(action_t, T_IDXS, acceleration))
+
+
 def cruise_accel_limit(params, speed, steering_angle, e2e_allowed, coast_accel, allow_throttle):
   maximum = ACCEL_MAX if e2e_allowed else float(get_max_accel(speed))
   if not e2e_allowed:
@@ -432,7 +437,7 @@ class UnifiedLongitudinalPlanner:
     # time. Reconstructing it as 2 * average_accel - initial_accel assumes one
     # constant jerk over the entire delay and can reverse the sign of a valid
     # braking trajectory when measured acceleration changes quickly.
-    self.reference_accel = float(np.interp(delay + DT_MDL, T_IDXS, planner.mpc.a_solution))
+    self.reference_accel = sample_native_acceleration(planner.mpc.a_solution, delay + DT_MDL)
     planner._observe(sampledAccelKnown=True, sampledAccel=self.reference_accel)
     if not math.isfinite(self.reference_accel):
       self.invalidate(speed, "nonfinite_sampled_accel")

@@ -129,7 +129,7 @@ def test_negative_source_label_requires_same_lead_geometry_and_current_contract(
 
   with patch.object(planner, 'is_e2e', return_value=True), patch.object(planner.mpc, 'update', side_effect=update), \
        patch.object(state, 'all_checks', return_value=case != 'stale_radar'), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan', return_value=0.3 if case == 'positive_target' else -1.0):
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_native_acceleration', return_value=0.3 if case == 'positive_target' else -1.0):
     plan, _ = consume(planner, control, state, 0)
   assert plan.motionIntent.responseKind == expected
   if expected == MotionResponseKind.LEAD_BRAKING:
@@ -156,7 +156,7 @@ def test_fcw_does_not_withdraw_existing_qualified_braking(selected, e2e, target,
     planner.mpc.crash_cnt = crash_count
 
   with patch.object(planner, 'is_e2e', return_value=e2e), patch.object(planner.mpc, 'update', side_effect=update), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan', return_value=target):
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_native_acceleration', return_value=target):
     for frame in range(8):
       crash_count = 0 if frame < 3 else 4
       before = control.pid.i
@@ -185,7 +185,7 @@ def test_ordinary_acc_with_a_lead_cannot_gain_positive_i_before_or_during_fcw(se
     planner.mpc.crash_cnt = crash_count
 
   with patch.object(planner, 'is_e2e', return_value=False), patch.object(planner.mpc, 'update', side_effect=update), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan', return_value=0.3):
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_native_acceleration', return_value=0.3):
     for frame in range(6):
       crash_count = 0 if frame < 3 else 4
       plan, outputs = consume(planner, control, state, frame)
@@ -211,7 +211,7 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
 
   with patch.object(planner, 'is_e2e', side_effect=lambda _: e2e), patch.object(planner.mpc, 'update', side_effect=update), \
        patch.object(state, 'all_checks', side_effect=lambda *args, **kwargs: healthy), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan', side_effect=lambda *args, **kwargs: target):
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_native_acceleration', side_effect=lambda *args, **kwargs: target):
     for frame in range(6):
       if frame == 3:
         assert control.pid.i > 0.0
@@ -261,7 +261,7 @@ def test_lead_loss_threshold_crossing_and_slot_change_recompute_permission_witho
   cases = [(0, True, 10.0), (0, True, 0.5), (0, True, 10.0),
            (1, True, 10.0), (1, False, 10.0), (0, True, 10.0)]
   with patch.object(planner, 'is_e2e', return_value=True), patch.object(planner.mpc, 'update', side_effect=update), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan', return_value=-1.0):
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_native_acceleration', return_value=-1.0):
     for frame, (selected, present, closing) in enumerate(cases):
       leads = (state['radarState'].leadOne, state['radarState'].leadTwo)
       set_lead(leads[selected], present=present, closing=closing)

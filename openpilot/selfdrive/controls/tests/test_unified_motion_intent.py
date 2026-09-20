@@ -2,7 +2,8 @@ import numpy as np
 import pytest
 
 from opendbc.car.honda.values import CarControllerParams
-from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED, get_accel_from_plan
+from openpilot.common.realtime import DT_MDL
+from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_STOP_T, STOP_RELEASE_ACCEL, STOP_SPEED, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_planner import CONTROL_N_T_IDX
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
@@ -132,7 +133,11 @@ def test_warm_braking_history_cannot_release_during_approach_or_hold(protocol_ho
     state['modelV2'].position.x = [float(speed * sample) for sample in ModelConstants.T_IDXS]
     state['modelV2'].velocity.x = [float(speed)] * len(ModelConstants.T_IDXS)
     plan, command, motion = publish_and_consume(planner, state, consumer)
-    positive_compensation.append(plan.aTarget)
+    # Keep this counterexample to the old inverse independently of the new
+    # production sampler. The owner must retain the stop in either case.
+    positive_compensation.append(get_accel_from_plan(
+      planner.v_desired_trajectory, planner.a_desired_trajectory, CONTROL_N_T_IDX,
+      action_t=planner.CP.longitudinalActuatorDelay + DT_MDL))
     if speed > 0.0:
       assert planner.mpc.x0[2] == pytest.approx(measured_accel)
     assert not plan.motionIntent.releaseAllowed
@@ -140,7 +145,7 @@ def test_warm_braking_history_cannot_release_during_approach_or_hold(protocol_ho
   assert max(positive_compensation) > 0.2
 
 
-@pytest.mark.parametrize('scenario', ['clear_cruise', 'distant_stationary_lead', 'departing_lead'])
+@pytest.mark.parametrize('scenario', ['clear_cruise', 'departing_lead'])
 def test_actual_forward_reference_supplies_explicit_permission_to_leave_hold(scenario):
   planner, extension = make_planner(speed=0.0)
   planner.CP.pcmCruise = False
@@ -157,6 +162,42 @@ def test_actual_forward_reference_supplies_explicit_permission_to_leave_hold(sce
   assert not motion.resolvedStop
   assert command.actuators.accel > -2.0
   assert command.actuators.accel <= -2.0 + 8.0 * 0.01 + 1e-6
+
+
+def test_distant_stationary_lead_uses_fresh_confirmation_before_a_small_positive_release():
+  planner, extension = make_planner(speed=0.0)
+  planner.CP.pcmCruise = False
+  state = stopped_lead_state(0.0, gap=10.0)
+  consumer = held_consumer(planner, extension)
+  previous_request = -2.0
+  released = False
+  for frame in range(24):
+    state['controlsState'].longControlState = consumer.control.LoC.long_control_state
+    # Four cached 10 ms ticks follow each plan below; the next fresh tick is
+    # another 10 ms, giving the actual 20 Hz producer / 100 Hz consumer cadence.
+    plan, command, motion = publish_and_consume(
+      planner, state, consumer, plan_step_ns=50_000_000 if frame == 0 else 10_000_000)
+    assert plan.motionIntent.releaseAllowed
+    assert 0.0 < plan.aTarget < STOP_RELEASE_ACCEL
+    confirmation = consumer.control.LoC.motion_supervisor.release_lead_t
+    if not released:
+      if confirmation < CREEP_STOP_T - 1e-9:
+        assert_kept_stop(command, motion)
+      else:
+        assert motion.phase == 'release' and not motion.resolvedStop
+        assert -2.0 < command.actuators.accel <= -2.0 + 0.08 + 1e-6
+        released = True
+    for tick in range(5):
+      if tick:
+        command, motion = consumer.step(new_plan=False)
+        if not released:
+          assert consumer.control.LoC.motion_supervisor.release_lead_t == confirmation
+          assert_kept_stop(command, motion)
+      assert command.actuators.accel - previous_request <= 0.08 + 1e-6
+      assert command.longActive and not motion.degraded
+      previous_request = command.actuators.accel
+  assert released and not motion.resolvedStop
+  assert motion.phase == 'track' and command.actuators.accel > 0.0
 
 
 def test_nonnegative_stopping_trajectory_is_not_a_move_intent_despite_positive_scalar():
@@ -218,7 +259,9 @@ def test_track_enters_a_real_stop_even_when_the_delay_compensation_is_positive(f
     state['modelV2'].position.x = [float(speed * sample) for sample in ModelConstants.T_IDXS]
     state['modelV2'].velocity.x = [float(speed)] * len(ModelConstants.T_IDXS)
     plan, command, motion = publish_and_consume(planner, state, consumer, plan_step_ns=10_000_000)
-    reference_accels.append(plan.reference.accel)
+    reference_accels.append(get_accel_from_plan(
+      planner.v_desired_trajectory, planner.a_desired_trajectory, CONTROL_N_T_IDX,
+      action_t=planner.CP.longitudinalActuatorDelay + DT_MDL))
     assert plan.shouldStop
     assert plan.motionIntent.reasons & (int(StopReason.FORCE_DECEL) if force_decel else int(StopReason.MPC))
     for tick in range(5):
