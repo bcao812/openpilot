@@ -9,6 +9,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from openpilot.cereal import log
@@ -129,7 +130,8 @@ def test_negative_source_label_requires_same_lead_geometry_and_current_contract(
 
   with patch.object(planner, 'is_e2e', return_value=True), patch.object(planner.mpc, 'update', side_effect=update), \
        patch.object(state, 'all_checks', return_value=case != 'stale_radar'), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.3 if case == 'positive_target' else -1.0):
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration',
+             return_value=0.3 if case == 'positive_target' else -1.0):
     plan, _ = consume(planner, control, state, 0)
   assert plan.motionIntent.responseKind == expected
   if expected == MotionResponseKind.LEAD_BRAKING:
@@ -245,7 +247,7 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
           assert plan.motionIntent.referenceKind == MotionReferenceKind.MOVING
         if boundary == 'acc_cap':
           assert planner.reference_planner.reference_overridden
-          assert plan.aTarget == planner.reference_planner.constraint_accel
+          assert plan.aTarget == float(np.float32(planner.reference_planner.constraint_accel))
         if boundary in ('leadOne', 'leadTwo', 'fcw', 'model', 'acc_cap'):
           assert all(output <= plan.aTarget for output in outputs)
 
