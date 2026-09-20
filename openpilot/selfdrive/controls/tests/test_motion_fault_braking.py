@@ -13,6 +13,7 @@ from opendbc.car.honda.values import CAR, DBC, CarControllerParams
 from opendbc.car.structs import car
 from openpilot.cereal import log, messaging
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
+from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.motion_supervisor import (
@@ -542,9 +543,9 @@ def e2e_actuation_arm(speed, model_request, *, withdrawal):
     state['modelV2'].action.shouldStop = 10 <= frame < 30
     state['modelV2'].action.desiredAcceleration = model_request if frame < 30 else 1.0
     if frame >= 30 and withdrawal == 'forward':
-      # A rising source trajectory supplies departure evidence. A flat MOVING
-      # source can instead withdraw an obsolete stop while already rolling;
-      # it still cannot authorize departure from an owned standstill.
+      # A rising source supplies its original departure evidence. A flat
+      # MOVING source keeps that factual classification and can separately
+      # qualify P's strong final absolute target after its stop bit clears.
       model = state['modelV2']
       model.velocity.x = [float(speed + sample) for sample in ModelConstants.T_IDXS]
       model.position.x = [float(speed * sample + 0.5 * sample ** 2) for sample in ModelConstants.T_IDXS]
@@ -615,7 +616,7 @@ def test_unified_e2e_stop_preserves_braking_with_20_100_50_hz_execution_and_only
       expected_kind = MotionReferenceKind.FORWARD if withdrawal == 'forward' else MotionReferenceKind.MOVING
       assert candidate['reference_kind'] == expected_kind
       if withdrawal == 'moving':
-        assert not candidate['release_allowed']
+        assert not candidate['release_allowed'] or candidate['target'] >= STOP_RELEASE_ACCEL
       assert not candidate['resolved_stop']
       if previous['resolved_stop'] and not candidate['resolved_stop']:
         # Every case is still rolling. Qualified withdrawal may end APPROACH

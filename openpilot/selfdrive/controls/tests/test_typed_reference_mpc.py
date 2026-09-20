@@ -14,6 +14,7 @@ import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.common.realtime import DT_CTRL
+from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   J_EGO_COST, MODEL_A_REF, MODEL_BRAKING_PRIORITY, MODEL_V_REF, MPC_GOAL_INFEASIBLE,
@@ -28,7 +29,7 @@ from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import action, radar_state, solve_reference
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner, make_state
 from openpilot.selfdrive.controls.tests.test_unified_model_reference_contract import ModelReferenceHarness, held_harness, model_stop_curve
-from openpilot.selfdrive.controls.tests.test_unified_startup import PLANNER_STEPS
+from openpilot.selfdrive.controls.tests.test_unified_startup import CONTROL_STEP_NS, PLANNER_STEPS
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness, new_event
 
 
@@ -402,7 +403,8 @@ def test_qualified_departing_lead_is_independent_of_missing_aligned_or_raw_growt
              for command in can_rows)
 
 
-def test_cached_departing_lead_cannot_withdraw_a_held_stop_when_speed_crosses_the_stop_band():
+@pytest.mark.parametrize('action_accel', [0.1, 0.5], ids=['weak_action', 'strong_action'])
+def test_cached_departing_lead_cannot_withdraw_a_held_stop_when_speed_crosses_the_stop_band(action_accel):
   harness = StrictPlanTransportHarness(speed=5.0)
   harness.hold()
   harness.source_state.cruiseState.standstill = False
@@ -424,16 +426,63 @@ def test_cached_departing_lead_cannot_withdraw_a_held_stop_when_speed_crosses_th
     return row | {'measured_speed': float(harness.source_state.vEgo)}
 
   with patch.object(harness, 'step', side_effect=crossing_step):
-    _, plans, rows, can_rows = harness.exercise(curve, action_accel=0.5)
+    # The extra observation time lets a later legitimate departure complete
+    # the existing command ramp; the original cached crossing is unchanged.
+    _, plans, rows, can_rows = harness.exercise(curve, action_accel=action_accel, seconds=1.2)
   first_plan_time = int(plans[0].logMonoTime)
   assert plans[0].longitudinalPlan.aTarget < 0.0
   assert plans[0].longitudinalPlan.motionIntent.releaseAllowed
   cached_rows = [row for row in rows if row['consumed_plan_mono'] == first_plan_time]
   assert cached_rows[0]['measured_speed'] < 0.3
   assert any(row['measured_speed'] > 0.3 for row in cached_rows)
-  assert all(row['resolved_stop'] and not row['resume'] for row in rows)
+  assert all(row['resolved_stop'] and not row['resume'] and row['accel'] <= 0.0 for row in cached_rows), cached_rows
+
+  plans_by_time = {int(event.logMonoTime): event.longitudinalPlan for event in plans}
+  controls_by_time = {row['mono']: row for row in rows}
+  # Card applies the preceding control tick, not the plan currently being
+  # produced or consumed at the CAN timestamp.
+  linked_can = [(command, controls_by_time[command['mono'] - CONTROL_STEP_NS]) for command in can_rows]
+  cached_can = [command for command, row in linked_can if row['consumed_plan_mono'] == first_plan_time]
+  assert cached_can
   assert all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0.0
-             and not command['STANDSTILL_RELEASE'] for command in can_rows)
+             and not command['STANDSTILL_RELEASE'] and not command['resume'] for command in cached_can)
+
+  qualified_times = [stamp for stamp, plan in plans_by_time.items()
+                     if stamp > first_plan_time and plan.modelMonoTime > plans[0].longitudinalPlan.modelMonoTime
+                     and plan.aTarget >= STOP_RELEASE_ACCEL and plan.motionIntent.releaseAllowed]
+  first_qualified = min(qualified_times) if qualified_times else None
+  protected_rows = [row for row in rows if first_qualified is None or row['consumed_plan_mono'] < first_qualified]
+  assert protected_rows
+  assert all(row['resolved_stop'] and not row['resume'] and row['accel'] <= 0.0 for row in protected_rows), protected_rows
+  protected_times = {row['mono'] for row in protected_rows}
+  protected_can = [command for command, row in linked_can if row['mono'] in protected_times]
+  assert all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0.0
+             and not command['STANDSTILL_RELEASE'] and not command['resume'] for command in protected_can)
+
+  if action_accel < STOP_RELEASE_ACCEL:
+    # At .31 m/s the old independent-lead departure guard no longer qualifies.
+    # A fresh weak action cannot turn its earlier cached permission into a go.
+    assert not qualified_times
+    assert all(plan.aTarget < STOP_RELEASE_ACCEL for plan in plans_by_time.values())
+    assert all(row['resolved_stop'] and not row['resume'] for row in rows)
+  else:
+    assert qualified_times
+    released = [index for index, row in enumerate(rows) if not row['resolved_stop']]
+    assert released and released[0] > 0
+    index = released[0]
+    previous, current = rows[index - 1], rows[index]
+    assert previous['resolved_stop']
+    assert current['consumed_plan_mono'] > previous['consumed_plan_mono']
+    assert current['model_mono'] > previous['model_mono']
+    plan = plans_by_time[current['consumed_plan_mono']]
+    assert plan.aTarget >= STOP_RELEASE_ACCEL and plan.motionIntent.releaseAllowed
+    assert plan.motionIntent.referenceKind == MotionReferenceKind.MOVING
+    assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+    assert any(row['accel'] > 0.0 for row in rows[index:])
+    assert any(command['STANDSTILL_RELEASE'] and not command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0.0
+               for command, row in linked_can if row['consumed_plan_mono'] >= current['consumed_plan_mono'])
+  assert all(not command['BRAKE_REQUEST'] or command['GAS_COMMAND'] <= 0.0 for command in can_rows)
+  assert np.max(np.diff([row['accel'] for row in rows])) <= STARTING_ACCEL_RATE * DT_CTRL + 1e-6
 
 
 def mutated_model_planner(bad_raw, bad_action, *, solver_status=None):
