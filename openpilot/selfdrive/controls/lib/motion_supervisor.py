@@ -403,7 +403,12 @@ class MotionSupervisor:
       # creep deadline win even while a healthy moving lead is confirmed.
       # Both identities must advance; the existing gap bound still restarts
       # confirmation instead of crediting an unobserved interval.
-      return min(CREEP_STOP_T, previous + min(plan_step, model_step))
+      step = min(plan_step, model_step)
+      # Keep the previous first-sample bound when eligibility has just become
+      # true. The preceding longer interval did not yet carry that evidence.
+      if previous == 0.0:
+        step = min(step, DT_MDL)
+      return min(CREEP_STOP_T, previous + step)
     return previous
 
   def _update_creep(self, v_ego, a_target, allowed, elapsed, *, movement_evidence=False, fresh_input=False):
