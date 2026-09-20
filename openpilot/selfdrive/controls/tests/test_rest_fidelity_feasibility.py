@@ -19,6 +19,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
 )
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
 from openpilot.selfdrive.controls.tests.test_future_rest_scheduling import assert_actual_scheduled_stop
+from openpilot.selfdrive.controls.tests.test_mpc_rest_numerics import integrate
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, evidence, stopping_curve
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import typed_reference
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
@@ -152,3 +153,23 @@ def test_reachable_short_rest_keeps_its_original_goal_and_native_result():
     np.testing.assert_array_equal(getattr(results[0], name), getattr(results[1], name))
   for before, after in zip(results[0].diagnostic_reference_bounds, results[1].diagnostic_reference_bounds, strict=True):
     np.testing.assert_array_equal(before, after)
+
+
+def test_partly_deliverable_nominal_interval_keeps_a_native_stop_inside_the_envelope():
+  # Existing short-scheduler boundary: the mathematical a1 interval straddles
+  # -3.5, so rejecting its old midpoint would discard a real nonempty witness.
+  # This case keeps its original destination; no rescheduling or solution clip.
+  speed = 73.0 / 150.0
+  reference = typed_reference(stopping_curve(speed, 0.15), speed, cruise=5.0)
+  assert reference.typed_model.rest_goal.native_node == 2
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=False)
+  mpc.set_cur_state(speed, 0.0)
+  minimum, maximum = mpc.future_rest_acceleration_interval(mpc.x0, 2)
+  assert minimum < ACCEL_MIN < maximum
+  mpc.update(radar_state(), reference=reference)
+  assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == 0
+  assert mpc.outcome is MpcOutcome.ACCEPTED and mpc.rest_goal_state == 'satisfied'
+  assert mpc.effective_rest_node is None and mpc.rest_goal is reference.typed_model.rest_goal
+  assert_acceleration_deliverable(mpc)
+  np.testing.assert_allclose(mpc.x_sol, integrate(mpc.x0, mpc.j_solution), atol=QP_FEASIBILITY_TOL, rtol=0.0)

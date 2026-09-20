@@ -1219,11 +1219,22 @@ class LongitudinalMpc:
         self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_without_nonnegative_initial_segment'
       elif self.x0[1] + minimum_accel * goal.native_time_s > REST_STATE_TOL:
         self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_time_below_braking_lower_bound'
-      elif goal.native_node in (1, 2) and (future_interval := self.future_rest_acceleration_interval(self.x0, goal.native_node)) is None:
-        # This certifies infeasibility of the actual native boxes and forward
-        # interval certificate. It does not claim that the physical car cannot
-        # stop, nor reinterpret the following real risk solve as goal success.
-        self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_time_below_discrete_lower_bound'
+      elif goal.native_node in (1, 2):
+        future_interval = self.future_rest_acceleration_interval(self.x0, goal.native_node)
+        if future_interval is not None:
+          # This interval describes a_1, including for a node-two rest. A soft
+          # acceleration slack cannot make an otherwise undeliverable stop
+          # qualify. Use the same first-node envelope as later scheduling.
+          minimum = max(future_interval[0], float(self.params[1, 0]))
+          maximum = min(future_interval[1], float(self.params[1, 1]))
+          future_interval = (minimum, maximum) if minimum <= maximum else None
+        if future_interval is None:
+          # Reject this native destination, not every physical way to stop.
+          # Existing later-node scheduling or explicit failure braking remains
+          # responsible for an uncommandable nominal first acceleration.
+          self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_time_below_discrete_lower_bound'
+        else:
+          self.rest_goal_state = 'constrained'
       else:
         self.rest_goal_state = 'constrained'
 
@@ -1238,9 +1249,9 @@ class LongitudinalMpc:
       if self.rest_goal_state == 'constrained' or scheduled_primal is not None:
         node = self.effective_rest_node if scheduled_primal is not None else goal.native_node
         if scheduled_primal is not None:
-          # These rows were checked by the scheduling witness. Make the
-          # existing acceleration envelope hard for this new branch only;
-          # ordinary mathematically reachable goals retain their prior problem.
+          # A scheduled destination has a complete checked witness. Retain its
+          # acceleration envelope on every future interval; nominal short-rest
+          # admission installs its first-node envelope separately below.
           lower[1:, 1], upper[1:, 1] = self.params[1:, 0], self.params[1:, 1]
         lower[max(1, node):, :] = 0.0
         upper[max(1, node):, :] = 0.0
@@ -1273,6 +1284,12 @@ class LongitudinalMpc:
           if scheduled_primal is not None:
             lower[node:, 1] = np.maximum(lower[node:, 1], self.params[node:, 0])
             upper[node:, 1] = np.minimum(upper[node:, 1], self.params[node:, 1])
+          elif node in (1, 2):
+            # Admission and the actual solve must use the same a_1 envelope;
+            # narrowing only the primal seed would still leave the solver's
+            # soft acceleration row able to buy an undeliverable short stop.
+            lower[1, 1] = max(lower[1, 1], self.params[1, 0])
+            upper[1, 1] = min(upper[1, 1], self.params[1, 1])
           self.diagnostic_rest_goal.update(nativeVelocityBounds=[0.0, REST_STATE_TOL],
                                            nativeAccelerationBounds=[-REST_STATE_TOL, 0.0])
           future_primal = (scheduled_primal if scheduled_primal is not None else
