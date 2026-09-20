@@ -11,9 +11,15 @@ import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.params import Params
+from openpilot.common.realtime import DT_CTRL, DT_MDL
+from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_ACCEL, CREEP_STOP_T, STOP_RELEASE_ACCEL, STOP_SPEED, should_stop
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_planner import get_cruise_accel, get_max_accel
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner, make_state
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, STARTING_ACCEL_RATE, StopReason
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import decoded_commands
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import (
+  Publisher, advance, consume, make_handover_state, make_planner, make_planner_owner, make_state,
+)
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanSource as SPSource
@@ -22,9 +28,12 @@ from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.vision_con
 
 def make_scc_case(*, target=30.0, initial_accel=0.0, experimental=False, enabled=True):
   params = Params()
-  params.put_bool('SmartCruiseControlVision', enabled)
-  params.put_bool('SmartCruiseControlMap', False)
-  params.put_bool('DynamicExperimentalControl', False)
+  # SCC reads its enable switch during construction. Nonblocking fixture writes
+  # can miss that read and defer activation until its next parameter refresh.
+  params.put_bool('SmartCruiseControlVision', enabled, block=True)
+  params.put_bool('SmartCruiseControlMap', False, block=True)
+  params.put_bool('DynamicExperimentalControl', False, block=True)
+  assert params.get_bool('SmartCruiseControlVision') == enabled
   planner, _ = make_planner(speed=20.0, initial_accel=initial_accel)
   state = make_state(speed=20.0, target=target, experimental=experimental)
   return planner, state
@@ -124,14 +133,16 @@ def test_negative_scc_acceleration_is_not_a_hard_brake_or_an_unselected_policy(t
     requests.append(plan.aTarget)
     assert plan.reference.constraintAccel > 0.0
     assert plan.aTarget > 0.0
+    assert planner.scc.vision.state == (VisionState.enabled if frame == 0 else VisionState.entering)
     if frame:
-      assert planner.scc.vision.state == VisionState.entering
       # Decimal-curve goldens allow only the Float32 model-input rounding;
       # response and arbitration above still compare their exact wire values.
       assert planner.scc.vision.output_a_target == pytest.approx(-0.2470588235294118, rel=0.0, abs=1e-6)
       assert planner.scc.vision.output_v_target == pytest.approx(22.916336892570225, rel=0.0, abs=1e-6)
       assert planner.cruise_target.source == expected_source
       assert planner.cruise_target.speed > state['carState'].vEgo
+    else:
+      assert planner.cruise_target.source == SPSource.cruise
   if target == 21.0:
     # The same externally supplied curve with SCC disabled must give the same
     # target trajectory when cruise already selects the lower speed.
@@ -164,8 +175,8 @@ def test_stronger_lead_or_admitted_model_braking_keeps_priority_and_does_not_rep
     plan = step(planner, state, frame)
     previous = p_cruise_step(planner, state, previous)
     assert_published_arbitration(plan, state, previous)
-    if frame:
-      assert planner.cruise_target.source == SPSource.sccVision
+    assert planner.scc.vision.state == (VisionState.enabled if frame == 0 else VisionState.entering)
+    assert planner.cruise_target.source == (SPSource.cruise if frame == 0 else SPSource.sccVision)
     if risk_active:
       risk_plans.append(plan)
   if risk == 'lead':
@@ -183,9 +194,16 @@ def test_nonzero_constructor_and_explicit_reset_keep_p_response_without_overwrit
   planner, state = make_scc_case(initial_accel=initial_accel)
   set_curve(state, 0.0075)
   previous = initial_accel
+  expected_states = (VisionState.enabled, VisionState.entering, VisionState.entering,
+                     VisionState.disabled, VisionState.disabled, VisionState.enabled, VisionState.entering, VisionState.entering)
   for frame, measured in enumerate((0.35, 0.35, 0.35, -0.35, -0.35, 0.1, 0.1, 0.1)):
     reset = frame in (3, 4)
     state['controlsState'].longControlState = LongCtrlState.off if reset else LongCtrlState.pid
+    # SP gates SCC with carControl.enabled, independently of the planner's
+    # reset predicate. Exercise the actual disable/re-enable inputs as well.
+    state['carControl'].enabled = not reset
+    state['carControl'].longActive = not reset
+    state['selfdriveState'].enabled = not reset
     state['carState'].aEgo = measured
     plan = step(planner, state, frame)
     previous = p_cruise_step(planner, state, previous, reset=reset)
@@ -193,9 +211,13 @@ def test_nonzero_constructor_and_explicit_reset_keep_p_response_without_overwrit
     assert plan.reference.initialStateKnown
     assert plan.reference.initialAEgo == state['carState'].aEgo
     assert planner.mpc.x0[2] == state['carState'].aEgo
-    if frame:
+    assert planner.scc.vision.long_enabled == state['carControl'].enabled
+    assert planner.scc.vision.state == expected_states[frame]
+    if expected_states[frame] == VisionState.entering:
       assert planner.cruise_target.source == SPSource.sccVision
       assert planner.cruise_target.acceleration < 0.0
+    else:
+      assert planner.cruise_target.source == SPSource.cruise
 
 
 @pytest.mark.parametrize('failure', ['owner_unavailable', 'unhealthy_inputs'])
@@ -217,3 +239,78 @@ def test_invalid_or_unhealthy_cycle_clears_response_before_healthy_recovery(fail
   expected = p_cruise_step(planner, state, 0.0, reset=True)
   assert_published_arbitration(recovered, state, expected)
   assert recovered.reference.constraintAccel < 0.0
+
+
+def test_low_speed_cruise_stop_evidence_reaches_owner_and_retains_p_release_hysteresis():
+  params = Params()
+  for name in ('SmartCruiseControlVision', 'SmartCruiseControlMap', 'DynamicExperimentalControl'):
+    params.put_bool(name, False, block=True)
+  planner, owner = make_planner_owner(speed=0.2, initial_accel=-0.6)
+  state = make_handover_state(speed=0.2, target=4.0, experimental=True)
+  state['carState'].standstill = state['carState'].cruiseState.standstill = False
+  model = state['modelV2']
+  model.velocity.x = [0.8] * len(ModelConstants.T_IDXS)
+  model.position.x = [float(0.8 * sample) for sample in ModelConstants.T_IDXS]
+  model.acceleration.x = [0.0] * len(ModelConstants.T_IDXS)
+  model.action.desiredAcceleration = 0.5
+  model.action.shouldStop = False
+  assert not state['radarState'].leadOne.present and not state['radarState'].leadTwo.present
+  assert owner.motion_phase == MotionPhase.OFF
+  # The public constructor supplies the response history of an active planner.
+  # Feeding a synthetic OFF acknowledgement on its first sample would reset it.
+  assert state['controlsState'].longControlState == LongCtrlState.pid
+
+  previous, p_latched = -0.6, False
+  rows, requests = [], []
+  for frame in range(20):
+    if frame:
+      state['controlsState'].longControlState = owner.long_control_state
+      state['carControl'].actuators.accel = owner.last_output_accel
+    plan, outputs = consume(planner, owner, state, frame)
+    previous = p_cruise_step(planner, state, previous)
+    assert_published_arbitration(plan, state, previous)
+    raw_cruise_stop = should_stop(state['carState'].vEgo, previous)
+    # P lines 407-411: this independent scalar oracle retains the raw stop
+    # until the final arbitrated target crosses the existing release threshold.
+    # In L only the owner may retain that latch; the producer reports raw facts.
+    if p_latched:
+      p_latched = not (plan.aTarget >= STOP_RELEASE_ACCEL or state['carState'].vEgo >= STOP_SPEED)
+    else:
+      p_latched = raw_cruise_stop
+    rows.append({
+      'plan': plan, 'cruise_ceiling': previous, 'raw_stop': raw_cruise_stop,
+      'expected_stop': raw_cruise_stop or p_latched, 'owner_stop': owner.resolved_should_stop,
+      'phase': owner.motion_phase, 'owner_reasons': owner.motion_reasons, 'degraded': owner.motion_degraded,
+      'outputs': outputs,
+    })
+    requests.extend(outputs)
+
+  # This case must not be rescued accidentally by HOLD, creep, a model stop,
+  # invalid transport or a different initial response.
+  assert rows[0]['plan'].reference.constraintAccel == float(np.float32(-0.5204))
+  assert all(row['plan'].solverStatus == 0 and row['plan'].motionIntent.valid and not row['degraded'] for row in rows)
+  assert all(row['phase'] != MotionPhase.HOLD and not row['owner_reasons'] & StopReason.CREEP for row in rows)
+  assert sum(row['plan'].aTarget < CREEP_ACCEL for row in rows) * DT_MDL < CREEP_STOP_T
+  expected_raw = [row['raw_stop'] for row in rows]
+  assert [bool(row['plan'].motionIntent.reasons & int(StopReason.CRUISE)) for row in rows] == expected_raw
+  assert [row['plan'].shouldStop for row in rows] == expected_raw
+  assert [row['owner_stop'] for row in rows] == [row['expected_stop'] for row in rows]
+
+  hysteresis_band = [row for row in rows if not row['raw_stop'] and row['expected_stop']]
+  assert hysteresis_band
+  assert all(row['plan'].aTarget < STOP_RELEASE_ACCEL and max(row['outputs']) <= 0.0 for row in hysteresis_band)
+  release_frames = [frame for frame, row in enumerate(rows) if not row['expected_stop']]
+  assert release_frames
+  first_release = release_frames[0]
+  assert rows[first_release]['plan'].aTarget >= STOP_RELEASE_ACCEL
+  assert rows[first_release]['plan'].motionIntent.releaseAllowed
+  assert rows[first_release]['phase'] == MotionPhase.RELEASE
+  assert rows[first_release]['outputs'][0] < rows[first_release]['plan'].aTarget
+  assert np.max(np.diff(requests)) <= STARTING_ACCEL_RATE * DT_CTRL + 1e-12
+  assert rows[-1]['phase'] == MotionPhase.TRACK and requests[-1] > 0.0
+
+  # Reuse the existing Bosch encoder/decoder at 50 Hz; no new vehicle plant.
+  commands = decoded_commands(requests[::2])
+  held_commands = [command for index, command in enumerate(commands) if index * 2 < first_release * 5]
+  assert held_commands and all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0.0 for command in held_commands)
+  assert not commands[-1]['BRAKE_REQUEST'] and commands[-1]['GAS_COMMAND'] > 0.0

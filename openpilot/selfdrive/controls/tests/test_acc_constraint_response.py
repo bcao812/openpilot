@@ -14,9 +14,10 @@ import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.realtime import DT_CTRL
+from openpilot.selfdrive.controls.lib.cruise_response import A_CRUISE_MAX_BP, J_CRUISE_VALS
 from openpilot.selfdrive.controls.lib.longcontrol import STARTING_ACCEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
-from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanSource
+from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanSource, get_max_accel
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, MotionResponseKind
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
@@ -29,12 +30,13 @@ def controlled_acc(*, speed=3.0, initial_accel=0.0):
   planner, control = make_planner_owner(speed=speed, initial_accel=initial_accel)
   state = make_state(speed=speed, target=speed + 2.0)
   run = SimpleNamespace(planner=planner, control=control, state=state, frame=0,
-                        acceleration=0.3, policy_source=PolicySource.cruise)
+                        acceleration=0.3, policy_source=PolicySource.cruise, policy_speed=None)
 
   def targets(instance, state, speed, accel, cruise):
     instance.source = run.policy_source
     if run.policy_source != PolicySource.cruise:
-      cruise, accel = min(cruise, speed - 0.5), min(accel, -0.2)
+      policy_speed = speed - 0.5 if run.policy_speed is None else run.policy_speed
+      cruise, accel = min(cruise, policy_speed), min(accel, -0.2)
     instance.cruise_target = CruiseTarget(instance.source, cruise, accel)
     return instance.cruise_target
 
@@ -59,12 +61,43 @@ def controlled_acc(*, speed=3.0, initial_accel=0.0):
     yield run
 
 
+def settle_independent_hard_cap(run):
+  """Reach the hard cap through real plans before testing a cap crossing.
+
+  The fixture is straight, allows throttle and requests more acceleration
+  than the hard maximum. Starting with measured a=0, the existing cruise jerk
+  bound gives a finite settling budget; it is not a trial-and-error sleep or
+  a write to CruiseResponse history. Zero tracking error keeps I unseeded.
+  """
+  assert run.frame == 0
+  speed = float(run.state['carState'].vEgo)
+  hard_cap = float(get_max_accel(speed))
+  assert run.state['carState'].vCruise / 3.6 - speed > hard_cap
+  jerk = float(np.interp(speed, A_CRUISE_MAX_BP, J_CRUISE_VALS))
+  ramp_frames = int(np.ceil(hard_cap / (jerk * run.planner.dt)))
+  limits = []
+  for _ in range(ramp_frames + 1):
+    plan, _ = run.step(reference=0.0, measured=0.0)
+    limits.append(float(plan.reference.constraintAccel))
+  np.testing.assert_allclose(limits[-2:], hard_cap, atol=1e-7, rtol=0.0)
+
+  # Restore the original 0.3 baseline using the public control path, so the
+  # positive-I test does not spend its learning interval climbing from zero.
+  plan, outputs = run.step(reference=0.3, measured=0.3)
+  assert plan.reference.constraintAccel == pytest.approx(hard_cap, abs=1e-7)
+  assert outputs[-1] == pytest.approx(0.3, abs=1e-7)
+  assert run.control.pid.i == 0.0
+  return hard_cap
+
+
 def learn_negative_response(run):
+  cap = settle_independent_hard_cap(run)
   for _ in range(6):
     plan, _ = run.step(reference=0.3, measured=0.8)
+  assert plan.reference.constraintAccel == pytest.approx(cap, abs=1e-7)
   assert plan.motionIntent.responseKind == MotionResponseKind.PURE_CRUISE
   assert run.control.pid.i < -0.03
-  return run.planner.reference_planner.constraint_accel
+  return cap
 
 
 @pytest.mark.parametrize('crossing', [5e-5, 0.3])
@@ -94,8 +127,7 @@ def test_cruise_cap_preserves_negative_response_for_small_and_large_crossings(cr
 
 def test_cap_projection_withdraws_positive_i_on_the_first_control_tick():
   with controlled_acc() as run:
-    run.step()
-    cap = run.planner.reference_planner.constraint_accel
+    cap = settle_independent_hard_cap(run)
     for _ in range(8):
       before, before_outputs = run.step(reference=cap - 5e-5, measured=cap - 0.5)
     assert before.motionIntent.responseKind == MotionResponseKind.PURE_CRUISE
@@ -121,6 +153,12 @@ def test_policy_override_and_ordinary_model_cap_keep_their_declared_response_dom
     assert run.control.pid.i < -0.03
 
     if constraint == 'policy':
+      # Isolate withdrawal of response permission when SCC becomes the source:
+      # lower cruise while its speed error still exceeds the independent hard
+      # max. Negative speed error and real ENTERING/TURNING/LEAVING cycles are
+      # covered by the SCC integration tests and frozen common scenarios.
+      previous_cruise = float(run.planner.cruise_target.speed)
+      run.policy_speed = min(previous_cruise, float(run.state['carState'].vEgo) + cap + 0.5)
       run.policy_source = PolicySource.sccVision
     else:
       run.state['selfdriveState'].experimentalMode = True
@@ -131,7 +169,7 @@ def test_policy_override_and_ordinary_model_cap_keep_their_declared_response_dom
     if constraint == 'policy':
       assert plan.motionIntent.responseKind == MotionResponseKind.NONE
       assert run.control.pid.i == 0.0
-      assert run.planner.cruise_target.speed < run.state['carState'].vEgo
+      assert run.state['carState'].vEgo + cap < run.planner.cruise_target.speed < previous_cruise
       assert plan.aTarget == pytest.approx(cap)
       assert outputs == pytest.approx([plan.aTarget] * 5, abs=1e-7)
     else:
