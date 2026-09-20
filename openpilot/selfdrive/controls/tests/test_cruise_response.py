@@ -120,3 +120,33 @@ def test_complete_target_history_matches_the_retained_p_helper(dt, e2e, initial_
       previous = get_cruise_accel(e2e, target, speed, previous, 0.0, params, dt, ACCEL_MAX, True)
       actual = response.update(target, speed, maximum, measured_accel=initial_accel if first else -0.25, reset=first)
       assert actual == pytest.approx(previous, rel=0.0, abs=1e-12), (phase, frame)
+
+
+@pytest.mark.parametrize('raw,expected', [
+  (-1.2, -1.2), (-0.31, -0.31), (-0.3, -0.3), (-0.275, -0.245),
+  (-0.25, -0.19), (-0.23, -0.19), (-0.19, -0.19), (-0.15, -0.19),
+  (-0.125, -0.145), (-0.1, -0.1), (-0.09, -0.09), (0.0, 0.0), (0.5, 0.5),
+])
+def test_cruise_coast_map_keeps_p_knots_interpolation_and_open_boundaries(raw, expected):
+  # P=e18b1de longitudinal_planner.py:36-40,69-73. Fixed numbers keep this
+  # baseline independent of any shared production constants or current output.
+  from openpilot.selfdrive.controls.lib.cruise_response import get_cruise_coast_accel
+
+  assert get_cruise_coast_accel(raw) == pytest.approx(expected, rel=0.0, abs=1e-12)
+
+
+def test_cruise_coast_map_does_not_replace_the_raw_response_history():
+  from openpilot.selfdrive.controls.lib.cruise_response import get_cruise_coast_accel
+  from openpilot.selfdrive.controls.lib.longitudinal_planner import get_cruise_accel, get_max_accel
+
+  response = CruiseResponse(init_a=-0.23)
+  params = SimpleNamespace(steerRatio=15.0, wheelbase=2.8)
+  previous, mapped_frames = -0.23, 0
+  targets = [20.0] * 4 + [19.8] * 2 + [20.0] * 3 + [20.3] * 2 + [20.0] * 4
+  for target in targets:
+    previous = get_cruise_accel(False, target, 20.23, previous, 0.0, params, 0.05, ACCEL_MAX, True)
+    raw = response.update(target, 20.23, get_max_accel(20.23), measured_accel=0.0)
+    assert raw == pytest.approx(previous, rel=0.0, abs=1e-12)
+    mapped = get_cruise_coast_accel(raw)
+    mapped_frames += mapped != raw
+  assert mapped_frames > 0

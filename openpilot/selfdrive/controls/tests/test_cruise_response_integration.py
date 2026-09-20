@@ -1,28 +1,30 @@
-"""Real SCC policy selection and native planning preserve P's response history.
+"""Selected cruise policies and native planning preserve P's response history.
 
 These fixed-input contracts inspect the published target and constraint. They
 do not substitute for the common closed-loop or CAN/vehicle validation.
 """
 
+from contextlib import ExitStack
 from unittest.mock import patch
 
 import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
+from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_ACCEL, CREEP_STOP_T, STOP_RELEASE_ACCEL, STOP_SPEED, should_stop
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_planner import get_cruise_accel, get_max_accel
-from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, STARTING_ACCEL_RATE, StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, MotionResponseKind, STARTING_ACCEL_RATE, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import decoded_commands
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import (
   Publisher, advance, consume, make_handover_state, make_planner, make_planner_owner, make_state,
 )
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.modeld.constants import ModelConstants
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanSource as SPSource
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource as SPSource
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.vision_controller import VisionState
 
 
@@ -314,3 +316,183 @@ def test_low_speed_cruise_stop_evidence_reaches_owner_and_retains_p_release_hyst
   held_commands = [command for index, command in enumerate(commands) if index * 2 < first_release * 5]
   assert held_commands and all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0.0 for command in held_commands)
   assert not commands[-1]['BRAKE_REQUEST'] and commands[-1]['GAS_COMMAND'] > 0.0
+
+
+# Version 8 adds this wire value. The owner protocol tests verify its enum and
+# validity contract; using the wire value also makes the pre-fix red tests run.
+COAST_RESPONSE_KIND = 4
+
+
+def make_coast_case(*, speed=20.23, target=20.0, initial_accel=-0.23):
+  params = Params()
+  for name in ('SmartCruiseControlVision', 'SmartCruiseControlMap', 'DynamicExperimentalControl'):
+    params.put_bool(name, False, block=True)
+  planner, _ = make_planner(speed=speed, initial_accel=initial_accel)
+  return planner, make_state(speed=speed, target=target)
+
+
+def p_coast_command(raw):
+  # Exact P mapping, independent of the proposed production helper.
+  if not -0.3 < raw < -0.1:
+    return raw
+  return float(np.interp(raw, [-0.3, -0.25, -0.15, -0.1], [-0.3, -0.19, -0.19, -0.1]))
+
+
+@pytest.mark.parametrize('oscillating', [False, True], ids=['band', 'changing-speed'])
+def test_native_cruise_coast_history_matches_p_mapping_and_declares_only_the_winning_request(oscillating):
+  planner, state = make_coast_case(initial_accel=0.0)
+  previous, coast_frames = 0.0, 0
+  for frame in range(80 if oscillating else 40):
+    # The paired oscillation case uses alternating +/-0.09 m/s^2 one-second
+    # disturbances. Here ego is prescribed, so this is fixed-input coverage.
+    speed = 20.155 + 0.09 * (1.0 - abs((frame * DT_MDL) % 2.0 - 1.0)) if oscillating else 20.23
+    state['carState'].vEgo = speed
+    state['modelV2'].velocity.x = [speed] * len(ModelConstants.T_IDXS)
+    state['modelV2'].position.x = [float(speed * sample) for sample in ModelConstants.T_IDXS]
+    plan = step(planner, state, frame)
+    previous = p_cruise_step(planner, state, previous)
+    reference = planner.reference_planner.reference_accel
+    applicable = previous <= reference and abs(planner.cruise_target.speed - state['carState'].vEgo) <= CV.KPH_TO_MS
+    command = p_coast_command(previous) if applicable else previous
+    maximum = get_max_accel(state['carState'].vEgo)
+    expected = min(command, reference, maximum)
+    assert plan.reference.constraintAccel == float(np.float32(min(command, maximum)))
+    assert plan.aTarget == float(np.float32(expected))
+    coast_wins = applicable and -0.3 < previous < -0.1 and command < min(reference, maximum)
+    assert (plan.motionIntent.responseKind == COAST_RESPONSE_KIND) == coast_wins
+    if coast_wins:
+      coast_frames += 1
+      assert not plan.motionIntent.releaseAllowed and not plan.motionIntent.movingLead
+  assert coast_frames > 0
+
+
+def test_coast_exit_and_reentry_keep_raw_jerk_history_in_the_real_planner():
+  planner, state = make_coast_case()
+  previous = -0.23
+  # Native solve still runs. A controlled readout isolates response history
+  # and exact arbitration, without claiming this readout is a vehicle model.
+  with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.0):
+    for frame, target in enumerate([20.0] * 4 + [19.8] * 2 + [20.0] * 3 + [20.2] * 2 + [20.0] * 4):
+      state['carState'].vCruise = state['carState'].vCruiseCluster = target * 3.6
+      plan = step(planner, state, frame)
+      previous = p_cruise_step(planner, state, previous)
+      applicable = abs(planner.cruise_target.speed - state['carState'].vEgo) <= CV.KPH_TO_MS
+      expected = p_coast_command(previous) if applicable else previous
+      assert plan.aTarget == float(np.float32(expected))
+      assert (plan.motionIntent.responseKind == COAST_RESPONSE_KIND) == (applicable and -0.3 < previous < -0.1)
+
+
+def test_exact_unchanged_coast_value_still_declares_execution_semantics():
+  initial = -0.19 + get_max_accel(20.0) * DT_MDL  # P jerk equals max-accel table here.
+  planner, state = make_coast_case(speed=20.0, target=19.77, initial_accel=initial)
+  with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.0):
+    plan = step(planner, state, 0)
+  assert p_cruise_step(planner, state, initial) == -0.19
+  assert plan.aTarget == float(np.float32(-0.19))
+  assert plan.motionIntent.responseKind == COAST_RESPONSE_KIND
+  assert not plan.motionIntent.releaseAllowed and not plan.motionIntent.movingLead
+
+
+@pytest.mark.parametrize('guard', [
+  'leadOne', 'leadTwo', 'scc_source', 'sla_source', 'throttle_veto', 'e2e', 'model_stop', 'model_braking',
+  'admitted_model_braking', 'force_decel', 'unhealthy', 'reset', 'gas', 'brake', 'override', 'selfdrive_disabled', 'control_disabled',
+  'long_inactive', 'below_speed', 'outside_speed_error', 'nonfinite_model', 'nonfinite_reference',
+])
+def test_coast_keeps_p_admission_guards_at_the_real_planner_boundary(guard):
+  speed = 9.8 if guard == 'below_speed' else 20.23
+  target = speed - (0.6 if guard == 'outside_speed_error' else 0.23)
+  planner, state = make_coast_case(speed=speed, target=target)
+  state['carState'].aEgo = -0.23  # Reset/manual cases also retain an in-band raw candidate.
+  with ExitStack() as stack:
+    stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration',
+                              return_value=float('nan') if guard == 'nonfinite_reference' else 0.0))
+    if guard in ('leadOne', 'leadTwo'):
+      lead = getattr(state['radarState'], guard)
+      lead.present, lead.dRel, lead.vLead, lead.vRel = True, 100.0, speed, 0.0
+      lead.aLeadK, lead.aLeadTau, lead.modelProb = 0.0, 1.5, 0.99
+    elif guard in ('scc_source', 'sla_source'):
+      # Isolate the selected-policy contract without fabricating its speed
+      # response. The real SCC state-cycle test above covers its producer.
+      source = SPSource.sccVision if guard == 'scc_source' else SPSource.speedLimitAssist
+
+      def select_policy(instance, _state, _speed, accel, cruise):
+        instance.source = source
+        instance.cruise_target = CruiseTarget(source, cruise, accel)
+        return instance.cruise_target
+
+      stack.enter_context(patch.object(LongitudinalPlannerSP, 'update_targets', new=select_policy))
+    elif guard == 'throttle_veto':
+      state['modelV2'].meta.disengagePredictions.gasPressProbs = [0.0] * 6
+    elif guard == 'e2e':
+      state['selfdriveState'].experimentalMode = True
+    elif guard == 'model_stop':
+      state['modelV2'].action.shouldStop = True
+    elif guard == 'model_braking':
+      state['modelV2'].action.desiredAcceleration = -0.6
+    elif guard == 'admitted_model_braking':
+      state['selfdriveState'].experimentalMode = True
+      state['modelV2'].action.desiredAcceleration = -0.6
+    elif guard == 'force_decel':
+      state['controlsState'].forceDecel = True
+    elif guard == 'unhealthy':
+      stack.enter_context(patch.object(state, 'all_checks', return_value=False))
+    elif guard == 'reset':
+      state['controlsState'].longControlState = LongCtrlState.off
+    elif guard in ('gas', 'brake'):
+      setattr(state['carState'], guard + 'Pressed', True)
+    elif guard == 'override':
+      state['carControl'].cruiseControl.override = True
+    elif guard == 'selfdrive_disabled':
+      state['selfdriveState'].enabled = False
+    elif guard == 'control_disabled':
+      state['carControl'].enabled = False
+    elif guard == 'long_inactive':
+      state['carControl'].longActive = False
+    elif guard == 'nonfinite_model':
+      state['modelV2'].action.desiredAcceleration = float('nan')
+    plan = step(planner, state, 0, valid=guard not in ('unhealthy', 'nonfinite_model', 'nonfinite_reference'))
+  assert plan.motionIntent.responseKind != COAST_RESPONSE_KIND
+  if guard == 'admitted_model_braking':
+    assert plan.aTarget <= state['modelV2'].action.desiredAcceleration
+
+
+@pytest.mark.parametrize('reference,maximum,expected,response', [
+  (-0.5, None, -0.5, MotionResponseKind.PURE_CRUISE),
+  (-0.22, None, -0.22, MotionResponseKind.PURE_CRUISE),
+  (-0.19, None, -0.19, MotionResponseKind.PURE_CRUISE),
+  (0.0, -0.22, -0.22, MotionResponseKind.ABSOLUTE_ACC),
+  (0.0, -0.19, -0.19, MotionResponseKind.ABSOLUTE_ACC),
+])
+def test_coast_never_takes_ownership_from_a_stronger_or_equal_independent_constraint(reference, maximum, expected, response):
+  planner, state = make_coast_case()
+  with ExitStack() as stack:
+    stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration',
+                              return_value=reference))
+    if maximum is not None:
+      stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.cruise_accel_limit', return_value=maximum))
+    plan = step(planner, state, 0)
+  assert plan.aTarget == float(np.float32(expected))
+  assert plan.motionIntent.responseKind == response
+
+
+def test_coast_uses_current_solver_fcw_and_can_return_when_current_risk_clears():
+  planner, state = make_coast_case()
+  native_update = planner.mpc.update
+  crash_count = 3
+
+  def update_current_crash_count(*args, **kwargs):
+    native_update(*args, **kwargs)
+    planner.mpc.crash_cnt = crash_count
+
+  with patch.object(planner.mpc, 'update', side_effect=update_current_crash_count), \
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.0):
+    risk = step(planner, state, 0)
+    previous = p_cruise_step(planner, state, -0.23)
+    assert planner.fcw
+    assert risk.aTarget == float(np.float32(previous))
+    assert risk.motionIntent.responseKind != COAST_RESPONSE_KIND
+    crash_count = 0
+    cleared = step(planner, state, 1)
+  assert not planner.fcw
+  assert cleared.aTarget == float(np.float32(-0.19))
+  assert cleared.motionIntent.responseKind == COAST_RESPONSE_KIND
