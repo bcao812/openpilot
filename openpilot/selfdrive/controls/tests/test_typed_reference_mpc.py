@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN
+from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
@@ -20,7 +21,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   PARAM_DIM, REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, LongitudinalPlanSource, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.model_reference import moving_preference
-from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import STARTING_ACCEL_RATE, StopReason
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import model_reference_from_velocity
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, SOURCE_NS, evidence, stopping_curve
@@ -106,9 +107,12 @@ def test_matching_generated_solver_has_real_path_and_terminal_slots():
 
 
 @pytest.mark.parametrize('preference_time', [1.25, 2.5, 5.0])
-def test_nonzero_native_weights_and_changed_targets_change_the_solution(preference_time):
-  decelerating = typed_reference(10.0 - 0.6 * MODEL_TIMES, 10.0, preference_time=preference_time)
-  accelerating = typed_reference(10.0 + 0.6 * MODEL_TIMES, 10.0, preference_time=preference_time)
+@pytest.mark.parametrize('after_anchor', [False, True])
+def test_nonzero_native_weights_and_changed_targets_change_the_solution(preference_time, after_anchor):
+  timing = {'model_ns': SOURCE_NS + 5_000_000, 'now_ns': SOURCE_NS + 10_000_000} if after_anchor else {}
+  slower_raw, faster_raw = 10.0 - 0.6 * MODEL_TIMES, 10.0 + 0.6 * MODEL_TIMES
+  decelerating = typed_reference(slower_raw, 10.0, preference_time=preference_time, typed=evidence(slower_raw, 10.0, **timing))
+  accelerating = typed_reference(faster_raw, 10.0, preference_time=preference_time, typed=evidence(faster_raw, 10.0, **timing))
   slower = solve_reference(10.0, decelerating)
   faster = LongitudinalMpc()
   faster.solver = Mock(wraps=faster.solver)
@@ -214,17 +218,81 @@ def test_future_restart_cannot_cancel_current_rest_even_with_a_departing_real_le
   assert planner.reference_planner.model_evidence.rest_goal.future_forward
 
 
-def test_real_far_lead_does_not_disable_model_deceleration_with_positive_action():
+@pytest.mark.parametrize('after_anchor', [False, True])
+def test_real_far_lead_does_not_disable_model_deceleration_with_positive_action(after_anchor):
   planner, _ = make_planner(speed=20.0)
   state = make_state(speed=20.0, target=30.0, experimental=True)
   assign_curve(state, 20.0 - 0.6 * MODEL_TIMES)
   assign_lead(state, distance=200.0, speed=20.0, relative_speed=0.0)
   for frame in range(12):
-    planner.update(state, now_ns=advance(state, frame))
+    anchor = advance(state, frame)
+    if after_anchor:
+      state.logMonoTime['modelV2'] = anchor + 5_000_000
+    planner.update(state, now_ns=anchor + 10_000_000)
     assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
   assert state['modelV2'].action.desiredAcceleration > 0.0
   assert np.any(planner.mpc.diagnostic_reference_weights[:, 2:4] > 0.0)
   assert planner.output_a_target < -0.1
+
+
+@pytest.mark.parametrize('after_anchor', [False, True])
+def test_neutral_model_preserves_acceleration_toward_a_departing_low_speed_lead(after_anchor):
+  # Rounded from L's 12 s loss-of-following frame: no stop, fault or standstill,
+  # but an opening real-lead gap while a constant model preference stays neutral.
+  speed, acceleration = 1.15, -0.02
+  planner, _ = make_planner(speed=speed, initial_accel=acceleration)
+  state = make_state(speed=speed, target=4.0, experimental=True)
+  state['carState'].aEgo = acceleration
+  assign_curve(state, np.full(len(MODEL_TIMES), speed + 0.4))
+  state['modelV2'].action.desiredAcceleration = 0.6
+  assign_lead(state, distance=10.23, speed=2.0, relative_speed=2.0 - speed)
+  targets = []
+  for frame in range(12):
+    anchor = advance(state, frame)
+    if after_anchor:
+      state.logMonoTime['modelV2'] = anchor + 5_000_000
+    planner.update(state, now_ns=anchor + 10_000_000)
+    assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
+    assert not planner.output_should_stop
+    targets.append(planner.output_a_target)
+  # Resolve an actual positive request beyond the existing steady-state
+  # numerical budget, not a solver residual on the wrong side of zero.
+  assert min(targets[-4:]) > 1e-4, targets
+
+
+@pytest.mark.parametrize('after_anchor', [False, True])
+def test_near_zero_model_slope_round_trips_do_not_switch_control_targets(after_anchor):
+  """Tiny slope changes must not turn numerical signs into a new target owner.
+
+  Each arm uses the same real planner/Controls/CAN history. The 1e-6 m/s²
+  perturbation is below the existing 1e-4 output budget; production's upward
+  controller rate remains +8 m/s³. Negative steps are compared with the
+  matching neutral arm, so that unbounded extra braking cannot hide here.
+  """
+  def run(slopes):
+    harness = StrictPlanTransportHarness(speed=10.0)
+    harness.model_publication_after_state = after_anchor
+    harness.engage()
+    raw = np.full(len(MODEL_TIMES), 10.4)
+    harness.exercise((raw * MODEL_TIMES, raw, np.zeros(len(raw))), action_accel=0.5)
+    history_start = len(harness.history)
+    targets = []
+    for slope in slopes:
+      raw = 10.4 + slope * MODEL_TIMES
+      _, plans, _, _ = harness.exercise((raw * MODEL_TIMES, raw, np.full(len(raw), slope)),
+                                        action_accel=0.5, seconds=0.4)
+      targets.extend(float(event.longitudinalPlan.aTarget) for event in plans)
+    rows = harness.history[history_start:]
+    assert all(row['long_active'] and not row['degraded'] and row['phase'] == 'track' for row in rows)
+    output = np.array([row['accel'] for row in rows])
+    assert np.max(np.diff(output)) <= STARTING_ACCEL_RATE * DT_CTRL + 1e-4
+    return np.array(targets), output
+
+  slopes = [-1e-6, 0.0, 1e-6, 0.0] * 2
+  neutral, neutral_output = run([0.0] * len(slopes))
+  perturbed, perturbed_output = run(slopes)
+  np.testing.assert_allclose(perturbed, neutral, atol=1e-4, rtol=0.0)
+  np.testing.assert_allclose(perturbed_output, neutral_output, atol=1e-4, rtol=0.0)
 
 
 def test_new_rest_semantics_discard_cruise_history_once_and_reentry_discards_again():
@@ -259,17 +327,25 @@ def test_new_rest_semantics_discard_cruise_history_once_and_reentry_discards_aga
   assert planner.reference_planner.entered_rest_goal
 
 
-def test_lead_priority_uses_tighter_geometry_and_keeps_stronger_model_braking_available():
-  far = solve_reference(20.0, typed_reference(20.0 - 0.6 * MODEL_TIMES, 20.0),
+@pytest.mark.parametrize('after_anchor', [False, True])
+def test_lead_priority_uses_tighter_geometry_and_keeps_stronger_model_braking_available(after_anchor):
+  timing = {'model_ns': SOURCE_NS + 5_000_000, 'now_ns': SOURCE_NS + 10_000_000} if after_anchor else {}
+  far_raw = 20.0 - 0.6 * MODEL_TIMES
+  far = solve_reference(20.0, typed_reference(far_raw, 20.0, typed=evidence(far_raw, 20.0, **timing)),
                         radar=radar_state(distance=200.0, speed=20.0))
   assert np.all(far.params[:, MODEL_BRAKING_PRIORITY] == 0.0)
-  np.testing.assert_array_equal(far.params[:, TYPED_MODEL_MODE], 1.0)
   assert action(far) < 0.0
+  np.testing.assert_array_equal(far.params[:, TYPED_MODEL_MODE], 1.0)
   radar = radar_state(distance=30.0, speed=20.0, acceleration=-3.0)
   lead_only = solve_reference(20.0, MpcReference(40.0), radar=radar, acceleration=-1.0)
-  strong_model = solve_reference(20.0, typed_reference(np.maximum(20.0 - 3.0 * MODEL_TIMES, 0.0), 20.0, cruise=40.0),
+  strong_raw = np.maximum(20.0 - 3.0 * MODEL_TIMES, 0.0)
+  strong_model = solve_reference(20.0, typed_reference(strong_raw, 20.0, cruise=40.0,
+                                                     typed=evidence(strong_raw, 20.0, **timing)),
                                 radar=radar, acceleration=-1.0)
-  assert np.any(strong_model.diagnostic_reference_weights[:, 2:4] > 0.0)
+  if not after_anchor:
+    assert np.any(strong_model.diagnostic_reference_weights[:, 2:4] > 0.0)
+  # A later raw rest retains its existing compatibility risk problem. The
+  # stronger-braking requirement applies in both representations.
   assert action(strong_model) < action(lead_only) - 0.05
 
 
