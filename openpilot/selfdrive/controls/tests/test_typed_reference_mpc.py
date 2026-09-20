@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN
+from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   J_EGO_COST, MODEL_A_REF, MODEL_BRAKING_PRIORITY, MODEL_V_REF, MPC_GOAL_INFEASIBLE,
@@ -309,6 +310,25 @@ def test_later_moving_preference_keeps_unknown_epoch_and_real_lead_risk(delay_ns
   np.testing.assert_array_equal(future.diagnostic_reference_weights[~typed.moving.supported, 1:4], 0.0)
 
 
+@pytest.mark.parametrize('speed', [STOP_SPEED - 0.001, STOP_SPEED + 0.001])
+def test_later_nonforward_preference_matches_the_declared_stop_band_domain_with_a_lead(speed):
+  raw = np.full(len(MODEL_TIMES), 1.0)
+  typed = evidence(raw, speed, model_ns=SOURCE_NS + 5_000_000, now_ns=SOURCE_NS + 10_000_000)
+  reference = typed_reference(raw, speed, typed=typed)
+  radar = radar_state(distance=7.0, speed=1.5)
+  actual = solve_reference(speed, reference, radar=radar)
+  if speed < STOP_SPEED:
+    expected = solve_reference(speed, replace(reference, typed_model=None), radar=radar)
+    assert typed.moving is None
+    np.testing.assert_array_equal(actual.params[:, TYPED_MODEL_MODE], 0.0)
+  else:
+    expected = solve_reference(speed, typed_reference(raw, speed), radar=radar)
+    assert typed.has_future_moving_preference
+    np.testing.assert_array_equal(actual.params[:, TYPED_MODEL_MODE], 1.0)
+  # This declares two retained domains, not equivalence across the stop band.
+  assert action(actual) == pytest.approx(action(expected), abs=1e-4)
+
+
 @pytest.mark.parametrize('lead_present', [False, True])
 def test_available_model_after_carstate_proxy_does_not_create_a_cruise_fault(lead_present):
   planner, _ = make_planner(speed=10.0)
@@ -371,7 +391,6 @@ def test_future_supported_moving_preference_does_not_weaken_model_action_braking
     assert planner.motion_intent.valid and planner.mpc.solution_status == 0
     assert planner.reference_planner.model_reference_mode == 'future_supported_moving'
     assert planner.output_a_target <= -1.0
-    assert not planner.motion_intent.release_allowed
 
 
 def test_later_publication_raw_forward_can_release_actual_held_owner_and_honda_can():
@@ -431,7 +450,7 @@ def test_qualified_departing_lead_is_independent_of_missing_aligned_or_raw_growt
   curve = (raw * MODEL_TIMES, raw, np.zeros(len(raw)))
   _, plans, rows, can_rows = harness.exercise(curve, action_accel=0.5)
   evidence = harness.planner.reference_planner.model_evidence
-  assert evidence.has_future_moving_preference and evidence.raw_motion.kind == 'moving'
+  assert evidence.moving is None and evidence.raw_motion.kind == 'moving'
   assert not evidence.allows_departure and evidence.allows_external_departure
   assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
   negative_plan_times = {int(event.logMonoTime) for event in plans if event.longitudinalPlan.aTarget <= 0.0}

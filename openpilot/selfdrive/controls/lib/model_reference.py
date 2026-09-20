@@ -355,7 +355,12 @@ class ModelReferenceAdapter:
       self.clear_rest_continuity()
       raw_motion = raw_motion_from_velocity(raw)
       moving = None
-      if raw_motion.does_not_veto_departure:
+      # Below the existing stop band, a constant measured-speed preference
+      # would create a stop and suppress independent lead departure. Preserve
+      # that compatibility domain until lead motion has its own target;
+      # raw forward evidence can already supply a moving preference here.
+      if (raw_motion.does_not_veto_departure
+          and (measured_speed >= STOP_SPEED or raw_motion.forward_intent is not None)):
         try:
           moving = moving_preference(raw, native_times, measured_speed,
                                      proxy_age_s=(anchor_mono_time_ns - model_mono_time_ns) / 1e9)
