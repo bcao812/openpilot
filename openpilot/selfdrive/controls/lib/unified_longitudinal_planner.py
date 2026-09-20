@@ -532,7 +532,9 @@ class UnifiedLongitudinalPlanner:
       reasons |= StopReason.MPC
     if self.e2e_allowed and model.action.shouldStop:
       reasons |= StopReason.E2E
-    if cruise_speed <= STOP_SPEED:
+    # Preserve the cruise candidate's raw stop fact as well as its numeric
+    # ceiling. Only the motion owner retains the resulting stop/release state.
+    if cruise_speed <= STOP_SPEED or should_stop(speed, cruise_ceiling):
       reasons |= StopReason.FORCE_DECEL if forced_decel else StopReason.CRUISE
     qualified = active and healthy and not forced_decel and not planner.fcw and planner.source == LongitudinalPlanSourceSP.cruise
     if qualified and should_stop_for_close_lead(speed, output, state['radarState'], delay, a_ego=car_state.aEgo):
