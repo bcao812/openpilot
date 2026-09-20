@@ -604,8 +604,16 @@ class UnifiedLongitudinalPlanner:
     # Independent model constraints and policy overrides retain their guards.
     ordinary_acc_cap = (not self.e2e_allowed and evidence is None
                         and self.constraint_source == LongitudinalPlanSource.cruise
+                        and self.constraint_accel == maximum_accel
                         and self.reference_accel > self.constraint_accel
                         and output == self.constraint_accel)
+    # The cruise response is a net acceleration target, not an independent
+    # actuator limit. Keep its ordinary disturbance-response domain while
+    # a tighter current maximum still retains the nonpositive-I contract.
+    cruise_response_bound = (not self.e2e_allowed and evidence is None
+                             and self.constraint_source == LongitudinalPlanSource.cruise
+                             and self.constraint_accel == cruise_ceiling < maximum_accel
+                             and self.reference_accel > cruise_ceiling and output == cruise_ceiling)
     if (ordinary_model_motion and raw_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
         and active and healthy and not forced_decel and not reasons):
       # This producer installed only absolute lead/cruise targets. An action
@@ -614,7 +622,7 @@ class UnifiedLongitudinalPlanner:
       # acquire MODEL positive-I permission merely from a tiny raw slope.
       response_kind = MotionResponseKind.ABSOLUTE_ACC
     elif (active and healthy and not reset and not forced_decel and not reasons
-        and (not self.reference_overridden or ordinary_acc_cap)
+        and (not self.reference_overridden or ordinary_acc_cap or cruise_response_bound)
         and planner.source == LongitudinalPlanSourceSP.cruise):
       lead_sources = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
       lead_index = lead_sources.index(planner.mpc.source) if planner.mpc.source in lead_sources else None
@@ -627,7 +635,7 @@ class UnifiedLongitudinalPlanner:
         # Ordinary ACC retains only braking correction, including for excess
         # response to a positive target. FCW does not revoke this negative I.
         response_kind = MotionResponseKind.ABSOLUTE_ACC
-        if (not self.reference_overridden and not planner.fcw and planner.mpc.source == LongitudinalPlanSource.cruise
+        if ((not self.reference_overridden or cruise_response_bound) and not planner.fcw and planner.mpc.source == LongitudinalPlanSource.cruise
             and not state['radarState'].leadOne.present and not state['radarState'].leadTwo.present):
           # With no lead/model risk owner, correct net cruise acceleration in
           # both directions. Its disturbance I may cross the target's zero;
