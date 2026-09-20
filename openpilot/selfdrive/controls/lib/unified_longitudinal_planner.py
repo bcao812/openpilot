@@ -8,7 +8,7 @@ from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_SPEED, should_stop
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_SPEED, should_stop, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter, stationary_lead_departure_compatible
@@ -81,9 +81,45 @@ def reference_requests_departure(velocity, acceleration, jerk):
           and max(progress_speeds) > max(float(velocity[0]), STOP_SPEED))
 
 
-def sample_native_acceleration(acceleration, action_t):
-  """Read the native piecewise-linear acceleration at the actuation horizon."""
-  return float(np.interp(action_t, T_IDXS, acceleration))
+def low_speed_follow_distance(speed):
+  """Comfort geometry; the MPC's independent braking boundary remains intact."""
+  return float(np.interp(speed * CV.MS_TO_KPH, [15.0, 30.0], [4.0, 6.0]))
+
+
+def following_sample_weight(radar_state, speed):
+  """Limit response smoothing to slow, coherent following of moving leads.
+
+  Closing or braking leads retain the existing response compensation. Smooth
+  weights avoid a new request step at the speed/relative-motion boundaries.
+  This is an applicability gate, not a replacement collision or stop guard.
+  """
+  if not math.isfinite(speed) or not STOP_SPEED < speed < 20.0 * CV.KPH_TO_MS or not radar_state.leadOne.present:
+    return 0.0
+  weight = float(np.interp(speed, [STOP_SPEED, 0.5, 15.0 * CV.KPH_TO_MS, 20.0 * CV.KPH_TO_MS], [0.0, 1.0, 1.0, 0.0]))
+  for lead in (radar_state.leadOne, radar_state.leadTwo):
+    if not lead.present:
+      continue
+    values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb, lead.yRel)
+    if (not all(math.isfinite(value) for value in values)
+        or lead.dRel < CREEP_FOLLOW_MIN_GAP or not 0.95 <= lead.modelProb <= 1.0
+        or abs(lead.yRel) > 1.8 or lead.vLead < CREEP_FOLLOW_MIN_LEAD_SPEED
+        or abs(lead.vLead - speed - lead.vRel) > CREEP_FOLLOW_MAX_CLOSING_SPEED
+        or lead.vLead + min(lead.aLeadK, 0.0) * CREEP_FINISH_T < STOP_SPEED):
+      return 0.0
+    weight = min(weight,
+                 float(np.interp(lead.vRel, [-CREEP_FOLLOW_MAX_CLOSING_SPEED, 0.0], [0.0, 1.0])),
+                 float(np.interp(lead.aLeadK, [-CREEP_FOLLOW_MAX_CLOSING_SPEED, 0.0], [0.0, 1.0])))
+  return weight
+
+
+def sample_reference_acceleration(acceleration, action_t, *, inverse_acceleration, following_weight):
+  """Blend native sampling only inside the qualified slow-following domain."""
+  if following_weight <= 0.0:
+    return float(inverse_acceleration)
+  native_acceleration = float(np.interp(action_t, T_IDXS, acceleration))
+  if following_weight >= 1.0:
+    return native_acceleration
+  return float(inverse_acceleration + following_weight * (native_acceleration - inverse_acceleration))
 
 
 def cruise_accel_limit(params, speed, steering_angle, e2e_allowed, coast_accel, allow_throttle):
@@ -408,6 +444,7 @@ class UnifiedLongitudinalPlanner:
       cruise_speed=cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
       typed_model=self.model_evidence, allow_future_rest_reschedule=True,
+      comfort_stop_distance=low_speed_follow_distance(speed),
     )
     urgency = 0.0
     if active and healthy and not reset and not forced_decel and planner.source == LongitudinalPlanSourceSP.cruise:
@@ -432,12 +469,20 @@ class UnifiedLongitudinalPlanner:
     planner.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS, planner.mpc.a_solution)
     planner.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS[:-1], planner.mpc.j_solution)
     planner._observe(actionHorizonKnown=True, actionHorizon=float(delay + DT_MDL))
-    # The native trajectory has piecewise-constant jerk, so acceleration is
-    # linear within each native interval. Sample that acceleration at actuation
-    # time. Reconstructing it as 2 * average_accel - initial_accel assumes one
-    # constant jerk over the entire delay and can reverse the sign of a valid
-    # braking trajectory when measured acceleration changes quickly.
-    self.reference_accel = sample_native_acceleration(planner.mpc.a_solution, delay + DT_MDL)
+    inverse_acceleration = float(get_accel_from_plan(
+      planner.v_desired_trajectory, planner.a_desired_trajectory, CONTROL_N_T_IDX, action_t=delay + DT_MDL))
+    # Native a(t) avoids amplifying a rapidly changing measured response in
+    # calm low-speed following. Applying it to every approach weakened braking
+    # in the weak-response downhill regression, so those contexts retain the
+    # original delay compensation and independent model/lead envelopes.
+    model_permits_following = (not self.e2e_allowed or (
+      self.model_evidence is not None and self.model_evidence.allows_external_departure
+      and not model.action.shouldStop and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL))
+    following_weight = (following_sample_weight(state['radarState'], speed)
+                        if active and healthy and not reset and not forced_decel and planner.mpc.crash_cnt <= 2
+                        and planner.source == LongitudinalPlanSourceSP.cruise and model_permits_following else 0.0)
+    self.reference_accel = sample_reference_acceleration(
+      planner.mpc.a_solution, delay + DT_MDL, inverse_acceleration=inverse_acceleration, following_weight=following_weight)
     planner._observe(sampledAccelKnown=True, sampledAccel=self.reference_accel)
     if not math.isfinite(self.reference_accel):
       self.invalidate(speed, "nonfinite_sampled_accel")

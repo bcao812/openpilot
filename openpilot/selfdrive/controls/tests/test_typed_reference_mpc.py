@@ -16,7 +16,7 @@ from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   J_EGO_COST, MODEL_A_REF, MODEL_BRAKING_PRIORITY, MODEL_V_REF, MPC_GOAL_INFEASIBLE,
-  REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, MpcReference,
+  PARAM_DIM, REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.model_reference import moving_preference
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
@@ -99,7 +99,7 @@ def test_matching_generated_solver_has_real_path_and_terminal_slots():
   model_path = Path(__file__).resolve().parents[1] / 'lib/longitudinal_mpc_lib/acados_ocp_long.json'
   generated = json.loads(model_path.read_text())
   assert generated['dims']['nx'] == 3 and generated['dims']['nu'] == 1
-  assert generated['dims']['np'] == 10
+  assert generated['dims']['np'] == PARAM_DIM == 11
   assert generated['dims']['nbx'] == generated['dims']['nbx_e'] == 2
   assert generated['constraints']['idxbx'] == generated['constraints']['idxbx_e'] == [1, 2]
 
@@ -290,7 +290,7 @@ def test_unknown_retains_compatible_model_and_lead_risk_without_new_typed_proble
     np.testing.assert_allclose(getattr(old_risk, name), getattr(unknown, name), atol=1e-9, rtol=0.0)
   assert reference.typed_model.moving is None
   assert reference.typed_model.allows_departure == (unknown_kind == 'model_after_anchor')
-  np.testing.assert_array_equal(unknown.params[:, MODEL_V_REF:], 0.0)
+  np.testing.assert_array_equal(unknown.params[:, MODEL_V_REF:TYPED_MODEL_MODE+1], 0.0)
   np.testing.assert_array_equal(unknown.diagnostic_reference_weights[:, 1:4], 0.0)
 
 
@@ -444,7 +444,7 @@ def test_mutated_model_source_does_not_supply_new_raw_or_action_braking_but_reta
   assert planner.mpc.diagnostic_last_solver_return == 0 and planner.mpc.solution_status != 0
   assert planner.motion_intent.is_braking_valid() and not planner.motion_intent.release_allowed
   assert planner.mpc.rest_goal is None
-  np.testing.assert_array_equal(planner.mpc.params[:, MODEL_V_REF:], 0.0)
+  np.testing.assert_array_equal(planner.mpc.params[:, MODEL_V_REF:TYPED_MODEL_MODE+1], 0.0)
   assert planner.output_a_target < -0.5
   assert planner.output_a_target == opposite.output_a_target
   np.testing.assert_array_equal(planner.mpc.params, opposite.mpc.params)

@@ -17,7 +17,9 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.tools.longitudinal.replay_pedal_switches import publish_plan
 
 
-def stopped_lead_state(speed, gap=6.0, measured_accel=0.0):
+def stopped_lead_state(speed, gap=4.0, measured_accel=0.0):
+  # Already at the requested low-speed comfort goal; the independent native
+  # braking boundary may ask for still more room, never forward creep here.
   state = make_state(speed=speed, target=40.0 / 3.6)
   state['controlsState'].longControlState = LongCtrlState.stopping
   state['carState'].aEgo = measured_accel
@@ -167,7 +169,7 @@ def test_actual_forward_reference_supplies_explicit_permission_to_leave_hold(sce
 def test_distant_stationary_lead_uses_fresh_confirmation_before_a_small_positive_release():
   planner, extension = make_planner(speed=0.0)
   planner.CP.pcmCruise = False
-  state = stopped_lead_state(0.0, gap=10.0)
+  state = stopped_lead_state(0.0, gap=7.0)
   consumer = held_consumer(planner, extension)
   previous_request = -2.0
   released = False

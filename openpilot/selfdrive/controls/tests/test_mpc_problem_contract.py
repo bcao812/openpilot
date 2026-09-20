@@ -10,7 +10,7 @@ import pytest
 
 from openpilot.cereal import log
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  MODEL_V_REF, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, N, REFERENCE_BOUND, T_IDXS,
+  MODEL_V_REF, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, N, REFERENCE_BOUND, T_IDXS, TYPED_MODEL_MODE,
   LongitudinalMpc, MpcOutcome, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, ModelSource, MovingPreference, NoForward, RestGoal
@@ -181,7 +181,7 @@ def test_rest_and_no_rest_switches_clear_previous_costs_and_native_bounds(record
     assert_cost_contract(recorder.solved_costs[-1], kind)
     if kind in ('legacy', 'cruise'):
       assert mpc.rest_goal is None and mpc.effective_rest_node is None
-      np.testing.assert_array_equal(mpc.params[:, MODEL_V_REF:], 0.0)
+      np.testing.assert_array_equal(mpc.params[:, MODEL_V_REF:TYPED_MODEL_MODE+1], 0.0)
       np.testing.assert_array_equal(mpc.yref, 0.0)
       for stage in range(1, N+1):
         np.testing.assert_array_equal(recorder.constraints[stage, 'lbx'], -REFERENCE_BOUND)
