@@ -588,12 +588,22 @@ class MotionSupervisor:
       reasons |= StopReason.CLOSE_LEAD
 
     near_standstill = standstill or v_ego < STOP_SPEED
+    # An already rolling car may continue a newly accepted moving target
+    # after the stop cause disappears; it need not request more speed first.
+    # This cannot start a held car, spend a cached source, or clear the creep
+    # and close-lead reasons retained above. Standstill departure keeps its
+    # separate positive-target and confirmation contract.
+    rolling_continuation = (
+      self.phase == MotionPhase.APPROACH and not held_stop and not near_standstill and new_input and not reasons
+      and (intent.reference_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
+           or intent.response_kind in (MotionResponseKind.PURE_CRUISE, MotionResponseKind.ABSOLUTE_ACC))
+    )
     release_qualified = (intent.release_allowed and a_target > CREEP_ACCEL and not raw_reasons
                          and (a_target >= STOP_RELEASE_ACCEL or self.release_lead_t >= CREEP_STOP_T - 1e-9))
     if release_qualified:
       reasons = StopReason.NONE
       self._reset_creep()
-    elif stopped_phase and not reasons and (held_stop or near_standstill or not intent.release_allowed):
+    elif stopped_phase and not reasons and (held_stop or near_standstill or not (intent.release_allowed or rolling_continuation)):
       reasons = (self.reasons & ~StopReason.INVALID) or StopReason.HOLD
       if near_standstill:
         reasons |= StopReason.HOLD

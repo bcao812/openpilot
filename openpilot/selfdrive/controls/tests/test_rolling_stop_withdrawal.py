@@ -13,6 +13,7 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import (
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import (
   consume, make_handover_state, make_planner_owner,
 )
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarness
 
@@ -82,3 +83,22 @@ def test_rolling_continuation_is_not_permission_to_depart_a_previous_hold():
   harness.stopped()
   assert harness.step(continuation(), v_ego=1.8, a_target=0.5)
   assert harness.supervisor.reasons & StopReason.HOLD
+
+
+def test_withdrawing_a_rolling_stop_retires_integral_through_the_existing_output_ramp():
+  harness = ControlHarness()
+  harness.state.vEgo = 3.0
+  intent = continuation(response=MotionResponseKind.ABSOLUTE_ACC)
+  for _ in range(200):
+    harness.step(-0.3, intent)
+  assert harness.control.pid.i < -0.1
+  harness.step(-0.3, MotionIntent(reasons=StopReason.E2E, allow_creep=False, producer_instance_ns=1_000_000_000))
+  assert harness.control.motion_phase == MotionPhase.APPROACH
+  assert harness.control.pid.i < -0.1
+  outputs = [harness.control.last_output_accel]
+  for _ in range(20):
+    outputs.append(harness.step(-0.3, intent))
+    assert not harness.control.resolved_should_stop
+    assert outputs[-1] <= -0.3
+  assert np.max(np.diff(outputs)) <= 0.08 + 1e-12
+  assert harness.control.motion_phase == MotionPhase.TRACK
