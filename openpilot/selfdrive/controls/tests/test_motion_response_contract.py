@@ -3,8 +3,9 @@
 The producer tests use a native trajectory with an injected diagnostic source
 and sampled target. They test admission of deliberately ambiguous source labels,
 not physical lead avoidance or uniqueness of MPC attribution.
-The PURE withdrawal case makes the cruise governor nonbinding so it tests
-retirement of actually learned positive I, independently of governor shaping.
+PURE remains an explicitly injected wire/consumer compatibility contract.
+An ordinary native continuation has no numeric cruise goal and cannot certify
+PURE merely because its diagnostic source is named cruise.
 """
 
 from dataclasses import replace
@@ -31,6 +32,7 @@ INSTANCE_NS = 1_000_000_000
 
 @pytest.mark.parametrize('kind', list(MotionResponseKind))
 def test_response_permission_survives_real_wire_roundtrip(kind):
+  """Explicit compatibility input; this does not prove producer reachability."""
   planner = SimpleNamespace(longitudinal_mode=LongitudinalMode.UNIFIED)
   producer = UnifiedLongitudinalPlanner(planner)
   planner.motion_intent = MotionIntent(response_kind=int(kind), producer_instance_ns=INSTANCE_NS)
@@ -234,22 +236,25 @@ def test_ordinary_acc_with_a_lead_cannot_gain_positive_i_before_or_during_fcw(se
 
 
 @pytest.mark.parametrize('boundary', ['leadOne', 'leadTwo', 'fcw', 'force_decel', 'model', 'acc_cap', 'unhealthy', 'manual'])
-def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boundary, ordinary_policy):
+def test_native_continuation_has_no_positive_i_before_or_at_current_risk_boundary(boundary, ordinary_policy):
+  """Producer risk gates; explicit PURE retirement remains covered by consumer contracts."""
   planner, control = make_planner_owner()
   state = make_state()
   native_update = planner.mpc.update
   e2e, fcw, healthy, target = False, False, True, 0.3
+  references = []
 
   def update(*args, **kwargs):
+    references.append(kwargs['reference'])
     native_update(*args, **kwargs)
     # A cruise label alone must never hide either newly present lead.
     planner.mpc.source = LongitudinalPlanSource.cruise
     planner.mpc.crash_cnt = 4 if fcw else 0
 
   def neutral_cruise_response(_target_speed, _speed, maximum_accel, **_kwargs):
-    # Isolate permission withdrawal from the governor's own jerk/history.
-    # This ceiling never undercuts the independent hard cap. During PURE
-    # warmup the native sample must strictly win below both ceilings;
+    # Isolate native-winner permission from the governor's own jerk/history.
+    # This ceiling never undercuts the independent hard cap. The sampled
+    # native continuation must strictly win before the risk boundary;
     # all actual arbitration, transport, owner and integral updates still run.
     return maximum_accel
 
@@ -259,7 +264,7 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
        patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', side_effect=lambda *args, **kwargs: target):
     for frame in range(6):
       if frame == 3:
-        assert control.pid.i > 0.0
+        assert control.pid.i == 0.0
         if boundary in ('leadOne', 'leadTwo'):
           set_lead(getattr(state['radarState'], boundary), closing=0.0, gap=200.0)
         elif boundary == 'fcw':
@@ -280,10 +285,12 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
         assert plan.motionIntent.responseKind == MotionResponseKind.NONE
         assert control.pid.i == 0.0
       elif frame < 3:
+        assert references[-1].cruise_speed is None
         assert planner.reference_planner.reference_accel < planner.reference_planner.constraint_accel
         assert plan.aTarget == float(np.float32(planner.reference_planner.reference_accel))
-        assert plan.motionIntent.responseKind == MotionResponseKind.PURE_CRUISE
-        assert control.pid.i > 0.0
+        assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+        assert control.pid.i == 0.0
+        assert all(output <= plan.aTarget for output in outputs)
       else:
         expected = MotionResponseKind.ABSOLUTE_ACC if boundary in ('leadOne', 'leadTwo', 'fcw', 'model', 'acc_cap') else MotionResponseKind.NONE
         assert plan.motionIntent.responseKind == expected

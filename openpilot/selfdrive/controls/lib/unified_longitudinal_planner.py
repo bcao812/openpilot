@@ -687,11 +687,13 @@ class UnifiedLongitudinalPlanner:
         # Ordinary ACC retains only braking correction, including for excess
         # response to a positive target. FCW does not revoke this negative I.
         response_kind = MotionResponseKind.ABSOLUTE_ACC
-        if ((not self.reference_overridden or cruise_response_bound) and not planner.fcw and planner.mpc.source == LongitudinalPlanSource.cruise
+        if (reference.cruise_speed is not None and (not self.reference_overridden or cruise_response_bound)
+            and not planner.fcw and planner.mpc.source == LongitudinalPlanSource.cruise
             and not state['radarState'].leadOne.present and not state['radarState'].leadTwo.present):
-          # With no lead/model risk owner, correct net cruise acceleration in
-          # both directions. Its disturbance I may cross the target's zero;
-          # the appearance of either lead immediately withdraws this domain.
+          # A cruise diagnostic label also names finite continuation; only an
+          # installed native speed goal can certify signed cruise feedback.
+          # Current ordinary cruise uses the external governor and cannot
+          # issue PURE_CRUISE. Explicit wire contracts remain compatible.
           response_kind = MotionResponseKind.PURE_CRUISE
       elif (not self.reference_overridden and selected_lead is not None and output < 0.0
             and get_lead_braking_urgency(speed, output, state['radarState'], delay, lead_index=lead_index) > 0.0):

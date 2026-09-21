@@ -2,6 +2,8 @@
 
 These are software command tests. The frozen CAN-driven short-response plants
 must separately check the required motion under their declared assumptions.
+PURE inputs are explicit compatibility injections; current ordinary native
+continuation does not establish a producer path to that response domain.
 """
 
 from dataclasses import replace
@@ -39,6 +41,7 @@ def absolute_intent(**changes):
 
 
 def pure_intent(**changes):
+  """Explicit consumer compatibility input, not current producer reachability."""
   return replace(absolute_intent(response_kind=int(MotionResponseKind.PURE_CRUISE)), **changes)
 
 
@@ -258,12 +261,13 @@ def test_real_acc_publication_without_model_reference_executes_the_winning_cruis
 
 
 @pytest.mark.parametrize('speed,correction_sign', [(20.8, -1), (19.2, 1)])
-def test_isolated_native_winner_publication_preserves_signed_pure_cruise_response(speed, correction_sign):
-  """Isolate the existing PURE permission, without faking its wire declaration.
+def test_native_continuation_winner_publication_keeps_only_nonpositive_response(speed, correction_sign):
+  """A finite risk continuation may win without acquiring a numeric cruise goal.
 
   Native solves still run. A declared sampled target and a neutral governor
   ceiling make that sample win actual arbitration, independently of the real
-  cruise governor's history. This is a feedback contract, not a trajectory test.
+  cruise governor's history. Actual MPC inputs retain cruise_speed=None;
+  this is a feedback contract, not a trajectory test or a manufactured PURE path.
   """
   target = correction_sign * 0.3
   with OpenpilotPrefix():
@@ -273,6 +277,7 @@ def test_isolated_native_winner_publication_preserves_signed_pure_cruise_respons
     with patch.object(planner, 'is_e2e', return_value=False), \
          patch.object(LongitudinalPlannerSP, 'update', return_value=None), \
          patch.object(LongitudinalPlannerSP, 'update_targets', new=ordinary_cruise_target), \
+         patch.object(planner.mpc, 'update', wraps=planner.mpc.update) as native_update, \
          patch.object(planner.reference_planner.cruise_response, 'update',
                       side_effect=lambda _target, _speed, maximum, **_kwargs: maximum), \
          patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=target), \
@@ -284,18 +289,49 @@ def test_isolated_native_winner_publication_preserves_signed_pure_cruise_respons
         assert plan.motionIntent.referenceKind == MotionReferenceKind.UNKNOWN
         assert planner.reference_planner.reference_accel < planner.reference_planner.constraint_accel
         assert plan.aTarget == plan.reference.accel == float(np.float32(target))
-        assert plan.motionIntent.responseKind == (MotionResponseKind.NONE if frame == 0 else MotionResponseKind.PURE_CRUISE)
+        assert plan.motionIntent.responseKind == (MotionResponseKind.NONE if frame == 0 else MotionResponseKind.ABSOLUTE_ACC)
         assert plan.motionIntent.valid and plan.solverStatus == 0
         assert control.motion_phase == MotionPhase.TRACK and not control.motion_input_constrained
+        assert control.pid.i <= 0.0
         if frame == 0:
           assert control.pid.i == 0.0
-        if correction_sign < 0:
-          assert all(output <= plan.aTarget for output in outputs)
+        else:
+          assert native_update.call_args.kwargs['reference'].cruise_speed is None
+        assert all(output <= plan.aTarget for output in outputs)
         requests.extend(outputs)
       assert feedback.call_count == 95
-      assert control.pid.i * correction_sign > 0.0
+      if correction_sign < 0:
+        assert control.pid.i < 0.0
+      else:
+        assert control.pid.i == 0.0
       assert not control.launch_response.armed
     assert_honda_commands_match_requests(requests)
+
+
+@pytest.mark.parametrize('correction_sign', [-1, 1])
+def test_explicit_pure_contract_preserves_signed_consumer_feedback(correction_sign):
+  """Retain the accepted contract's helper/CAN behavior through explicit injection.
+
+  The separate response-contract test covers its wire roundtrip. This case
+  does not assert that the current planner can produce PURE; existing consumer
+  tests below still check its withdrawal for stop, fault and authority changes.
+  """
+  with OpenpilotPrefix():
+    harness = ControlHarness()
+    harness.state.vEgo = 20.0
+    target = correction_sign * 0.3
+    intent = pure_intent()
+    assert intent.is_valid()
+    outputs = []
+    for _ in range(100):
+      outputs.append(harness.step(target, intent))
+      assert harness.control.motion_phase == MotionPhase.TRACK and not harness.control.motion_input_constrained
+    assert harness.control.pid.i * correction_sign > 0.0
+    assert outputs[-1] == pytest.approx(target + harness.control.pid.i, rel=0.0, abs=1e-12)
+    assert not harness.control.launch_response.armed
+    if correction_sign < 0:
+      assert all(output <= target for output in outputs)
+    assert_honda_commands_match_requests(outputs)
 
 
 def test_qualified_launch_to_rolling_keeps_one_integral_without_a_threshold_jump():
