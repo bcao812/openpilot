@@ -87,10 +87,10 @@ def test_request_flags_do_not_relax_the_distinct_coast_contract(moving_lead, rel
 
 @pytest.mark.parametrize('tuned_ki', [False, True], ids=['launch-response', 'configured-pid'])
 @pytest.mark.parametrize('sign', [-1, 1], ids=['negative-history', 'positive-history'])
-@pytest.mark.parametrize('request', [-0.35, 0.35], ids=['braking-request', 'accelerating-request'])
-def test_accepted_request_executes_without_integral_then_returns_to_the_original_feedback_domains(request, sign, tuned_ki):
+@pytest.mark.parametrize('cruise_request', [-0.35, 0.35], ids=['braking-request', 'accelerating-request'])
+def test_accepted_request_executes_without_integral_then_returns_to_the_original_feedback_domains(cruise_request, sign, tuned_ki):
   harness = learned_harness(sign, tuned_ki=tuned_ki)
-  command = float(np.float32(request))
+  command = float(np.float32(cruise_request))
   outputs = [harness.control.last_output_accel]
   settle_ticks = math.ceil(max(0.0, command - outputs[-1]) / UPWARD_STEP) + 2
   for _ in range(settle_ticks + 10):
@@ -103,8 +103,8 @@ def test_accepted_request_executes_without_integral_then_returns_to_the_original
   assert outputs[-10:] == [command] * 10
   assert harness.control.motion_phase == MotionPhase.TRACK
   for encoded in decoded_commands(outputs[-10:]):
-    assert encoded['ACCEL_COMMAND'] == pytest.approx(request, abs=1e-6)
-    assert bool(encoded['BRAKE_REQUEST']) == (request < 0.0)
+    assert encoded['ACCEL_COMMAND'] == pytest.approx(cruise_request, abs=1e-6)
+    assert bool(encoded['BRAKE_REQUEST']) == (cruise_request < 0.0)
 
   # Independent following/risk feedback remains available on the next target.
   absolute = MotionIntent(response_kind=int(MotionResponseKind.ABSOLUTE_ACC), producer_instance_ns=INSTANCE_NS, allow_creep=False)

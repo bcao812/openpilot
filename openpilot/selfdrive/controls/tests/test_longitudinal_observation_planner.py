@@ -56,7 +56,7 @@ def snapshot_value(value):
 
 def reference_snapshot(reference):
   return {
-    name: snapshot_value(vars(value) if name == 'model_reference_adapter' else value)
+    name: snapshot_value(vars(value) if name in ('model_reference_adapter', 'cruise_response') else value)
     for name, value in vars(reference).items() if name != 'planner'
   }
 

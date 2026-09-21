@@ -171,11 +171,16 @@ def test_unified_observation_keeps_reference_and_admitted_model_constraint_separ
   planner = planner_for(LongitudinalMode.UNIFIED, speed=20.2, trace=trace)
   state = state_for(LongitudinalMode.UNIFIED, speed=20.2, target=20.2)
   state['modelV2'].action.desiredAcceleration = model_accel
+  # Isolate the whole stateful cruise strategy at the physical upper ceiling.
+  # This observer test checks the independent acceleration limit and admitted
+  # model action; P's raw cruise history has separate differential coverage.
   with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_cruise_accel', side_effect=AssertionError('retired cruise executed')), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan', return_value=1.0) as sample, \
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=1.0) as sample, \
+       patch.object(planner.reference_planner.cruise_response, 'update', return_value=2.0) as cruise, \
        patch.object(planner, 'is_e2e', return_value=admitted):
     planner.update(state, now_ns=1_005_000_000)
   sample.assert_called_once()
+  cruise.assert_called_once()
   observed = diagnostics(planner, state)
   assert not observed.analysis.referenceCandidates.known
   assert observed.modelAdmissionKnown and observed.e2eAllowed == admitted
