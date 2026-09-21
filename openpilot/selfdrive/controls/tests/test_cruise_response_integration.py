@@ -457,20 +457,22 @@ def test_coast_keeps_p_admission_guards_at_the_real_planner_boundary(guard):
 
 
 @pytest.mark.parametrize('reference,maximum,expected,response', [
-  (-0.5, None, -0.5, MotionResponseKind.PURE_CRUISE),
-  (-0.22, None, -0.22, MotionResponseKind.PURE_CRUISE),
-  (-0.19, None, -0.19, MotionResponseKind.PURE_CRUISE),
+  (-0.5, None, -0.5, MotionResponseKind.ABSOLUTE_ACC),
+  (-0.22, None, -0.22, MotionResponseKind.ABSOLUTE_ACC),
+  (-0.19, None, -0.19, MotionResponseKind.ABSOLUTE_ACC),
   (0.0, -0.22, -0.22, MotionResponseKind.ABSOLUTE_ACC),
   (0.0, -0.19, -0.19, MotionResponseKind.ABSOLUTE_ACC),
 ])
 def test_coast_never_takes_ownership_from_a_stronger_or_equal_independent_constraint(reference, maximum, expected, response):
   planner, state = make_coast_case()
   with ExitStack() as stack:
+    update = stack.enter_context(patch.object(planner.mpc, 'update', wraps=planner.mpc.update))
     stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration',
                               return_value=reference))
     if maximum is not None:
       stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.cruise_accel_limit', return_value=maximum))
     plan = step(planner, state, 0)
+  assert update.call_args.kwargs['reference'].cruise_speed is None
   assert plan.aTarget == float(np.float32(expected))
   assert plan.motionIntent.responseKind == response
 

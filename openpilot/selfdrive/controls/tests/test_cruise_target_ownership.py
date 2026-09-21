@@ -378,7 +378,7 @@ def test_cruise_request_preserves_real_moving_lead_fact_without_manufacturing_it
 
 @pytest.mark.parametrize('case,expected_kind', [
   ('request_wins', CRUISE_REQUEST_KIND), ('native_above_nonbinding_maximum', CRUISE_REQUEST_KIND),
-  ('native_tie', MotionResponseKind.PURE_CRUISE), ('native_stronger', MotionResponseKind.PURE_CRUISE),
+  ('native_tie', MotionResponseKind.ABSOLUTE_ACC), ('native_stronger', MotionResponseKind.ABSOLUTE_ACC),
   ('hard_limit_tie', MotionResponseKind.ABSOLUTE_ACC), ('hard_limit_stronger', MotionResponseKind.ABSOLUTE_ACC),
 ])
 def test_cruise_request_declaration_requires_the_strict_final_winner(case, expected_kind):
@@ -401,11 +401,13 @@ def test_cruise_request_declaration_requires_the_strict_final_winner(case, expec
   # The native solver still runs. Only its readout/current limit dependencies
   # are controlled to express exact ties, rather than relying on QP rounding.
   with ExitStack() as stack:
+    update = stack.enter_context(patch.object(planner.mpc, 'update', wraps=planner.mpc.update))
     stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration',
                               return_value=native))
     if maximum is not None:
       stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.cruise_accel_limit', return_value=maximum))
     plan, _ = consume(planner, owner, state, 0)
+  assert update.call_args.kwargs['reference'].cruise_speed is None
   assert plan.solverStatus == 0 and plan.motionIntent.valid and not plan.motionIntent.reasons
   assert plan.aTarget == float(np.float32(expected))
   assert plan.aTarget == min(plan.reference.accel, plan.reference.constraintAccel)

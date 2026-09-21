@@ -3,6 +3,8 @@
 The native solve still runs, then its acceleration trajectory is substituted
 to isolate cap crossings. These are response-contract counterexamples, not a
 claim that the substituted trajectory is safe for an obstacle or a road test.
+Ordinary cruise has an external goal; its finite native continuation cannot
+qualify signed cruise feedback merely by carrying the cruise source label.
 """
 
 from contextlib import contextmanager
@@ -30,7 +32,7 @@ def controlled_acc(*, speed=3.0, initial_accel=0.0):
   planner, control = make_planner_owner(speed=speed, initial_accel=initial_accel)
   state = make_state(speed=speed, target=speed + 2.0)
   run = SimpleNamespace(planner=planner, control=control, state=state, frame=0,
-                        acceleration=0.3, policy_source=PolicySource.cruise, policy_speed=None)
+                        acceleration=0.3, policy_source=PolicySource.cruise, policy_speed=None, native_reference=None)
 
   def targets(instance, state, speed, accel, cruise):
     instance.source = run.policy_source
@@ -41,6 +43,7 @@ def controlled_acc(*, speed=3.0, initial_accel=0.0):
     return instance.cruise_target
 
   def update(*args, **kwargs):
+    run.native_reference = kwargs['reference']
     solve_given_acceleration(planner, np.full_like(T_IDXS, run.acceleration), speed, *args, **kwargs)
 
   def step(reference=None, measured=None):
@@ -82,7 +85,7 @@ def settle_independent_hard_cap(run):
   np.testing.assert_allclose(limits[-2:], hard_cap, atol=1e-7, rtol=0.0)
 
   # Restore the original 0.3 baseline using the public control path, so the
-  # positive-I test does not spend its learning interval climbing from zero.
+  # response-history tests start from this known command rather than zero.
   plan, outputs = run.step(reference=0.3, measured=0.3)
   assert plan.reference.constraintAccel == pytest.approx(hard_cap, abs=1e-7)
   assert outputs[-1] == pytest.approx(0.3, abs=1e-7)
@@ -94,8 +97,9 @@ def learn_negative_response(run):
   cap = settle_independent_hard_cap(run)
   for _ in range(6):
     plan, _ = run.step(reference=0.3, measured=0.8)
+    assert run.native_reference.cruise_speed is None
   assert plan.reference.constraintAccel == pytest.approx(cap, abs=1e-7)
-  assert plan.motionIntent.responseKind == MotionResponseKind.PURE_CRUISE
+  assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
   assert run.control.pid.i < -0.03
   return cap
 
@@ -107,7 +111,7 @@ def test_cruise_cap_preserves_negative_response_for_small_and_large_crossings(cr
     for _ in range(4):
       before, before_outputs = run.step(reference=cap - crossing, measured=cap - crossing)
     assert not before.reference.overridden
-    assert before.motionIntent.responseKind == MotionResponseKind.PURE_CRUISE
+    assert before.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
     negative_i = run.control.pid.i
     assert negative_i < -0.03
 
@@ -125,22 +129,42 @@ def test_cruise_cap_preserves_negative_response_for_small_and_large_crossings(cr
     assert np.max(np.diff([before_outputs[-1], *outputs])) <= STARTING_ACCEL_RATE * DT_CTRL + 1e-7
 
 
-def test_cap_projection_withdraws_positive_i_on_the_first_control_tick():
+@pytest.mark.parametrize('crossing', [1.6e-5, 5e-5])
+def test_finite_continuation_cannot_learn_positive_i_or_drop_it_at_a_hard_cap_crossing(crossing):
   with controlled_acc() as run:
     cap = settle_independent_hard_cap(run)
-    for _ in range(8):
-      before, before_outputs = run.step(reference=cap - 5e-5, measured=cap - 0.5)
-    assert before.motionIntent.responseKind == MotionResponseKind.PURE_CRUISE
-    assert not before.reference.overridden
-    assert run.control.pid.i > 0.03
-    assert before_outputs[-1] > cap
-
-    plan, outputs = run.step(reference=cap + 5e-5, measured=cap)
-    assert plan.reference.overridden
-    assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
-    assert plan.aTarget == pytest.approx(cap)
-    assert run.control.pid.i == 0.0
-    assert outputs == pytest.approx([plan.aTarget] * 5, abs=1e-7)
+    previous = run.control.last_output_accel
+    rows = []
+    # The first delta comes from the observed reentry counterexample; the
+    # second retains the existing small-crossing input. Neither changes the
+    # sampler or injects a numeric goal that production would not install.
+    for _ in range(2):
+      for sample, measured in [(cap - crossing, cap - 0.5)] * 8 + [(cap + crossing, cap)]:
+        plan, outputs = run.step(reference=sample, measured=measured)
+        assert run.native_reference.cruise_speed is None
+        assert plan.solverStatus == 0 and plan.motionIntent.valid and not plan.motionIntent.reasons
+        assert run.control.motion_phase == MotionPhase.TRACK
+        assert plan.reference.accel == float(np.float32(sample))
+        assert plan.reference.constraintAccel == pytest.approx(cap, abs=1e-7)
+        assert plan.aTarget == min(plan.reference.accel, plan.reference.constraintAccel)
+        assert plan.reference.overridden == (sample > cap)
+        rows.append((plan, outputs, run.control.pid.i))
+    # Capture the complete boundary history before asserting permission. In
+    # the regression, the cruise label learns positive I below the cap and
+    # ABS discards it on the very first tick above the cap.
+    assert [integral for _, _, integral in rows] == [0.0] * len(rows)
+    assert all(plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC for plan, _, _ in rows)
+    for plan, outputs, _ in rows:
+      assert all(ACCEL_MIN <= output <= min(plan.aTarget, ACCEL_MAX) for output in outputs)
+      assert np.max(np.diff([previous, *outputs])) <= STARTING_ACCEL_RATE * DT_CTRL + 1e-7
+      previous = outputs[-1]
+    for index in (8, 17):
+      before, before_outputs, _ = rows[index - 1]
+      plan, outputs, _ = rows[index]
+      assert not before.reference.overridden and plan.reference.overridden
+      assert plan.aTarget == pytest.approx(cap)
+      assert outputs == pytest.approx([plan.aTarget] * 5, abs=1e-7)
+      assert outputs[0] - before_outputs[-1] == pytest.approx(crossing, abs=1e-7)
 
 
 @pytest.mark.parametrize('constraint', ['policy', 'model'])
