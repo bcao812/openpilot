@@ -221,6 +221,20 @@ def test_strength_does_not_replace_permission_positive_execution_or_health(condi
   assert harness.supervisor.phase == MotionPhase.HOLD
 
 
+@pytest.mark.parametrize('declining', [False, True])
+def test_positive_inverse_from_negative_initial_accel_does_not_supply_movement_permission(declining):
+  speeds = np.maximum(0.1 - 0.1 * CONTROL_TIMES, 0.0) if declining else np.zeros(CONTROL_N)
+  accels = np.zeros(CONTROL_N)
+  accels[0] = -0.6
+  strength = departure_strength(speeds=speeds, accels=accels)
+  assert strength >= STOP_RELEASE_ACCEL
+  harness = MotionHarness()
+  harness.stopped()
+  intent = MotionIntent(release_allowed=False, release_accel=strength)
+  assert harness.step(intent, a_target=RECORDED_TARGET, v_ego=0.0, standstill=True)
+  assert harness.supervisor.phase == MotionPhase.HOLD
+
+
 @pytest.mark.parametrize('condition', ['gas', 'brake', 'disable', 'override_event'])
 def test_strength_cannot_override_driver_authority(condition):
   harness = held_controls()

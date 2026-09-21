@@ -10,7 +10,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_ACCEL, CREEP_F
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
 
-MOTION_INTENT_VERSION = 9
+MOTION_INTENT_VERSION = 10
 PLAN_LEASE_NS = 250_000_000
 MODEL_LEASE_NS = 250_000_000
 MAX_CONTROL_GAP_NS = 100_000_000
@@ -42,8 +42,8 @@ class MotionResponseKind(IntEnum):
   # acceleration-error feedback. It carries UNKNOWN model semantics and
   # neither movement nor departure permission; the owner still resolves stops.
   CRUISE_COAST = 4
-  # Version 9: the strictly winning cruise governor request already owns its
-  # response shaping. Its UNKNOWN reference may retain independently qualified
+  # Version 10: the strictly winning cruise governor request already owns its
+  # response shaping. Keep its UNKNOWN/MOVING/FORWARD reference and independent
   # movement/departure facts; this kind adds no permission to release a stop.
   CRUISE_REQUEST = 5
 
@@ -118,6 +118,8 @@ class MotionIntent:
   evidence to the separately qualified measured-reference producer.
   response_kind declares a separate current-target contract; UNKNOWN model
   semantics alone grant no acceleration-response permission.
+  release_accel is optional consumer-local trajectory strength, never a wire
+  permission or an execution request. Only new dual-source input may spend it.
   """
 
   version: int = MOTION_INTENT_VERSION
@@ -133,6 +135,7 @@ class MotionIntent:
   rest_goal_rejected: bool = False
   producer_instance_ns: int = 0
   response_kind: int = int(MotionResponseKind.NONE)
+  release_accel: float | None = None
 
   @classmethod
   def from_message(cls, message):
@@ -165,9 +168,9 @@ class MotionIntent:
             and self.reference_kind in MOTION_REFERENCE_KINDS
             and isinstance(self.response_kind, int) and not isinstance(self.response_kind, bool)
             and self.response_kind in MOTION_RESPONSE_KINDS
-            and (self.response_kind != MotionResponseKind.ABSOLUTE_ACC
+            and (self.response_kind not in (MotionResponseKind.ABSOLUTE_ACC, MotionResponseKind.CRUISE_REQUEST)
                  or self.reference_kind in (MotionReferenceKind.UNKNOWN, MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD))
-            and (self.response_kind not in (MotionResponseKind.PURE_CRUISE, MotionResponseKind.CRUISE_COAST, MotionResponseKind.CRUISE_REQUEST)
+            and (self.response_kind not in (MotionResponseKind.PURE_CRUISE, MotionResponseKind.CRUISE_COAST)
                  or self.reference_kind == MotionReferenceKind.UNKNOWN)
             and (self.response_kind != MotionResponseKind.CRUISE_COAST or not self.release_allowed and not self.moving_lead)
             and (self.reference_kind not in (MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.REST, MotionReferenceKind.NO_FORWARD)
@@ -180,6 +183,9 @@ class MotionIntent:
             and (not self.rest_goal_rejected
                  or self.reference_kind == MotionReferenceKind.REST
                  and not self.valid and self.braking_accel is not None and self.producer_instance_ns > 0)
+            and (self.release_accel is None
+                 or isinstance(self.release_accel, (int, float)) and not isinstance(self.release_accel, bool)
+                 and math.isfinite(self.release_accel))
             and (self.braking_accel is None
                  or isinstance(self.braking_accel, (int, float)) and not isinstance(self.braking_accel, bool)
                  and math.isfinite(self.braking_accel) and CarControllerParams.BOSCH_ACCEL_MIN <= self.braking_accel <= DEGRADED_ACCEL))
@@ -615,8 +621,9 @@ class MotionSupervisor:
            or intent.response_kind in (MotionResponseKind.PURE_CRUISE, MotionResponseKind.ABSOLUTE_ACC,
                                        MotionResponseKind.CRUISE_COAST, MotionResponseKind.CRUISE_REQUEST))
     )
+    strong_departure = (new_input and intent.release_accel is not None and intent.release_accel >= STOP_RELEASE_ACCEL)
     release_qualified = (intent.release_allowed and a_target > CREEP_ACCEL and not raw_reasons
-                         and (a_target >= STOP_RELEASE_ACCEL or self.release_lead_t >= CREEP_STOP_T - 1e-9))
+                         and (a_target >= STOP_RELEASE_ACCEL or strong_departure or self.release_lead_t >= CREEP_STOP_T - 1e-9))
     if release_qualified:
       reasons = StopReason.NONE
       self._reset_creep()

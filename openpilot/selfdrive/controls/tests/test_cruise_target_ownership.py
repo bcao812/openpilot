@@ -414,8 +414,8 @@ def test_cruise_request_declaration_requires_the_strict_final_winner(case, expec
   assert plan.motionIntent.responseKind == expected_kind
 
 
-@pytest.mark.parametrize('domain,expected_kind', [('e2e', MotionResponseKind.ABSOLUTE_ACC), ('scc', MotionResponseKind.NONE)])
-def test_strict_cruise_scalar_winner_does_not_relabel_other_admitted_policy_domains(domain, expected_kind):
+@pytest.mark.parametrize('domain,expected_kind', [('e2e', MotionResponseKind.CRUISE_REQUEST), ('scc', MotionResponseKind.NONE)])
+def test_strict_cruise_request_keeps_ordinary_model_facts_and_respects_scc_domain(domain, expected_kind):
   planner, owner, state = ordinary_case(speed=3.0, target=4.0)
   with ExitStack() as stack:
     stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=1.0))
@@ -431,6 +431,8 @@ def test_strict_cruise_scalar_winner_does_not_relabel_other_admitted_policy_doma
     plan, _ = consume(planner, owner, state, 0)
   assert plan.motionIntent.valid and plan.aTarget < plan.reference.accel
   assert plan.motionIntent.responseKind == expected_kind
+  if domain == 'e2e':
+    assert plan.motionIntent.referenceKind == MotionReferenceKind.MOVING
 
 
 def test_current_fcw_vetoes_cruise_request_domain_and_clearance_restores_it():

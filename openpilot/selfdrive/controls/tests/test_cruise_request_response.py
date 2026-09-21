@@ -29,7 +29,7 @@ from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarn
 
 
 # Wire constants allow red tests to collect against the preceding contract.
-REQUEST_VERSION = 9
+REQUEST_VERSION = 10
 REQUEST_KIND = 5
 INSTANCE_NS = 1_000_000_000
 UPWARD_STEP = STARTING_ACCEL_RATE * DT_CTRL
@@ -70,11 +70,11 @@ def test_request_wire_contract_preserves_independent_motion_facts(moving_lead, r
 
 
 @pytest.mark.parametrize('changes', [
-  {'version': 8}, {'response_kind': True}, {'response_kind': 5.0}, {'response_kind': 6},
+  {'version': 8}, {'version': 9}, {'response_kind': True}, {'response_kind': 5.0}, {'response_kind': 6},
   {'ready': False}, {'valid': False}, {'reasons': int(StopReason.MPC)}, {'reasons': int(StopReason.FORCE_DECEL)},
   {'braking_accel': -0.5}, {'producer_instance_ns': 0}, {'producer_instance_ns': None},
-] + [{'reference_kind': int(kind)} for kind in MotionReferenceKind if kind != MotionReferenceKind.UNKNOWN])
-def test_request_rejects_unqualified_or_model_reference_contracts(changes):
+] + [{'reference_kind': int(kind)} for kind in (MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.REST, MotionReferenceKind.NO_FORWARD)])
+def test_request_rejects_unqualified_or_stopping_reference_contracts(changes):
   assert not request_intent(**changes).is_valid()
 
 

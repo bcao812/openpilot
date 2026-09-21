@@ -29,7 +29,7 @@ from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarn
 
 
 # Fixed wire values allow the pre-fix version to collect and fail behaviorally.
-COAST_VERSION = 9
+COAST_VERSION = 10
 COAST_KIND = 4
 INSTANCE_NS = 1_000_000_000
 # P e18b1de's plateau, after the real LongitudinalPlan Float32 transport.

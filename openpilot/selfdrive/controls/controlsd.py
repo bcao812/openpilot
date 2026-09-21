@@ -10,14 +10,14 @@ import openpilot.cereal.messaging as messaging
 from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.params import Params
-from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
+from openpilot.common.realtime import config_realtime_process, DT_CTRL, DT_MDL, Priority, Ratekeeper
 from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
-from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, clip_curvature, get_departure_accel_from_plan
 from openpilot.selfdrive.controls.lib.control_observation import ControlObservation
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -28,7 +28,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer
-from openpilot.selfdrive.modeld.constants import LAT_SMOOTH_SECONDS
+from openpilot.selfdrive.modeld.constants import LAT_SMOOTH_SECONDS, ModelConstants
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
@@ -149,13 +149,20 @@ class Controls(ControlsExt):
     reference_valid = True
     self.reference_timing_check = None
     if self.LoC.longitudinal_mode == LongitudinalMode.UNIFIED:
+      # This local fact restores the old strong-departure interpretation; it
+      # cannot replace the sampled execution target or producer permission.
+      speeds, accels = tuple(long_plan.speeds), tuple(long_plan.accels)
+      action_t = self.CP.longitudinalActuatorDelay + DT_MDL
+      motion_intent = replace(motion_intent, release_accel=get_departure_accel_from_plan(
+        speeds, accels, ModelConstants.T_IDXS[:CONTROL_N], action_t, long_plan.reference.constraintAccel))
       # Preserve all three times: source epoch, LP Event availability and this
       # actual consumption. Only source age can qualify a measured reference.
       self.reference_timing_check = self.reference_timing.consume(
         long_plan.reference, self.sm.logMonoTime['longitudinalPlan'], now_ns,
         command_identity=(int(long_plan.modelMonoTime), float(long_plan.aTarget), bool(long_plan.shouldStop),
                           int(long_plan.solverStatus), motion_intent, float(long_plan.reference.accel),
-                          float(long_plan.reference.constraintAccel), bool(long_plan.reference.overridden)))
+                          float(long_plan.reference.constraintAccel), bool(long_plan.reference.overridden),
+                          speeds, accels, action_t))
       if (self.reference_timing_check.valid
           and (motion_intent.producer_instance_ns <= 0 or motion_intent.producer_instance_ns != self.reference_timing_check.timing.instance_ns)):
         self.reference_timing_check = replace(self.reference_timing_check, valid=False, reason='intent_reference_instance_mismatch')

@@ -12,7 +12,8 @@ from openpilot.selfdrive.controls.lib.cruise_response import (
   CRUISE_COAST_BP, CRUISE_COAST_MIN_SPEED, CRUISE_COAST_MAX_SPEED_ERROR, CRUISE_COAST_RISK_ACCEL,
   CruiseResponse, get_cruise_coast_accel,
 )
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED, should_stop
+from openpilot.selfdrive.controls.lib.drive_helpers import (CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED,
+                                                          get_departure_accel_from_plan, should_stop)
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS,
@@ -456,9 +457,6 @@ class UnifiedLongitudinalPlanner:
       and ((not self.e2e_allowed and self.model_evidence is None) or ordinary_model_motion)
       and model_position is model_velocity is model_acceleration is None
     )
-    # Only ACC without admitted model facts may declare CRUISE_REQUEST.
-    # Ordinary model motion retains its separate ABSOLUTE_ACC contract.
-    external_cruise = native_cruise_external and not self.e2e_allowed and self.model_evidence is None
     reference = MpcReference(
       cruise_speed=None if native_cruise_external else cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
@@ -603,10 +601,16 @@ class UnifiedLongitudinalPlanner:
     # P's ordinary action can request departure without raw speed growth.
     # Certify that request only after every current target cap and raw veto;
     # the owner still controls HOLD, freshness and the actual brake release.
+    # These arrays were projected from this solve above and are the arrays
+    # publish() sends. The helper matches their wire precision and Controls'
+    # CP actuator horizon; its inverse is only independent departure strength.
+    departure_accel = get_departure_accel_from_plan(
+      planner.v_desired_trajectory, planner.a_desired_trajectory, CONTROL_N_T_IDX, delay + DT_MDL, self.constraint_accel)
     ordinary_absolute_departure = (
       ordinary_model_motion and raw_kind == MotionReferenceKind.MOVING
       and evidence.allows_external_departure and not model.action.shouldStop
-      and model.action.desiredAcceleration >= STOP_RELEASE_ACCEL and output >= STOP_RELEASE_ACCEL
+      and model.action.desiredAcceleration >= STOP_RELEASE_ACCEL and output > 0.0
+      and (output >= STOP_RELEASE_ACCEL or departure_accel is not None and departure_accel >= STOP_RELEASE_ACCEL)
     )
     model_allows_trajectory_departure = evidence is None or evidence.allows_departure or ordinary_absolute_departure
     no_model_risk = (model_allows_external_departure and not model.action.shouldStop
@@ -655,6 +659,13 @@ class UnifiedLongitudinalPlanner:
     cruise_selected = (not reasons and cruise_command < min(self.reference_accel, maximum_accel)
                        and self.constraint_source == LongitudinalPlanSource.cruise
                        and self.constraint_accel == cruise_command and output == cruise_command)
+    # Ordinary model motion retains its raw facts while the winning cruise
+    # governor owns response shaping. An equal action cap is independent
+    # ownership even though the numeric arbitration labels that tie cruise.
+    external_cruise = (native_cruise_external
+                       and ((not self.e2e_allowed and evidence is None)
+                            or ordinary_model_motion and raw_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
+                            and cruise_command < model.action.desiredAcceleration))
     coast_selected = coast_applicable and cruise_selected
     if coast_selected:
       response_kind = MotionResponseKind.CRUISE_COAST
