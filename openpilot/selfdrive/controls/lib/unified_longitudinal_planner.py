@@ -636,24 +636,31 @@ class UnifiedLongitudinalPlanner:
                         and self.constraint_source == LongitudinalPlanSource.cruise
                         and self.reference_accel > maximum_accel
                         and output == self.constraint_accel)
-    # The cruise response is a net acceleration target, not an independent
-    # actuator limit. Keep its ordinary disturbance-response domain while
-    # a tighter current maximum still retains the nonpositive-I contract.
+    # Retain feedback qualification outside the separately certified request
+    # domain below. A binding independent maximum still retains the
+    # nonpositive-correction contract.
     cruise_response_bound = (not self.e2e_allowed and evidence is None
                              and self.constraint_source == LongitudinalPlanSource.cruise
                              and self.constraint_accel == cruise_ceiling < maximum_accel
                              and cruise_ceiling < self.reference_accel <= maximum_accel and output == cruise_ceiling)
-    # Only a strictly winning coast command carries the execution contract.
+    # Only the actual strictly winning cruise command carries a request
+    # contract. This declaration does not change the numeric arbitration.
     # Equal independent constraints keep their existing response semantics;
     # raw == mapped (notably -0.19) is still coast when this candidate wins.
-    coast_selected = (coast_applicable and not reasons and cruise_command < min(self.reference_accel, maximum_accel)
-                      and self.constraint_source == LongitudinalPlanSource.cruise
-                      and self.constraint_accel == cruise_command and output == cruise_command)
+    cruise_selected = (not reasons and cruise_command < min(self.reference_accel, maximum_accel)
+                       and self.constraint_source == LongitudinalPlanSource.cruise
+                       and self.constraint_accel == cruise_command and output == cruise_command)
+    coast_selected = coast_applicable and cruise_selected
     if coast_selected:
       response_kind = MotionResponseKind.CRUISE_COAST
       # A negative coast request is execution shaping, never a departure
       # certificate inherited from the unconstrained native trajectory.
       moving_lead = release_allowed = False
+    elif external_cruise and not planner.fcw and cruise_selected:
+      # CruiseResponse already forms P's execution request from speed and
+      # history. Keep independently qualified departure facts; this domain
+      # grants no release and must not add a second acceleration feedback loop.
+      response_kind = MotionResponseKind.CRUISE_REQUEST
     elif (ordinary_model_motion and raw_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
         and active and healthy and not forced_decel and not reasons):
       # This producer installed only absolute lead/cruise targets. An action

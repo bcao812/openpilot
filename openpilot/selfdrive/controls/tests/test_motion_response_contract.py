@@ -34,7 +34,7 @@ def test_response_permission_survives_real_wire_roundtrip(kind):
   planner.motion_intent = MotionIntent(response_kind=int(kind), producer_instance_ns=INSTANCE_NS)
   message = log.LongitudinalPlan.new_message()
   producer.publish(message)
-  assert MOTION_INTENT_VERSION == 8
+  assert MOTION_INTENT_VERSION == 9
   with log.LongitudinalPlan.from_bytes(message.to_bytes()) as decoded:
     assert decoded.motionIntent.responseKind == kind
     assert MotionIntent.from_message(decoded.motionIntent) == planner.motion_intent
@@ -42,8 +42,8 @@ def test_response_permission_survives_real_wire_roundtrip(kind):
 
 
 @pytest.mark.parametrize('changes', [
-  {'version': 4}, {'version': 5}, {'version': 6}, {'version': 7},
-  {'response_kind': True}, {'response_kind': 1.0}, {'response_kind': -1}, {'response_kind': 5},
+  {'version': 4}, {'version': 5}, {'version': 6}, {'version': 7}, {'version': 8},
+  {'response_kind': True}, {'response_kind': 1.0}, {'response_kind': -1}, {'response_kind': 6},
   {'producer_instance_ns': 0}, {'producer_instance_ns': None}, {'ready': False}, {'valid': False},
   {'reasons': int(StopReason.FORCE_DECEL)}, {'braking_accel': -0.5},
   {'reference_kind': int(MotionReferenceKind.REST)}, {'reference_kind': int(MotionReferenceKind.NO_FORWARD)},
@@ -54,7 +54,7 @@ def test_bad_absolute_response_contract_is_rejected(changes):
   assert not replace(intent, **changes).is_valid()
 
 
-@pytest.mark.parametrize('old_version', [4, 5, 6, 7])
+@pytest.mark.parametrize('old_version', [4, 5, 6, 7, 8])
 def test_missing_field_and_old_version_never_acquire_an_absolute_response_contract(old_version):
   message = SimpleNamespace(version=MOTION_INTENT_VERSION, reasons=0, movingLead=False, releaseAllowed=False,
                             allowCreep=False, valid=True, mode=int(LongitudinalMode.UNIFIED), producerInstanceMonoTime=INSTANCE_NS)

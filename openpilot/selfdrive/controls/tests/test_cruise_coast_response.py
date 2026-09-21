@@ -29,7 +29,7 @@ from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarn
 
 
 # Fixed wire values allow the pre-fix version to collect and fail behaviorally.
-COAST_VERSION = 8
+COAST_VERSION = 9
 COAST_KIND = 4
 INSTANCE_NS = 1_000_000_000
 # P e18b1de's plateau, after the real LongitudinalPlan Float32 transport.
@@ -93,7 +93,7 @@ def test_coast_contract_has_its_own_versioned_wire_kind():
 
 
 @pytest.mark.parametrize('changes', [
-  {'version': 7}, {'response_kind': True}, {'response_kind': 4.0}, {'response_kind': 5},
+  {'version': 7}, {'version': 8}, {'response_kind': True}, {'response_kind': 4.0}, {'response_kind': 6},
   {'release_allowed': True}, {'moving_lead': True}, {'ready': False}, {'valid': False},
   {'reasons': int(StopReason.FORCE_DECEL)}, {'braking_accel': -0.5}, {'producer_instance_ns': 0},
 ] + [{'reference_kind': int(kind)} for kind in MotionReferenceKind if kind != MotionReferenceKind.UNKNOWN])

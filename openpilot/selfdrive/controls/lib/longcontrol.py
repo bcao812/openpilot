@@ -221,7 +221,8 @@ class LongControl:
     owner_allows_response = (not self.motion_input_constrained and not self.resolved_should_stop and not protocol_hold and not intent.reasons
                              and self.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
                              and self.motion_supervisor.rest_braking_accel_limit is None)
-    coast_execution = owner_allows_response and intent.response_kind == MotionResponseKind.CRUISE_COAST
+    cruise_execution = (owner_allows_response
+                        and intent.response_kind in (MotionResponseKind.CRUISE_COAST, MotionResponseKind.CRUISE_REQUEST))
     response_domain = ResponseDomain.NONE
     if response_available and owner_allows_response:
       if intent.response_kind == MotionResponseKind.PURE_CRUISE and self.motion_phase == MotionPhase.TRACK:
@@ -253,9 +254,9 @@ class LongControl:
         self.reset()
         output_accel = a_target
       else:
-        if coast_execution:
-          # Coast is a guarded execution request, not a net-acceleration
-          # target. Retire the same PID integral only after the owner accepts
+        if cruise_execution:
+          # The accepted cruise request already owns its response shaping.
+          # Retire the same PID integral only after the owner accepts
           # TRACK/RELEASE; an unwithdrawn APPROACH keeps its braking history.
           # Also cover configured Ki when LaunchResponse is not installed.
           self.pid.i = 0.0
@@ -264,7 +265,7 @@ class LongControl:
           self.launch_response.freeze_release(
             intent.producer_instance_ns, now_ns, arm=bool(intent.reference_kind == MotionReferenceKind.FORWARD and intent.release_allowed))
         output_accel = self.pid.update(a_target - CS.aEgo, speed=CS.vEgo, feedforward=a_target,
-                                       freeze_integrator=coast_execution or self.launch_response is not None or self.motion_phase == MotionPhase.RELEASE)
+                                       freeze_integrator=cruise_execution or self.launch_response is not None or self.motion_phase == MotionPhase.RELEASE)
         # The helper owns the existing pid.i, not an extra correction added
         # after a PID which already included I. Preserve unsaturated P+D+F.
         base_output = float(self.pid.p + self.pid.d + self.pid.f)
