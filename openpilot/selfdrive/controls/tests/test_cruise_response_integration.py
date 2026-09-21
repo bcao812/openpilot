@@ -377,6 +377,14 @@ def test_coast_exit_and_reentry_keep_raw_jerk_history_in_the_real_planner():
       previous = p_cruise_step(planner, state, previous)
       applicable = abs(planner.cruise_target.speed - state['carState'].vEgo) <= CV.KPH_TO_MS
       expected = p_coast_command(previous) if applicable else previous
+      # This fixed target sequence re-enters the coast flank on frame 6.
+      # Frames 7/8 have raw -0.23: retain the already requested light brake.
+      # Frame 9 recovers above raw -0.20 and releases that retention. Raw
+      # cruise history must still follow the independent P/jerk recurrence.
+      if frame in (7, 8):
+        assert previous == pytest.approx(-0.23)
+        expected = -0.21
+      assert planner.reference_planner.cruise_response._previous_accel == pytest.approx(previous)
       assert plan.aTarget == float(np.float32(expected))
       assert (plan.motionIntent.responseKind == COAST_RESPONSE_KIND) == (applicable and -0.3 < previous < -0.1)
 
