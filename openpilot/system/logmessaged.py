@@ -8,6 +8,10 @@ from openpilot.common.hardware.hw import Paths
 from openpilot.common.swaglog import get_file_handler
 
 
+# Leave room for the cereal envelope below msgq's per-message queue limit.
+MAX_LOG_MESSAGE_BYTES = 2 * 1024 * 1024
+
+
 def main() -> NoReturn:
   log_handler = get_file_handler()
   log_handler.setFormatter(SwagLogFileFormatter(None))
@@ -24,13 +28,24 @@ def main() -> NoReturn:
   try:
     while True:
       dat = b''.join(sock.recv_multipart())
+      if len(dat) <= 1:
+        print("WARNING: empty log record")
+        continue
+
       level = dat[0]
-      record = dat[1:].decode("utf-8")
+      try:
+        record = dat[1:].decode("utf-8")
+      except UnicodeDecodeError:
+        print("WARNING: log record is not valid UTF-8")
+        continue
+
       if level >= log_level:
         log_handler.emit(record)
 
-      if len(record) > 2*1024*1024:
-        print("WARNING: log too big to publish", len(record))
+      # Text is serialized as UTF-8; character count can understate its size by 4x.
+      record_bytes = len(dat) - 1
+      if record_bytes > MAX_LOG_MESSAGE_BYTES:
+        print("WARNING: log too big to publish", record_bytes)
         print(record[:100])
         continue
 

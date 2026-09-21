@@ -107,9 +107,10 @@ class PhaseTimer:
     try:
       if not os.path.exists(marker):
         return None
-    except OSError:
+      return cls(marker, event, phases, period_frames, affinity)
+    except Exception as error:
+      cls._diagnostic(event, "create", type(error).__name__)
       return None
-    return cls(marker, event, phases, period_frames, affinity)
 
   def __init__(self, marker, event, phases, period_frames, affinity=(0, 1, 2)):
     self.MARKER = marker
@@ -117,6 +118,10 @@ class PhaseTimer:
     self.PHASES = tuple(phases)
     self.PERIOD_FRAMES = period_frames
     self.affinity = list(affinity)
+    if not isinstance(period_frames, int) or period_frames < 1:
+      raise ValueError("period_frames must be a positive integer")
+    if not self.PHASES or len(self.PHASES) != len(set(self.PHASES)):
+      raise ValueError("phases must be nonempty and unique")
 
     # A set is always in exactly one of four places: written by the hot thread, sitting in
     # _full, held by the writer inside _emit, or sitting in _free. Two queues rather than one
@@ -125,18 +130,51 @@ class PhaseTimer:
     # sets, the second rotate found the queue empty (the writer had already taken the item),
     # succeeded, and handed the hot thread back the set the writer was still reading.
     self._sets = [self._new_set() for _ in range(2)]
-    self.wall = self._sets[0]['wall']
-    self.cpu = self._sets[0]['cpu']
+    self._active = self._sets[0]
+    self.wall = self._active['wall']
+    self.cpu = self._active['cpu']
     self.i = 0
+    self._rotate_at = self.PERIOD_FRAMES
+    self._window_start = None
     self.periods = 0
+    # Kept as a legacy alias for deferred_windows in version 2 events. A busy writer merges
+    # windows; it does not discard their frames or samples.
     self.dropped = 0
-    self._full = queue.Queue(maxsize=1)
-    self._free = queue.Queue(maxsize=2)
+    # Ownership of the two preallocated sets bounds these queues, without Queue's hot-path
+    # mutex acquisition. SimpleQueue.put_nowait never waits for a reader or free queue space.
+    self._full = queue.SimpleQueue()
+    self._free = queue.SimpleQueue()
     self._free.put_nowait(self._sets[1])
-    self._w = 0
-    self._c = 0
+    self._w = None
+    self._c = None
     self._stop = threading.Event()
     self._thread = None
+    self._enabled = True
+    self._failure = None
+    self._failure_count = 0
+    self._failure_reported = False
+
+  @staticmethod
+  def _diagnostic(event, operation, exception, *, disabled=True):
+    """Best effort, called only during setup or on the writer, never by a hot-path failure."""
+    try:
+      cloudlog.event(f"{event}.{'disabled' if disabled else 'warning'}", operation=operation, exception=exception, error=True)
+    except Exception:
+      # A broken logger must not turn an optional instrument into a process failure.
+      pass
+
+  def _disable(self, operation, error):
+    # No logging, locks, traceback formatting or retained exception/stack on the hot thread.
+    # The writer observes this once its bounded queue wait finishes and reports it once.
+    if self._failure is None:
+      self._failure = operation, type(error).__name__
+    self._failure_count += 1
+    self._enabled = False
+
+  def _report_failure(self):
+    if self._failure is not None and not self._failure_reported:
+      self._failure_reported = True
+      self._diagnostic(self.event, *self._failure)
 
   @classmethod
   def bucket_mid(cls, idx):
@@ -152,111 +190,143 @@ class PhaseTimer:
             'cpu': {p: [0] * self.NB_BUCKETS for p in self.PHASES}}
 
   def start(self):
-    if self._thread is None:
-      self._thread = threading.Thread(target=self._writer, daemon=True)
-      self._thread.start()
+    if self._enabled and self._thread is None:
+      try:
+        self._thread = threading.Thread(target=self._writer, daemon=True)
+        self._thread.start()
+      except Exception as error:
+        self._disable("start", error)
+        self._report_failure()
 
   def stop(self):
+    # Do not flush/clear the active (possibly incomplete) frame or join a logging thread here.
+    # The writer drains already completed windows, then exits. Further hot calls are no-ops.
+    self._enabled = False
     self._stop.set()
 
   def begin(self):
-    self._w = time.perf_counter_ns()
-    self._c = time.thread_time_ns()
+    if not self._enabled:
+      return
+    try:
+      if self._window_start is None:
+        self._window_start = time.monotonic_ns()
+      self._w = time.perf_counter_ns()
+      self._c = time.thread_time_ns()
+    except Exception as error:
+      self._disable("begin", error)
 
   def mark(self, phase):
-    w = time.perf_counter_ns()
-    c = time.thread_time_ns()
-    dw = w - self._w
-    dc = c - self._c
-    # The bit_length guard is not branchless for style: the equivalent branch on the bucket
-    # index cost 22 ns per call and every real delta is far above the linear region it
-    # protected. A delta under 64 ns mis-files by one bucket; the smallest real phase measured
-    # on this device is ~10 us.
-    sh = dw.bit_length() - 6
-    if sh < 0:
-      sh = 0
-    i = ((sh + 1) << 5) | ((dw >> sh) & 31)
-    self.wall[phase][i if i <= self.MAX_BUCKET else self.MAX_BUCKET] += 1
-    sh = dc.bit_length() - 6
-    if sh < 0:
-      sh = 0
-    i = ((sh + 1) << 5) | ((dc >> sh) & 31)
-    self.cpu[phase][i if i <= self.MAX_BUCKET else self.MAX_BUCKET] += 1
-    self._w = w
-    self._c = c
+    if not self._enabled:
+      return
+    try:
+      w = time.perf_counter_ns()
+      c = time.thread_time_ns()
+      dw = w - self._w
+      dc = c - self._c
+      if dw < 0 or dc < 0:
+        raise ValueError("phase clock moved backwards")
+      # Below 64 ns the buckets are linear, including a real zero for a coarse CPU clock.
+      # Larger deltas retain constant relative resolution and saturate safely after long stalls.
+      sh = dw.bit_length() - 6
+      i = dw if sh <= 0 else ((sh + 1) << 5) | ((dw >> sh) & 31)
+      self.wall[phase][i if i <= self.MAX_BUCKET else self.MAX_BUCKET] += 1
+      sh = dc.bit_length() - 6
+      i = dc if sh <= 0 else ((sh + 1) << 5) | ((dc >> sh) & 31)
+      self.cpu[phase][i if i <= self.MAX_BUCKET else self.MAX_BUCKET] += 1
+      self._w = w
+      self._c = c
+    except Exception as error:
+      self._disable("mark", error)
 
   def end_frame(self):
-    self.i += 1
-    if self.i >= self.PERIOD_FRAMES:
-      self._rotate()
+    if not self._enabled:
+      return
+    try:
+      self.i += 1
+      if self.i >= self._rotate_at:
+        self._rotate()
+    except Exception as error:
+      self._disable("end_frame", error)
 
   def _rotate(self):
-    """Hand the filled buffers off and take a free set. Runs on the HOT thread, so it does no
-    work beyond two queue operations and three stores, and never blocks."""
+    """Hand off a complete window using bounded queue work, with no clearing or logging."""
     n = self.i
-    self.i = 0
-    if n < 2:
+    if not n:
       return
+    window_end = time.monotonic_ns()
+    if self._window_start is None or window_end < self._window_start:
+      raise ValueError("invalid phase timing window")
     try:
       spare = self._free.get_nowait()
     except queue.Empty:
-      # The writer still owns the other set. Overwrite the active one rather than wait: losing a
-      # window of diagnostics beats stalling the hot loop, and the count rides along in the next
-      # event so the loss is visible rather than silent.
+      # The writer still owns the other set. Keep BOTH the histograms and their frame count;
+      # resetting only the count makes conditional phases and loop averages lie. Retry only at
+      # the next nominal boundary, not on every following frame while the writer is busy.
       self.dropped += 1
+      self._rotate_at = n + self.PERIOD_FRAMES
       return
-    filled = self.wall, self.cpu
+    filled = self._active
+    # Strings preserve integer nanoseconds through JSON readers backed by IEEE doubles.
+    filled['window_start_mono_ns'] = str(self._window_start)
+    filled['window_end_mono_ns'] = str(window_end)
+    filled['deferred_windows'] = self.dropped
+    self._active = spare
     self.wall = spare['wall']
     self.cpu = spare['cpu']
-    self._full.put_nowait(({'wall': filled[0], 'cpu': filled[1]}, n))
+    self.i = 0
+    self._rotate_at = self.PERIOD_FRAMES
+    self._window_start = None
+    self._full.put_nowait((filled, n))
 
   def _writer(self):
     # Demote FIRST, and in its own try. Every caller of this class has already put its process
     # at SCHED_FIFO on a pinned core, and a thread inherits its creator's policy -- so without
     # this the emit runs at real-time priority on the control or display core, which is the
-    # whole problem the thread exists to remove. Sharing one try block with the affinity call
-    # would let a raise from either skip the other; selfdrived hit exactly that and left the
-    # writer at FIFO 53 on core 4.
+    # whole problem the thread exists to remove. If demotion fails, do no histogram or logging
+    # work at inherited FIFO priority: stop this optional instrument before processing a window.
+    demoted = False
     try:
-      drop_realtime()
-    except OSError:
-      cloudlog.exception(f"{self.event} writer: could not drop to SCHED_OTHER")
-    try:
-      # Little cluster by default, and NOT core 3: that is pandad at FIFO 54 plus the spi_geni
-      # IRQ, and a thread preempted by pandad while holding the GIL would block the very loop
-      # this thread exists to keep clear.
-      #
-      # An earlier version of this comment told little-cluster callers to exclude their own core.
-      # That was wrong about the mechanism and a safety review caught it. After drop_realtime()
-      # this thread is SCHED_OTHER, which cannot preempt ANY SCHED_FIFO thread whatever core
-      # they share -- so locationd, at FIFO 5 on [0,1,2,3], is safe with the default overlap.
-      # What actually contends is the GIL, and affinity does not touch that: the mitigation for
-      # it is the explicit yields in _emit, not where this thread runs.
-      set_core_affinity(self.affinity)
-    except OSError:
-      cloudlog.exception(f"{self.event} writer: could not set affinity")
-    while not self._stop.is_set():
       try:
-        buf, n = self._full.get(timeout=0.5)
-      except queue.Empty:
-        continue
+        drop_realtime()
+        demoted = True
+      except Exception as error:
+        self._disable("drop_realtime", error)
+        return
       try:
-        self._emit(buf, n)
-      except Exception:
-        cloudlog.exception(f"{self.event} writer failed")
-      finally:
-        # ALWAYS hand the set back, including after a failed emit. Skipping this on the error
-        # path strands the set, leaves _free empty, and turns every later window into a silent
-        # drop. Cleared HERE, on the writer, because zeroing NB_BUCKETS x 2 x len(PHASES)
-        # counters is far too much work for the hot thread to do at a window boundary.
+        # Little cluster by default, and NOT core 3: that is pandad at FIFO 54 plus the spi_geni
+        # IRQ, and a thread preempted by pandad while holding the GIL would block the very loop
+        # this thread exists to keep clear. After demotion, affinity is best effort; the GIL
+        # yields inside _emit remain necessary even when the worker has its own core.
+        set_core_affinity(self.affinity)
+      except Exception as error:
+        self._diagnostic(self.event, "set_core_affinity", type(error).__name__, disabled=False)
+      while self._failure is None:
+        try:
+          buf, n = self._full.get_nowait() if self._stop.is_set() else self._full.get(timeout=0.5)
+        except queue.Empty:
+          if self._stop.is_set():
+            break
+          continue
+        try:
+          self._emit(buf, n)
+        except Exception as error:
+          self._disable("emit", error)
+        # Clear only on the writer. A failed clear must NEVER return a partially cleared set:
+        # that would silently mix old samples into a later window. Disable instead of retrying
+        # allocations or running a persistent failing logger every period.
         try:
           self._clear(buf)
-        except Exception:
-          cloudlog.exception(f"{self.event} clear failed")
-        try:
-          self._free.put_nowait(buf)
-        except queue.Full:
-          pass
+        except Exception as error:
+          self._disable("clear", error)
+          break
+        self._free.put_nowait(buf)
+    except Exception as error:
+      self._disable("writer", error)
+    finally:
+      # If even demotion failed, retain the reason/count in memory and exit silently. A
+      # diagnostic logger can also serialize or block; do not run it at inherited FIFO.
+      if demoted:
+        self._report_failure()
 
   def _emit(self, buf, n):
     self.periods += 1
@@ -273,7 +343,7 @@ class PhaseTimer:
       want = (int(total * 0.5), int(total * 0.95), int(total * 0.99))
       out = [0.0, 0.0, 0.0]
       seen = 0
-      acc = 0.0
+      acc = 0
       last = 0
       k = 0
       for idx, c in enumerate(h):
@@ -290,6 +360,8 @@ class PhaseTimer:
         out[k] = PhaseTimer.bucket_mid(last)
         k += 1
       return {
+        "count": total,
+        "sum_us": round(acc / 1000.0, 3),
         "p50": round(out[0] / 1000.0, 1),
         "p95": round(out[1] / 1000.0, 1),
         "p99": round(out[2] / 1000.0, 1),
@@ -324,13 +396,20 @@ class PhaseTimer:
 
     cloudlog.event(
       self.event,
+      stats_version=2,
       frames=n,
+      nominal_frames=self.PERIOD_FRAMES,
+      window_start_mono_ns=buf['window_start_mono_ns'],
+      window_end_mono_ns=buf['window_end_mono_ns'],
       period=self.periods,
       cpu_us=cpu,
       wall_us=wall,
-      cpu_total_us=round(sum(c["mean"] for c in cpu.values() if c), 1),
-      wall_total_us=round(sum(w["mean"] for w in wall.values() if w), 1),
-      dropped=self.dropped,
+      # Conditional phases may occur less than once per frame, and phases inside a drained
+      # message loop may occur several times. Their conditional means cannot just be added.
+      cpu_total_us=round(sum(c["sum_us"] for c in cpu.values() if c) / n, 1),
+      wall_total_us=round(sum(w["sum_us"] for w in wall.values() if w) / n, 1),
+      dropped=buf['deferred_windows'],
+      deferred_windows=buf['deferred_windows'],
       bucket_pct=round(100.0 / (1 << self.SUB_BITS), 1),
     )
 

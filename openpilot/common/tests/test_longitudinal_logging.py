@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from pathlib import Path
@@ -348,6 +349,73 @@ class TestLongitudinalLogging(unittest.TestCase):
     self.assertIn("openpilot/common/libparams_c.so", longitudinal_logging.EXPLICIT_NATIVE_PATHS)
     self.assertTrue(any(path.endswith("libacados_ocp_solver_long.so") for path in longitudinal_logging.EXPLICIT_NATIVE_PATHS))
     self.assertTrue(any(path.endswith("libqpOASES_e.so.3.1") for path in longitudinal_logging.EXPLICIT_NATIVE_PATHS))
+
+  def test_manifest_covers_current_longitudinal_decisions_and_vehicle_estimate(self):
+    required_source = {
+      "openpilot/selfdrive/controls/lib/cruise_response.py",
+      "openpilot/selfdrive/controls/lib/launch_response.py",
+      "openpilot/selfdrive/controls/lib/model_reference.py",
+      "openpilot/selfdrive/controls/lib/reference_timing.py",
+      "openpilot/common/pid.py", "openpilot/common/realtime.py", "openpilot/common/constants.py",
+      "openpilot/selfdrive/modeld/constants.py", "openpilot/selfdrive/car/cruise.py",
+      "opendbc_repo/opendbc/car/honda/carcontroller.py", "opendbc_repo/opendbc/car/honda/hondacan.py",
+      "opendbc_repo/opendbc/car/honda/values.py", "opendbc_repo/opendbc/car/honda/interface.py",
+      "opendbc_repo/opendbc/car/honda/carstate.py", "opendbc_repo/opendbc/car/interfaces.py",
+      "opendbc_repo/opendbc/car/common/simple_kalman.py", "opendbc_repo/opendbc/can/parser.py",
+      "opendbc_repo/opendbc/can/packer.py",
+    }
+    self.assertTrue(required_source.issubset(longitudinal_logging.SOURCE_PATHS))
+
+  def test_manifest_covers_actual_accord_dbc_generator_inputs(self):
+    from opendbc.car import Bus
+    from opendbc.car.honda.values import CAR, DBC
+
+    root = Path(longitudinal_logging.__file__).resolve().parents[2]
+    template_dir = Path("opendbc_repo/opendbc/dbc/generator/honda")
+    template = template_dir / f"{DBC[CAR.HONDA_ACCORD][Bus.pt].removesuffix('_generated')}.dbc"
+    imports = re.findall(r'^CM_ "IMPORT (.*?)";', (root / template).read_text(), re.MULTILINE)
+    self.assertTrue(imports)
+    required_source = {
+      "opendbc_repo/opendbc/__init__.py", "opendbc_repo/opendbc/can/dbc.py",
+      "opendbc_repo/opendbc/dbc/generator/generator.py", str(template),
+      *(str(template_dir / name) for name in imports),
+    }
+    self.assertTrue(required_source.issubset(longitudinal_logging.SOURCE_PATHS))
+
+  def test_decision_source_and_dbc_template_changes_change_startup_identity(self):
+    representatives = (
+      "openpilot/selfdrive/controls/lib/cruise_response.py",
+      "openpilot/selfdrive/controls/lib/model_reference.py",
+      "opendbc_repo/opendbc/dbc/generator/honda/_bosch_radar_acc.dbc",
+    )
+    with tempfile.TemporaryDirectory() as directory:
+      root = Path(directory)
+      common = root / "openpilot/common"
+      common.mkdir(parents=True)
+      for relative in representatives:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"selected-input-v1")
+      with patch.object(longitudinal_logging, "__file__", str(common / "longitudinal_logging.py")), \
+           patch.object(longitudinal_logging, "EXPLICIT_NATIVE_PATHS", ()):
+        try:
+          for relative in representatives:
+            with self.subTest(source=relative):
+              longitudinal_logging.source_manifest.cache_clear()
+              before = ObservationRecorder("fixture", FakeParams(), FakeParams(), enabled=True)
+              before_sources = json.loads(before.manifest)["source"]["source_files"]
+              self.assertIn(relative, before_sources)
+              (root / relative).write_bytes(b"selected-input-v2")
+              cached = ObservationRecorder("fixture", FakeParams(), FakeParams(), enabled=True)
+              self.assertEqual(cached.identity, before.identity)
+              longitudinal_logging.source_manifest.cache_clear()
+              after = ObservationRecorder("fixture", FakeParams(), FakeParams(), enabled=True)
+              after_sources = json.loads(after.manifest)["source"]["source_files"]
+              self.assertNotEqual(after.identity, before.identity)
+              self.assertEqual([path for path in before_sources if before_sources[path] != after_sources[path]], [relative])
+              self.assertIn("not loaded-code or firmware attestation", json.loads(after.manifest)["source"]["scope"])
+        finally:
+          longitudinal_logging.source_manifest.cache_clear()
 
 
 if __name__ == "__main__":

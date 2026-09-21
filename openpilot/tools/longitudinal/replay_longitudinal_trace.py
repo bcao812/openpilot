@@ -3,9 +3,9 @@
 import argparse
 from concurrent.futures import ProcessPoolExecutor
 from functools import wraps
-import inspect
 import json
 from pathlib import Path
+import re
 import time
 from unittest.mock import patch
 
@@ -16,7 +16,105 @@ from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrac
 from openpilot.tools.longitudinal.evaluate_pedal_full_routes import native_clean, exact_alignment, columns, compare_can
 from openpilot.tools.longitudinal.window_replay import load_window, window_messages
 from openpilot.tools.longitudinal.replay_pedal_full_routes import NumericSink, ROW_FIELDS, NATIVE_FIELDS
-from openpilot.tools.longitudinal.replay_pedal_switches import replay_window, save_json, selected_mode, sha256
+from openpilot.tools.longitudinal.replay_pedal_switches import (
+  DIAGNOSTIC_SCHEMA_VERSION, ReplayDiagnostics, replay_window, save_json, selected_mode, sha256,
+)
+
+
+# Selected disk-source identities for this comparison, not native-library or
+# loaded-code attestation. Keep path names: the two planner modules share a basename.
+SOURCE_PATHS = (
+  'openpilot/tools/longitudinal/replay_longitudinal_trace.py',
+  'openpilot/tools/longitudinal/replay_pedal_switches.py',
+  'openpilot/tools/longitudinal/replay_pedal_full_routes.py',
+  'openpilot/tools/longitudinal/evaluate_pedal_full_routes.py',
+  'openpilot/tools/longitudinal/window_replay.py',
+  'openpilot/tools/longitudinal/replay_longitudinal_regressions.py',
+  'openpilot/tools/lib/logreader.py',
+  'openpilot/common/longitudinal_logging.py',
+  'openpilot/common/logging_extra.py',
+  'openpilot/common/swaglog.py',
+  'openpilot/common/constants.py',
+  'openpilot/common/pid.py',
+  'openpilot/common/filter_simple.py',
+  'openpilot/selfdrive/controls/lib/longitudinal_trace.py',
+  'openpilot/selfdrive/controls/lib/longitudinal_observation.py',
+  'openpilot/selfdrive/controls/lib/longitudinal_planner.py',
+  'openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py',
+  'openpilot/selfdrive/controls/lib/longcontrol.py',
+  'openpilot/selfdrive/controls/lib/motion_supervisor.py',
+  'openpilot/selfdrive/controls/lib/unified_longitudinal_planner.py',
+  'openpilot/selfdrive/controls/lib/longitudinal_mode.py',
+  'openpilot/selfdrive/controls/lib/longitudinal_trajectory.py',
+  'openpilot/selfdrive/controls/lib/reference_timing.py',
+  'openpilot/selfdrive/controls/lib/launch_response.py',
+  'openpilot/selfdrive/controls/lib/cruise_response.py',
+  'openpilot/selfdrive/controls/lib/drive_helpers.py',
+  'openpilot/selfdrive/car/longitudinal_authority.py',
+  'openpilot/selfdrive/modeld/constants.py',
+  'openpilot/sunnypilot/selfdrive/controls/lib/longitudinal_planner.py',
+  'opendbc_repo/opendbc/car/honda/carcontroller.py',
+  'opendbc_repo/opendbc/car/honda/hondacan.py',
+  'opendbc_repo/opendbc/car/honda/interface.py',
+  'opendbc_repo/opendbc/car/honda/values.py',
+)
+
+
+def source_fingerprints():
+  root = Path(__file__).resolve().parents[3]
+  return {relative: sha256(root / relative) for relative in SOURCE_PATHS}
+
+
+def validate_sources(metadata):
+  hashes = metadata.get('source_hashes')
+  if (not isinstance(hashes, dict) or set(hashes) != set(SOURCE_PATHS)
+      or any(not isinstance(value, str) or re.fullmatch('[0-9a-f]{64}', value) is None for value in hashes.values())):
+    raise ValueError('Missing or invalid replay source identities')
+  return hashes
+
+
+def validate_execution(metadata):
+  diagnostics = metadata.get('diagnostics')
+  if (not isinstance(diagnostics, dict) or type(diagnostics.get('diagnostic_schema')) is not int
+      or diagnostics['diagnostic_schema'] != DIAGNOSTIC_SCHEMA_VERSION
+      or diagnostics.get('status') != 'COMPLETED' or diagnostics.get('initialized') is not True
+      or diagnostics.get('native_supported') is not True):
+    raise ValueError('Incomplete replay execution diagnostics')
+  coverage = metadata.get('coverage')
+  fields = ('plans', 'matched_plans', 'controls', 'matched_controls', 'sendcan', 'matched_sendcan')
+  if (not isinstance(coverage, dict) or any(type(coverage.get(name)) is not int or coverage[name] <= 0 for name in fields)
+      or diagnostics.get('coverage') != coverage):
+    raise ValueError('Missing or invalid replay score coverage')
+  if any(coverage[expected] != coverage[matched] for expected, matched in zip(fields[::2], fields[1::2], strict=True)):
+    raise ValueError('Incomplete replay score coverage')
+  counts = diagnostics.get('counts')
+  if not isinstance(counts, dict) or set(counts) != set(ReplayDiagnostics.LAYERS):
+    raise ValueError('Missing replay runtime counts')
+  for layer, calls in counts.items():
+    if not isinstance(calls, dict) or set(calls) != {'attempted', 'completed'}:
+      raise ValueError(f'Missing replay {layer} execution counts')
+    for values in calls.values():
+      if (not isinstance(values, dict) or set(values) != {'total', *ReplayDiagnostics.REGIONS}
+          or any(type(value) is not int or value < 0 for value in values.values())
+          or values['total'] != sum(values[region] for region in ReplayDiagnostics.REGIONS)):
+        raise ValueError(f'Invalid replay {layer} execution counts')
+    if calls['attempted'] != calls['completed']:
+      raise ValueError(f'Incomplete replay {layer} execution')
+  for layer, measured in (('planner', 'plans'), ('longcontrol', 'controls')):
+    if counts[layer]['completed']['score'] != coverage[measured]:
+      raise ValueError(f'Replay {layer} score count does not match coverage')
+  # CarController executes at every sendcan cycle; coverage selects ACC frames.
+  if counts['carcontroller']['completed']['score'] < coverage['sendcan']:
+    raise ValueError('Replay carcontroller score count does not cover CAN output')
+  return counts
+
+
+def validate_trace(trace, attempted):
+  if (not isinstance(trace, dict)
+      or any(type(trace.get(name)) is not int or trace[name] < 0 for name in ('attempted', 'samples', 'dropped', 'failures'))
+      or trace.get('disabled') is not False or trace['failures'] or trace['attempted'] != attempted
+      or trace['samples'] + trace['dropped'] != attempted):
+    raise ValueError('Incomplete diagnostic capture')
 
 
 def run_window(arguments):
@@ -30,14 +128,7 @@ def run_window(arguments):
   original_init = LongitudinalPlanner.__init__
   records = []
   emitted = {'batches': 0, 'samples': 0, 'bytes': 0}
-  source_files = [
-    Path(__file__),
-    Path(__file__).with_name('replay_pedal_switches.py'),
-    Path(__file__).with_name('window_replay.py'),
-    Path(inspect.getfile(LongitudinalTrace)),
-    Path(inspect.getfile(LongitudinalPlanner)),
-  ]
-  source_hashes = {path.name: sha256(path) for path in source_files}
+  source_hashes = source_fingerprints()
 
   def emit(event, **payload):
     encoded = json.dumps({'msg': dict(payload, event=event)}, allow_nan=False)
@@ -54,13 +145,7 @@ def run_window(arguments):
       records.append(recorder)
     original_init(planner, *args, trace=recorder, **kwargs)
 
-  class TraceSink(NumericSink):
-    def __call__(self, kind, row):
-      if kind == 'plan' and records:
-        records[-1].publish(row['mono'])
-      return super().__call__(kind, row)
-
-  sink = TraceSink(output, window['id'])
+  sink = NumericSink(output, window['id'])
   started = time.monotonic()
   try:
     with patch.object(LongitudinalPlanner, '__init__', new=initialize):
@@ -79,8 +164,10 @@ def run_window(arguments):
     failures=sum(recorder.failures for recorder in records),
     disabled=any(recorder.disabled for recorder in records),
   )
-  if trace['disabled'] or trace['failures'] or trace['samples'] + trace['dropped'] != trace['attempted']:
-    raise ValueError(f'Diagnostic capture failed: {trace}')
+  counts = validate_execution(result)
+  validate_trace(trace, counts['planner']['attempted']['total'] if enabled else 0)
+  if source_fingerprints() != source_hashes:
+    raise ValueError('Replay source changed during execution')
   result.update(mode=mode, chunks=sink.chunks, fields=ROW_FIELDS, trace=trace, elapsed_s=time.monotonic() - started, source_hashes=source_hashes)
   save_json(output / f'{window["id"]}.json', result)
   print(window['id'], mode, result['coverage'], trace, flush=True)
@@ -98,8 +185,21 @@ def evaluate(selection, output):
     expected_window = dict(window, cache=window['id'])
     if before_meta['window'] != expected_window or after_meta['window'] != expected_window:
       raise ValueError('Sampled replay window changed')
+    if validate_sources(before_meta) != validate_sources(after_meta):
+      raise ValueError('Trace comparison changed replay source identities')
+    before_counts, after_counts = validate_execution(before_meta), validate_execution(after_meta)
+    if before_counts != after_counts or before_meta['coverage'] != after_meta['coverage']:
+      raise ValueError('Trace comparison changed replay execution coverage')
+    validate_trace(before_meta.get('trace'), 0)
+    validate_trace(after_meta.get('trace'), after_counts['planner']['attempted']['total'])
     for name in ('requested_mode', 'planner_mode', 'controller_mode'):
-      if before_meta['capabilities'][name] != after_meta['capabilities'][name]:
+      modes = []
+      for metadata in (before_meta, after_meta):
+        capabilities = metadata.get('capabilities')
+        if not isinstance(capabilities, dict) or type(capabilities.get(name)) is not int or capabilities[name] not in (0, 1, 2):
+          raise ValueError(f'Missing or invalid longitudinal {name}')
+        modes.append(capabilities[name])
+      if modes[0] != modes[1]:
         raise ValueError(f'Trace comparison changed longitudinal {name}')
     for kind in ROW_FIELDS:
       for field in ROW_FIELDS[kind]:
@@ -119,15 +219,12 @@ def evaluate(selection, output):
       'reason': window['reason'],
       'exact_equal': True,
       'coverage': before_meta['coverage'],
+      'execution_counts': after_counts,
+      'source_hashes': after_meta['source_hashes'],
       'trace': after_meta['trace'],
       'solver_failures': after_meta['solver_failures'],
       'can': compare_can(before['can'], after['can'], before['can']['t'], clean),
     }
-    if after_meta['trace']['attempted'] != after_meta['coverage']['plans']:
-      raise ValueError('Trace sample attempts did not cover all measured plans')
-    trace = after_meta['trace']
-    if trace['disabled'] or trace['failures'] or trace['samples'] + trace['dropped'] != trace['attempted']:
-      raise ValueError('Incomplete diagnostic capture')
     results.append(result)
   save_json(output / 'evaluation.json', results)
   print(json.dumps({'windows': len(results), 'exact_equal': all(result['exact_equal'] for result in results), 'trace_event': TRACE_EVENT}))

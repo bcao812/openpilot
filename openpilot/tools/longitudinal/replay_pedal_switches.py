@@ -208,6 +208,12 @@ def paired_messages(messages, maximum_delay=0.25, maximum_messages=512, *, with_
     elif pending:
       pending.append(message)
       if service == 'longitudinalPlanSP':
+        parent_mono = getattr(message.longitudinalPlanSP, 'longitudinalPlanMonoTime', 0)
+        # Historical records have no parent ID (or the schema default zero).
+        # A current record must name this exact plan; keep waiting within the
+        # existing bounds when an unrelated SP publication arrives first.
+        if type(parent_mono) is not int or parent_mono not in (0, pending[0].logMonoTime):
+          continue
         decision = (SimpleNamespace(value=message.longitudinalPlanSP, mono=int(message.logMonoTime))
                     if with_identity else message.longitudinalPlanSP)
         yield pending[0], decision

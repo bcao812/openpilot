@@ -23,6 +23,61 @@ def test_pairing_preserves_intermediate_control_order():
   assert all(decision is None for _, decision in actual[1:])
 
 
+@pytest.mark.parametrize('with_identity', [False, True])
+def test_pairing_uses_exact_parent_id_and_waits_past_an_unrelated_sp(with_identity):
+  parent = 2 ** 53 + 17
+  messages = [message(service, 0.0) for service in
+              ('longitudinalPlan', 'longitudinalPlanSP', 'controlsState', 'longitudinalPlanSP', 'sendcan')]
+  for offset, entry in enumerate(messages):
+    entry.logMonoTime = parent + offset
+  unrelated = SimpleNamespace(longitudinalPlanMonoTime=parent - 1)
+  matching = SimpleNamespace(longitudinalPlanMonoTime=parent)
+  messages[1].longitudinalPlanSP = unrelated
+  messages[3].longitudinalPlanSP = matching
+  # These adjacent IDs collapse to one float; pairing must retain UInt64 precision.
+  assert float(parent) == float(parent - 1)
+  actual = list(paired_messages(messages, with_identity=with_identity))
+  assert [entry[0] for entry in actual] == messages
+  decision = actual[0][1]
+  if with_identity:
+    assert decision.value is matching
+    assert decision.mono == parent + 3
+  else:
+    assert decision is matching
+  assert all(decision is None for _, decision in actual[1:])
+
+
+@pytest.mark.parametrize('parent', [999_999_999, 1_000_000_001, -1, None, False, 1_000_000_000.0, '1000000000'])
+def test_pairing_rejects_mismatched_or_invalid_explicit_parent_ids(parent):
+  messages = [message('longitudinalPlan', 1.0), message('longitudinalPlanSP', 1.001)]
+  messages[1].longitudinalPlanSP = SimpleNamespace(longitudinalPlanMonoTime=parent)
+  actual = list(paired_messages(messages))
+  assert [entry[0] for entry in actual] == messages
+  assert all(decision is None for _, decision in actual)
+
+
+@pytest.mark.parametrize('parent', ['absent', 0])
+def test_pairing_retains_legacy_records_without_parent_identity(parent):
+  messages = [message('longitudinalPlan', 1.0), message('longitudinalPlanSP', 1.001)]
+  decision = SimpleNamespace()
+  if parent != 'absent':
+    decision.longitudinalPlanMonoTime = parent
+  messages[1].longitudinalPlanSP = decision
+  actual = list(paired_messages(messages))
+  assert actual[0] == (messages[0], decision)
+
+
+@pytest.mark.parametrize('boundary', ['time', 'messages'])
+def test_unrelated_sp_waiting_respects_pairing_bounds(boundary):
+  messages = [message('longitudinalPlan', 1.0), message('longitudinalPlanSP', 1.001),
+              message('longitudinalPlanSP', 1.3 if boundary == 'time' else 1.002)]
+  messages[1].longitudinalPlanSP = SimpleNamespace(longitudinalPlanMonoTime=999_999_999)
+  messages[2].longitudinalPlanSP = SimpleNamespace(longitudinalPlanMonoTime=1_000_000_000)
+  actual = list(paired_messages(messages, maximum_messages=2 if boundary == 'messages' else 512))
+  assert [entry[0] for entry in actual] == messages
+  assert all(decision is None for _, decision in actual)
+
+
 @pytest.mark.parametrize('boundary', ['next_plan', 'time_limit', 'message_limit', 'eof'])
 def test_pairing_does_not_assign_stale_or_missing_decisions(boundary):
   messages = [message('longitudinalPlan', 1.0)]

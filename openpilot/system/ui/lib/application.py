@@ -666,7 +666,9 @@ class GuiApplication(GuiApplicationExt):
         # fresh on every call, so caching it here let the two disagree: a timer installed after
         # the generator started got marks from the widget tree with a cursor the loop had never
         # begun(), and the delta was "since epoch". One attribute load per frame.
-        ft = self._frame_timer
+        # Screen-off iterations still drain input and sleep, but never complete a render
+        # frame. Exclude them from both phase samples and the completed-frame denominator.
+        ft = self._frame_timer if self._should_render else None
         frame_start = time.monotonic()
         if ft is not None:
           ft.begin()
