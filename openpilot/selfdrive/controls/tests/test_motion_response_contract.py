@@ -3,6 +3,8 @@
 The producer tests use a native trajectory with an injected diagnostic source
 and sampled target. They test admission of deliberately ambiguous source labels,
 not physical lead avoidance or uniqueness of MPC attribution.
+The PURE withdrawal case makes the cruise governor nonbinding so it tests
+retirement of actually learned positive I, independently of governor shaping.
 """
 
 from dataclasses import replace
@@ -221,7 +223,12 @@ def test_ordinary_acc_with_a_lead_cannot_gain_positive_i_before_or_during_fcw(se
       plan, outputs = consume(planner, control, state, frame)
       assert plan.aTarget > 0.0 and planner.fcw == (frame >= 3)
       assert planner.reference_planner.model_evidence is None
-      assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+      # Before FCW the stricter governor command owns execution. Current FCW
+      # vetoes that contract and restores the existing nonpositive-I domain.
+      expected = MotionResponseKind.ABSOLUTE_ACC if frame >= 3 else MotionResponseKind.CRUISE_REQUEST
+      assert plan.motionIntent.responseKind == expected
+      assert plan.aTarget == float(np.float32(planner.reference_planner.constraint_accel))
+      assert planner.reference_planner.constraint_accel < planner.reference_planner.reference_accel
       assert control.pid.i == 0.0
       assert all(output <= plan.aTarget for output in outputs)
 
@@ -239,8 +246,16 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
     planner.mpc.source = LongitudinalPlanSource.cruise
     planner.mpc.crash_cnt = 4 if fcw else 0
 
+  def neutral_cruise_response(_target_speed, _speed, maximum_accel, **_kwargs):
+    # Isolate permission withdrawal from the governor's own jerk/history.
+    # This ceiling never undercuts the independent hard cap. During PURE
+    # warmup the native sample must strictly win below both ceilings;
+    # all actual arbitration, transport, owner and integral updates still run.
+    return maximum_accel
+
   with patch.object(planner, 'is_e2e', side_effect=lambda _: e2e), patch.object(planner.mpc, 'update', side_effect=update), \
        patch.object(state, 'all_checks', side_effect=lambda *args, **kwargs: healthy), \
+       patch.object(planner.reference_planner.cruise_response, 'update', side_effect=neutral_cruise_response) as cruise_update, \
        patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', side_effect=lambda *args, **kwargs: target):
     for frame in range(6):
       if frame == 3:
@@ -265,6 +280,8 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
         assert plan.motionIntent.responseKind == MotionResponseKind.NONE
         assert control.pid.i == 0.0
       elif frame < 3:
+        assert planner.reference_planner.reference_accel < planner.reference_planner.constraint_accel
+        assert plan.aTarget == float(np.float32(planner.reference_planner.reference_accel))
         assert plan.motionIntent.responseKind == MotionResponseKind.PURE_CRUISE
         assert control.pid.i > 0.0
       else:
@@ -275,6 +292,8 @@ def test_pure_cruise_permission_and_positive_i_end_at_current_risk_boundary(boun
           assert plan.motionIntent.referenceKind == MotionReferenceKind.MOVING
         if boundary == 'acc_cap':
           assert planner.reference_planner.reference_overridden
+          assert planner.reference_planner.constraint_accel == cruise_update.call_args.args[2]
+          assert planner.reference_planner.reference_accel > planner.reference_planner.constraint_accel
           assert plan.aTarget == float(np.float32(planner.reference_planner.constraint_accel))
         if boundary in ('leadOne', 'leadTwo', 'fcw', 'model', 'acc_cap'):
           assert all(output <= plan.aTarget for output in outputs)
