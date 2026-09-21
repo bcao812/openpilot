@@ -403,6 +403,7 @@ class UnifiedLongitudinalPlanner:
         self.model_reference_adapter.clear_rest_continuity()
         self.invalidate(speed, "invalid_e2e_reference")
         return
+      model_position, model_velocity, model_acceleration = model_reference_from_velocity(model.velocity.x)
       self.model_evidence = self.model_reference_adapter.build(
         model.velocity.x, T_IDXS, initial_speed,
         model_mono_time_ns=getattr(state, 'logMonoTime', {}).get('modelV2'),
@@ -418,6 +419,7 @@ class UnifiedLongitudinalPlanner:
           # A future/expired/mutated source has no qualified new model risk
           # input. The same MPC still consumes independently valid real leads
           # and cruise; its invalid output cannot authorize forward movement.
+          model_position = model_velocity = model_acceleration = None
           # Losing this source also changes the admitted objective. Do not
           # smooth independent current lead braking against a preceding
           # acceleration trajectory whose model contract is now invalid.
@@ -434,12 +436,8 @@ class UnifiedLongitudinalPlanner:
       # P's ordinary driving policy follows absolute lead/cruise targets and
       # the independent action cap. Preserve raw model facts for the owner,
       # without adding a second ordinary velocity target to this same MPC.
+      model_position = model_velocity = model_acceleration = None
       self.model_reference_mode = 'action_capped_absolute'
-    elif self.e2e_allowed and self.model_reference_mode != 'invalid':
-      # Only risk/rest semantics consume a model trajectory in this solve.
-      # Raw input validation and evidence classification above still apply
-      # when ordinary motion uses the independent action cap instead.
-      model_position, model_velocity, model_acceleration = model_reference_from_velocity(model.velocity.x)
     has_rest_goal = self.model_evidence is not None and self.model_evidence.rest_goal is not None
     self.entered_rest_goal = has_rest_goal and not self._model_rest_active
     self._model_rest_active = has_rest_goal

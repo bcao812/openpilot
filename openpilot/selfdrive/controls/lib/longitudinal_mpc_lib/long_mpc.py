@@ -1431,16 +1431,13 @@ class LongitudinalMpc:
         self.rest_recovery_position_limit = float(limit)
     with np.errstate(over='ignore', invalid='ignore'):
       lead_xv_0 = self.process_lead(radarstate.leadOne)
-      # Both absent slots have the same continuation at this frame's x0.
-      # Later list replacements leave it intact; column_stack below retains
-      # two independent obstacle columns.
-      lead_xv_1 = lead_xv_0 if not present_leads else self.process_lead(radarstate.leadTwo)
+      lead_xv_1 = self.process_lead(radarstate.leadTwo)
 
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_0_obstacle if not present_leads else lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
     obstacles = [lead_0_obstacle, lead_1_obstacle]
     sources = list(MPC_SOURCES)
