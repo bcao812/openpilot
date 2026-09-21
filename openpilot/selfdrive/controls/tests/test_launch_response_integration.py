@@ -8,18 +8,19 @@ from dataclasses import replace
 import math
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from opendbc.car import structs
 from opendbc.car.honda.carstate import CarState
 from opendbc.car.honda.interface import CarInterface
-from opendbc.car.honda.values import CAR
+from opendbc.car.honda.values import CAR, CarControllerParams
 from openpilot.cereal import custom
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MotionIntent, MotionPhase, MotionReferenceKind, MotionResponseKind,
                                                                StopReason)
-from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, controller
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, controller, decoded_commands
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
 
@@ -201,37 +202,100 @@ def test_unknown_reference_without_response_contract_revokes_feedback_and_cannot
   assert harness.control.pid.i == 0.0
 
 
-@pytest.mark.parametrize('speed,correction_sign', [(20.8, -1), (19.2, 1)])
-def test_real_acc_publication_without_model_reference_declares_signed_response(speed, correction_sign):
-  """Ordinary ACC declares its absolute target without relabeling a model."""
-  def update_targets(instance, state, v_ego, a_ego, v_cruise):
-    instance.source = LongitudinalPlanSource.cruise
-    instance.cruise_target = CruiseTarget(instance.source, v_cruise, a_ego)
-    return instance.cruise_target
+def ordinary_cruise_target(instance, state, v_ego, a_ego, v_cruise):
+  instance.source = LongitudinalPlanSource.cruise
+  instance.cruise_target = CruiseTarget(instance.source, v_cruise, a_ego)
+  return instance.cruise_target
+
+
+def assert_honda_commands_match_requests(outputs):
+  for output, command in zip(outputs, decoded_commands(outputs), strict=True):
+    serialized = float(np.float32(output))
+    braking = serialized < CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
+    # ACC_CONTROL encodes acceleration at 0.01 m/s^2 resolution. Honda's
+    # braking boundary is its gas lookup threshold, not acceleration zero.
+    assert command['ACCEL_COMMAND'] == pytest.approx(serialized, rel=0.0, abs=0.005 + 1e-12)
+    assert bool(command['BRAKE_REQUEST']) == bool(command['BRAKE_LIGHTS']) == braking
+    assert not (command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0.0)
+
+
+@pytest.mark.parametrize('speed,request_sign', [(20.8, -1), (19.2, 1)])
+def test_real_acc_publication_without_model_reference_executes_the_winning_cruise_request(speed, request_sign):
+  """The real governor/native arbitration owns the request before execution."""
 
   with OpenpilotPrefix():
     planner, control = make_planner_owner(speed=speed)
     state = make_state(speed=speed, target=20.0)
+    requests = []
     with patch.object(planner, 'is_e2e', return_value=False), \
          patch.object(LongitudinalPlannerSP, 'update', return_value=None), \
-         patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets), \
+         patch.object(LongitudinalPlannerSP, 'update_targets', new=ordinary_cruise_target), \
+         patch.object(control.launch_response, 'propose', wraps=control.launch_response.propose) as feedback:
+      for frame in range(20):
+        state['controlsState'].longControlState = control.long_control_state
+        previous = control.last_output_accel
+        plan, outputs = consume(planner, control, state, frame)
+        assert planner.reference_planner.model_evidence is None
+        assert plan.motionIntent.referenceKind == MotionReferenceKind.UNKNOWN
+        assert plan.motionIntent.responseKind == (MotionResponseKind.NONE if frame == 0 else MotionResponseKind.CRUISE_REQUEST)
+        assert control.pid.i == 0.0
+        assert plan.motionIntent.valid and plan.solverStatus == 0
+        assert control.motion_phase == MotionPhase.TRACK
+        assert not control.motion_input_constrained
+        assert plan.aTarget * request_sign > 0.0
+        if frame > 0:
+          assert plan.aTarget == float(np.float32(planner.reference_planner.constraint_accel))
+        for output in outputs:
+          # Startup can hand off a stronger native brake. Keep the existing
+          # +8 m/s^3 owner limit while executing the dated final request.
+          assert output == pytest.approx(min(plan.aTarget, previous + 0.08), rel=0.0, abs=1e-12)
+          previous = output
+        requests.extend(outputs)
+      assert feedback.call_count == 0
+      assert requests[-1] == plan.aTarget
+      assert not control.launch_response.armed
+    assert_honda_commands_match_requests(requests)
+
+
+@pytest.mark.parametrize('speed,correction_sign', [(20.8, -1), (19.2, 1)])
+def test_isolated_native_winner_publication_preserves_signed_pure_cruise_response(speed, correction_sign):
+  """Isolate the existing PURE permission, without faking its wire declaration.
+
+  Native solves still run. A declared sampled target and a neutral governor
+  ceiling make that sample win actual arbitration, independently of the real
+  cruise governor's history. This is a feedback contract, not a trajectory test.
+  """
+  target = correction_sign * 0.3
+  with OpenpilotPrefix():
+    planner, control = make_planner_owner(speed=speed)
+    state = make_state(speed=speed, target=20.0)
+    requests = []
+    with patch.object(planner, 'is_e2e', return_value=False), \
+         patch.object(LongitudinalPlannerSP, 'update', return_value=None), \
+         patch.object(LongitudinalPlannerSP, 'update_targets', new=ordinary_cruise_target), \
+         patch.object(planner.reference_planner.cruise_response, 'update',
+                      side_effect=lambda _target, _speed, maximum, **_kwargs: maximum), \
+         patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=target), \
          patch.object(control.launch_response, 'propose', wraps=control.launch_response.propose) as feedback:
       for frame in range(20):
         state['controlsState'].longControlState = control.long_control_state
         plan, outputs = consume(planner, control, state, frame)
         assert planner.reference_planner.model_evidence is None
         assert plan.motionIntent.referenceKind == MotionReferenceKind.UNKNOWN
+        assert planner.reference_planner.reference_accel < planner.reference_planner.constraint_accel
+        assert plan.aTarget == plan.reference.accel == float(np.float32(target))
         assert plan.motionIntent.responseKind == (MotionResponseKind.NONE if frame == 0 else MotionResponseKind.PURE_CRUISE)
-        if frame == 0:
-          assert control.pid.i == 0.0  # producer saw OFF; it cannot grant response during reset
         assert plan.motionIntent.valid and plan.solverStatus == 0
-        assert control.motion_phase == MotionPhase.TRACK
-        assert not control.motion_input_constrained
+        assert control.motion_phase == MotionPhase.TRACK and not control.motion_input_constrained
+        if frame == 0:
+          assert control.pid.i == 0.0
         if correction_sign < 0:
           assert all(output <= plan.aTarget for output in outputs)
+        requests.extend(outputs)
       assert feedback.call_count == 95
       assert control.pid.i * correction_sign > 0.0
       assert not control.launch_response.armed
+    assert_honda_commands_match_requests(requests)
 
 
 def test_qualified_launch_to_rolling_keeps_one_integral_without_a_threshold_jump():

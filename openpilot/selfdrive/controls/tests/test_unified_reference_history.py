@@ -11,7 +11,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import Longi
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner, make_state
 
 
 def production_planner():
@@ -45,23 +45,37 @@ def first_active_reference(seed_speed, measured_accel, lead_distance=None):
   assert np.isfinite(planner.output_a_target)
   assert np.all(np.isfinite(planner.mpc.x_sol))
   assert not weights.call_args.args[0]
-  return planner
+  return planner, state
 
 
 @pytest.mark.parametrize('seed_speed', [False, True])
 @pytest.mark.parametrize('measured_accel', [0.0, -1.0])
 def test_first_overspeed_reference_uses_measured_state_and_plans_speed_recovery(seed_speed, measured_accel):
-  planner = first_active_reference(seed_speed, measured_accel)
-  # A speed error without a lead is a convergence/comfort scenario. The first
-  # scalar request need not reproduce aEgo or a particular old braking frame.
-  assert planner.mpc.v_solution[-1] < planner.mpc.x0[1]
+  planner, state = first_active_reference(seed_speed, measured_accel)
+  # P assigns ordinary set-speed recovery to its cruise governor. The native
+  # finite risk continuation need not duplicate that speed objective. Keep the
+  # original braking requirement on the final request, without fixing either
+  # native preview values or measured acceleration as a scalar-output golden.
+  cruise_request = planner.reference_planner.cruise_response._previous_accel
+  assert cruise_request < 0.0
+  assert planner.output_a_target <= cruise_request
+  publisher = Publisher()
+  with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns',
+             return_value=state.logMonoTime['modelV2'] + 1_000_000):
+    planner.publish(state, publisher)
+  message = publisher.messages['longitudinalPlan']
+  plan = message.longitudinalPlan
+  assert message.valid and plan.motionIntent.valid and plan.solverStatus == 0
+  assert plan.modelMonoTime == state.logMonoTime['modelV2']
+  assert plan.aTarget == float(np.float32(planner.output_a_target))
+  assert plan.aTarget <= float(np.float32(cruise_request)) < 0.0
 
 
 @pytest.mark.parametrize('seed_speed', [False, True])
 @pytest.mark.parametrize('measured_accel', [0.0, -1.0])
 @pytest.mark.parametrize('lead_distance', [40.0, 20.0])
 def test_first_stationary_lead_reference_retains_immediate_braking_response(seed_speed, measured_accel, lead_distance):
-  planner = first_active_reference(seed_speed, measured_accel, lead_distance)
+  planner, _ = first_active_reference(seed_speed, measured_accel, lead_distance)
   # These 20 m/s / 20-40 m fixtures demand braking, and some cannot stop within
   # the measured gap. This is response/initialization evidence, not avoidance.
   assert planner.output_a_target < 0.0

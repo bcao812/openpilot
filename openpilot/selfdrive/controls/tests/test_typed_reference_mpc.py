@@ -437,7 +437,10 @@ def test_cached_departing_lead_cannot_withdraw_a_held_stop_when_speed_crosses_th
     # the existing command ramp; the original cached crossing is unchanged.
     _, plans, rows, can_rows = harness.exercise(curve, action_accel=action_accel, seconds=1.2)
   first_plan_time = int(plans[0].logMonoTime)
-  assert plans[0].longitudinalPlan.aTarget < 0.0
+  # This packet must not satisfy the existing strong-request release gate.
+  # With the duplicate native speed goal removed it can be weakly positive;
+  # the cached packet must still retain every held-brake assertion below.
+  assert plans[0].longitudinalPlan.aTarget < STOP_RELEASE_ACCEL
   assert plans[0].longitudinalPlan.motionIntent.releaseAllowed
   cached_rows = [row for row in rows if row['consumed_plan_mono'] == first_plan_time]
   assert cached_rows[0]['measured_speed'] < 0.3
