@@ -82,7 +82,8 @@ def test_legacy_path_ignores_new_protocol_and_remains_frame_equivalent():
     active = source.random() > 0.04
     stopping = source.random() < 0.15
     expected = reference.update(active, state, target, stopping, ACCEL_LIMITS)
-    actual = candidate.update(active, state, target, stopping, ACCEL_LIMITS, intent=MotionIntent(version=7), now_ns=-1, plan_valid=False)
+    actual = candidate.update(active, state, target, stopping, ACCEL_LIMITS,
+                              intent=MotionIntent(version=MOTION_INTENT_VERSION + 1), now_ns=-1, plan_valid=False)
     assert actual == expected
     assert candidate.long_control_state == reference.long_control_state
     assert candidate.starting == reference.starting
@@ -346,7 +347,7 @@ def test_driver_authority_wins_even_over_malformed_inputs(condition):
   harness.hold()
   if condition != 'disable':
     setattr(harness.state, condition + 'Pressed', True)
-  output = harness.step(float('nan'), MotionIntent(version=8), active=condition != 'disable',
+  output = harness.step(float('nan'), MotionIntent(version=MOTION_INTENT_VERSION + 1), active=condition != 'disable',
                         accel_limits=None, plan_time_ns=-1, model_time_ns=-1, now_ns=-1)
   assert output == 0.0
   assert harness.control.long_control_state == LongCtrlState.off
@@ -364,7 +365,7 @@ def test_driver_authority_immediately_revokes_an_authorized_release(condition):
   assert harness.control.motion_phase == MotionPhase.RELEASE
   if condition != 'disable':
     setattr(harness.state, condition + 'Pressed', True)
-  assert harness.step(float('nan'), MotionIntent(version=8), active=condition != 'disable', accel_limits=None) == 0.0
+  assert harness.step(float('nan'), MotionIntent(version=MOTION_INTENT_VERSION + 1), active=condition != 'disable', accel_limits=None) == 0.0
   assert harness.control.motion_phase == MotionPhase.OFF
   assert harness.control.long_control_state == LongCtrlState.off
   assert not harness.control.resolved_should_stop

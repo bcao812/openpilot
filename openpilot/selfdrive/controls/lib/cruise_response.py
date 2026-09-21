@@ -3,12 +3,29 @@
 import numpy as np
 
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
+from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 
 
 A_CRUISE_MIN = -1.2
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
 J_CRUISE_VALS = [1.6, 1.2, 0.8, 0.6]
+CRUISE_COAST_BP = [-0.3, -0.25, -0.15, -0.1]
+CRUISE_COAST_ACCEL = -0.19
+CRUISE_COAST_MIN_SPEED = 10.0
+CRUISE_COAST_MAX_SPEED_ERROR = 1.0 * CV.KPH_TO_MS
+CRUISE_COAST_RISK_ACCEL = -0.5
+
+
+def get_cruise_coast_accel(a_cruise: float) -> float:
+  """P's coast command mapping; the caller owns eligibility and arbitration.
+
+  This stateless mapping must not replace CruiseResponse's raw jerk history.
+  """
+  if not CRUISE_COAST_BP[0] < a_cruise < CRUISE_COAST_BP[-1]:
+    return a_cruise
+  return float(np.interp(a_cruise, CRUISE_COAST_BP,
+                         [CRUISE_COAST_BP[0], CRUISE_COAST_ACCEL, CRUISE_COAST_ACCEL, CRUISE_COAST_BP[-1]]))
 
 
 class CruiseResponse:

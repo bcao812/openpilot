@@ -218,10 +218,12 @@ class LongControl:
     response_available = self.launch_response is not None and allocation is None and not self.motion_input_constrained
     # The accepted same-frame intent declares a target domain. UNKNOWN alone
     # grants none; model launch/continuation keeps its separate qualification.
+    owner_allows_response = (not self.motion_input_constrained and not self.resolved_should_stop and not protocol_hold and not intent.reasons
+                             and self.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
+                             and self.motion_supervisor.rest_braking_accel_limit is None)
+    coast_execution = owner_allows_response and intent.response_kind == MotionResponseKind.CRUISE_COAST
     response_domain = ResponseDomain.NONE
-    if (response_available and not self.resolved_should_stop and not protocol_hold and not intent.reasons
-        and self.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
-        and self.motion_supervisor.rest_braking_accel_limit is None):
+    if response_available and owner_allows_response:
       if intent.response_kind == MotionResponseKind.PURE_CRUISE and self.motion_phase == MotionPhase.TRACK:
         response_domain = ResponseDomain.PURE_CRUISE
       elif intent.response_kind == MotionResponseKind.ABSOLUTE_ACC and self.motion_phase == MotionPhase.TRACK:
@@ -251,12 +253,18 @@ class LongControl:
         self.reset()
         output_accel = a_target
       else:
+        if coast_execution:
+          # Coast is a guarded execution request, not a net-acceleration
+          # target. Retire the same PID integral only after the owner accepts
+          # TRACK/RELEASE; an unwithdrawn APPROACH keeps its braking history.
+          # Also cover configured Ki when LaunchResponse is not installed.
+          self.pid.i = 0.0
         if response_feedback and self.motion_phase == MotionPhase.RELEASE:
           # Freeze before PID evaluation, so RELEASE cannot spend an old I.
           self.launch_response.freeze_release(
             intent.producer_instance_ns, now_ns, arm=bool(intent.reference_kind == MotionReferenceKind.FORWARD and intent.release_allowed))
         output_accel = self.pid.update(a_target - CS.aEgo, speed=CS.vEgo, feedforward=a_target,
-                                       freeze_integrator=self.launch_response is not None or self.motion_phase == MotionPhase.RELEASE)
+                                       freeze_integrator=coast_execution or self.launch_response is not None or self.motion_phase == MotionPhase.RELEASE)
         # The helper owns the existing pid.i, not an extra correction added
         # after a PID which already included I. Preserve unsaturated P+D+F.
         base_output = float(self.pid.p + self.pid.d + self.pid.f)

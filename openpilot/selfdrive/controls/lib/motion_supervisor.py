@@ -10,7 +10,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_ACCEL, CREEP_F
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
 
-MOTION_INTENT_VERSION = 7
+MOTION_INTENT_VERSION = 8
 PLAN_LEASE_NS = 250_000_000
 MODEL_LEASE_NS = 250_000_000
 MAX_CONTROL_GAP_NS = 100_000_000
@@ -38,6 +38,10 @@ class MotionResponseKind(IntEnum):
   ABSOLUTE_ACC = 1
   LEAD_BRAKING = 2
   PURE_CRUISE = 3
+  # Version 8: guarded cruise coasting is an execution request, without
+  # acceleration-error feedback. It carries UNKNOWN model semantics and
+  # neither movement nor departure permission; the owner still resolves stops.
+  CRUISE_COAST = 4
 
 
 MOTION_REFERENCE_KINDS = tuple(MotionReferenceKind)
@@ -159,7 +163,9 @@ class MotionIntent:
             and self.response_kind in MOTION_RESPONSE_KINDS
             and (self.response_kind != MotionResponseKind.ABSOLUTE_ACC
                  or self.reference_kind in (MotionReferenceKind.UNKNOWN, MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD))
-            and (self.response_kind != MotionResponseKind.PURE_CRUISE or self.reference_kind == MotionReferenceKind.UNKNOWN)
+            and (self.response_kind not in (MotionResponseKind.PURE_CRUISE, MotionResponseKind.CRUISE_COAST)
+                 or self.reference_kind == MotionReferenceKind.UNKNOWN)
+            and (self.response_kind != MotionResponseKind.CRUISE_COAST or not self.release_allowed and not self.moving_lead)
             and (self.reference_kind not in (MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.REST, MotionReferenceKind.NO_FORWARD)
                  or not self.release_allowed and not self.moving_lead)
             and type(self.rest_goal_rejected) is bool
@@ -602,7 +608,7 @@ class MotionSupervisor:
     rolling_continuation = (
       self.phase == MotionPhase.APPROACH and not held_stop and not near_standstill and new_input and not reasons
       and (intent.reference_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
-           or intent.response_kind in (MotionResponseKind.PURE_CRUISE, MotionResponseKind.ABSOLUTE_ACC))
+           or intent.response_kind in (MotionResponseKind.PURE_CRUISE, MotionResponseKind.ABSOLUTE_ACC, MotionResponseKind.CRUISE_COAST))
     )
     release_qualified = (intent.release_allowed and a_target > CREEP_ACCEL and not raw_reasons
                          and (a_target >= STOP_RELEASE_ACCEL or self.release_lead_t >= CREEP_STOP_T - 1e-9))

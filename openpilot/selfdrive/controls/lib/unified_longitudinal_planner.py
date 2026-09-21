@@ -2,13 +2,16 @@ import math
 
 import numpy as np
 
-from opendbc.car.honda.values import CarControllerParams
+from opendbc.car.honda.values import CAR, CarControllerParams
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
-from openpilot.selfdrive.controls.lib.cruise_response import CruiseResponse
+from openpilot.selfdrive.controls.lib.cruise_response import (
+  CRUISE_COAST_BP, CRUISE_COAST_MIN_SPEED, CRUISE_COAST_MAX_SPEED_ERROR, CRUISE_COAST_RISK_ACCEL,
+  CruiseResponse, get_cruise_coast_accel,
+)
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED, should_stop
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
@@ -468,6 +471,9 @@ class UnifiedLongitudinalPlanner:
     if planner.mpc.solution_status != 0:
       self.fail_mpc(state, speed, planner.output_a_target)
       return
+    # Eligibility below consumes the current solve's collision warning, never
+    # the preceding plan's flag.
+    planner.fcw = planner.mpc.crash_cnt > 2 and not car_state.standstill
     planner.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS, planner.mpc.v_solution)
     planner.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS, planner.mpc.a_solution)
     planner.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS[:-1], planner.mpc.j_solution)
@@ -482,10 +488,25 @@ class UnifiedLongitudinalPlanner:
     if not math.isfinite(self.reference_accel):
       self.invalidate(speed, "nonfinite_sampled_accel")
       return
+    # P's coast policy changes only this cruise candidate. Its raw response
+    # and stop evidence remain separate, and stronger current references and
+    # constraints still participate in the one arbitration below.
+    coast_applicable = (
+      planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl
+      and active and healthy and not reset and not forced_decel and not self.e2e_allowed and planner.allow_throttle
+      and not planner.fcw and not should_stop(speed, self.reference_accel) and not model.action.shouldStop
+      and math.isfinite(self.reference_accel) and math.isfinite(model.action.desiredAcceleration)
+      and model.action.desiredAcceleration >= CRUISE_COAST_RISK_ACCEL
+      and planner.source == LongitudinalPlanSourceSP.cruise and cruise_ceiling <= self.reference_accel
+      and speed >= CRUISE_COAST_MIN_SPEED and abs(cruise_speed - speed) <= CRUISE_COAST_MAX_SPEED_ERROR
+      and not (state['radarState'].leadOne.present or state['radarState'].leadTwo.present)
+      and CRUISE_COAST_BP[0] < cruise_ceiling < CRUISE_COAST_BP[-1]
+    )
+    cruise_command = get_cruise_coast_accel(cruise_ceiling) if coast_applicable else cruise_ceiling
     # The selected policy owns its response history. It supplies one current
     # target bound, without rewriting the measured MPC initial state or
     # introducing another final-output decision or stop owner.
-    self.constraint_accel = min(maximum_accel, cruise_ceiling)
+    self.constraint_accel = min(maximum_accel, cruise_command)
     self.constraint_source = LongitudinalPlanSource.cruise
     self.reference_source = planner.mpc.source
     if cruise_speed <= STOP_SPEED:
@@ -522,7 +543,6 @@ class UnifiedLongitudinalPlanner:
     self.reference_overridden = output != self.reference_accel
     if output < self.reference_accel:
       planner.mpc.source = self.constraint_source
-    planner.fcw = planner.mpc.crash_cnt > 2 and not car_state.standstill
 
     forward_reference = reference_requests_departure(planner.mpc.v_solution, planner.mpc.a_solution, planner.mpc.j_solution)
     low_speed_preference_stop = (planner.mpc.v_solution[-1] < STOP_SPEED
@@ -615,7 +635,18 @@ class UnifiedLongitudinalPlanner:
                              and self.constraint_source == LongitudinalPlanSource.cruise
                              and self.constraint_accel == cruise_ceiling < maximum_accel
                              and cruise_ceiling < self.reference_accel <= maximum_accel and output == cruise_ceiling)
-    if (ordinary_model_motion and raw_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
+    # Only a strictly winning coast command carries the execution contract.
+    # Equal independent constraints keep their existing response semantics;
+    # raw == mapped (notably -0.19) is still coast when this candidate wins.
+    coast_selected = (coast_applicable and not reasons and cruise_command < min(self.reference_accel, maximum_accel)
+                      and self.constraint_source == LongitudinalPlanSource.cruise
+                      and self.constraint_accel == cruise_command and output == cruise_command)
+    if coast_selected:
+      response_kind = MotionResponseKind.CRUISE_COAST
+      # A negative coast request is execution shaping, never a departure
+      # certificate inherited from the unconstrained native trajectory.
+      moving_lead = release_allowed = False
+    elif (ordinary_model_motion and raw_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
         and active and healthy and not forced_decel and not reasons):
       # This producer installed only absolute lead/cruise targets. An action
       # cap and a factual raw FORWARD label do not change that target domain.
