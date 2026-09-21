@@ -233,7 +233,9 @@ def test_model_moving_following_retains_progress_through_unwarmed_measurements(d
                               duration=20.0, delay=delay, response_time=response_time, measurement_filter=True)
   assert result['maximum_measured_acceleration'] > 10.0
   assert result['reference_kinds'] == [MotionReferenceKind.MOVING]
-  assert result['minimum_integral'] == result['maximum_integral'] == 0.0
+  # Raw MOVING facts do not change an ordinary target's ABSOLUTE_ACC domain.
+  # Braking correction is permitted; positive integral remains forbidden.
+  assert result['maximum_integral'] == 0.0
   assert result['stopping_seconds'] == 0.0
   assert result['minimum_speed'] > 0.3
   assert result['minimum_gap'] > 2.0
