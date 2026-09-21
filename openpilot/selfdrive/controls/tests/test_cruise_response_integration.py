@@ -382,7 +382,7 @@ def test_coast_exit_and_reentry_keep_raw_jerk_history_in_the_real_planner():
       # Frame 9 recovers above raw -0.20 and releases that retention. Raw
       # cruise history must still follow the independent P/jerk recurrence.
       if frame in (7, 8):
-        assert previous == pytest.approx(-0.23)
+        assert previous == 20.0 - float(np.float32(20.23))
         expected = -0.21
       assert planner.reference_planner.cruise_response._previous_accel == pytest.approx(previous)
       assert plan.aTarget == float(np.float32(expected))
