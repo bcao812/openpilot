@@ -13,12 +13,12 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN
-from openpilot.common.realtime import DT_CTRL
-from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL
+from openpilot.common.realtime import DT_CTRL, DT_MDL
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, STOP_RELEASE_ACCEL, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   J_EGO_COST, MODEL_A_REF, MODEL_BRAKING_PRIORITY, MODEL_V_REF, MPC_GOAL_INFEASIBLE,
-  PARAM_DIM, REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, MpcReference,
+  PARAM_DIM, REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, LongitudinalPlanSource, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.model_reference import moving_preference
 from openpilot.selfdrive.controls.lib.longitudinal_planner import get_cruise_accel
@@ -238,7 +238,6 @@ def test_ordinary_model_velocity_preserves_p_lead_cruise_and_action_arbitration(
         state.logMonoTime['modelV2'] = anchor + 5_000_000
       planner.update(state, now_ns=anchor + 10_000_000)
       assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
-      assert planner.motion_intent.response_kind == MotionResponseKind.ABSOLUTE_ACC
       assert planner.motion_intent.reference_kind == MotionReferenceKind.MOVING
       # P's three candidates include its independent speed-error/jerk history.
       # Derive that candidate from the retained P helper, not from the new
@@ -246,6 +245,13 @@ def test_ordinary_model_velocity_preserves_p_lead_cruise_and_action_arbitration(
       previous_cruise = get_cruise_accel(True, 30.0, 20.0, previous_cruise, 0.0, planner.CP, planner.dt, 0.0, True)
       expected = min(planner.reference_planner.reference_accel, previous_cruise, action_accel)
       assert planner.output_a_target == pytest.approx(expected, abs=1e-4)
+      # Version 10 declares the strictly winning cruise response as its own
+      # request. Independent action/native limits retain absolute ACC meaning.
+      assert not planner.motion_intent.reasons
+      cruise_wins = previous_cruise < min(planner.reference_planner.reference_accel,
+                                         float(np.min(planner.mpc.params[:, 1])), action_accel)
+      expected_kind = MotionResponseKind.CRUISE_REQUEST if cruise_wins else MotionResponseKind.ABSOLUTE_ACC
+      assert planner.motion_intent.response_kind == expected_kind
       targets.append(planner.output_a_target)
     trajectories.append(np.array(targets))
   np.testing.assert_allclose(trajectories[0], trajectories[1], atol=1e-4, rtol=0.0)
@@ -435,19 +441,31 @@ def test_cached_departing_lead_cannot_withdraw_a_held_stop_when_speed_crosses_th
   with patch.object(harness, 'step', side_effect=crossing_step):
     # The extra observation time lets a later legitimate departure complete
     # the existing command ramp; the original cached crossing is unchanged.
-    _, plans, rows, can_rows = harness.exercise(curve, action_accel=action_accel, seconds=1.2)
+    references, plans, rows, can_rows = harness.exercise(curve, action_accel=action_accel, seconds=1.2)
+  plans_by_time = {int(event.logMonoTime): event.longitudinalPlan for event in plans}
+  references_by_time = {int(event.logMonoTime): reference for event, reference in zip(plans, references, strict=True)}
+  action_t = harness.controls.CP.longitudinalActuatorDelay + DT_MDL
+  # Read actual Float32 publications through the pre-existing trajectory
+  # inverse, independently of the producer/consumer departure-strength helper.
+  departure_strengths = {
+    stamp: min(get_accel_from_plan(plan.speeds, plan.accels, MODEL_TIMES[:CONTROL_N], action_t),
+               plan.reference.constraintAccel)
+    for stamp, plan in plans_by_time.items()
+  }
+  assert all(np.isfinite(strength) for strength in departure_strengths.values())
   first_plan_time = int(plans[0].logMonoTime)
-  # This packet must not satisfy the existing strong-request release gate.
-  # With the duplicate native speed goal removed it can be weakly positive;
-  # the cached packet must still retain every held-brake assertion below.
-  assert plans[0].longitudinalPlan.aTarget < STOP_RELEASE_ACCEL
-  assert plans[0].longitudinalPlan.motionIntent.releaseAllowed
+  first_plan = plans_by_time[first_plan_time]
+  # This first packet cannot qualify departure through either its scalar or
+  # published trajectory. Crossing the speed band cannot renew cached IDs.
+  assert first_plan.aTarget < STOP_RELEASE_ACCEL
+  assert first_plan.motionIntent.releaseAllowed
+  assert (first_plan.aTarget <= 0.0 or departure_strengths[first_plan_time] < STOP_RELEASE_ACCEL
+          or first_plan.motionIntent.reasons), (first_plan.to_dict(), departure_strengths[first_plan_time])
   cached_rows = [row for row in rows if row['consumed_plan_mono'] == first_plan_time]
   assert cached_rows[0]['measured_speed'] < 0.3
   assert any(row['measured_speed'] > 0.3 for row in cached_rows)
   assert all(row['resolved_stop'] and not row['resume'] and row['accel'] <= 0.0 for row in cached_rows), cached_rows
 
-  plans_by_time = {int(event.logMonoTime): event.longitudinalPlan for event in plans}
   controls_by_time = {row['mono']: row for row in rows}
   # Card applies the preceding control tick, not the plan currently being
   # produced or consumed at the CAN timestamp.
@@ -457,9 +475,13 @@ def test_cached_departing_lead_cannot_withdraw_a_held_stop_when_speed_crosses_th
   assert all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0.0
              and not command['STANDSTILL_RELEASE'] and not command['resume'] for command in cached_can)
 
-  qualified_times = [stamp for stamp, plan in plans_by_time.items()
-                     if stamp > first_plan_time and plan.modelMonoTime > plans[0].longitudinalPlan.modelMonoTime
-                     and plan.aTarget >= STOP_RELEASE_ACCEL and plan.motionIntent.releaseAllowed]
+  qualified_times = []
+  for previous_event, event in zip(plans[:-1], plans[1:], strict=True):
+    stamp, plan = int(event.logMonoTime), event.longitudinalPlan
+    fresh = stamp > int(previous_event.logMonoTime) and plan.modelMonoTime > previous_event.longitudinalPlan.modelMonoTime
+    if (fresh and plan.motionIntent.releaseAllowed and not plan.motionIntent.reasons and not plan.shouldStop
+        and plan.aTarget > 0.0 and max(plan.aTarget, departure_strengths[stamp]) >= STOP_RELEASE_ACCEL):
+      qualified_times.append(stamp)
   first_qualified = min(qualified_times) if qualified_times else None
   protected_rows = [row for row in rows if first_qualified is None or row['consumed_plan_mono'] < first_qualified]
   assert protected_rows
@@ -474,6 +496,7 @@ def test_cached_departing_lead_cannot_withdraw_a_held_stop_when_speed_crosses_th
     # A fresh weak action cannot turn its earlier cached permission into a go.
     assert not qualified_times
     assert all(plan.aTarget < STOP_RELEASE_ACCEL for plan in plans_by_time.values())
+    assert all(strength < STOP_RELEASE_ACCEL for strength in departure_strengths.values())
     assert all(row['resolved_stop'] and not row['resume'] for row in rows)
   else:
     assert qualified_times
@@ -485,9 +508,18 @@ def test_cached_departing_lead_cannot_withdraw_a_held_stop_when_speed_crosses_th
     assert current['consumed_plan_mono'] > previous['consumed_plan_mono']
     assert current['model_mono'] > previous['model_mono']
     plan = plans_by_time[current['consumed_plan_mono']]
-    assert plan.aTarget >= STOP_RELEASE_ACCEL and plan.motionIntent.releaseAllowed
+    strength = departure_strengths[current['consumed_plan_mono']]
+    assert current['consumed_plan_mono'] in qualified_times
+    assert plan.aTarget > 0.0 and max(plan.aTarget, strength) >= STOP_RELEASE_ACCEL, (plan.to_dict(), strength)
+    assert plan.motionIntent.releaseAllowed and not plan.motionIntent.reasons and not plan.shouldStop
     assert plan.motionIntent.referenceKind == MotionReferenceKind.MOVING
-    assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+    reference = references_by_time[current['consumed_plan_mono']]
+    wire_action = float(harness.latest['modelV2'].modelV2.action.desiredAcceleration)
+    cruise_wins = (plan.reference.constraintSource == LongitudinalPlanSource.cruise
+                   and plan.aTarget == plan.reference.constraintAccel
+                   and plan.reference.constraintAccel < min(plan.reference.accel, float(np.min(reference.accel_max)), wire_action))
+    expected_kind = MotionResponseKind.CRUISE_REQUEST if cruise_wins else MotionResponseKind.ABSOLUTE_ACC
+    assert plan.motionIntent.responseKind == expected_kind
     assert any(row['accel'] > 0.0 for row in rows[index:])
     assert any(command['STANDSTILL_RELEASE'] and not command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0.0
                for command, row in linked_can if row['consumed_plan_mono'] >= current['consumed_plan_mono'])
