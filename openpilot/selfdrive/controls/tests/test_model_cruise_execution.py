@@ -65,9 +65,11 @@ def model_case(kind, *, target=4.0):
 def test_request_wire_preserves_raw_model_facts_without_inventing_release(kind, release_allowed):
   intent = model_request(kind, release_allowed=release_allowed)
   assert intent.is_valid()
-  planner = SimpleNamespace(longitudinal_mode=LongitudinalMode.UNIFIED, motion_intent=intent)
+  planner = SimpleNamespace(longitudinal_mode=LongitudinalMode.UNIFIED)
+  producer = UnifiedLongitudinalPlanner(planner)
+  planner.motion_intent = intent
   message = log.LongitudinalPlan.new_message()
-  UnifiedLongitudinalPlanner(planner).publish(message)
+  producer.publish(message)
   with log.LongitudinalPlan.from_bytes(message.to_bytes()) as decoded:
     actual = MotionIntent.from_message(decoded.motionIntent)
     assert actual == intent and actual.is_valid()

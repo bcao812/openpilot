@@ -48,10 +48,13 @@ def departure_strength(speeds=RECORDED_SPEEDS, accels=RECORDED_ACCELS, times=CON
   return drive_helpers.get_departure_accel_from_plan(speeds, accels, times, action_t, constraint_accel)
 
 
-def held_controls():
+def held_controls(*, cruise_standstill=False):
   harness = ControlsHarness()
   harness.control.CP.longitudinalActuatorDelay = 0.5
   harness.hold()
+  # An owned physical stop and the stock cruise protocol's stop bit are
+  # separate. Accord openpilot longitudinal normally has only the former.
+  harness.car_state.cruiseState.standstill = cruise_standstill
   harness.plan.aTarget = RECORDED_TARGET
   harness.plan.speeds = RECORDED_SPEEDS
   harness.plan.accels = RECORDED_ACCELS
@@ -70,6 +73,18 @@ def test_recorded_r_publication_releases_hold_at_bs_strength_without_changing_ex
   assert motion.phase == 'release' and not motion.resolvedStop
   assert motion.referenceTimingValid and not motion.degraded
   assert harness.control.LoC.motion_supervisor._last_target == pytest.approx(RECORDED_TARGET)
+  assert -2.0 < command.actuators.accel <= -2.0 + 0.08 + 1e-6
+
+
+def test_strong_departure_preserves_stock_cruise_protocol_hold_until_its_stop_bit_clears():
+  harness = held_controls(cruise_standstill=True)
+  command, motion = harness.step()
+  assert motion.phase == 'release' and not motion.resolvedStop
+  assert not motion.degraded and command.longActive
+  assert command.actuators.accel == -2.0
+  harness.car_state.cruiseState.standstill = False
+  command, motion = harness.step(new_plan=False)
+  assert motion.phase == 'release' and not motion.resolvedStop
   assert -2.0 < command.actuators.accel <= -2.0 + 0.08 + 1e-6
 
 
@@ -282,7 +297,11 @@ def ordinary_action_case(*, fault=None):
     if fault == 'fcw':
       planner.mpc.crash_cnt = 3
 
-  with patch.object(planner.reference_planner.cruise_response, 'update', return_value=1.6), \
+  # Close-lead stopping guards a mild negative execution request. Give that
+  # scenario a real independent brake constraint even though the substituted
+  # native trajectory remains forward, and assert the resulting raw veto.
+  cruise_constraint = -0.5 if fault == 'close_lead' else 1.6
+  with patch.object(planner.reference_planner.cruise_response, 'update', return_value=cruise_constraint), \
        patch.object(planner.mpc, 'update', side_effect=solve):
     planner.update(state, now_ns=advance(state, 0))
   return planner
@@ -310,3 +329,7 @@ def test_ordinary_action_strength_cannot_bypass_current_producer_vetoes(fault):
   assert not planner.motion_intent.release_allowed
   if fault == 'fcw':
     assert planner.fcw
+  elif fault == 'close_lead':
+    assert planner.reference_planner.constraint_accel == pytest.approx(-0.5)
+    assert planner.output_a_target == pytest.approx(-0.5)
+    assert planner.motion_intent.reasons & StopReason.CLOSE_LEAD

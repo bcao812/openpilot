@@ -349,11 +349,28 @@ def test_ordinary_model_action_cap_remains_absolute_and_cannot_learn_positive_i(
   state['modelV2'].velocity.x = (20.4 + slope * np.asarray(ModelConstants.T_IDXS)).tolist()
   state['modelV2'].action.desiredAcceleration = action_accel
   state['carState'].aEgo = -0.5 if action_accel > 0.0 else 0.5
+  response_kinds = set()
   for frame in range(8):
     plan, outputs = consume(planner, control, state, frame)
-    assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+    # Compare the actual governor request with the transported action before
+    # final-output rounding. The +0.05 action initially exceeds the slower
+    # cruise ramp; only its later binding cap owns acceleration feedback.
+    cruise_request = planner.reference_planner.cruise_response._previous_accel
+    action_binding = state['modelV2'].action.desiredAcceleration <= cruise_request
+    if action_binding:
+      assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+    else:
+      assert planner.reference_planner.constraint_accel < planner.reference_planner.reference_accel
+      assert plan.motionIntent.responseKind == MotionResponseKind.CRUISE_REQUEST
+      assert control.pid.i == 0.0
+    response_kinds.add(plan.motionIntent.responseKind)
     assert plan.motionIntent.referenceKind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
     assert plan.aTarget <= action_accel + 1e-7
     assert control.pid.i <= 0.0
     assert all(output <= plan.aTarget + 1e-7 for output in outputs)
   assert planner.reference_planner.reference_overridden
+  if action_accel < 0.0:
+    assert response_kinds == {MotionResponseKind.ABSOLUTE_ACC}
+    assert control.pid.i < 0.0
+  else:
+    assert response_kinds == {MotionResponseKind.CRUISE_REQUEST, MotionResponseKind.ABSOLUTE_ACC}
