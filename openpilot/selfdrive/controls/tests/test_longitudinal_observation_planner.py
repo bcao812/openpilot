@@ -14,7 +14,9 @@ from openpilot.common.longitudinal_logging import CHECK_FLAGS, PLANNER_INPUTS
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, MpcReference, MPC_INVALID_INPUT, MPC_SOLVER_ERROR
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  COMFORT_STOP_DISTANCE, N, PARAM_DIM, STOP_DISTANCE, LongitudinalMpc, MpcReference, MPC_INVALID_INPUT, MPC_SOLVER_ERROR,
+)
 from openpilot.selfdrive.controls.lib.longitudinal_observation import PlannerObservation, TRACE_STATUS_COUNTERS
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner, MIN_ALLOW_THROTTLE_SPEED, PitchBiasEstimator
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace
@@ -299,7 +301,8 @@ def test_actual_solver_failures_survive_control_reset(unified, failure, status, 
 def test_nonfinite_sample_is_not_replaced_with_invalidated_reference_zero():
   planner = make_planner()
   state = make_state()
-  with patch("openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_accel_from_plan", return_value=float("nan")) as sample:
+  with patch("openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration",
+             return_value=float("nan")) as sample:
     update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   sample.assert_called_once()
@@ -598,7 +601,11 @@ def test_mpc_failure_reset_preserves_attempted_problem_not_zero_sentinel():
   assert mpc.diagnostic_last_solver_return == 4
   assert mpc.diagnostic_last_x0 == (0.0, 20.0, -1.1)
   assert mpc.diagnostic_last_parameters[0][2] > 0.0
-  assert np.all(mpc.params == 0.0)
+  # The reset problem retains its declared default comfort distance. Compare
+  # all slots independently of the attempted solve's preserved diagnostics.
+  expected_reset_parameters = np.zeros((N + 1, PARAM_DIM))
+  expected_reset_parameters[:, COMFORT_STOP_DISTANCE] = STOP_DISTANCE
+  np.testing.assert_array_equal(mpc.params, expected_reset_parameters)
   mpc.reset()
   assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_reset_calls == 3
   assert mpc.diagnostic_last_x0 == (0.0, 20.0, -1.1)
