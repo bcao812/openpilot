@@ -1,6 +1,7 @@
 """Earlier lead response may change MPC smoothing, never controller permission."""
 
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -11,7 +12,7 @@ from opendbc.car.honda.values import CAR
 from openpilot.cereal import log
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  LEAD_DANGER_FACTOR, get_T_FOLLOW, get_safe_obstacle_distance, get_stopped_equivalence_factor,
+  A_CHANGE_COST, LEAD_DANGER_FACTOR, get_T_FOLLOW, get_safe_obstacle_distance, get_stopped_equivalence_factor,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   LEAD_BRAKING_MIN_CHANGE_SCALE, LongitudinalPlanSource, get_lead_approach_urgency, get_lead_braking_urgency,
@@ -20,6 +21,7 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import MotionResponseKin
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, consume, make_planner, make_planner_owner, make_state
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_motion_response_contract import ordinary_policy as ordinary_policy
+from openpilot.selfdrive.controls.tests.test_mpc_problem_contract import NativeProblemRecorder
 
 
 PERSONALITIES = (log.LongitudinalPersonality.aggressive, log.LongitudinalPersonality.standard, log.LongitudinalPersonality.relaxed)
@@ -169,23 +171,66 @@ def test_unknown_personality_cannot_invent_a_following_gap(personality):
   assert urgency(approach_radar(), personality=personality) == 0.0
 
 
-def test_positive_previous_target_reaches_native_weights_without_changing_risk_geometry():
-  planner, _ = make_planner(speed=25.0, initial_accel=0.05)
-  state = make_state(speed=25.0, target=28.0)
-  install_leads(state, approach_radar())
-  before = deepcopy(state['radarState'].to_dict())
-  planner.mpc.set_weights = Mock(wraps=planner.mpc.set_weights)
-  assert planner.output_a_target > 0.0
-  planner.update(state, now_ns=advance(state, 0))
-  scale = planner.mpc.set_weights.call_args.kwargs['a_change_scale']
-  assert LEAD_BRAKING_MIN_CHANGE_SCALE <= scale < 1.0
-  assert planner.mpc.solution_status == 0
-  assert planner.mpc.x0[1] == 25.0
-  assert np.all(planner.mpc.params[:, 5] == LEAD_DANGER_FACTOR)
-  assert np.all(planner.mpc.params[:, 4] == get_T_FOLLOW(state['selfdriveState'].personality))
-  assert np.min(planner.mpc.params[:, 0]) == -3.5
-  assert -3.5 <= planner.output_a_target <= 2.0
-  assert state['radarState'].to_dict() == before
+@pytest.mark.parametrize('speed,gap,closing', [(25.0, 54.0, 5.6), (26.9, 74.7, 4.4)])
+def test_warm_approach_reduces_installed_native_history_cost_only(speed, gap, closing, record_property):
+  # Both arms establish the same positive native history before seeing the
+  # closing lead. This is a cost-installation contract; continuous scenarios
+  # must establish changes in response timing and delivered clearance.
+  results = []
+  for candidate in (False, True):
+    planner, _ = make_planner(speed=speed, initial_accel=0.05)
+    state = make_state(speed=speed, target=28.0)
+    state['carState'].aEgo = 0.05
+    radar = approach_radar(speed, gap, closing)
+    radar.leadOne.present = False
+    install_leads(state, radar)
+    recorder = NativeProblemRecorder(planner.mpc.solver)
+    planner.mpc.solver = recorder
+    planner.mpc.set_weights = Mock(wraps=planner.mpc.set_weights)
+    approach = get_lead_approach_urgency if candidate else lambda *args, **kwargs: 0.0
+    with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.get_lead_approach_urgency', side_effect=approach):
+      for frame in range(6):
+        planner.update(state, now_ns=advance(state, frame))
+        assert planner.mpc.solution_status == 0
+        if frame:
+          assert planner.mpc.set_weights.call_args.args[0] is True
+      assert planner.output_a_target > 0.0 and planner.mpc.a_solution[1] > 0.0
+      history = planner.mpc.a_solution.copy()
+      radar.leadOne.present = True
+      install_leads(state, radar)
+      before = deepcopy(state['radarState'].to_dict())
+      planner.update(state, now_ns=advance(state, 6))
+    assert planner.mpc.set_weights.call_args.args[0] is True
+    assert planner.mpc.solution_status == 0
+    assert planner.mpc.x0[1] == state['carState'].vEgo
+    assert np.all(planner.mpc.params[:, 5] == LEAD_DANGER_FACTOR)
+    assert np.all(planner.mpc.params[:, 4] == get_T_FOLLOW(state['selfdriveState'].personality))
+    assert np.min(planner.mpc.params[:, 0]) == -3.5
+    assert -3.5 <= planner.output_a_target <= 2.0
+    assert state['radarState'].to_dict() == before
+    results.append({
+      'scale': planner.mpc.set_weights.call_args.kwargs['a_change_scale'],
+      'history': history, 'costs': recorder.solved_costs[-1], 'params': planner.mpc.params.copy(),
+      'target': float(planner.output_a_target),
+    })
+  baseline, candidate = results
+  assert baseline['scale'] == 1.0
+  assert LEAD_BRAKING_MIN_CHANGE_SCALE <= candidate['scale'] < 1.0
+  np.testing.assert_array_equal(candidate['history'], baseline['history'])
+  np.testing.assert_array_equal(candidate['params'], baseline['params'])
+  assert baseline['costs'][1, 'W'][4, 4] == A_CHANGE_COST
+  assert 0.0 < candidate['costs'][1, 'W'][4, 4] < baseline['costs'][1, 'W'][4, 4]
+  for key, original in baseline['costs'].items():
+    expected = original.copy()
+    if key[1] == 'W':
+      expected[4, 4] *= candidate['scale']
+    np.testing.assert_allclose(candidate['costs'][key], expected, rtol=0.0, atol=1e-12)
+  record_property('warm_approach_weight_probe', json.dumps({
+    'speed_mps': speed, 'gap_m': gap, 'closing_mps': closing,
+    'baseline_target_mps2': baseline['target'], 'candidate_target_mps2': candidate['target'],
+    'baseline_scale': baseline['scale'], 'candidate_scale': candidate['scale'],
+    'scope': 'same_history_native_cost_installation_only',
+  }, sort_keys=True))
 
 
 @pytest.mark.parametrize('condition', [
