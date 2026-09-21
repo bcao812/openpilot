@@ -16,7 +16,7 @@ from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.cereal import log
 from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.cruise_response import get_cruise_coast_accel
-from openpilot.selfdrive.controls.lib.longcontrol import MPC_FAILURE_ACCEL
+from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_STOP_DISTANCE, MPC_INVALID_INPUT, N, STOP_DISTANCE, T_IDXS, LongitudinalMpc, LongitudinalPlanSource, MpcReference,
   get_stopped_equivalence_factor, get_T_FOLLOW,
@@ -24,7 +24,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
 from openpilot.selfdrive.controls.lib.longitudinal_planner import get_cruise_accel, get_max_accel
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
-from openpilot.selfdrive.controls.lib.motion_supervisor import MotionResponseKind
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionReferenceKind, MotionResponseKind
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import sample_reference_acceleration
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, consume, make_handover_state, make_planner_owner
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
@@ -137,7 +137,55 @@ def test_ordinary_acc_has_one_cruise_owner_independent_of_unadmitted_raw_model_s
   assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
 
 
-@pytest.mark.parametrize('condition', ['e2e', 'e2e_rest', 'e2e_no_forward', 'scc', 'force_decel'])
+@pytest.mark.parametrize('speed', [0.0, 3.0])
+@pytest.mark.parametrize('kind', [MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD])
+def test_ordinary_model_motion_keeps_one_cruise_goal_action_cap_and_measured_initial_state(speed, kind):
+  planner, owner, state = ordinary_case(speed=speed, target=speed + 2.0, initial_accel=1.0)
+  state['selfdriveState'].experimentalMode = True
+  state['carState'].aEgo = 0.0 if speed == 0.0 else -0.3
+  times = np.asarray(ModelConstants.T_IDXS)
+  slope = 0.6 if kind == MotionReferenceKind.FORWARD else 0.0
+  raw_speed = max(speed, 0.4)
+  model = state['modelV2']
+  model.position.x = (raw_speed * times + 0.5 * slope * times**2).tolist()
+  model.velocity.x = (raw_speed + slope * times).tolist()
+  model.acceleration.x = np.full(len(times), slope).tolist()
+  model.action.desiredAcceleration = 0.6
+  references, plans = [], []
+  with patch.object(planner.mpc, 'update', wraps=planner.mpc.update) as update:
+    for frame in range(8):
+      if frame:
+        state['controlsState'].longControlState = owner.long_control_state
+      plan, outputs = consume(planner, owner, state, frame)
+      reference = update.call_args.kwargs['reference']
+      assert plan.solverStatus == 0 and plan.motionIntent.valid and not owner.motion_degraded
+      assert plan.motionIntent.referenceKind == kind
+      assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+      # The public constructor seeds CruiseResponse history, never native x0.
+      # Neither the raw model's initial speed nor P's HOLD prediction replaces
+      # the dated measured state used by the retained L architecture.
+      assert planner.mpc.diagnostic_last_x0 == (0.0, state['carState'].vEgo, state['carState'].aEgo)
+      assert plan.reference.initialAEgo == state['carState'].aEgo
+      assert reference.typed_model is None
+      assert reference.model_position is reference.model_velocity is reference.model_acceleration is None
+      assert plan.reference.constraintSource == LongitudinalPlanSource.e2e
+      assert plan.reference.constraintAccel == model.action.desiredAcceleration
+      assert plan.aTarget == min(plan.reference.accel, plan.reference.constraintAccel)
+      assert plan.aTarget <= model.action.desiredAcceleration
+      assert owner.pid.i <= 0.0 and all(output <= plan.aTarget + 1e-7 for output in outputs)
+      references.append(reference)
+      plans.append(plan)
+  assert any(plan.motionIntent.releaseAllowed for plan in plans)
+  # P consumes lead risks in native MPC and applies one outer cruise/action
+  # request. A normal admitted MOVING/FORWARD model must not reinstall the
+  # same speed objective after its redundant model preference was removed.
+  assert all(reference.cruise_speed is None for reference in references)
+
+
+@pytest.mark.parametrize('condition', [
+  'e2e_rest', 'e2e_no_forward', 'e2e_unknown_raw', 'e2e_bad_source', 'e2e_should_stop',
+  'e2e_reset', 'e2e_inactive', 'e2e_unhealthy', 'e2e_force_decel', 'e2e_scc', 'scc', 'force_decel',
+])
 def test_risk_and_policy_domains_keep_their_existing_numeric_cruise_goal(condition):
   planner, _, state = ordinary_case()
   with ExitStack() as stack:
@@ -152,23 +200,40 @@ def test_risk_and_policy_domains_keep_their_existing_numeric_cruise_goal(conditi
       elif condition == 'e2e_no_forward':
         state['modelV2'].velocity.x = [0.0] * len(times)
         state['modelV2'].position.x = [0.0] * len(times)
-    elif condition == 'scc':
+      elif condition == 'e2e_unknown_raw':
+        state['modelV2'].velocity.x = (-0.4 + 0.6 * times).tolist()
+      elif condition == 'e2e_should_stop':
+        state['modelV2'].action.shouldStop = True
+      elif condition == 'e2e_reset':
+        state['controlsState'].longControlState = LongCtrlState.off
+      elif condition == 'e2e_inactive':
+        state['carControl'].longActive = False
+      elif condition == 'e2e_unhealthy':
+        stack.enter_context(patch.object(state, 'all_checks', return_value=False))
+    if condition in ('scc', 'e2e_scc'):
       def selected_policy(instance, _state, _speed, accel, _cruise):
         instance.source = SPSource.sccVision
         instance.cruise_target = CruiseTarget(instance.source, 11.0, accel)
         return instance.cruise_target
 
       stack.enter_context(patch.object(LongitudinalPlannerSP, 'update_targets', new=selected_policy))
-    elif condition == 'force_decel':
+    elif condition in ('force_decel', 'e2e_force_decel'):
       state['controlsState'].forceDecel = True
     update = stack.enter_context(patch.object(planner.mpc, 'update', wraps=planner.mpc.update))
-    planner.update(state, now_ns=advance(state, 0))
+    now_ns = advance(state, 0)
+    if condition == 'e2e_bad_source':
+      state.logMonoTime['modelV2'] = now_ns + 1
+    planner.update(state, now_ns=now_ns)
   reference = update.call_args.kwargs['reference']
   assert reference.cruise_speed is not None and np.isfinite(reference.cruise_speed)
-  if condition == 'force_decel':
+  if condition in ('force_decel', 'e2e_force_decel', 'e2e_should_stop'):
     assert reference.cruise_speed == 0.0
-  elif condition in ('e2e_rest', 'e2e_no_forward'):
+  elif condition in ('e2e_rest', 'e2e_no_forward', 'e2e_unknown_raw', 'e2e_bad_source'):
     assert reference.typed_model is not None
+    if condition == 'e2e_unknown_raw':
+      assert reference.typed_model.unknown.reason == 'backward_then_forward_is_ambiguous'
+    elif condition == 'e2e_bad_source':
+      assert reference.typed_model.unknown.reason == 'future_publication_proxy'
 
 
 @pytest.mark.parametrize('slot,source,column', [

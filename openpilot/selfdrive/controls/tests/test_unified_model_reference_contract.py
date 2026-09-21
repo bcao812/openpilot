@@ -190,7 +190,7 @@ def test_actual_forward_model_departure_can_release_the_same_hold_and_reach_hond
   np.testing.assert_array_equal(evidence.raw_velocity, harness.latest['modelV2'].modelV2.velocity.x)
   assert all(reference.model_position is None and reference.model_velocity is None
              and reference.model_acceleration is None and reference.typed_model is None
-             and reference.cruise_speed > 0.0 for reference in references)
+             and reference.cruise_speed is None for reference in references)
   assert all(event.longitudinalPlan.motionIntent.referenceKind == MotionReferenceKind.FORWARD
              and event.longitudinalPlan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC for event in plans)
   assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)

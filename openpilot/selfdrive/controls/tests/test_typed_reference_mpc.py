@@ -21,6 +21,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   PARAM_DIM, REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.model_reference import moving_preference
+from openpilot.selfdrive.controls.lib.longitudinal_planner import get_cruise_accel
 from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VERSION, MotionReferenceKind,
                                                                MotionResponseKind, STARTING_ACCEL_RATE, StopReason)
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import model_reference_from_velocity
@@ -230,6 +231,7 @@ def test_ordinary_model_velocity_preserves_p_lead_cruise_and_action_arbitration(
     state['modelV2'].action.desiredAcceleration = action_accel
     assign_lead(state, distance=200.0, speed=20.0, relative_speed=0.0)
     targets = []
+    previous_cruise = 0.0
     for frame in range(12):
       anchor = advance(state, frame)
       if after_anchor:
@@ -238,7 +240,12 @@ def test_ordinary_model_velocity_preserves_p_lead_cruise_and_action_arbitration(
       assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
       assert planner.motion_intent.response_kind == MotionResponseKind.ABSOLUTE_ACC
       assert planner.motion_intent.reference_kind == MotionReferenceKind.MOVING
-      assert planner.output_a_target == pytest.approx(min(planner.reference_planner.reference_accel, action_accel), abs=1e-4)
+      # P's three candidates include its independent speed-error/jerk history.
+      # Derive that candidate from the retained P helper, not from the new
+      # CruiseResponse's private state or the candidate's current output.
+      previous_cruise = get_cruise_accel(True, 30.0, 20.0, previous_cruise, 0.0, planner.CP, planner.dt, 0.0, True)
+      expected = min(planner.reference_planner.reference_accel, previous_cruise, action_accel)
+      assert planner.output_a_target == pytest.approx(expected, abs=1e-4)
       targets.append(planner.output_a_target)
     trajectories.append(np.array(targets))
   np.testing.assert_allclose(trajectories[0], trajectories[1], atol=1e-4, rtol=0.0)
