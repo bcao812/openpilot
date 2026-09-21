@@ -74,7 +74,10 @@ def solution(planner, profile, *, initial_speed=0.02):
 
 
 def context(monkeypatch, *, warm=True, raw_forward=True):
-  planner, _ = make_planner(speed=0.02)
+  # execution_state already declares measured and executed +0.18 acceleration.
+  # Seed that same cruise history instead of mixing an executing session with
+  # a cold zero response that legitimately contributes its own stop reason.
+  planner, _ = make_planner(speed=0.02, initial_accel=0.18)
   state = execution_state(raw_forward=raw_forward)
   planner._execution_test_consumer = ReferenceTimingConsumer()
   monkeypatch.setattr(planner.mpc, 'update', lambda *args, **kwargs: None)

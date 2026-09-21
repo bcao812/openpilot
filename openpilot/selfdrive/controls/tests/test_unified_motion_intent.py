@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from opendbc.car.honda.values import CarControllerParams
+from opendbc.car.interfaces import ACCEL_MAX
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_STOP_T, STOP_RELEASE_ACCEL, STOP_SPEED, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
@@ -148,9 +149,12 @@ def test_warm_braking_history_cannot_release_during_approach_or_hold(protocol_ho
 
 
 @pytest.mark.parametrize('scenario', ['clear_cruise', 'departing_lead'])
-def test_actual_forward_reference_supplies_explicit_permission_to_leave_hold(scenario):
+def test_actual_forward_reference_supplies_explicit_permission_to_leave_hold(scenario, monkeypatch):
   planner, extension = make_planner(speed=0.0)
   planner.CP.pcmCruise = False
+  # Independently positive cruise request: isolate its entire response policy
+  # while retaining the real MPC, producer permission, owner and CAN output.
+  monkeypatch.setattr(planner.reference_planner.cruise_response, 'update', lambda *args, **kwargs: ACCEL_MAX)
   state = stopped_lead_state(0.0, gap=10.0)
   if scenario == 'clear_cruise':
     state['radarState'].leadOne.present = False
@@ -166,9 +170,12 @@ def test_actual_forward_reference_supplies_explicit_permission_to_leave_hold(sce
   assert command.actuators.accel <= -2.0 + 8.0 * 0.01 + 1e-6
 
 
-def test_distant_stationary_lead_uses_fresh_confirmation_before_a_small_positive_release():
+def test_distant_stationary_lead_uses_fresh_confirmation_before_a_small_positive_release(monkeypatch):
   planner, extension = make_planner(speed=0.0)
   planner.CP.pcmCruise = False
+  # The independent cruise response is positive before confirmation starts;
+  # the real lead trajectory still owns the small final request being timed.
+  monkeypatch.setattr(planner.reference_planner.cruise_response, 'update', lambda *args, **kwargs: ACCEL_MAX)
   state = stopped_lead_state(0.0, gap=7.0)
   consumer = held_consumer(planner, extension)
   previous_request = -2.0
@@ -306,13 +313,19 @@ def test_explicit_zero_speed_goal_never_requests_positive_drive(force_decel, spe
   assert all(item['GAS_COMMAND'] <= 0 for item in decoded_commands([command.actuators.accel]))
 
 
-def test_no_departure_permission_does_not_turn_nonzero_cruise_into_a_stop():
+def test_no_departure_permission_does_not_turn_nonzero_cruise_into_a_stop(monkeypatch):
   planner, extension = make_planner(speed=20.0)
   state = make_state(speed=20.0, target=10.0)
   state['radarState'].leadOne.present = False
   state['radarState'].leadTwo.present = False
+  # A lower cruise request no longer implies a particular internal MPC motion
+  # shape. Make this permission-negative fixture explicit, retaining the real
+  # negative cruise request and all stop/owner/output decisions below.
+  monkeypatch.setattr('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.reference_requests_departure',
+                      lambda *args: False)
   consumer = tracking_consumer(planner, extension)
   plan, command, motion = publish_and_consume(planner, state, consumer)
+  assert plan.aTarget < 0.0
   assert not plan.motionIntent.releaseAllowed
   assert not plan.motionIntent.reasons
   assert not plan.shouldStop

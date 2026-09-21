@@ -446,16 +446,21 @@ class UnifiedLongitudinalPlanner:
       # accepted trajectory; do not clear history on each new model identity.
       planner.mpc.discard_prepared_reference_cost()
       previous_reference_valid = False
-    # Ordinary ACC's speed response already belongs to CruiseResponse. Keep
-    # native lead risks and bounds, without a second speed target.
+    # Ordinary speed response already belongs to CruiseResponse, including
+    # admitted MOVING/FORWARD with an independent action cap. Keep native lead
+    # risks and bounds, without a second speed target.
     # Unadmitted raw model signs do not select between two cruise policies.
-    external_cruise = (
-      healthy and active and not reset and not forced_decel and not self.e2e_allowed
+    native_cruise_external = (
+      healthy and active and not reset and not forced_decel
       and policy.source == LongitudinalPlanSourceSP.cruise and cruise_speed > STOP_SPEED
-      and self.model_evidence is None and model_position is model_velocity is model_acceleration is None
+      and ((not self.e2e_allowed and self.model_evidence is None) or ordinary_model_motion)
+      and model_position is model_velocity is model_acceleration is None
     )
+    # Only ACC without admitted model facts may declare CRUISE_REQUEST.
+    # Ordinary model motion retains its separate ABSOLUTE_ACC contract.
+    external_cruise = native_cruise_external and not self.e2e_allowed and self.model_evidence is None
     reference = MpcReference(
-      cruise_speed=None if external_cruise else cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
+      cruise_speed=None if native_cruise_external else cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
       typed_model=None if ordinary_model_motion else self.model_evidence, allow_future_rest_reschedule=True,
       comfort_stop_distance=low_speed_follow_distance(speed),
