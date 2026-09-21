@@ -7,6 +7,7 @@ scheduling stay fixed; command differences are not changes in vehicle motion.
 
 import argparse
 from collections import Counter
+from dataclasses import replace
 import hashlib
 import inspect
 import json
@@ -321,6 +322,33 @@ def decode_motion_intent(plan):
   from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent
 
   return MotionIntent.from_message(plan.motionIntent)
+
+
+def consume_motion_reference(params, plan, consumer, available_ns, now_ns):
+  """Apply Controls' local facts and identity gate at the recorded control clock.
+
+  The carControl publication remains a consumption-time proxy. This does not
+  establish actual IPC arrival timing or replace a real-Controls replay.
+  """
+  intent = plan.intent
+  trajectory_identity = ()
+  if hasattr(intent, 'release_accel'):
+    from openpilot.common.realtime import DT_MDL
+    from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_departure_accel_from_plan
+    from openpilot.selfdrive.modeld.constants import ModelConstants
+
+    action_t = params.longitudinalActuatorDelay + DT_MDL
+    intent = replace(intent, release_accel=get_departure_accel_from_plan(
+      plan.speeds, plan.accels, ModelConstants.T_IDXS[:CONTROL_N], action_t, plan.reference.constraintAccel))
+    trajectory_identity = (plan.speeds, plan.accels, action_t)
+  check = consumer.consume(
+    plan.reference, available_ns, now_ns,
+    command_identity=(plan.model_mono, plan.accel, plan.stop, plan.solver_status, intent,
+                      float(plan.reference.accel), float(plan.reference.constraintAccel), bool(plan.reference.overridden),
+                      *trajectory_identity))
+  if check.valid and (intent.producer_instance_ns <= 0 or intent.producer_instance_ns != check.timing.instance_ns):
+    check = replace(check, valid=False, reason='intent_reference_instance_mismatch')
+  return intent, check
 
 
 def initialization_only(raw_can):
@@ -748,6 +776,7 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
   latest, valid, stamps, models, generated = {}, {}, {}, {}, {}
   planner = controller = longitudinal = None
   consumer_health = None
+  reference_timing = None
   params = params_sp = None
   pending_control = controller_input = None
   control_outputs = {}
@@ -769,6 +798,7 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
                   'controller_braking_health_protocol': None, 'controller_owner_protocol': None,
                   'motion_intent_version': MOTION_PROTOCOL_VERSION, 'planner_clock': None,
                   'controller_waiting_protocol': None, 'controller_standby_input_protocol': None,
+                  'controller_reference_timing_protocol': None, 'controller_local_departure_strength': None,
                   'shared_authority_helper': restrict_longitudinal_authority is not None,
                   'planner_inputs': 'exact_provider' if planner_inputs is not None else 'model_publication_snapshot'}
   motion = {'enabled': motion_enabled, 'mode': mode, 'generated_intent_versions': Counter(), 'accepted_intent_versions': Counter(),
@@ -861,6 +891,7 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
         controller = CarController({Bus.pt: DBC[params.carFingerprint][Bus.pt]}, params, controller_params_sp)
         progress.data['components']['carcontroller'] = True
         longitudinal = LongControl(params, controller_params_sp, **component_options(LongControl, unified, supervised))
+        reference_timing = None
         capabilities['controller_mode'] = require_component_mode(longitudinal, mode, 'controller')
         progress.data['components']['longcontrol'] = True
         capabilities['controller_solver_status'] = solver_status_supported(LongControl, motion_enabled)
@@ -939,9 +970,21 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
           solver_status = int(getattr(selected_plan, 'solverStatus', 0))
           intent_version = int(getattr(getattr(selected_plan, 'motionIntent', None), 'version', 0))
           intent_mode = int(getattr(getattr(selected_plan, 'motionIntent', None), 'mode', 0))
+          # Legacy and historical intent protocols have no measured-reference
+          # identity. A current decoded intent requires its full publication.
+          reference_protocol = motion_enabled and hasattr(intent, 'producer_instance_ns')
+          reference_payload = {}
+          if reference_protocol:
+            reference_payload = {'reference': selected_plan.reference, 'speeds': tuple(selected_plan.speeds),
+                                 'accels': tuple(selected_plan.accels)}
+          capabilities['controller_reference_timing_protocol'] = reference_protocol
+          capabilities['controller_local_departure_strength'] = reference_protocol and hasattr(intent, 'release_accel')
+          if reference_protocol:
+            capabilities['reference_consumer_clock'] = 'recorded_carControl_publication_proxy_not_recorded_control_entry_time'
           generated[message.logMonoTime] = SimpleNamespace(
             accel=target_accel, stop=target_stop, intent=intent, model_mono=model_mono,
-            valid=plan_valid, solver_status=solver_status, intent_version=intent_version, intent_mode=intent_mode)
+            valid=plan_valid, solver_status=solver_status, intent_version=intent_version, intent_mode=intent_mode,
+            **reference_payload)
           if window['start'] <= plan_time <= window['end']:
             coverage['matched_plans'] += 1
             solver_failures += int(planner.mpc.solution_status != 0)
@@ -1004,6 +1047,17 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
           model_mono = supplied_plan.model_mono if supplied_plan is not None else 0
           solver_status = supplied_plan.solver_status if supplied_plan is not None else 0
           plan_valid = bool(supplied_plan.valid and car_state_valid) if supplied_plan is not None else False
+          control_now_ns = int(message.logMonoTime)
+          reference_check = None
+          if motion_enabled and intent is not None and hasattr(intent, 'producer_instance_ns'):
+            if reference_timing is None:
+              from openpilot.selfdrive.controls.lib.reference_timing import ReferenceTimingConsumer
+
+              reference_timing = ReferenceTimingConsumer()
+            intent, reference_check = consume_motion_reference(params, supplied_plan, reference_timing, int(plan_mono), control_now_ns)
+            if not reference_check.clock_valid:
+              control_now_ns = 0
+          reference_valid = reference_check is None or reference_check.valid
           cruise_set = bool(np.isfinite(car_state.vCruise) and car_state.vCruise != V_CRUISE_UNSET)
           readiness_enabled = motion_enabled and capabilities['controller_readiness']
           can_standby = longitudinal.can_standby if readiness_enabled else False
@@ -1023,7 +1077,7 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
           owner_established = getattr(longitudinal, 'motion_owner_established', False)
           if type(owner_established) is not bool:
             raise ValueError('LongControl.motion_owner_established must be a boolean property')
-          plan_valid = plan_valid and not mode_mismatch
+          plan_valid = plan_valid and not mode_mismatch and reference_valid
           standby_input = bool(
             capabilities['controller_standby_input_protocol'] and readiness_enabled and can_standby and not mode_mismatch
             and intent is not None and intent.is_standby_valid() and solver_status == 0 and standby_input_health
@@ -1031,12 +1085,12 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
             and car_state.vCruise == V_CRUISE_UNSET)
           health = consumer_health.at(int(message.logMonoTime)) if consumer_health is not None else None
           braking_plan_valid = bool(
-            supplied_plan is not None and not mode_mismatch and car_state_valid and getattr(car_state, 'canValid', False)
+            supplied_plan is not None and reference_valid and not mode_mismatch and car_state_valid and getattr(car_state, 'canValid', False)
             and cruise_set and health is not None and all(health['carState'].values()) and all(health['longitudinalPlan'].values()))
           limits = CarInterface.get_pid_accel_limits(params, controller_params_sp, car_state.vEgo, car_state.vCruise / 3.6)
           control_options = {'intent': intent, 'plan_time_ns': int(plan_mono) if supplied_plan is not None else None,
                              'model_time_ns': model_mono if supplied_plan is not None else None,
-                             'now_ns': int(message.logMonoTime), 'plan_valid': plan_valid} if motion_enabled else {}
+                             'now_ns': control_now_ns, 'plan_valid': plan_valid} if motion_enabled else {}
           if capabilities['controller_solver_status'] and supplied_plan is not None:
             control_options['solver_status'] = solver_status
           if motion_enabled and capabilities['controller_braking_health_protocol']:
@@ -1108,8 +1162,13 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
               intent_identity = None if intent is None else (
                 intent.version, intent.reasons, intent.moving_lead, intent.release_allowed, intent.allow_creep, intent.valid,
                 getattr(intent, 'ready', None), getattr(intent, 'mode', 0), getattr(intent, 'braking_accel', None))
+              if intent is not None and hasattr(intent, 'release_accel'):
+                intent_identity += (intent.reference_kind, intent.rest_goal_rejected, intent.producer_instance_ns,
+                                    getattr(intent, 'response_kind', 0), intent.release_accel)
               identity = (int(message.logMonoTime), int(plan_mono), model_mono, target_accel, target_stop,
                           intent_identity, plan_valid, solver_status if supplied_plan is not None else None, inactive_no_plan)
+              if reference_check is not None:
+                identity += (control_now_ns, reference_check.valid, reference_check.clock_valid, reference_check.reason)
               intent_input_hash.update((json.dumps(identity, separators=(',', ':'), allow_nan=False) + '\n').encode())
           control_outputs[message.logMonoTime] = control.as_reader()
           control_row = {'t': timestamp, 'mono': int(message.logMonoTime), 'plan_mono': int(plan_mono),
