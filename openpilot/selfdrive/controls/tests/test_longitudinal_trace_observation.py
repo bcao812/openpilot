@@ -367,6 +367,44 @@ def test_trace_scalar_fast_path_preserves_numpy_subclass_and_nonfinite_values():
   assert json_value(frozen) == ((1 << 64) - 1, 7, 1.5, 4, 2.5, True, False, None, None, None, None)
 
 
+@pytest.mark.parametrize('scalar_type', [int, float, str])
+def test_json_scalar_mapping_subclasses_keep_mapping_semantics(scalar_type):
+  class ScalarMapping(scalar_type, Mapping):
+    def __getitem__(self, key):
+      if key != 'native':
+        raise KeyError(key)
+      return ((1 << 64) - 1, float('inf'))
+
+    def __iter__(self):
+      return iter(('native',))
+
+    def __len__(self):
+      return 1
+
+  assert json_value(ScalarMapping()) == {'native': ((1 << 64) - 1, None)}
+
+
+def test_json_scalar_subclasses_preserve_values_without_snapshot_normalization():
+  class IntSubclass(int):
+    pass
+
+  class FloatSubclass(float):
+    pass
+
+  values = (IntSubclass((1 << 64) - 1), FloatSubclass(-0.0), FloatSubclass('nan'),
+            FloatSubclass('inf'), FloatSubclass('-inf'), True, False, None)
+  converted = json_value(values)
+  assert converted[0] is values[0]
+  assert converted[1] is values[1]
+  assert json.dumps(converted, allow_nan=False) == '[18446744073709551615, -0.0, null, null, null, true, false, null]'
+
+
+@pytest.mark.parametrize('value', [object(), np.int64(7), np.uint64((1 << 64) - 1), np.float32(1.5)])
+def test_json_conversion_requires_nonbuiltin_scalars_to_be_frozen(value):
+  with pytest.raises(TypeError, match='immutable JSON snapshot'):
+    json_value(value)
+
+
 @pytest.mark.parametrize('invalid', [{1: 'non-text key'}, {'native': [object()]}])
 def test_trace_snapshot_still_rejects_invalid_nested_data(invalid):
   with pytest.raises(TypeError):

@@ -2,7 +2,7 @@ from dataclasses import FrozenInstanceError, replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
@@ -12,7 +12,8 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COST_E_DIM, CRASH_DISTANCE, LEAD_DANGER_FACTOR, MPC_INVALID_INPUT, MPC_INVALID_SOLUTION, MPC_SOLVER_ERROR, N,
-  T_DIFFS, T_IDXS, LongitudinalMpc, LongitudinalPlanSource, MpcReference, get_safe_obstacle_distance, get_T_FOLLOW,
+  T_DIFFS, T_IDXS, LongitudinalMpc, LongitudinalPlanSource, MpcReference, get_safe_obstacle_distance,
+  get_stopped_equivalence_factor, get_T_FOLLOW,
 )
 
 
@@ -317,6 +318,47 @@ def test_reference_none_preserves_legacy_params_and_solution_each_frame():
     for name in ('params', 'yref', 'x_sol', 'u_sol', 'a_prev'):
       np.testing.assert_array_equal(getattr(explicit, name), getattr(implicit, name))
     np.testing.assert_array_equal(explicit.yref, np.zeros((N+1, COST_E_DIM+1)))
+
+
+@pytest.mark.parametrize('mode', ['legacy', 'ordinary', 'cruise'])
+def test_lead_obstacle_columns_follow_current_presence_and_speed(mode):
+  planner = LongitudinalMpc()
+  reference = {'legacy': None, 'ordinary': MpcReference(None, comfort_stop_distance=4.0),
+               'cruise': MpcReference(20.0, comfort_stop_distance=4.0)}[mode]
+  radar = radar_state()
+  radar.leadOne.dRel, radar.leadOne.vLead = 30.0, 9.0
+  radar.leadTwo.dRel, radar.leadTwo.vLead = 25.0, 7.0
+  lead_sources = [LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1]
+  for speed, presence in ((12.0, (False, False)), (13.0, (True, False)), (14.0, (False, True)),
+                          (15.0, (True, True)), (16.0, (False, False))):
+    radar.leadOne.present, radar.leadTwo.present = presence
+    planner.set_cur_state(speed, 0.0)
+    planner.set_weights(prev_accel_constraint=False)
+    with patch.object(planner, 'observe_obstacles', wraps=planner.observe_obstacles) as observed:
+      planner.update(radar, reference=reference)
+    assert planner.solution_status == 0
+    obstacles, sources = observed.call_args.args
+    assert obstacles.shape == (N + 1, 3 if mode == 'cruise' else 2)
+    for column, lead in enumerate((radar.leadOne, radar.leadTwo)):
+      if not lead.present and (mode == 'cruise' or mode == 'ordinary' and any(presence)):
+        assert np.all(np.isinf(obstacles[:, column]))
+      else:
+        # Constant-speed lead geometry gives an independent expectation;
+        # absent slots use this frame's ego+10 m/s, including after lead loss.
+        distance, lead_speed = (lead.dRel, lead.vLead) if lead.present else (50.0, speed + 10.0)
+        expected = distance + lead_speed * T_IDXS + get_stopped_equivalence_factor(lead_speed)
+        np.testing.assert_allclose(obstacles[:, column], expected, rtol=0.0, atol=1e-12)
+    expected_sources = [LongitudinalPlanSource.cruise] * 2 if mode == 'ordinary' and not any(presence) else lead_sources
+    assert sources[:2] == expected_sources
+    expected_source = (LongitudinalPlanSource.lead1 if presence[1] else LongitudinalPlanSource.lead0 if presence[0]
+                       else LongitudinalPlanSource.lead0 if mode == 'legacy' else LongitudinalPlanSource.cruise)
+    assert planner.source == expected_source
+    np.testing.assert_array_equal(planner.params[:, 2], np.min(obstacles, axis=1))
+    if not any(presence):
+      np.testing.assert_array_equal(obstacles[:, 0], obstacles[:, 1])
+      # The native matrix retains two independent columns, even when its
+      # temporary input arrays share the identical no-lead continuation.
+      assert not np.shares_memory(obstacles[:, 0], obstacles[:, 1])
 
 
 @pytest.mark.parametrize('reference', [

@@ -139,6 +139,12 @@ def immutable_value(value):
 
 
 def json_value(value):
+  # Snapshot leaves are usually builtins; subclasses retain the Mapping precedence below.
+  value_type = type(value)
+  if value_type is float:
+    return value if math.isfinite(value) else None
+  if value is None or value_type is str or value_type is bool or value_type is int:
+    return value
   if isinstance(value, Mapping):
     return {key: json_value(item) for key, item in value.items()}
   if isinstance(value, (tuple, list)):

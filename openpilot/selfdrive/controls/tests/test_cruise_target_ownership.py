@@ -182,6 +182,40 @@ def test_ordinary_model_motion_keeps_one_cruise_goal_action_cap_and_measured_ini
   assert all(reference.cruise_speed is None for reference in references)
 
 
+@pytest.mark.parametrize('field', ['position', 'velocity', 'acceleration'])
+@pytest.mark.parametrize('invalid', ['empty', 'short', 'nan', 'inf'])
+def test_ordinary_model_motion_still_rejects_invalid_raw_fields_and_recovers(field, invalid):
+  planner, _, state = ordinary_case()
+  state['selfdriveState'].experimentalMode = True
+  planner.update(state, now_ns=advance(state, 0))
+  assert planner.motion_intent.valid
+  assert planner.reference_planner.model_reference_mode == 'action_capped_absolute'
+  assert planner.mpc._reference_epoch_ns is not None
+
+  raw_field = getattr(state['modelV2'], field)
+  original = list(raw_field.x)
+  damaged = [] if invalid == 'empty' else original[:-1] if invalid == 'short' else original.copy()
+  if invalid in ('nan', 'inf'):
+    damaged[5] = float(invalid)
+  raw_field.x = damaged
+  with patch.object(planner.mpc, 'update', wraps=planner.mpc.update) as update:
+    planner.update(state, now_ns=advance(state, 1))
+  # Ordinary motion has no native model trajectory, but every admitted raw
+  # field must still be valid before a new solve or movement authorization.
+  update.assert_not_called()
+  assert not planner.motion_intent.valid and not planner.motion_intent.release_allowed
+  assert planner.output_a_target <= 0.0
+  assert planner.reference_planner.model_evidence is None
+  assert not planner.reference_planner.reference_initialized
+  assert planner.mpc._reference_epoch_ns is None
+
+  raw_field.x = original
+  planner.update(state, now_ns=advance(state, 2))
+  assert planner.motion_intent.valid and planner.mpc.solution_status == 0
+  assert planner.reference_planner.model_reference_mode == 'action_capped_absolute'
+  assert planner.mpc._reference_epoch_ns is not None
+
+
 @pytest.mark.parametrize('condition', [
   'e2e_rest', 'e2e_no_forward', 'e2e_unknown_raw', 'e2e_bad_source', 'e2e_should_stop',
   'e2e_reset', 'e2e_inactive', 'e2e_unhealthy', 'e2e_force_decel', 'e2e_scc', 'scc', 'force_decel',
@@ -230,6 +264,12 @@ def test_risk_and_policy_domains_keep_their_existing_numeric_cruise_goal(conditi
     assert reference.cruise_speed == 0.0
   elif condition in ('e2e_rest', 'e2e_no_forward', 'e2e_unknown_raw', 'e2e_bad_source'):
     assert reference.typed_model is not None
+    if condition == 'e2e_bad_source':
+      assert reference.model_position is reference.model_velocity is reference.model_acceleration is None
+    else:
+      for values in (reference.model_position, reference.model_velocity, reference.model_acceleration):
+        assert values is not None and values.shape == T_IDXS.shape and np.all(np.isfinite(values))
+      assert np.all(reference.model_velocity >= 0.0)
     if condition == 'e2e_unknown_raw':
       assert reference.typed_model.unknown.reason == 'backward_then_forward_is_ambiguous'
     elif condition == 'e2e_bad_source':
