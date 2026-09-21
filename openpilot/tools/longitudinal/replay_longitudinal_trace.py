@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from openpilot.common.longitudinal_logging import SOURCE_PATHS as OBSERVATION_SOURCE_PATHS
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace, TRACE_EVENT
 from openpilot.tools.longitudinal.evaluate_pedal_full_routes import native_clean, exact_alignment, columns, compare_can
@@ -21,9 +22,10 @@ from openpilot.tools.longitudinal.replay_pedal_switches import (
 )
 
 
-# Selected disk-source identities for this comparison, not native-library or
-# loaded-code attestation. Keep path names: the two planner modules share a basename.
-SOURCE_PATHS = (
+# Reuse the observer's selected control/CAN/schema dependencies so a newly added
+# decision module cannot silently fall out of the comparison's parallel inventory.
+# These remain disk-source identities, not native-library or loaded-code attestation.
+SOURCE_PATHS = tuple(dict.fromkeys((*OBSERVATION_SOURCE_PATHS,
   'openpilot/tools/longitudinal/replay_longitudinal_trace.py',
   'openpilot/tools/longitudinal/replay_pedal_switches.py',
   'openpilot/tools/longitudinal/replay_pedal_full_routes.py',
@@ -31,33 +33,10 @@ SOURCE_PATHS = (
   'openpilot/tools/longitudinal/window_replay.py',
   'openpilot/tools/longitudinal/replay_longitudinal_regressions.py',
   'openpilot/tools/lib/logreader.py',
-  'openpilot/common/longitudinal_logging.py',
   'openpilot/common/logging_extra.py',
   'openpilot/common/swaglog.py',
-  'openpilot/common/constants.py',
-  'openpilot/common/pid.py',
-  'openpilot/common/filter_simple.py',
-  'openpilot/selfdrive/controls/lib/longitudinal_trace.py',
-  'openpilot/selfdrive/controls/lib/longitudinal_observation.py',
-  'openpilot/selfdrive/controls/lib/longitudinal_planner.py',
-  'openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py',
-  'openpilot/selfdrive/controls/lib/longcontrol.py',
-  'openpilot/selfdrive/controls/lib/motion_supervisor.py',
-  'openpilot/selfdrive/controls/lib/unified_longitudinal_planner.py',
-  'openpilot/selfdrive/controls/lib/longitudinal_mode.py',
   'openpilot/selfdrive/controls/lib/longitudinal_trajectory.py',
-  'openpilot/selfdrive/controls/lib/reference_timing.py',
-  'openpilot/selfdrive/controls/lib/launch_response.py',
-  'openpilot/selfdrive/controls/lib/cruise_response.py',
-  'openpilot/selfdrive/controls/lib/drive_helpers.py',
-  'openpilot/selfdrive/car/longitudinal_authority.py',
-  'openpilot/selfdrive/modeld/constants.py',
-  'openpilot/sunnypilot/selfdrive/controls/lib/longitudinal_planner.py',
-  'opendbc_repo/opendbc/car/honda/carcontroller.py',
-  'opendbc_repo/opendbc/car/honda/hondacan.py',
-  'opendbc_repo/opendbc/car/honda/interface.py',
-  'opendbc_repo/opendbc/car/honda/values.py',
-)
+)))
 
 
 def source_fingerprints():

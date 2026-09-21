@@ -182,6 +182,24 @@ def test_trace_evaluation_requires_bound_matching_source_identities(tmp_path, co
       replay.evaluate(selection, tmp_path)
 
 
+@pytest.mark.parametrize('dependency', [
+  'openpilot/selfdrive/controls/lib/model_reference.py',
+  'opendbc_repo/opendbc/can/packer.py',
+  'opendbc_repo/opendbc/dbc/generator/honda/_bosch_standstill.dbc',
+])
+def test_runtime_and_can_dependency_changes_invalidate_source_fingerprints(tmp_path, monkeypatch, dependency):
+  for relative in replay.SOURCE_PATHS:
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(relative)
+  monkeypatch.setattr(replay, '__file__', str(tmp_path / 'openpilot/tools/longitudinal/replay_longitudinal_trace.py'))
+  before = replay.source_fingerprints()
+  (tmp_path / dependency).write_text('modified runtime or wire dependency')
+  after = replay.source_fingerprints()
+  assert before.keys() == after.keys()
+  assert [name for name in before if before[name] != after[name]] == [dependency]
+
+
 @pytest.mark.parametrize('value', [None, True, -1, 2.0, '2'])
 def test_equal_but_unknown_or_invalid_modes_cannot_pass_trace_evaluation(tmp_path, value):
   selection, before_metadata, after_metadata, before, after = prepare_results(tmp_path)
