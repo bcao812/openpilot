@@ -1225,9 +1225,16 @@ class LongitudinalMpc:
           # This interval describes a_1, including for a node-two rest. A soft
           # acceleration slack cannot make an otherwise undeliverable stop
           # qualify. Use the same first-node envelope as later scheduling.
-          minimum = max(future_interval[0], float(self.params[1, 0]))
-          maximum = min(future_interval[1], float(self.params[1, 1]))
-          future_interval = (minimum, maximum) if minimum <= maximum else None
+          acceleration_min, acceleration_max = map(float, self.params[1, :2])
+          if future_interval[1] < acceleration_min or future_interval[0] > acceleration_max:
+            future_interval = None
+          else:
+            # The native interval already accounts for arithmetic cancellation
+            # at a closed face. Preserve that decision when both faces lie
+            # inside the physical envelope; do not grant the envelope itself
+            # an extra tolerance or replace a tiny reversed pair by a point.
+            future_interval = (max(future_interval[0], acceleration_min),
+                               min(future_interval[1], acceleration_max))
         if future_interval is None:
           # Reject this native destination, not every physical way to stop.
           # Existing later-node scheduling or explicit failure braking remains

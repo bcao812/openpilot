@@ -35,10 +35,10 @@ def solve(reference, speed=10.0, acceleration=0.0):
   return mpc
 
 
-def assert_actual_scheduled_stop(mpc):
+def assert_actual_scheduled_stop(mpc, *, expected_solve_calls=1):
   node = mpc.effective_rest_node
   assert node is not None and mpc.rest_goal.native_node < node <= N
-  assert mpc.diagnostic_solve_calls == 1
+  assert mpc.diagnostic_solve_calls == expected_solve_calls
   assert mpc.diagnostic_last_solver_return == mpc.last_solver_status == mpc.solution_status == 0
   assert mpc.effective_rest_state == 'satisfied'
   np.testing.assert_allclose(mpc.x_sol, integrate(mpc.x0, mpc.j_solution), atol=QP_FEASIBILITY_TOL, rtol=0.0)

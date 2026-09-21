@@ -129,7 +129,7 @@ def test_short_captured_history_never_accepts_rest_via_undeliverable_braking():
     assert np.all(acceleration >= bounds[:, 0] - QP_FEASIBILITY_TOL)
     assert np.all(acceleration <= bounds[:, 1] + QP_FEASIBILITY_TOL)
   assert mpc.rest_goal_state == 'infeasible'
-  assert_actual_scheduled_stop(mpc)
+  assert_actual_scheduled_stop(mpc, expected_solve_calls=len(APPROACH))
 
 
 def test_reachable_short_rest_keeps_its_original_goal_and_native_result():
@@ -173,3 +173,25 @@ def test_partly_deliverable_nominal_interval_keeps_a_native_stop_inside_the_enve
   assert mpc.effective_rest_node is None and mpc.rest_goal is reference.typed_model.rest_goal
   assert_acceleration_deliverable(mpc)
   np.testing.assert_allclose(mpc.x_sol, integrate(mpc.x0, mpc.j_solution), atol=QP_FEASIBILITY_TOL, rtol=0.0)
+
+
+def test_nominal_physical_envelope_does_not_inherit_the_arithmetic_face_allowance():
+  speed = 73.0 / 150.0
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=False)
+  mpc.set_cur_state(speed, 0.0)
+  _, maximum = mpc.future_rest_acceleration_interval(mpc.x0, 2)
+  physical_minimum = np.nextafter(maximum, np.inf)
+  reference = replace(typed_reference(stopping_curve(speed, 0.15), speed, cruise=5.0),
+                      accel_min=physical_minimum)
+  # An actually disjoint physical interval remains empty even by one ULP.
+  # This differs from preserving a roundoff face already admitted by the
+  # mathematical helper entirely inside an unchanged physical envelope.
+  assert physical_minimum > maximum
+  mpc.update(radar_state(), reference=reference)
+  assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_last_solver_return == 0
+  assert mpc.outcome is MpcOutcome.REST_REJECTED
+  assert mpc.rest_goal_reason == 'rest_goal_time_below_discrete_lower_bound'
+  assert mpc.solution_status == MPC_GOAL_INFEASIBLE
+  assert mpc.rest_goal_braking_accel == physical_minimum
+  np.testing.assert_array_equal(mpc.params[:, 0], physical_minimum)
