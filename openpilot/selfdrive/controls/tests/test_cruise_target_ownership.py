@@ -33,11 +33,15 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource as SPSource
 
 
-def ordinary_case(*, speed=12.0, target=12.3, trace=None):
+# Version 9's request domain; using its wire value lets pre-fix red tests run.
+CRUISE_REQUEST_KIND = 5
+
+
+def ordinary_case(*, speed=12.0, target=12.3, initial_accel=0.0, trace=None):
   params = Params()
   for name in ('SmartCruiseControlVision', 'SmartCruiseControlMap', 'DynamicExperimentalControl'):
     params.put_bool(name, False, block=True)
-  planner, owner = make_planner_owner(speed=speed, trace=trace)
+  planner, owner = make_planner_owner(speed=speed, initial_accel=initial_accel, trace=trace)
   return planner, owner, make_handover_state(speed=speed, target=target)
 
 
@@ -250,11 +254,10 @@ def test_decelerating_ego_below_set_speed_recovers_the_outer_cruise_request_thro
       assert plan.aTarget == min(plan.reference.accel, plan.reference.constraintAccel)
   assert previous > 0.0 and plan.reference.accel >= previous
   assert plan.aTarget == float(np.float32(previous)) and outputs[-1] > 0.0
-  # Preserve the existing hard-cap response contract instead of relabeling a
-  # native result that exceeds its independent acceleration limit.
-  maximum = get_max_accel(state['carState'].vEgo)
-  expected_kind = MotionResponseKind.ABSOLUTE_ACC if planner.reference_planner.reference_accel > maximum else MotionResponseKind.PURE_CRUISE
-  assert plan.motionIntent.responseKind == expected_kind
+  # The request is below both independent candidates. A native reference above
+  # its maximum does not make that nonbinding maximum own the final request.
+  assert previous < get_max_accel(state['carState'].vEgo)
+  assert plan.motionIntent.responseKind == CRUISE_REQUEST_KIND
   assert trace.failures == 0 and trace.queue
 
 
@@ -269,3 +272,125 @@ def test_absent_goal_keeps_native_failure_braking_envelope():
   assert plan.solverStatus == 4 and not plan.motionIntent.valid
   assert plan.motionIntent.brakingValid and plan.motionIntent.brakingAccel <= MPC_FAILURE_ACCEL
   assert all(ACCEL_MIN <= output <= MPC_FAILURE_ACCEL for output in outputs)
+
+
+def test_native_cruise_request_history_keeps_p_request_and_independent_departure_fact():
+  planner, owner, state = ordinary_case(speed=3.0, target=2.6)
+  previous, plans = 0.0, []
+  for frame in range(20):
+    if frame:
+      state['controlsState'].longControlState = owner.long_control_state
+    if frame == 8:
+      state['carState'].vCruise = state['carState'].vCruiseCluster = 3.4 * 3.6
+    plan, _ = consume(planner, owner, state, frame)
+    previous = get_cruise_accel(False, planner.cruise_target.speed, state['carState'].vEgo, previous,
+                                0.0, planner.CP, planner.dt, ACCEL_MAX, True)
+    assert plan.solverStatus == 0 and plan.motionIntent.valid
+    assert plan.aTarget == plan.reference.constraintAccel == float(np.float32(previous))
+    assert plan.reference.accel > plan.aTarget
+    assert previous < get_max_accel(state['carState'].vEgo)
+    assert plan.reference.constraintSource == LongitudinalPlanSource.cruise
+    plans.append(plan)
+  assert min(plan.aTarget for plan in plans) < 0.0 < max(plan.aTarget for plan in plans)
+  assert all(plan.motionIntent.responseKind == CRUISE_REQUEST_KIND for plan in plans)
+  # This is an independent native trajectory fact, not new permission supplied
+  # by the request domain. The owner still enforces target/freshness/HOLD gates.
+  assert all(plan.motionIntent.releaseAllowed and not plan.motionIntent.movingLead for plan in plans)
+
+
+def test_cruise_request_preserves_real_moving_lead_fact_without_manufacturing_it():
+  planner, owner, state = ordinary_case(speed=1.0, target=2.0)
+  lead = state['radarState'].leadOne
+  lead.present, lead.dRel, lead.vLead, lead.vRel = True, 20.0, 1.5, 0.5
+  lead.aLeadK, lead.aLeadTau, lead.modelProb = 0.0, 1.5, 0.99
+  state['modelV2'].action.desiredAcceleration = 2.0
+  plan, _ = consume(planner, owner, state, 0)
+  assert plan.motionIntent.valid and not plan.motionIntent.reasons
+  assert plan.reference.accel > plan.aTarget > 0.0
+  assert plan.motionIntent.movingLead and plan.motionIntent.releaseAllowed
+  assert plan.motionIntent.responseKind == CRUISE_REQUEST_KIND
+
+
+@pytest.mark.parametrize('case,expected_kind', [
+  ('request_wins', CRUISE_REQUEST_KIND), ('native_above_nonbinding_maximum', CRUISE_REQUEST_KIND),
+  ('native_tie', MotionResponseKind.PURE_CRUISE), ('native_stronger', MotionResponseKind.PURE_CRUISE),
+  ('hard_limit_tie', MotionResponseKind.ABSOLUTE_ACC), ('hard_limit_stronger', MotionResponseKind.ABSOLUTE_ACC),
+])
+def test_cruise_request_declaration_requires_the_strict_final_winner(case, expected_kind):
+  initial = 0.4 if case == 'hard_limit_stronger' else 0.0
+  planner, owner, state = ordinary_case(speed=3.0, target=4.0, initial_accel=initial)
+  first_request = get_cruise_accel(False, 4.0, 3.0, 0.0, 0.0, planner.CP, planner.dt, ACCEL_MAX, True)
+  maximum = None
+  native = 0.5
+  expected = first_request
+  if case == 'native_above_nonbinding_maximum':
+    native = 2.0
+  elif case == 'native_tie':
+    native = first_request
+  elif case == 'native_stronger':
+    native = expected = -0.5
+  elif case == 'hard_limit_tie':
+    native, maximum = 2.0, first_request
+  elif case == 'hard_limit_stronger':
+    native, maximum, expected = 2.0, 0.1, 0.1
+  # The native solver still runs. Only its readout/current limit dependencies
+  # are controlled to express exact ties, rather than relying on QP rounding.
+  with ExitStack() as stack:
+    stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration',
+                              return_value=native))
+    if maximum is not None:
+      stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.cruise_accel_limit', return_value=maximum))
+    plan, _ = consume(planner, owner, state, 0)
+  assert plan.solverStatus == 0 and plan.motionIntent.valid and not plan.motionIntent.reasons
+  assert plan.aTarget == float(np.float32(expected))
+  assert plan.aTarget == min(plan.reference.accel, plan.reference.constraintAccel)
+  assert plan.motionIntent.responseKind == expected_kind
+
+
+@pytest.mark.parametrize('domain,expected_kind', [('e2e', MotionResponseKind.ABSOLUTE_ACC), ('scc', MotionResponseKind.NONE)])
+def test_strict_cruise_scalar_winner_does_not_relabel_other_admitted_policy_domains(domain, expected_kind):
+  planner, owner, state = ordinary_case(speed=3.0, target=4.0)
+  with ExitStack() as stack:
+    stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=1.0))
+    if domain == 'e2e':
+      state['selfdriveState'].experimentalMode = True
+    else:
+      def selected_policy(instance, _state, _speed, accel, _cruise):
+        instance.source = SPSource.sccVision
+        instance.cruise_target = CruiseTarget(instance.source, 3.4, accel)
+        return instance.cruise_target
+
+      stack.enter_context(patch.object(LongitudinalPlannerSP, 'update_targets', new=selected_policy))
+    plan, _ = consume(planner, owner, state, 0)
+  assert plan.motionIntent.valid and plan.aTarget < plan.reference.accel
+  assert plan.motionIntent.responseKind == expected_kind
+
+
+def test_current_fcw_vetoes_cruise_request_domain_and_clearance_restores_it():
+  planner, owner, state = ordinary_case(speed=3.0, target=4.0)
+  native_update = planner.mpc.update
+  crash_count = 3
+
+  def update_current_crash_count(*args, **kwargs):
+    native_update(*args, **kwargs)
+    planner.mpc.crash_cnt = crash_count
+
+  with patch.object(planner.mpc, 'update', side_effect=update_current_crash_count), \
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.5):
+    risk, _ = consume(planner, owner, state, 0)
+    assert planner.fcw and risk.motionIntent.responseKind != CRUISE_REQUEST_KIND
+    assert risk.aTarget == risk.reference.constraintAccel < risk.reference.accel
+    crash_count = 0
+    cleared, _ = consume(planner, owner, state, 1)
+  assert not planner.fcw
+  assert cleared.aTarget == cleared.reference.constraintAccel < cleared.reference.accel
+  assert cleared.motionIntent.responseKind == CRUISE_REQUEST_KIND
+
+
+def test_coast_execution_contract_keeps_priority_over_general_cruise_request():
+  planner, owner, state = ordinary_case(speed=20.23, target=20.0, initial_accel=-0.23)
+  plan, _ = consume(planner, owner, state, 0)
+  assert plan.motionIntent.valid and plan.aTarget == float(np.float32(-0.19))
+  assert plan.reference.accel > plan.aTarget
+  assert plan.motionIntent.responseKind == MotionResponseKind.CRUISE_COAST
+  assert not plan.motionIntent.movingLead and not plan.motionIntent.releaseAllowed
