@@ -53,7 +53,7 @@ def test_empty_and_partial_final_phase():
   assert switch_metrics(pedal_rows([1] * 10 + [-1] * 7))['debounced'] == 0
 
 
-def reference_replay_fixture(monkeypatch, *, delay=0.5, constraint=1.6, repeat=None, fault=None, solver_status=0):
+def reference_replay_fixture(monkeypatch, *, delay=0.5, constraint=1.6, repeat=None, fault=None, solver_status=0, health_fault=None):
   from openpilot.cereal import messaging
   from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
   from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION
@@ -65,6 +65,8 @@ def reference_replay_fixture(monkeypatch, *, delay=0.5, constraint=1.6, repeat=N
   monkeypatch.setattr(replay, 'decode_motion_intent', decode)
   messages[0].carParams.longitudinalActuatorDelay = delay
   health = {service: {'seen': True, 'alive': True, 'frequency_ok': True} for service in ('carState', 'longitudinalPlan')}
+  if health_fault is not None:
+    health[health_fault[0]][health_fault[1]] = False
   monkeypatch.setattr(replay, 'ReplayConsumerHealth', lambda: SimpleNamespace(observe=lambda *args: None, at=lambda now: health))
   times = np.asarray(ModelConstants.T_IDXS[:CONTROL_N])
   publications = []
@@ -154,6 +156,18 @@ def test_replay_valid_reference_preserves_independent_braking_health(monkeypatch
   options = controls[0][1]
   assert not options['plan_valid']
   assert options['braking_plan_valid']
+
+
+@pytest.mark.parametrize('service', ['carState', 'longitudinalPlan'])
+@pytest.mark.parametrize('flag', ['seen', 'alive', 'frequency_ok'])
+def test_replay_reference_strength_requires_both_services_healthy(monkeypatch, service, flag):
+  messages, window, controls, _, _ = reference_replay_fixture(monkeypatch, health_fault=(service, flag))
+  replay_window(None, window, messages=messages, unified=True)
+  options = controls[0][1]
+  assert options['intent'].release_accel > 0.0
+  assert options['now_ns'] == 1_020_000_000
+  assert not options['plan_valid']
+  assert not options['braking_plan_valid']
 
 
 def test_replay_impossible_reference_clock_does_not_advance_the_motion_owner(monkeypatch):
