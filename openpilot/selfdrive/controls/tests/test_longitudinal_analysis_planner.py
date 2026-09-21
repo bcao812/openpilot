@@ -231,7 +231,8 @@ def test_unified_obstacle_summary_uses_existing_bounded_solver_inputs_without_an
   assert list(summary.times) == list(T_IDXS)
   assert list(summary.distances) == list(planner.mpc.params[:, 2])
   assert [source.raw for source in summary.sources] == [sources[index] for index in np.argmin(matrix, axis=1)]
-  assert summary.sourceRule == 'first_minimum_by_mpc_source_order'
+  assert reference.call_args.args[0].cruise_speed is None
+  assert summary.sourceRule == 'first_minimum_by_mpc_source_order;finite_continuation_without_cruise_speed_goal'
   assert str(summary.sources[0]) == 'cruise'  # equal initial cruise/e2e obstacles use the existing column order
 
 
