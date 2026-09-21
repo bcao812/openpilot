@@ -1442,6 +1442,7 @@ class LongitudinalMpc:
     obstacles = [lead_0_obstacle, lead_1_obstacle]
     sources = list(MPC_SOURCES)
     accel_min, accel_max = ACCEL_MIN, ACCEL_MAX
+    ordinary_continuation = False
     if reference is not None:
       try:
         with np.errstate(over='ignore', invalid='ignore'):
@@ -1481,7 +1482,7 @@ class LongitudinalMpc:
       return
 
     try:
-      self.observe_obstacles(x_obstacles, sources)
+      self.observe_obstacles(x_obstacles, sources, ordinary_continuation=ordinary_continuation)
     except Exception:
       self.diagnostic_obstacle_failures += 1
 
@@ -1495,7 +1496,7 @@ class LongitudinalMpc:
     else:
       self.crash_cnt = 0
 
-  def observe_obstacles(self, obstacles, sources):
+  def observe_obstacles(self, obstacles, sources, *, ordinary_continuation=False):
     """Copy a bounded constraint summary; never rebuild a reference or solve."""
     if not self.diagnostic_obstacles_enabled:
       return
@@ -1503,12 +1504,15 @@ class LongitudinalMpc:
       raise ValueError("Unexpected obstacle summary shape")
     selected = np.argmin(obstacles, axis=1)
     source_names = {value: name for name, value in LongitudinalPlanSource.schema.enumerants.items()}
+    source_rule = 'first_minimum_by_mpc_source_order'
+    if ordinary_continuation:
+      source_rule += ';finite_continuation_without_cruise_speed_goal'
     self.diagnostic_last_obstacle_summary = {
       'known': True,
       'times': tuple(float(value) for value in T_IDXS),
       'sources': tuple(source_names[sources[index]] for index in selected),
       'distances': tuple(float(value) for value in self.params[:,2]),
-      'sourceRule': 'first_minimum_by_mpc_source_order',
+      'sourceRule': source_rule,
     }
 
   def fail(self, status):
