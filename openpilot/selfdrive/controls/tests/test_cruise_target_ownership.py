@@ -15,6 +15,7 @@ import pytest
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.cereal import log
 from openpilot.common.params import Params
+from openpilot.selfdrive.controls.lib.cruise_response import get_cruise_coast_accel
 from openpilot.selfdrive.controls.lib.longcontrol import MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_STOP_DISTANCE, MPC_INVALID_INPUT, N, STOP_DISTANCE, T_IDXS, LongitudinalMpc, LongitudinalPlanSource, MpcReference,
@@ -61,6 +62,8 @@ def test_absent_cruise_goal_keeps_structured_bounds_finite_continuation_and_trut
     assert mpc.source == LongitudinalPlanSource.cruise
     assert mpc.diagnostic_last_obstacle_summary['known']
     assert set(mpc.diagnostic_last_obstacle_summary['sources']) == {'cruise'}
+    assert mpc.diagnostic_last_obstacle_summary['sourceRule'] == (
+      'first_minimum_by_mpc_source_order;finite_continuation_without_cruise_speed_goal')
   # Removing the speed goal must not turn the live distance-cost continuation
   # into a zero-reference request or an all-infinite invalid native problem.
   assert sample_reference_acceleration(mpc.a_solution, 0.55) > 0.0
@@ -78,6 +81,11 @@ def test_absent_cruise_goal_is_distinct_from_zero_and_does_not_erase_a_compatibl
     None, model_position=8.0 * T_IDXS, model_velocity=np.full(N + 1, 8.0), model_acceleration=np.zeros(N + 1)), following_time)
   assert len(model) == 1 and sources == [LongitudinalPlanSource.e2e]
   assert np.all(np.isfinite(model))
+  mpc.diagnostic_obstacles_enabled = True
+  for reference in (MpcReference(12.0), None):
+    mpc.update(radar_state(), reference=reference)
+    assert mpc.solution_status == 0
+    assert mpc.diagnostic_last_obstacle_summary['sourceRule'] == 'first_minimum_by_mpc_source_order'
 
 
 @pytest.mark.parametrize('invalid', [
@@ -125,7 +133,7 @@ def test_ordinary_acc_has_one_cruise_owner_independent_of_unadmitted_raw_model_s
   assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
 
 
-@pytest.mark.parametrize('condition', ['e2e', 'e2e_rest', 'e2e_no_forward', 'leadOne', 'leadTwo', 'scc', 'force_decel'])
+@pytest.mark.parametrize('condition', ['e2e', 'e2e_rest', 'e2e_no_forward', 'scc', 'force_decel'])
 def test_risk_and_policy_domains_keep_their_existing_numeric_cruise_goal(condition):
   planner, _, state = ordinary_case()
   with ExitStack() as stack:
@@ -140,10 +148,6 @@ def test_risk_and_policy_domains_keep_their_existing_numeric_cruise_goal(conditi
       elif condition == 'e2e_no_forward':
         state['modelV2'].velocity.x = [0.0] * len(times)
         state['modelV2'].position.x = [0.0] * len(times)
-    elif condition in ('leadOne', 'leadTwo'):
-      lead = getattr(state['radarState'], condition)
-      lead.present, lead.dRel, lead.vLead, lead.vRel = True, 25.0, 10.0, -2.0
-      lead.aLeadK, lead.aLeadTau, lead.modelProb = -1.0, 1.5, 0.99
     elif condition == 'scc':
       def selected_policy(instance, _state, _speed, accel, _cruise):
         instance.source = SPSource.sccVision
@@ -161,6 +165,65 @@ def test_risk_and_policy_domains_keep_their_existing_numeric_cruise_goal(conditi
     assert reference.cruise_speed == 0.0
   elif condition in ('e2e_rest', 'e2e_no_forward'):
     assert reference.typed_model is not None
+
+
+@pytest.mark.parametrize('slot,source,column', [
+  ('leadOne', LongitudinalPlanSource.lead0, 0), ('leadTwo', LongitudinalPlanSource.lead1, 1),
+])
+def test_ordinary_acc_keeps_the_real_lead_goal_source_and_immediate_stronger_braking(slot, source, column):
+  planner, owner, state = ordinary_case(speed=20.0, target=22.0)
+  state['carState'].aEgo = -1.0
+  lead = getattr(state['radarState'], slot)
+  # Retain the established native-risk input from the two-slot lead regression.
+  lead.present, lead.dRel, lead.vLead, lead.vRel = True, 44.0, 10.0, -10.0
+  lead.aLeadK, lead.aLeadTau, lead.modelProb = -1.5, 1.5, 0.99
+  with patch.object(planner.mpc, 'update', wraps=planner.mpc.update) as update, \
+       patch.object(planner.mpc, 'observe_obstacles', wraps=planner.mpc.observe_obstacles) as observed:
+    plan, outputs = consume(planner, owner, state, 0)
+  assert update.call_args.kwargs['reference'].cruise_speed is None
+  assert plan.solverStatus == 0 and plan.motionIntent.valid and not owner.motion_degraded
+  obstacles, sources = observed.call_args.args
+  assert obstacles.shape == (N + 1, 2) and sources[column] == source
+  assert np.all(np.isfinite(obstacles[:, column])) and np.all(np.isinf(obstacles[:, 1 - column]))
+  projected = planner.mpc.process_lead(lead)
+  expected = projected[:, 0] + get_stopped_equivalence_factor(projected[:, 1])
+  np.testing.assert_array_equal(planner.mpc.params[:, 2], expected)
+  assert plan.reference.source == plan.longitudinalPlanSource == source
+  assert plan.reference.accel < 0.0 < plan.reference.constraintAccel
+  assert plan.aTarget == plan.reference.accel
+  assert outputs[0] <= plan.aTarget and all(output <= plan.aTarget for output in outputs)
+
+
+@pytest.mark.parametrize('slot,source', [('leadOne', LongitudinalPlanSource.lead0), ('leadTwo', LongitudinalPlanSource.lead1)])
+def test_far_lead_appearance_loss_and_recovery_keep_one_cruise_response_and_existing_history(slot, source):
+  planner, owner, state = ordinary_case(speed=20.23, target=20.0)
+  lead = getattr(state['radarState'], slot)
+  lead.dRel, lead.vLead, lead.vRel = 100.0, state['carState'].vEgo, 0.0
+  lead.aLeadK, lead.aLeadTau, lead.modelProb = 0.0, 1.5, 0.99
+  previous, instance = 0.0, None
+  with patch.object(planner.mpc, 'update', wraps=planner.mpc.update) as update:
+    for frame in range(20):
+      lead.present = 4 <= frame < 16 and not 8 <= frame < 10
+      if frame:
+        state['controlsState'].longControlState = owner.long_control_state
+      if frame == 12:
+        state['carState'].vCruise = state['carState'].vCruiseCluster = 20.2 * 3.6
+      plan, _ = consume(planner, owner, state, frame)
+      assert update.call_args.kwargs['reference'].cruise_speed is None
+      assert plan.solverStatus == 0 and plan.motionIntent.valid and not owner.motion_degraded
+      previous = get_cruise_accel(False, planner.cruise_target.speed, state['carState'].vEgo, previous,
+                                  0.0, planner.CP, planner.dt, ACCEL_MAX, True)
+      # No-lead coast keeps its existing P guards; a real lead withdraws it.
+      command = previous if lead.present else get_cruise_coast_accel(previous)
+      assert planner.reference_planner.reference_accel > command
+      assert plan.aTarget == plan.reference.constraintAccel == float(np.float32(command))
+      assert plan.reference.source == (source if lead.present else LongitudinalPlanSource.cruise)
+      assert plan.longitudinalPlanSource == LongitudinalPlanSource.cruise
+      if instance is None:
+        instance = plan.reference.producerInstanceMonoTime
+      assert plan.reference.producerInstanceMonoTime == instance
+      if frame:
+        assert planner.mpc.diagnostic_reference_weights[0, 4] > 0.0
 
 
 def test_decelerating_ego_below_set_speed_recovers_the_outer_cruise_request_through_live_native_arbitration():
