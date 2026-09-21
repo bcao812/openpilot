@@ -1084,6 +1084,9 @@ def _replay_window(cache, window, *, recorded_plan, messages, row_sink, strict, 
             and getattr(car_state, 'canValid', False) and np.isfinite(car_state.vEgo) and np.isfinite(car_state.aEgo)
             and car_state.vCruise == V_CRUISE_UNSET)
           health = consumer_health.at(int(message.logMonoTime)) if consumer_health is not None else None
+          if reference_check is not None:
+            plan_valid = bool(plan_valid and health is not None
+                              and all(health['carState'].values()) and all(health['longitudinalPlan'].values()))
           braking_plan_valid = bool(
             supplied_plan is not None and reference_valid and not mode_mismatch and car_state_valid and getattr(car_state, 'canValid', False)
             and cruise_set and health is not None and all(health['carState'].values()) and all(health['longitudinalPlan'].values()))
