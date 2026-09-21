@@ -31,7 +31,7 @@ class TestSunnylinkRemoval(OpenpilotTestCase):
       with self.subTest(process=name):
         self.assertTrue(managed_processes[name].should_run(True, params, car_params))
         self.assertFalse(managed_processes[name].should_run(False, params, car_params))
-    for name in ("models_manager", "mapd_manager", "statsd", "logmessaged"):
+    for name in ("models_manager", "statsd", "logmessaged"):
       for started in (False, True):
         self.assertTrue(managed_processes[name].should_run(started, params, car_params))
     for name in ("manage_athenad", "uploader", "modeld", "modeld_tinygrad", "pandad", "updated"):

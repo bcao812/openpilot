@@ -9,7 +9,6 @@ import pyray as rl
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import DeveloperUiRenderer, DeveloperUiState, get_bottom_dev_ui_offset
-from openpilot.selfdrive.ui.sunnypilot.onroad.road_name import RoadNameRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.rocket_fuel import RocketFuel
 from openpilot.selfdrive.ui.sunnypilot.onroad.speed_limit import SpeedLimitRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.smart_cruise_control import SmartCruiseControlRenderer
@@ -29,7 +28,6 @@ class HudRendererSP(HudRenderer):
   def __init__(self):
     super().__init__()
     self.developer_ui = DeveloperUiRenderer()
-    self.road_name_renderer = RoadNameRenderer()
     self.rocket_fuel = RocketFuel()
     self.speed_limit_renderer = SpeedLimitRenderer()
     self.smart_cruise_control_renderer = SmartCruiseControlRenderer()
@@ -54,7 +52,6 @@ class HudRendererSP(HudRenderer):
     self.speed_cluster = ui_state.sm['carState'].cruiseState.speedCluster * self.speed_conv
 
     super()._update_state()
-    self.road_name_renderer.update()
     self.speed_limit_renderer.update()
     self.smart_cruise_control_renderer.update()
     self.turn_signal_controller.update()
@@ -134,11 +131,10 @@ class HudRendererSP(HudRenderer):
     # what the host profile predicted. The host had it at 336 us and third place. The ratio is
     # 7.1x, which is the measured host->A75 factor for PYTHON work almost exactly, while
     # model_renderer scaled at only 2.2x because it is numpy. So the host's ORDERING did not
-    # transfer, and these nine marks are what say which of the eight renderers below is paying.
+    # transfer, and these marks identify the cost of each renderer below.
     #
-    # They cost: ~0.8 us per boundary on x86, ~4.8 us on this device, so nine of them are ~1.7%
-    # of a 7728 us frame. That is a real perturbation and it is why they are diagnostic rather
-    # than permanent -- take them out once the answer is known.
+    # They cost: ~0.8 us per boundary on x86, ~4.8 us on this device. That is a real perturbation
+    # and it is why they are diagnostic rather than permanent -- take them out once the answer is known.
     super()._render(rect)
     gui_app.mark_phase('hud_base')
 
@@ -151,8 +147,6 @@ class HudRendererSP(HudRenderer):
 
     self.developer_ui.render(rect)
     gui_app.mark_phase('hud_devui')
-    self.road_name_renderer.render(rect)
-    gui_app.mark_phase('hud_roadname')
     self.speed_limit_renderer.render(rect)
     gui_app.mark_phase('hud_speedlimit')
     self.smart_cruise_control_renderer.render(rect)

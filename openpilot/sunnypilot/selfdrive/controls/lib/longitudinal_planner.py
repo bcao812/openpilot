@@ -65,17 +65,16 @@ class LongitudinalPlannerSP:
     self.scc.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise)
 
     # Speed Limit Resolver
-    self.resolver.update(v_ego, sm)
+    self.resolver.update(sm)
 
     # Speed Limit Assist
     has_speed_limit = self.resolver.speed_limit_valid or self.resolver.speed_limit_last_valid
     self.sla.update(long_enabled, long_override, v_ego, a_ego, v_cruise_cluster, self.resolver.speed_limit,
-                    self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp)
+                    self.resolver.speed_limit_final_last, has_speed_limit, self.events_sp)
 
     targets = {
       LongitudinalPlanSource.cruise: (v_cruise, a_ego),
       LongitudinalPlanSource.sccVision: (self.scc.vision.output_v_target, self.scc.vision.output_a_target),
-      LongitudinalPlanSource.sccMap: (self.scc.map.output_v_target, self.scc.map.output_a_target),
       LongitudinalPlanSource.speedLimitAssist: (self.sla.output_v_target, self.sla.output_a_target),
     }
 
@@ -123,13 +122,6 @@ class LongitudinalPlannerSP:
     sccVision.maxPredictedLateralAccel = float(self.scc.vision.max_pred_lat_acc)
     sccVision.enabled = self.scc.vision.is_enabled
     sccVision.active = self.scc.vision.is_active
-    # Map Control
-    sccMap = smartCruiseControl.map
-    sccMap.state = self.scc.map.state
-    sccMap.vTarget = float(self.scc.map.output_v_target)
-    sccMap.aTarget = float(self.scc.map.output_a_target)
-    sccMap.enabled = self.scc.map.is_enabled
-    sccMap.active = self.scc.map.is_active
 
     # Speed Limit
     speedLimit = longitudinalPlanSP.speedLimit
@@ -141,7 +133,6 @@ class LongitudinalPlannerSP:
     resolver.speedLimitValid = self.resolver.speed_limit_valid
     resolver.speedLimitLastValid = self.resolver.speed_limit_last_valid
     resolver.speedLimitOffset = float(self.resolver.speed_limit_offset)
-    resolver.distToSpeedLimit = float(self.resolver.distance)
     resolver.source = self.resolver.source
     assist = speedLimit.assist
     assist.state = self.sla.state

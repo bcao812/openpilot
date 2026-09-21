@@ -16,19 +16,14 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode as SpeedLimitMode
 from openpilot.common.hardware import HARDWARE
 from openpilot.system.ui.lib.application import gui_app, FontWeight
-from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.sunnypilot.lib.utils import AlertFadeAnimator
 from openpilot.system.ui.widgets import Widget
 
-METER_TO_FOOT = 3.28084
-METER_TO_MILE = 0.000621371
-AHEAD_THRESHOLD = 5
 SET_SPEED_NA = 255
 KM_TO_MILE = 0.621371
 
 AssistState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
-SpeedLimitSource = custom.LongitudinalPlanSP.SpeedLimit.Source
 
 
 @dataclass(frozen=True)
@@ -38,8 +33,6 @@ class Colors:
   RED = rl.Color(235, 32, 32, 255)
   GREY = rl.Color(145, 155, 149, 255)
   DARK_GREY = rl.Color(77, 77, 77, 255)
-  SUB_BG = rl.Color(0, 0, 0, 180)
-  MUTCD_LINES = rl.Color(255, 255, 255, 100)
 
 
 class IconSide(StrEnum):
@@ -101,14 +94,7 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
     self.speed_limit_valid = False
     self.speed_limit_last_valid = False
     self.speed_limit_final_last = 0.0
-    self.speed_limit_source = SpeedLimitSource.none
     self.speed_limit_assist_state = AssistState.disabled
-
-    self.speed_limit_ahead = 0.0
-    self.speed_limit_ahead_dist = 0.0
-    self.speed_limit_ahead_dist_prev = 0.0
-    self.speed_limit_ahead_valid = False
-    self.speed_limit_ahead_frame = 0
 
     self.is_cruise_set: bool = False
     self.is_cruise_available: bool = True
@@ -118,7 +104,6 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
 
     self.font_bold = gui_app.font(FontWeight.BOLD)
     self.font_demi = gui_app.font(FontWeight.SEMI_BOLD)
-    self.font_norm = gui_app.font(FontWeight.NORMAL)
 
   @property
   def speed_conv(self):
@@ -143,21 +128,7 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       self.speed_limit_valid = resolver.speedLimitValid
       self.speed_limit_last_valid = resolver.speedLimitLastValid
       self.speed_limit_final_last = resolver.speedLimitFinalLast * self.speed_conv
-      self.speed_limit_source = resolver.source
       self.speed_limit_assist_state = assist.state
-
-    if sm.updated["liveMapDataSP"]:
-      lmd = sm["liveMapDataSP"]
-      self.speed_limit_ahead_valid = lmd.speedLimitAheadValid
-      self.speed_limit_ahead = lmd.speedLimitAhead * self.speed_conv
-      self.speed_limit_ahead_dist = lmd.speedLimitAheadDistance
-
-      if self.speed_limit_ahead_dist < self.speed_limit_ahead_dist_prev and self.speed_limit_ahead_frame < AHEAD_THRESHOLD:
-        self.speed_limit_ahead_frame += 1
-      elif self.speed_limit_ahead_dist > self.speed_limit_ahead_dist_prev and self.speed_limit_ahead_frame > 0:
-        self.speed_limit_ahead_frame -= 1
-
-      self.speed_limit_ahead_dist_prev = self.speed_limit_ahead_dist
 
     controls_state = sm['controlsState']
     car_state = sm["carState"]
@@ -194,8 +165,6 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       self._draw_sign_main(sign_rect, alpha)
       if self.speed_limit_assist_state == AssistState.preActive:
         self._draw_pre_active_arrow(sign_rect)
-      else:
-        self._draw_ahead_info(sign_rect)
 
   def _draw_sign_main(self, rect, alpha=1.0):
     speed_limit_warning_enabled = ui_state.speed_limit_mode is not None and ui_state.speed_limit_mode >= SpeedLimitMode.warning
@@ -284,45 +253,3 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
 
       f_scale = 0.6 if len(sub) < 3 else 0.475
       self._draw_text_centered(self.font_bold, sub, int(box_sz * f_scale), rl.Vector2(s_rect.x + box_sz / 2, s_rect.y + box_sz / 2), white)
-
-  def _draw_ahead_info(self, sign_rect):
-    source_is_map = self.speed_limit_source == SpeedLimitSource.map
-    valid = self.speed_limit_ahead_valid and self.speed_limit_ahead > 0 and self.speed_limit_ahead != self.speed_limit
-
-    if not (valid and source_is_map):
-      return
-
-    rect = rl.Rectangle(sign_rect.x + (sign_rect.width - 170) / 2, sign_rect.y + sign_rect.height + 10, 170, 160)
-    rl.draw_rectangle_rounded(rect, 0.35, 10, Colors.SUB_BG)
-    rl.draw_rectangle_rounded_lines_ex(rect, 0.35, 10, 3, Colors.MUTCD_LINES)
-
-    mid_x = rect.x + rect.width / 2
-    self._draw_text_centered(self.font_demi, "AHEAD", 40, rl.Vector2(mid_x, rect.y + 28), Colors.GREY)
-    self._draw_text_centered(self.font_bold, str(round(self.speed_limit_ahead)), 70, rl.Vector2(mid_x, rect.y + 82), Colors.WHITE)
-    self._draw_text_centered(self.font_norm, self._format_dist(self.speed_limit_ahead_dist), 36, rl.Vector2(mid_x, rect.y + 134), Colors.GREY)
-
-  @staticmethod
-  def _format_dist(d):
-    # metric
-    if ui_state.is_metric:
-      if d < 50:
-        return tr("Near")
-
-      if d >= 1000:
-        return f"{d / 1000:.1f} km"
-
-      d_rounded = round(d, -1) if d < 200 else round(d, -2)
-      return f"{int(d_rounded)} m"
-
-    # imperial
-    d_ft = d * METER_TO_FOOT
-    if d_ft < 100:
-      return tr("Near")
-
-    if d_ft >= 900:
-      return f"{d * METER_TO_MILE:.1f} mi"
-
-    if d_ft < 500:
-      return f"{int(round(d_ft / 50) * 50)} ft"
-
-    return f"{int(round(d_ft / 100) * 100)} ft"

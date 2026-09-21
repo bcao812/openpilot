@@ -5,16 +5,14 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 from collections.abc import Callable
-from enum import IntEnum
 
 import pyray as rl
-from openpilot.selfdrive.ui.sunnypilot.layouts.settings.cruise_sub_layouts.speed_limit_policy import SpeedLimitPolicyLayout
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode as SpeedLimitMode
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import OffsetType as SpeedLimitOffsetType
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.widgets import get_highlighted_description
-from openpilot.system.ui.sunnypilot.widgets.list_view import multiple_button_item_sp, option_item_sp, simple_button_item_sp, LineSeparatorSP
+from openpilot.system.ui.sunnypilot.widgets.list_view import multiple_button_item_sp, option_item_sp, LineSeparatorSP
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.network import NavButton
 from openpilot.system.ui.widgets.scroller_tici import Scroller
@@ -36,20 +34,11 @@ SPEED_LIMIT_OFFSET_DESCRIPTIONS = [
 ]
 
 
-class PanelType(IntEnum):
-  SETTINGS = 0
-  POLICY = 1
-
-
 class SpeedLimitSettingsLayout(Widget):
   def __init__(self, back_btn_callback: Callable):
     super().__init__()
-    self._current_panel = PanelType.SETTINGS
-
     self._back_button = NavButton(tr("Back"))
     self._back_button.set_click_callback(back_btn_callback)
-
-    self._policy_layout = SpeedLimitPolicyLayout(lambda: self._set_current_panel(PanelType.SETTINGS))
 
     items = self._initialize_items()
     self._scroller = Scroller(items, line_separator=False, spacing=0)
@@ -61,12 +50,6 @@ class SpeedLimitSettingsLayout(Widget):
       buttons=SPEED_LIMIT_MODE_BUTTONS,
       param="SpeedLimitMode",
       button_width=380,
-    )
-
-    self._source_button = simple_button_item_sp(
-      button_text=lambda: tr("Customize Source"),
-      button_width=720,
-      callback=lambda: self._set_current_panel(PanelType.POLICY)
     )
 
     self._speed_limit_offset_type = multiple_button_item_sp(
@@ -89,17 +72,10 @@ class SpeedLimitSettingsLayout(Widget):
     items = [
       self._speed_limit_mode,
       LineSeparatorSP(40),
-      self._source_button,
-      LineSeparatorSP(40),
       self._speed_limit_offset_type,
       self._speed_limit_value_offset
     ]
     return items
-
-  def _set_current_panel(self, panel: PanelType):
-    self._current_panel = panel
-    if panel == PanelType.POLICY:
-      self._policy_layout.show_event()
 
   @staticmethod
   def _get_mode_description():
@@ -158,10 +134,6 @@ class SpeedLimitSettingsLayout(Widget):
     self._speed_limit_value_offset.set_visible(offset_type != int(SpeedLimitOffsetType.off))
 
   def _render(self, rect):
-    if self._current_panel == PanelType.POLICY:
-      self._policy_layout.render(rect)
-      return
-
     self._back_button.set_position(self._rect.x, self._rect.y + 20)
     self._back_button.render()
 
@@ -169,10 +141,8 @@ class SpeedLimitSettingsLayout(Widget):
     self._scroller.render(content_rect)
 
   def show_event(self):
-    self._current_panel = PanelType.SETTINGS
     self._scroller.show_event()
     self._speed_limit_mode.show_description(True)
 
   def hide_event(self):
-    self._current_panel = PanelType.SETTINGS
     self._scroller.hide_event()

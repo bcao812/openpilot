@@ -91,7 +91,6 @@ def _cleanup_unsupported_params(CP: structs.CarParams, CP_SP: structs.CarParamsS
     params.remove("DynamicExperimentalControl")
     params.remove("CustomAccIncrementsEnabled")
     params.remove("SmartCruiseControlVision")
-    params.remove("SmartCruiseControlMap")
 
   set_speed_limit_assist_availability(CP, CP_SP, params)
 

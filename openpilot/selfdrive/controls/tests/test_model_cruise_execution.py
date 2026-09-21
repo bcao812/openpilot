@@ -46,7 +46,7 @@ def model_request(kind, **changes):
 
 def model_case(kind, *, target=4.0):
   params = Params()
-  for name in ('SmartCruiseControlVision', 'SmartCruiseControlMap', 'DynamicExperimentalControl'):
+  for name in ('SmartCruiseControlVision', 'DynamicExperimentalControl'):
     params.put_bool(name, False, block=True)
   planner, control = make_planner_owner(speed=3.0)
   state = make_handover_state(speed=3.0, target=target, experimental=True)

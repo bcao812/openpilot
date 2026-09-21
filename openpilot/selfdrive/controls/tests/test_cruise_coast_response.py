@@ -212,7 +212,7 @@ def test_unaccepted_coast_does_not_weaken_an_owned_brake(failure):
 
 def test_native_coast_oscillation_keeps_p_plateau_through_wire_integrator_and_can():
   params = Params()
-  for name in ('SmartCruiseControlVision', 'SmartCruiseControlMap', 'DynamicExperimentalControl'):
+  for name in ('SmartCruiseControlVision', 'DynamicExperimentalControl'):
     params.put_bool(name, False, block=True)
   speed = 20.23
   planner, owner = make_planner_owner(speed=speed)

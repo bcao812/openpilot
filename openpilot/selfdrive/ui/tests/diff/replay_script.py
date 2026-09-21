@@ -347,7 +347,6 @@ def build_mici_script(pm: PubMaster, main_layout, script: Script) -> None:
     lambda: scroll_through_cases(device_cases),
     lambda: script.wait(WAIT_SHORT),  # software
     lambda: script.wait(WAIT_SHORT),  # pairing
-    lambda: run_actions(lambda: swipe_up(height * 3), lambda: swipe_down(height * 3)),  # firehose (scroll down and back up)
     lambda: scroll_through_cases(developer_cases),
   ]
 
@@ -505,9 +504,6 @@ def build_tizi_script(pm: PubMaster, main_layout, script: Script) -> None:
   script.click(1600, 900)  # confirm selection
   script.click(2000, 800)  # uninstall
   script.click(650, 750)  # cancel uninstall
-
-  # === Settings - Firehose ===
-  select_settings_panel("FIREHOSE")
 
   # === Settings - Developer (set CarParamsPersistent first) ===
   script.setup(setup_developer_params, wait_after=0)

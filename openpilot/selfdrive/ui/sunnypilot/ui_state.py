@@ -34,7 +34,7 @@ class UIStateSP:
     self.is_sp_release: bool = self.params.get_bool("IsReleaseSpBranch")
     self.sm_services_ext = [
       "modelManagerSP", "selfdriveStateSP", "longitudinalPlanSP",
-      "gpsLocation", "lateralTorqueParameters", "carStateSP", "liveMapDataSP", "carParamsSP", "lateralDelay"
+      "gpsLocation", "lateralTorqueParameters", "carStateSP", "carParamsSP", "lateralDelay"
     ]
 
     self.screensaver = ScreenSaverSP(params=self.params)
@@ -51,7 +51,6 @@ class UIStateSP:
     self.onroad_brightness_timer: int = 0
     self.onroad_brightness_timer_param: int = 0
     self.rainbow_path: bool = False
-    self.road_name_toggle: bool = False
     self.rocket_fuel: bool = False
     self.speed_limit_mode = None
     self.standstill_timer: bool = False
@@ -157,7 +156,6 @@ class UIStateSP:
     self.onroad_brightness = int(float(self.params.get("OnroadScreenOffBrightness", return_default=True)))
     self.onroad_brightness_timer_param = self.params.get("OnroadScreenOffTimer", return_default=True)
     self.rainbow_path = self.params.get_bool("RainbowMode")
-    self.road_name_toggle = self.params.get_bool("RoadNameToggle")
     self.rocket_fuel = self.params.get_bool("RocketFuel")
     self.speed_limit_mode = self.params.get("SpeedLimitMode", return_default=True)
     self.standstill_timer = self.params.get_bool("StandstillTimer")
@@ -228,7 +226,6 @@ class UIStateSP:
     if not (has_long or self.has_icbm):
       self.params.remove("CustomAccIncrementsEnabled")
       self.params.remove("SmartCruiseControlVision")
-      self.params.remove("SmartCruiseControlMap")
 
 
 class DeviceSP:

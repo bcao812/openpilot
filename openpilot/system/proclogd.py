@@ -278,7 +278,7 @@ def main() -> NoReturn:
   # there is idle time -- which is the BIG cluster. Measured with _logs/procs.py --affinity
   # over the route corpus: 5.2% of a core, sampled on core 5 in 61% of procLog frames and core
   # 4 in 29%, i.e. exactly the two cores already at 74.0% and 81.2%. Every comparable daemon
-  # (paramsd, lagd, torqued, calibrationd, dmonitoringd, mapd_manager) pins [0, 1, 2, 3] at
+  # (paramsd, lagd, torqued, calibrationd, dmonitoringd) pins [0, 1, 2, 3] at
   # priority 5; this just joins them. Scanning /proc at 0.5 Hz has no deadline.
   config_realtime_process([0, 1, 2, 3], 5)
 

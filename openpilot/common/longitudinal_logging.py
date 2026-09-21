@@ -18,7 +18,7 @@ UINT64_MAX = (1 << 64) - 1
 CHECK_FLAGS = {"valid": 1, "alive": 2, "freq_ok": 4, "seen": 8, "updated": 16}
 PLANNER_INPUTS = (
   "carState", "radarState", "modelV2", "controlsState", "carControl", "selfdriveState", "vehicleParameters",
-  "selfdriveStateSP", "carStateSP", "liveMapDataSP", "gpsLocationExternal", "gpsLocation",
+  "selfdriveStateSP", "carStateSP", "gpsLocationExternal", "gpsLocation",
 )
 CONTROL_INPUTS = (
   "carState", "longitudinalPlan", "modelV2", "selfdriveState", "onroadEvents", "carOutput", "longitudinalPlanSP",
@@ -64,7 +64,6 @@ SOURCE_PATHS = (
   "openpilot/sunnypilot/selfdrive/controls/lib/longitudinal_planner.py",
   "openpilot/sunnypilot/selfdrive/controls/lib/dec/dec.py",
   "openpilot/sunnypilot/selfdrive/controls/lib/smart_cruise_control/smart_cruise_control.py",
-  "openpilot/sunnypilot/selfdrive/controls/lib/smart_cruise_control/map_controller.py",
   "openpilot/sunnypilot/selfdrive/controls/lib/smart_cruise_control/vision_controller.py",
   "openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_resolver.py",
   "openpilot/sunnypilot/selfdrive/controls/lib/speed_limit/speed_limit_assist.py",

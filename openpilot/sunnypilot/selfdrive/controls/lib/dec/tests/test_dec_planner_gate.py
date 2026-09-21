@@ -49,7 +49,7 @@ class MockSubMaster(dict):
 def build_sm(experimental_mode: bool) -> MockSubMaster:
   services = {}
   for service in ("radarState", "controlsState", "vehicleParameters", "carStateSP",
-                  "liveMapDataSP", "gpsLocationExternal", "gpsLocation"):
+                  "gpsLocationExternal", "gpsLocation"):
     services[service] = getattr(messaging.new_message(service), service)
 
   car_state = messaging.new_message('carState')

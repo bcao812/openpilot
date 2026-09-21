@@ -4,144 +4,116 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
-import random
-import time
-
-from openpilot.common.parameterized import parameterized
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from openpilot.cereal import custom
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE
-
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver, ALL_SOURCES
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy
+from openpilot.common.constants import CV
+from openpilot.common.parameterized import parameterized
+from openpilot.common.params import Params
+from openpilot.common.realtime import DT_MDL
 from openpilot.common.test import OpenpilotTestCase
+from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import OffsetType
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver
 
 SpeedLimitSource = custom.LongitudinalPlanSP.SpeedLimit.Source
 
 
-def create_mock(properties, mocker):
-  mock = mocker.MagicMock()
-  for _property, value in properties.items():
-    setattr(mock, _property, value)
-  return mock
+def car_state(speed_limit):
+  # Deliberately omit map and GPS subscriptions: the car source must stand alone.
+  return {'carStateSP': SimpleNamespace(speedLimit=speed_limit)}
 
 
-def setup_sm_mock(mocker):
-  cruise_speed_limit = random.uniform(0, 120)
-  live_map_data_limit = random.uniform(0, 120)
+class TestSpeedLimitResolver(OpenpilotTestCase):
+  def setup_method(self):
+    self.params = Params()
+    self.params.put_bool("IsMetric", True, block=True)
+    self.params.put("SpeedLimitOffsetType", int(OffsetType.off), block=True)
+    self.params.put("SpeedLimitValueOffset", 0, block=True)
 
-  car_state = create_mock({
-    'gasPressed': False,
-    'brakePressed': False,
-    'standstill': False,
-  }, mocker)
-  car_state_sp = create_mock({
-    'speedLimit': cruise_speed_limit,
-  }, mocker)
-  live_map_data = create_mock({
-    'speedLimit': live_map_data_limit,
-    'speedLimitValid': True,
-    'speedLimitAhead': 0.,
-    'speedLimitAheadValid': 0.,
-    'speedLimitAheadDistance': 0.,
-  }, mocker)
-  gps_data = create_mock({
-    'unixTimestampMillis': time.monotonic() * 1e3,
-  }, mocker)
-  sm_mock = mocker.MagicMock()
-  sm_mock.__getitem__.side_effect = lambda key: {
-    'carState': car_state,
-    'liveMapDataSP': live_map_data,
-    'carStateSP': car_state_sp,
-    'gpsLocation': gps_data,
-  }[key]
-  return sm_mock
+  def test_initial_state(self):
+    resolver = SpeedLimitResolver()
+    assert not resolver.speed_limit_valid
+    assert not resolver.speed_limit_last_valid
+    assert resolver.speed_limit_final == 0.
+    assert resolver.speed_limit_final_last == 0.
+    assert resolver.source == SpeedLimitSource.none
 
+  @parameterized.expand([(22.2, 22.2), (0., 0.), (-1., 0.)])
+  def test_only_car_state_needed(self, speed_limit, expected):
+    resolver = SpeedLimitResolver()
+    resolver.update(car_state(speed_limit))
+    assert resolver.speed_limit == expected
+    assert resolver.speed_limit_final == expected
+    assert resolver.speed_limit_valid == (expected > 0.)
+    assert resolver.source == (SpeedLimitSource.car if expected > 0. else SpeedLimitSource.none)
 
-parametrized_policies = parameterized.expand(
-  [
-    (Policy.car_state_only, 'carStateSP', SpeedLimitSource.car),
-    (Policy.car_state_priority, 'carStateSP', SpeedLimitSource.car),
-    (Policy.map_data_only, 'liveMapDataSP', SpeedLimitSource.map),
-    (Policy.map_data_priority, 'liveMapDataSP', SpeedLimitSource.map),
-  ],
-  names=["policy", "sm_key", "function_key"]
-)
+  @parameterized.expand([0, 1, 2, 3, 4, 99])
+  def test_retired_policy_does_not_override_car_limit(self, legacy_policy):
+    # Simulate an old on-device value without registering or writing the retired key.
+    params = Mock(wraps=self.params)
+    params.get.side_effect = lambda key, **kwargs: legacy_policy if key == "SpeedLimitPolicy" else self.params.get(key, **kwargs)
+    with patch('openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver.Params', return_value=params):
+      resolver = SpeedLimitResolver()
+      for _ in range(int(PARAMS_UPDATE_PERIOD / DT_MDL) + 2):
+        resolver.update(car_state(25.))
+        assert resolver.speed_limit == 25.
+        assert resolver.source == SpeedLimitSource.car
 
+    assert all(call.args[0] != "SpeedLimitPolicy" for call in params.get.call_args_list)
 
-def resolver_class():
-  return SpeedLimitResolver
+  @parameterized.expand([0., 25.])
+  def test_map_message_cannot_supply_or_lower_limit(self, car_limit):
+    resolver = SpeedLimitResolver()
+    sm = car_state(car_limit)
+    sm['liveMapDataSP'] = SimpleNamespace(speedLimit=10., speedLimitValid=True, speedLimitAhead=5.,
+                                        speedLimitAheadValid=True, speedLimitAheadDistance=1.)
+    resolver.update(sm)
+    assert resolver.speed_limit == car_limit
+    assert resolver.source == (SpeedLimitSource.car if car_limit > 0. else SpeedLimitSource.none)
 
+  @parameterized.expand([
+    (True, OffsetType.off, 5, 0.),
+    (True, OffsetType.fixed, 5, 5 * CV.KPH_TO_MS),
+    (False, OffsetType.fixed, 5, 5 * CV.MPH_TO_MS),
+    (True, OffsetType.fixed, -5, -5 * CV.KPH_TO_MS),
+    (True, OffsetType.percentage, 10, 2.),
+    (False, OffsetType.percentage, -10, -2.),
+  ])
+  def test_offsets_preserved(self, is_metric, offset_type, offset_value, expected):
+    self.params.put_bool("IsMetric", is_metric, block=True)
+    self.params.put("SpeedLimitOffsetType", int(offset_type), block=True)
+    self.params.put("SpeedLimitValueOffset", offset_value, block=True)
+    resolver = SpeedLimitResolver()
+    resolver.update(car_state(20.))
+    self.assertAlmostEqual(resolver.speed_limit_offset, expected)
+    self.assertAlmostEqual(resolver.speed_limit_final, 20. + expected)
+    self.assertAlmostEqual(resolver.speed_limit_final_last, 20. + expected)
 
-class TestSpeedLimitResolverValidation(OpenpilotTestCase):
+  def test_last_car_limit_survives_temporary_loss(self):
+    self.params.put("SpeedLimitOffsetType", int(OffsetType.percentage), block=True)
+    self.params.put("SpeedLimitValueOffset", 10, block=True)
+    resolver = SpeedLimitResolver()
+    resolver.update(car_state(20.))
+    resolver.update(car_state(0.))
+    assert not resolver.speed_limit_valid
+    assert resolver.source == SpeedLimitSource.none
+    assert resolver.speed_limit_last_valid
+    assert resolver.speed_limit_last == 20.
+    assert resolver.speed_limit_final_last == 22.
 
-  @parameterized.expand(list(Policy), names=["policy"])
-  def test_initial_state(self, resolver_class, policy):
-    resolver = resolver_class()
-    resolver.policy = policy
-    for source in ALL_SOURCES:
-      if source in resolver.limit_solutions:
-        assert resolver.limit_solutions[source] == 0.
-        assert resolver.distance_solutions[source] == 0.
+    resolver.update(car_state(30.))
+    assert resolver.speed_limit_last == 30.
+    assert resolver.speed_limit_final_last == 33.
+    assert resolver.source == SpeedLimitSource.car
 
-  @parametrized_policies
-  def test_resolver(self, resolver_class, policy, sm_key, function_key, mocker):
-    resolver = resolver_class()
-    resolver.policy = policy
-    sm_mock = setup_sm_mock(mocker)
-    source_speed_limit = sm_mock[sm_key].speedLimit
-
-    # Assert the resolver
-    resolver.update(source_speed_limit, sm_mock)
-    assert resolver.speed_limit == source_speed_limit
-    assert resolver.source == ALL_SOURCES[function_key]
-
-  def test_resolver_combined(self, resolver_class, mocker):
-    resolver = resolver_class()
-    resolver.policy = Policy.combined
-    sm_mock = setup_sm_mock(mocker)
-    socket_to_source = {'carStateSP': SpeedLimitSource.car, 'liveMapDataSP': SpeedLimitSource.map}
-    minimum_key, minimum_speed_limit = min(
-      ((key, sm_mock[key].speedLimit) for key in
-       socket_to_source.keys()), key=lambda x: x[1])
-
-    # Assert the resolver
-    resolver.update(minimum_speed_limit, sm_mock)
-    assert resolver.speed_limit == minimum_speed_limit
-    assert resolver.source == socket_to_source[minimum_key]
-
-  @parametrized_policies
-  def test_parser(self, resolver_class, policy, sm_key, function_key, mocker):
-    resolver = resolver_class()
-    resolver.policy = policy
-    sm_mock = setup_sm_mock(mocker)
-    source_speed_limit = sm_mock[sm_key].speedLimit
-
-    # Assert the parsing
-    resolver.update(source_speed_limit, sm_mock)
-    assert resolver.limit_solutions[ALL_SOURCES[function_key]] == source_speed_limit
-    assert resolver.distance_solutions[ALL_SOURCES[function_key]] == 0.
-
-  @parameterized.expand(list(Policy), names=["policy"])
-  def test_resolve_interaction_in_update(self, resolver_class, policy, mocker):
-    v_ego = 50
-    resolver = resolver_class()
-    resolver.policy = policy
-
-    sm_mock = setup_sm_mock(mocker)
-    resolver.update(v_ego, sm_mock)
-
-    # After resolution
-    assert resolver.speed_limit is not None
-    assert resolver.distance is not None
-    assert resolver.source is not None
-
-  @parameterized.expand(list(Policy), names=["policy"])
-  def test_old_map_data_ignored(self, resolver_class, policy, mocker):
-    resolver = resolver_class()
-    resolver.policy = policy
-    sm_mock = mocker.MagicMock()
-    sm_mock['gpsLocation'].unixTimestampMillis = (time.monotonic() - 2 * LIMIT_MAX_MAP_DATA_AGE) * 1e3
-    resolver._get_from_map_data(sm_mock)
-    assert resolver.limit_solutions[SpeedLimitSource.map] == 0.
-    assert resolver.distance_solutions[SpeedLimitSource.map] == 0.
+  def test_offset_settings_update_while_running(self):
+    resolver = SpeedLimitResolver()
+    resolver.update(car_state(20.))
+    self.params.put_bool("IsMetric", False, block=True)
+    self.params.put("SpeedLimitOffsetType", int(OffsetType.fixed), block=True)
+    self.params.put("SpeedLimitValueOffset", 5, block=True)
+    for _ in range(int(PARAMS_UPDATE_PERIOD / DT_MDL) + 1):
+      resolver.update(car_state(20.))
+    self.assertAlmostEqual(resolver.speed_limit_final, 20. + 5 * CV.MPH_TO_MS)

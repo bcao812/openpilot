@@ -141,8 +141,7 @@ class TestUIWithoutSunnylink(HeadlessUITestCase):
 
     constructors = (
       "DeviceLayoutSP", "NetworkUISP", "TogglesLayout", "SoftwareLayoutSP", "ModelsLayout",
-      "SteeringLayout", "CruiseLayout", "VisualsLayout", "DisplayLayout", "OSMLayout",
-      "TripsLayout", "VehicleLayout", "FirehoseLayout", "DeveloperLayoutSP",
+      "SteeringLayout", "CruiseLayout", "VisualsLayout", "DisplayLayout", "VehicleLayout", "DeveloperLayoutSP",
     )
     with ExitStack() as stack:
       stack.enter_context(patch.object(settings.OP.SettingsLayout, "__init__", return_value=None))
@@ -154,7 +153,7 @@ class TestUIWithoutSunnylink(HeadlessUITestCase):
       self.assertEqual(
         [panel.name for panel in layout._panels],
         ["DEVICE", "NETWORK", "TOGGLES", "SOFTWARE", "MODELS", "STEERING", "CRUISE", "VISUALS",
-         "DISPLAY", "OSM", "TRIPS", "VEHICLE", "FIREHOSE", "DEVELOPER"],
+         "DISPLAY", "VEHICLE", "DEVELOPER"],
       )
       self.assertNotIn("SUNNYLINK", settings.OP.PanelType.__members__)
       self.assertIs(layout._panels[settings.OP.PanelType.MODELS].instance, settings.ModelsLayout.return_value)
@@ -162,7 +161,7 @@ class TestUIWithoutSunnylink(HeadlessUITestCase):
   def test_mici_settings_keep_models_and_existing_items(self):
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts import settings
 
-    base_items = [Mock(name=name) for name in ("toggles", "network", "device", "software", "pairing", "firehose", "developer")]
+    base_items = [Mock(name=name) for name in ("toggles", "network", "device", "software", "pairing", "developer")]
     scroller = SimpleNamespace(_items=base_items.copy())
     scroller.add_widget = scroller._items.append
 

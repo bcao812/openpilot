@@ -33,7 +33,6 @@ def make_scc_case(*, target=30.0, initial_accel=0.0, experimental=False, enabled
   # SCC reads its enable switch during construction. Nonblocking fixture writes
   # can miss that read and defer activation until its next parameter refresh.
   params.put_bool('SmartCruiseControlVision', enabled, block=True)
-  params.put_bool('SmartCruiseControlMap', False, block=True)
   params.put_bool('DynamicExperimentalControl', False, block=True)
   assert params.get_bool('SmartCruiseControlVision') == enabled
   planner, _ = make_planner(speed=20.0, initial_accel=initial_accel)
@@ -245,7 +244,7 @@ def test_invalid_or_unhealthy_cycle_clears_response_before_healthy_recovery(fail
 
 def test_low_speed_cruise_stop_evidence_reaches_owner_and_retains_p_release_hysteresis():
   params = Params()
-  for name in ('SmartCruiseControlVision', 'SmartCruiseControlMap', 'DynamicExperimentalControl'):
+  for name in ('SmartCruiseControlVision', 'DynamicExperimentalControl'):
     params.put_bool(name, False, block=True)
   planner, owner = make_planner_owner(speed=0.2, initial_accel=-0.6)
   state = make_handover_state(speed=0.2, target=4.0, experimental=True)
@@ -325,7 +324,7 @@ COAST_RESPONSE_KIND = 4
 
 def make_coast_case(*, speed=20.23, target=20.0, initial_accel=-0.23):
   params = Params()
-  for name in ('SmartCruiseControlVision', 'SmartCruiseControlMap', 'DynamicExperimentalControl'):
+  for name in ('SmartCruiseControlVision', 'DynamicExperimentalControl'):
     params.put_bool(name, False, block=True)
   planner, _ = make_planner(speed=speed, initial_accel=initial_accel)
   return planner, make_state(speed=speed, target=target)

@@ -383,7 +383,7 @@ def test_input_snapshot_keeps_uint64_identity_and_unknown_health():
   assert entries["modelV2"].flags & CHECK_FLAGS["alive"]
   assert entries["carState"].knownFlags & CHECK_FLAGS["alive"]
   assert not entries["carState"].flags & CHECK_FLAGS["alive"]
-  assert not entries["liveMapDataSP"].knownFlags & CHECK_FLAGS["alive"]
+  assert not entries["carStateSP"].knownFlags & CHECK_FLAGS["alive"]
 
 
 @pytest.mark.parametrize("delay_ns", [750_000_001, -123_000_007])

@@ -128,8 +128,8 @@ class TestParams(OpenpilotTestCase):
 
   def test_params_get_type(self):
     # json
-    self.params.put("ApiCache_FirehoseStats", {"a": 0}, block=True)
-    assert self.params.get("ApiCache_FirehoseStats") == {"a": 0}
+    self.params.put("LiveParameters", {"a": 0}, block=True)
+    assert self.params.get("LiveParameters") == {"a": 0}
 
     # int
     self.params.put("BootCount", 1441, block=True)
@@ -156,6 +156,34 @@ class TestParams(OpenpilotTestCase):
     assert b"Mapd_ClearCache" not in self.params.all_keys()
     with self.assertRaises(UnknownKeyName):
       self.params.get("Mapd_ClearCache")
+
+  def test_retired_feature_params_are_cleared_without_changing_shared_settings(self):
+    retired_keys = (
+      "ApiCache_FirehoseStats", "ApiCache_DriveStats", "MapAdvisorySpeedLimit", "MapdVersion",
+      "MapSpeedLimit", "NextMapSpeedLimit", "Offroad_OSMUpdateRequired", "OsmDbUpdatesCheck",
+      "OSMDownloadBounds", "OsmDownloadedDate", "OSMDownloadLocations", "OSMDownloadProgress",
+      "OsmLocal", "OsmLocationName", "OsmLocationTitle", "OsmLocationUrl", "OsmStateName",
+      "OsmStateTitle", "OsmWayTest", "RoadName", "RoadNameToggle", "SpeedLimitPolicy",
+      "MapTargetVelocities", "SmartCruiseControlMap",
+    )
+    registered = self.params.all_keys()
+    for key in retired_keys:
+      assert key.encode() not in registered
+      # Model files left by an earlier version without using the retired registry.
+      with open(self.params.get_param_path(key), "w") as f:
+        f.write("1")
+
+    self.params.put_bool("SmartCruiseControlVision", True, block=True)
+    self.params.put("SpeedLimitMode", 3, block=True)
+    self.params.put("RouteCount", 42, block=True)
+    self.params.put_bool("OnroadUploads", True, block=True)
+    self.params.clear_all(ParamKeyFlag.CLEAR_ON_MANAGER_START)
+
+    assert all(not os.path.exists(self.params.get_param_path(key)) for key in retired_keys)
+    assert self.params.get_bool("SmartCruiseControlVision")
+    assert self.params.get("SpeedLimitMode") == 3
+    assert self.params.get("RouteCount") == 42
+    assert self.params.get_bool("OnroadUploads")
 
   def test_selected_model_keys_and_local_recording_key(self):
     expected_types = {

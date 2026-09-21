@@ -50,13 +50,6 @@ class VisualsLayout(Widget):
         tr("Show a timer on the HUD when the car is at a standstill."),
         None,
       ),
-      "RoadNameToggle": (
-        lambda: tr("Display Road Name"),
-        tr("Displays the name of the road the car is traveling on." +
-           "<br>The OpenStreetMap database of the location must be downloaded from " +
-           "the OSM panel to fetch the road name."),
-        None,
-      ),
       "GreenLightAlert": (
         lambda: tr("Green Traffic Light Alert (Beta)"),
         tr("A chime and on-screen alert will play when the traffic light you are waiting for " +

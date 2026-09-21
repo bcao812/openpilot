@@ -36,7 +36,6 @@ msgid "Advanced"
 msgstr ""
 
 #: openpilot/selfdrive/ui/layouts/onboarding.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/lane_change_settings.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/mads_settings.py
@@ -179,25 +178,11 @@ msgid "Pair your device with comma connect (connect.comma.ai) and claim your com
 msgstr ""
 
 #: openpilot/selfdrive/ui/widgets/setup.py
-msgid "Maximize your training data uploads to improve openpilot's driving models."
-msgstr ""
-
-#: openpilot/selfdrive/ui/widgets/setup.py
 msgid "Finish Setup"
 msgstr ""
 
 #: openpilot/selfdrive/ui/widgets/setup.py
 msgid "Pair device"
-msgstr ""
-
-#: openpilot/selfdrive/ui/widgets/setup.py
-msgid "Open"
-msgstr ""
-
-#: openpilot/selfdrive/ui/layouts/settings/firehose.py
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-#: openpilot/selfdrive/ui/widgets/setup.py
-msgid "Firehose Mode"
 msgstr ""
 
 #: openpilot/selfdrive/ui/widgets/setup.py
@@ -418,7 +403,6 @@ msgid "now"
 msgstr ""
 
 #: openpilot/selfdrive/ui/layouts/settings/software.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
 msgid "CHECK"
 msgstr ""
 
@@ -480,7 +464,6 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/layouts/settings/software.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/torque_settings.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/__init__.py
 msgid "SELECT"
@@ -528,11 +511,6 @@ msgstr ""
 #: openpilot/selfdrive/ui/layouts/settings/settings.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
 msgid "Software"
-msgstr ""
-
-#: openpilot/selfdrive/ui/layouts/settings/settings.py
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
-msgid "Firehose"
 msgstr ""
 
 #: openpilot/selfdrive/ui/layouts/settings/settings.py
@@ -919,10 +897,6 @@ msgstr ""
 msgid "disengage to enable always offroad"
 msgstr ""
 
-#: openpilot/selfdrive/ui/sunnypilot/onroad/speed_limit.py
-msgid "Near"
-msgstr ""
-
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 msgid "Model download has started in the background. We suggest resetting calibration. Would you like to do that now?"
 msgstr ""
@@ -1169,14 +1143,6 @@ msgid "Display"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
-msgid "OSM"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
-msgid "Trips"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/platform_selector.py
 msgid "Vehicle"
 msgstr ""
@@ -1324,73 +1290,6 @@ msgstr ""
 msgid "Quickboot mode requires updates to be disabled.<br>Enable 'Disable Updates' in the Software panel first."
 msgstr ""
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "DELETE"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid ""
-"This will delete ALL downloaded maps\n"
-"\n"
-"Are you sure you want to delete all maps?"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "Yes, delete all maps"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "This will start the download process and it might take a while to complete."
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "Start Download"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "FETCHING..."
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "Mapd Version"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "Downloaded Maps"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "Downloading Map"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "Database Update"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "Country"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "State"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "Error: Invalid download. Retry."
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "Downloading Maps..."
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "Last checked {}"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
-msgid "All states (~6.0 GB)"
-msgstr ""
-
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
 msgid "This feature requires sunnypilot longitudinal control to be available."
 msgstr ""
@@ -1429,10 +1328,6 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
 msgid "Enable Standstill Timer"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
-msgid "Display Road Name"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
@@ -1544,14 +1439,6 @@ msgid "Use vision path predictions to estimate the appropriate speed to drive th
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise.py
-msgid "Smart Cruise Control - Map"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise.py
-msgid "Use map data to estimate the appropriate speed to drive through turns ahead."
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise.py
 msgid "Custom ACC Speed Increments"
 msgstr ""
 
@@ -1576,80 +1463,12 @@ msgstr ""
 msgid "Enable toggle to allow the model to determine when to use sunnypilot ACC or sunnypilot End to End Longitudinal."
 msgstr ""
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/trips.py
-msgid "KM"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/trips.py
-msgid "Miles"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/trips.py
-msgid "Drives"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/trips.py
-msgid "Hours"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/trips.py
-msgid "ALL TIME"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/trips.py
-msgid "PAST WEEK"
-msgstr ""
-
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/network.py
 msgid "Scan"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/network.py
 msgid "Scanning..."
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Car Only"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Map Only"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Car First"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Map First"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Combined"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Car Only: Use Speed Limit data only from Car"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Map Only: Use Speed Limit data only from OpenStreetMaps"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Car First: Use Speed Limit data from Car if available, else use from OpenStreetMaps"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Map First: Use Speed Limit data from OpenStreetMaps if available, else use from Car"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Combined: Use combined Speed Limit data from Car & OpenStreetMaps"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_policy.py
-msgid "Speed Limit Source"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
@@ -1702,10 +1521,6 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 msgid "Percent: Adds a percent offset [Speed Limit + (Offset % Speed Limit)]"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
-msgid "Customize Source"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
@@ -2032,56 +1847,6 @@ msgstr ""
 #: openpilot/selfdrive/ui/mici/layouts/settings/device.py
 msgid "Device must be registered with the comma.ai backend to pair."
 msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "Frequently Asked Questions"
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "Does it matter how or where I drive?"
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "Nope, just drive as you normally would."
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "Do all of my segments get pulled in Firehose Mode?"
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "No, we selectively pull a subset of your segments."
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "What's a good USB-C adapter?"
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "Any fast phone or laptop charger should be fine."
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "Does it matter which software I run?"
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "Yes, only upstream openpilot (and particular forks) are able to be used for training."
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "ACTIVE"
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "INACTIVE: connect to an unmetered network"
-msgstr ""
-
-#: openpilot/selfdrive/ui/mici/layouts/settings/firehose.py
-msgid "{} segment of your driving is in the training dataset so far."
-msgid_plural "{} segments of your driving is in the training dataset so far."
-msgstr[0] ""
-msgstr[1] ""
 
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Toggle stock LKAS on or off to engage"

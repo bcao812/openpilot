@@ -48,7 +48,6 @@ CRUISE_BUTTON_CONFIRM_HOLD = 0.5  # secs.
 
 class SpeedLimitAssist:
   _speed_limit_final_last: float
-  _distance: float
   v_ego: float
   a_ego: float
   v_offset: float
@@ -84,7 +83,6 @@ class SpeedLimitAssist:
     self.speed_limit_prev = 0.
     self.speed_limit_final_last_conv = 0
     self.prev_speed_limit_final_last_conv = 0
-    self._distance = 0.
     self.state = SpeedLimitAssistState.disabled
     self._state_prev = SpeedLimitAssistState.disabled
     self.pcm_op_long = CP.openpilotLongitudinalControl and CP.pcmCruise
@@ -205,9 +203,6 @@ class SpeedLimitAssist:
     return self.a_ego
 
   def get_adapting_state_target_acceleration(self) -> float:
-    if self._distance > 0:
-      return (self._speed_limit_final_last ** 2 - self.v_ego ** 2) / (2. * self._distance)
-
     return self.v_offset / float(ModelConstants.T_IDXS[CONTROL_N])
 
   def get_active_state_target_acceleration(self) -> float:
@@ -380,7 +375,7 @@ class SpeedLimitAssist:
           self.update_active_event(events_sp)
 
   def update(self, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float, v_cruise_cluster: float, speed_limit: float,
-             speed_limit_final_last: float, has_speed_limit: bool, distance: float, events_sp: EventsSP) -> None:
+             speed_limit_final_last: float, has_speed_limit: bool, events_sp: EventsSP) -> None:
     self.long_enabled = long_enabled
     self.v_ego = v_ego
     self.a_ego = a_ego
@@ -388,7 +383,6 @@ class SpeedLimitAssist:
     self._has_speed_limit = has_speed_limit
     self._speed_limit = speed_limit
     self._speed_limit_final_last = speed_limit_final_last
-    self._distance = distance
 
     self.update_params()
     self.update_calculations(v_cruise_cluster)

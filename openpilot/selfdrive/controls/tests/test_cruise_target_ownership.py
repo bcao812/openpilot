@@ -39,7 +39,7 @@ CRUISE_REQUEST_KIND = 5
 
 def ordinary_case(*, speed=12.0, target=12.3, initial_accel=0.0, trace=None):
   params = Params()
-  for name in ('SmartCruiseControlVision', 'SmartCruiseControlMap', 'DynamicExperimentalControl'):
+  for name in ('SmartCruiseControlVision', 'DynamicExperimentalControl'):
     params.put_bool(name, False, block=True)
   planner, owner = make_planner_owner(speed=speed, initial_accel=initial_accel, trace=trace)
   return planner, owner, make_handover_state(speed=speed, target=target)
