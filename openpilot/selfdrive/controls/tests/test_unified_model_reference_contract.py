@@ -8,8 +8,9 @@ speed-bias correction, physical stopping distance or vehicle brake release.
 import numpy as np
 import pytest
 
+from openpilot.cereal import log
 from openpilot.common.realtime import DT_CTRL, DT_MDL
-from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL, should_stop
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, STOP_RELEASE_ACCEL, get_accel_from_plan, should_stop
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionReferenceKind, MotionResponseKind, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import serialized
@@ -128,6 +129,21 @@ def held_harness(measured_speed):
   return harness
 
 
+def assert_ordinary_model_response(plan, reference, wire_action):
+  if plan.motionIntent.responseKind == MotionResponseKind.CRUISE_REQUEST:
+    # A model reference alone cannot select this execution kind. Every
+    # request frame must carry the strict cruise winner through real transport.
+    assert not plan.motionIntent.reasons
+    assert reference.cruise_speed is None
+    assert plan.reference.constraintSource == log.LongitudinalPlan.LongitudinalPlanSource.cruise
+    assert plan.aTarget == plan.reference.constraintAccel
+    assert plan.aTarget < plan.reference.accel
+    assert plan.aTarget < wire_action
+    assert np.all(plan.aTarget < np.asarray(reference.accel_max))
+  else:
+    assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+
+
 @pytest.mark.parametrize('action_accel', [-1.0, 0.5], ids=['negative_action', 'positive_action'])
 def test_measured_speed_bias_does_not_lift_the_models_zero_speed_destination(action_accel):
   harness = ModelReferenceHarness(speed=10.0)
@@ -191,8 +207,10 @@ def test_actual_forward_model_departure_can_release_the_same_hold_and_reach_hond
   assert all(reference.model_position is None and reference.model_velocity is None
              and reference.model_acceleration is None and reference.typed_model is None
              and reference.cruise_speed is None for reference in references)
-  assert all(event.longitudinalPlan.motionIntent.referenceKind == MotionReferenceKind.FORWARD
-             and event.longitudinalPlan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC for event in plans)
+  wire_action = float(harness.latest['modelV2'].modelV2.action.desiredAcceleration)
+  for reference, event in zip(references, plans, strict=True):
+    assert event.longitudinalPlan.motionIntent.referenceKind == MotionReferenceKind.FORWARD
+    assert_ordinary_model_response(event.longitudinalPlan, reference, wire_action)
   assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
   assert any(row['phase'] == 'release' and not row['resolved_stop'] for row in rows)
   assert any(row['accel'] > 0.0 for row in rows)
@@ -209,18 +227,19 @@ def test_actual_forward_model_departure_can_release_the_same_hold_and_reach_hond
   pytest.param(0.0, id='zero_action'),
   pytest.param(-0.5, id='negative_action'),
 ])
-def test_constant_raw_moving_uses_p_final_target_to_release_the_actual_hold(measured_speed, action_accel):
-  """P releases its stop latch at 0.2 without requiring raw speed growth.
+def test_constant_raw_moving_uses_p_departure_strength_to_release_the_actual_hold(measured_speed, action_accel):
+  """Keep P's departure-strength evidence without requiring raw speed growth.
 
-  The model remains MOVING evidence. Only the final absolute target may
-  qualify this departure; the existing owner still confirms it and limits
-  the command rise before Honda CAN can request positive torque.
+  MOVING stays a raw fact. A positive execution target still needs a strong
+  action and either the existing target threshold or the independently
+  constrained published-grid strength. Producer permission and the stop owner
+  remain responsible for departure and the bounded command reaching Honda CAN.
   """
   assert STOP_RELEASE_ACCEL == 0.2
   harness = held_harness(measured_speed)
   raw = np.full(len(ModelConstants.T_IDXS), measured_speed + 0.8)
   curve = (raw * np.asarray(ModelConstants.T_IDXS), raw, np.zeros(len(raw)))
-  _, plans, rows, can_rows = harness.exercise(curve, action_accel=action_accel, seconds=1.2)
+  references, plans, rows, can_rows = harness.exercise(curve, action_accel=action_accel, seconds=1.2)
 
   evidence = harness.planner.reference_planner.model_evidence
   assert evidence.raw_motion.kind == 'moving' and not evidence.allows_departure
@@ -232,17 +251,33 @@ def test_constant_raw_moving_uses_p_final_target_to_release_the_actual_hold(meas
   # immediately below the P threshold. Decimal 0.2 rounds upward on this wire.
   wire_action = float(harness.latest['modelV2'].modelV2.action.desiredAcceleration)
   assert (wire_action >= STOP_RELEASE_ACCEL) == (action_accel >= STOP_RELEASE_ACCEL)
-  assert all(not event.longitudinalPlan.motionIntent.releaseAllowed
-             or event.longitudinalPlan.aTarget >= STOP_RELEASE_ACCEL for event in plans)
+  action_t = harness.CP.longitudinalActuatorDelay + DT_MDL
+  departure_qualified = {}
+  for event in plans:
+    plan = event.longitudinalPlan
+    # Use the old velocity-increment interpretation on the actual published
+    # samples, then retain the same independent current constraint. This is
+    # evidence only; it neither replaces aTarget nor grants releaseAllowed.
+    strength = min(get_accel_from_plan(plan.speeds, plan.accels, ModelConstants.T_IDXS[:CONTROL_N], action_t),
+                   plan.reference.constraintAccel)
+    qualified = (wire_action >= STOP_RELEASE_ACCEL and plan.aTarget > 0.0
+                 and (plan.aTarget >= STOP_RELEASE_ACCEL or strength >= STOP_RELEASE_ACCEL))
+    departure_qualified[int(event.logMonoTime)] = qualified
+    assert not plan.motionIntent.releaseAllowed or qualified
   assert all(row['resolved_stop'] and not row['resume'] for row in rows
-             if targets[row['consumed_plan_mono']] < STOP_RELEASE_ACCEL)
+             if targets[row['consumed_plan_mono']] <= 0.0)
 
   if wire_action >= STOP_RELEASE_ACCEL:
     assert not harness.latest['modelV2'].modelV2.action.shouldStop
-    assert all(event.longitudinalPlan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC for event in plans)
+    for reference, event in zip(references, plans, strict=True):
+      assert_ordinary_model_response(event.longitudinalPlan, reference, wire_action)
     assert max(targets.values()) >= STOP_RELEASE_ACCEL
     assert any(event.longitudinalPlan.motionIntent.releaseAllowed for event in plans)
-    assert any(row['phase'] == 'release' and not row['resolved_stop'] for row in rows)
+    releases = [row for row in rows if row['phase'] == 'release' and not row['resolved_stop']]
+    assert releases
+    released_plan = next(event.longitudinalPlan for event in plans if event.logMonoTime == releases[0]['consumed_plan_mono'])
+    assert released_plan.motionIntent.releaseAllowed
+    assert departure_qualified[releases[0]['consumed_plan_mono']]
     assert any(row['accel'] > 0.0 for row in rows)
     assert any(command['STANDSTILL_RELEASE'] and not command['BRAKE_REQUEST'] and command['GAS_COMMAND'] > 0
                for command in can_rows)
