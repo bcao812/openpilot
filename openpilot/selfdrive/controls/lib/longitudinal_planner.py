@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import math
-from numbers import Integral
+from numbers import Integral, Real
 import time
 import numpy as np
 
@@ -13,7 +13,10 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL, ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, LEAD_DANGER_FACTOR, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  COMFORT_BRAKE, LEAD_DANGER_FACTOR, REFERENCE_BOUND, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource,
+  get_T_FOLLOW, get_safe_obstacle_distance, get_stopped_equivalence_factor,
+)
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_observation import PlannerObservation, observe_trace
 from openpilot.selfdrive.controls.lib.cruise_response import A_CRUISE_MIN, A_CRUISE_MAX_BP, J_CRUISE_VALS
@@ -101,6 +104,47 @@ def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuato
     closing_weight = float(np.interp(closing_speed, [1.0, 3.0], [0.0, 1.0]))
     urgency = max(urgency, demand_weight * closing_weight)
   return braking_weight * speed_weight * urgency
+
+
+def get_lead_approach_urgency(v_ego: float, radar_state, actuator_delay: float, *, personality) -> float:
+  """Reduce MPC acceleration smoothing as a confirmed closing lead enters its comfort gap.
+
+  This weight has no target-acceleration prerequisite and grants no controller
+  response permission. The existing braking-urgency contract remains separate.
+  """
+  if not all(isinstance(value, Real) and not isinstance(value, (bool, np.bool_)) and math.isfinite(value)
+             for value in (v_ego, actuator_delay)):
+    return 0.0
+  # Use the MPC's numeric domain before squaring speed, including for a corrupt
+  # but finite caller. Ordinary road speeds remain well inside this bound.
+  if not CLOSE_LEAD_STATE_SPEED_BP[0] < v_ego <= REFERENCE_BOUND or not 0.0 <= actuator_delay <= 1.0:
+    return 0.0
+  if isinstance(personality, (bool, np.bool_)):
+    return 0.0
+  try:
+    t_follow = get_T_FOLLOW(personality)
+  except NotImplementedError:
+    return 0.0
+  safe_ego_distance = get_safe_obstacle_distance(v_ego, t_follow)
+  speed_weight = float(np.interp(v_ego, CLOSE_LEAD_STATE_SPEED_BP, [0.0, 1.0]))
+  urgency = 0.0
+  for lead in (radar_state.leadOne, radar_state.leadTwo):
+    values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb)
+    if not lead.present or not all(isinstance(value, Real) and not isinstance(value, (bool, np.bool_)) and math.isfinite(value)
+                                   for value in values):
+      continue
+    if (lead.dRel <= 0.0 or not 0.95 <= lead.modelProb <= 1.0 or lead.vLead < -0.5
+        or lead.vRel >= -1.0 or abs(lead.vLead - v_ego - lead.vRel) > 1.0):
+      continue
+    closing_speed = -lead.vRel
+    lead_stop_distance = get_stopped_equivalence_factor(max(lead.vLead, 0.0))
+    comfort_gap = safe_ego_distance - lead_stop_distance
+    danger_gap = LEAD_DANGER_FACTOR * safe_ego_distance - lead_stop_distance
+    available_gap = lead.dRel - closing_speed * (actuator_delay + DT_MDL)
+    gap_weight = float(np.interp(available_gap, [danger_gap, comfort_gap], [1.0, 0.0]))
+    closing_weight = float(np.interp(closing_speed, [1.0, 3.0], [0.0, 1.0]))
+    urgency = max(urgency, gap_weight * closing_weight)
+  return speed_weight * urgency
 
 
 def should_stop_for_close_lead(v_ego: float, a_target: float, radar_state, actuator_delay: float, *, a_ego: float) -> bool:

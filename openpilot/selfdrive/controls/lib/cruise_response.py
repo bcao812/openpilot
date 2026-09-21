@@ -15,6 +15,9 @@ CRUISE_COAST_ACCEL = -0.19
 CRUISE_COAST_MIN_SPEED = 10.0
 CRUISE_COAST_MAX_SPEED_ERROR = 1.0 * CV.KPH_TO_MS
 CRUISE_COAST_RISK_ACCEL = -0.5
+CRUISE_COAST_BRAKE_ENTER_ACCEL = -0.2
+CRUISE_COAST_BRAKE_HOLD_ACCEL = -0.21
+CRUISE_COAST_BRAKE_RELEASE_RAW_ACCEL = -0.2
 
 
 def get_cruise_coast_accel(a_cruise: float) -> float:
@@ -29,7 +32,7 @@ def get_cruise_coast_accel(a_cruise: float) -> float:
 
 
 class CruiseResponse:
-  """Own only the previous cruise response, advanced once per model update.
+  """Own raw cruise response history and eligible coast-command continuity.
 
   The caller selects the target speed, computes the existing acceleration
   limit, and validates inputs. Target-source changes preserve this history.
@@ -40,10 +43,12 @@ class CruiseResponse:
   def __init__(self, dt: float = DT_MDL, *, init_a: float = 0.0):
     self.dt = dt
     self._previous_accel: float | None = float(init_a)
+    self._coast_braking = False
 
   def clear(self) -> None:
-    """Discard history; the next update seeds from measured acceleration."""
+    """Discard response and command state; the next update seeds from measurement."""
     self._previous_accel = None
+    self._coast_braking = False
 
   def update(self, target_speed: float, speed: float, maximum_accel: float, *, measured_accel: float, reset: bool = False) -> float:
     """Apply the pre-refactor reset, target clamp, then jerk clamp in that order.
@@ -55,9 +60,31 @@ class CruiseResponse:
     """
     previous = self._previous_accel
     if reset or previous is None:
+      self._coast_braking = False
       previous = float(np.clip(measured_accel, ACCEL_MIN, ACCEL_MAX))
 
     target = np.clip(target_speed - speed, A_CRUISE_MIN, maximum_accel)
     jerk = np.interp(speed, A_CRUISE_MAX_BP, J_CRUISE_VALS)
     self._previous_accel = float(np.clip(target, previous - jerk * self.dt, previous + jerk * self.dt))
     return self._previous_accel
+
+  def coast_command(self, a_cruise: float, *, eligible: bool) -> float:
+    """Hold an already requested light brake across the coast-map transition.
+
+    Call every model frame, including ineligible frames. The caller retains
+    coast eligibility and all independent constraints. Only a mapped request
+    below the existing brake threshold arms this state; stronger braking is
+    immediate. A recovering raw request above -0.2, loss of eligibility or a
+    reset releases it. The -0.21 hold stays beyond CAN quantization without
+    feeding the shaped command into the raw cruise jerk history.
+    """
+    if not eligible or not np.isfinite(a_cruise):
+      self._coast_braking = False
+      return a_cruise
+
+    mapped = get_cruise_coast_accel(a_cruise)
+    if a_cruise > CRUISE_COAST_BRAKE_RELEASE_RAW_ACCEL:
+      self._coast_braking = False
+    elif mapped < CRUISE_COAST_BRAKE_ENTER_ACCEL:
+      self._coast_braking = True
+    return min(mapped, CRUISE_COAST_BRAKE_HOLD_ACCEL) if self._coast_braking else mapped

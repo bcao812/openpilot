@@ -10,7 +10,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.cruise_response import (
   CRUISE_COAST_BP, CRUISE_COAST_MIN_SPEED, CRUISE_COAST_MAX_SPEED_ERROR, CRUISE_COAST_RISK_ACCEL,
-  CruiseResponse, get_cruise_coast_accel,
+  CruiseResponse,
 )
 from openpilot.selfdrive.controls.lib.drive_helpers import (CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED,
                                                           get_departure_accel_from_plan, should_stop)
@@ -25,7 +25,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   CREEP_FOLLOW_MIN_GAP, CREEP_FOLLOW_MIN_LEAD_SPEED, CREEP_FOLLOW_MAX_CLOSING_SPEED,
   CREEP_FINISH_T, COMFORT_BRAKE, LongitudinalPlanSource,
   _A_TOTAL_MAX_V, _A_TOTAL_MAX_BP, get_max_accel, get_coast_accel,
-  get_lead_braking_urgency,
+  get_lead_approach_urgency, get_lead_braking_urgency,
   has_safe_moving_lead, should_stop_for_close_lead,
 )
 from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VERSION, MotionIntent, MotionReferenceKind, MotionResponseKind, StopReason,
@@ -465,7 +465,10 @@ class UnifiedLongitudinalPlanner:
     )
     urgency = 0.0
     if active and healthy and not reset and not forced_decel and planner.source == LongitudinalPlanSourceSP.cruise:
-      urgency = get_lead_braking_urgency(speed, planner.output_a_target, state['radarState'], delay)
+      urgency = max(
+        get_lead_braking_urgency(speed, planner.output_a_target, state['radarState'], delay),
+        get_lead_approach_urgency(speed, state['radarState'], delay, personality=state['selfdriveState'].personality),
+      )
     # Only smooth against a qualified native reference aligned to this epoch.
     # Neither reset zeros nor measured acceleration are a previous request.
     reference_qualified = healthy and not (reset or car_state.standstill)
@@ -499,7 +502,7 @@ class UnifiedLongitudinalPlanner:
     if not math.isfinite(self.reference_accel):
       self.invalidate(speed, "nonfinite_sampled_accel")
       return
-    # P's coast policy changes only this cruise candidate. Its raw response
+    # The coast policy changes only this cruise candidate. Its raw response
     # and stop evidence remain separate, and stronger current references and
     # constraints still participate in the one arbitration below.
     coast_applicable = (
@@ -513,7 +516,7 @@ class UnifiedLongitudinalPlanner:
       and not (state['radarState'].leadOne.present or state['radarState'].leadTwo.present)
       and CRUISE_COAST_BP[0] < cruise_ceiling < CRUISE_COAST_BP[-1]
     )
-    cruise_command = get_cruise_coast_accel(cruise_ceiling) if coast_applicable else cruise_ceiling
+    cruise_command = self.cruise_response.coast_command(cruise_ceiling, eligible=coast_applicable)
     # The selected policy owns its response history. It supplies one current
     # target bound, without rewriting the measured MPC initial state or
     # introducing another final-output decision or stop owner.
