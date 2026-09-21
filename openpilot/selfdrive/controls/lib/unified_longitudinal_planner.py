@@ -446,8 +446,17 @@ class UnifiedLongitudinalPlanner:
       # accepted trajectory; do not clear history on each new model identity.
       planner.mpc.discard_prepared_reference_cost()
       previous_reference_valid = False
+    # Ordinary ACC's speed response already belongs to CruiseResponse. Keep
+    # this frame's native bounds/continuation, without a second speed target.
+    # Unadmitted raw model signs do not select between two cruise policies.
+    external_cruise = (
+      healthy and active and not reset and not forced_decel and not self.e2e_allowed
+      and policy.source == LongitudinalPlanSourceSP.cruise and cruise_speed > STOP_SPEED
+      and not (state['radarState'].leadOne.present or state['radarState'].leadTwo.present)
+      and self.model_evidence is None and model_position is model_velocity is model_acceleration is None
+    )
     reference = MpcReference(
-      cruise_speed=cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
+      cruise_speed=None if external_cruise else cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
       typed_model=None if ordinary_model_motion else self.model_evidence, allow_future_rest_reschedule=True,
       comfort_stop_distance=low_speed_follow_distance(speed),

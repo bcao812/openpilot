@@ -17,11 +17,12 @@ from openpilot.cereal import log
 from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.longcontrol import MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  COMFORT_STOP_DISTANCE, N, STOP_DISTANCE, T_IDXS, LongitudinalMpc, LongitudinalPlanSource, MpcReference,
+  COMFORT_STOP_DISTANCE, MPC_INVALID_INPUT, N, STOP_DISTANCE, T_IDXS, LongitudinalMpc, LongitudinalPlanSource, MpcReference,
   get_stopped_equivalence_factor, get_T_FOLLOW,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_planner import get_cruise_accel, get_max_accel
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace
+from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionResponseKind
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import sample_reference_acceleration
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, consume, make_handover_state, make_planner_owner
@@ -87,6 +88,24 @@ def test_absent_cruise_goal_does_not_bypass_existing_bounds_or_model_validation(
   mpc = LongitudinalMpc()
   with pytest.raises(ValueError):
     mpc.reference_obstacles(MpcReference(None, **invalid), get_T_FOLLOW(log.LongitudinalPersonality.standard))
+
+
+def test_absent_cruise_goal_rejects_unvalidated_typed_only_problem_before_native_solve():
+  mpc = LongitudinalMpc()
+  mpc.set_cur_state(12.0, 0.0)
+  evidence = ModelReferenceAdapter().build(
+    np.full(len(ModelConstants.T_IDXS), 12.0), T_IDXS, 12.0,
+    model_mono_time_ns=1_000_000_000, anchor_mono_time_ns=1_000_000_000, consumed_mono_time_ns=1_000_000_000,
+  )
+  assert evidence.unknown is None
+  reference = MpcReference(None, typed_model=evidence)
+  with pytest.raises(ValueError, match='Typed model references require an explicit cruise goal'):
+    mpc.reference_obstacles(reference, get_T_FOLLOW(log.LongitudinalPersonality.standard))
+  solver = Mock(wraps=mpc.solver)
+  with patch.object(mpc, 'solver', solver):
+    mpc.update(radar_state(), reference=reference)
+  assert mpc.solution_status == MPC_INVALID_INPUT
+  solver.solve.assert_not_called()
 
 
 @pytest.mark.parametrize('unadmitted_risk', [False, True])

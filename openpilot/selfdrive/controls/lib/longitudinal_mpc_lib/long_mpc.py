@@ -93,7 +93,9 @@ class MpcOutcome(Enum):
 
 @dataclass(frozen=True)
 class MpcReference:
-  cruise_speed: float | np.ndarray
+  # None omits only the cruise-speed goal. Bounds and any compatible model
+  # goal remain checked; typed model references still require a cruise goal.
+  cruise_speed: float | np.ndarray | None
   accel_min: float | np.ndarray = ACCEL_MIN
   accel_max: float | np.ndarray = ACCEL_MAX
   cruise_min_accel: float | np.ndarray = -1.2
@@ -542,24 +544,30 @@ class LongitudinalMpc:
   def reference_obstacles(self, reference, t_follow):
     if reference.typed_model is not None and not isinstance(reference.typed_model, ModelReferenceEvidence):
       raise ValueError('Invalid typed model reference')
-    cruise_speed = np.broadcast_to(np.asarray(reference.cruise_speed, dtype=float), (N+1,))
+    if reference.cruise_speed is None and reference.typed_model is not None:
+      raise ValueError('Typed model references require an explicit cruise goal')
     accel_min = np.broadcast_to(np.asarray(reference.accel_min, dtype=float), (N+1,))
     accel_max = np.broadcast_to(np.asarray(reference.accel_max, dtype=float), (N+1,))
     cruise_min_accel = np.broadcast_to(np.asarray(reference.cruise_min_accel, dtype=float), (N+1,))
-    if (not np.all(np.isfinite([cruise_speed, accel_min, accel_max, cruise_min_accel]))
-        or np.any(cruise_speed < 0.0) or np.any(cruise_min_accel > 0.0)
+    if (not np.all(np.isfinite([accel_min, accel_max, cruise_min_accel]))
+        or np.any(cruise_min_accel > 0.0)
         or np.any(accel_min > accel_max) or np.any(accel_min > ACCEL_MAX) or np.any(accel_max < ACCEL_MIN)):
       raise ValueError("Invalid cruise reference")
 
     accel_min = np.clip(accel_min, ACCEL_MIN, ACCEL_MAX)
     accel_max = np.clip(accel_max, ACCEL_MIN, ACCEL_MAX)
     cruise_min_accel = np.clip(cruise_min_accel, accel_min, accel_max)
-    lower_speed = np.maximum(0.0, self.x0[1] + np.cumsum(T_DIFFS * cruise_min_accel))
-    upper_speed = np.maximum(0.0, self.x0[1] + np.cumsum(T_DIFFS * accel_max))
-    cruise_velocity = np.clip(cruise_speed, lower_speed, upper_speed)
-    cruise_position = np.cumsum(T_DIFFS * cruise_velocity)
-    obstacles = [cruise_position + get_safe_obstacle_distance(cruise_velocity, t_follow)]
-    sources = [LongitudinalPlanSource.cruise]
+    obstacles, sources = [], []
+    if reference.cruise_speed is not None:
+      cruise_speed = np.broadcast_to(np.asarray(reference.cruise_speed, dtype=float), (N+1,))
+      if not np.all(np.isfinite(cruise_speed)) or np.any(cruise_speed < 0.0):
+        raise ValueError("Invalid cruise reference")
+      lower_speed = np.maximum(0.0, self.x0[1] + np.cumsum(T_DIFFS * cruise_min_accel))
+      upper_speed = np.maximum(0.0, self.x0[1] + np.cumsum(T_DIFFS * accel_max))
+      cruise_velocity = np.clip(cruise_speed, lower_speed, upper_speed)
+      cruise_position = np.cumsum(T_DIFFS * cruise_velocity)
+      obstacles.append(cruise_position + get_safe_obstacle_distance(cruise_velocity, t_follow))
+      sources.append(LongitudinalPlanSource.cruise)
 
     model_reference = (reference.model_position, reference.model_velocity, reference.model_acceleration)
     if any(values is not None for values in model_reference):
@@ -1441,9 +1449,18 @@ class LongitudinalMpc:
       except (TypeError, ValueError, FloatingPointError):
         self.fail(MPC_INVALID_INPUT)
         return
+      ordinary_continuation = (
+        reference.cruise_speed is None and reference.typed_model is None and not present_leads
+        and all(values is None for values in (reference.model_position, reference.model_velocity, reference.model_acceleration))
+      )
       for lead_index, lead in enumerate((radarstate.leadOne, radarstate.leadTwo)):
         if not lead.present:
-          obstacles[lead_index] = np.full(N+1, np.inf)
+          if ordinary_continuation:
+            # Keep P's finite process_lead(None) continuation and distance cost.
+            # It is not an observed lead and gets no compact-lead adjustment.
+            sources[lead_index] = LongitudinalPlanSource.cruise
+          else:
+            obstacles[lead_index] = np.full(N+1, np.inf)
       obstacles.extend(reference_obstacles)
       sources.extend(reference_sources)
     x_obstacles = np.column_stack(obstacles)
