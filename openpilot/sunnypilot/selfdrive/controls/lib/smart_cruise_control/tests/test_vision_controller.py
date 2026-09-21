@@ -147,6 +147,52 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     assert self.scc_v.state == VisionState.enabled
 
   @parameterized.expand([
+    ("disabled", VisionState.disabled, 0., VisionState.enabled),
+    ("enabled", VisionState.enabled, 0., VisionState.enabled),
+    ("entering_abort", VisionState.entering, 0., VisionState.enabled),
+    ("entering_turn", VisionState.entering, 0.005, VisionState.turning),
+    ("turning", VisionState.turning, 0.005, VisionState.turning),
+    ("turning_exit", VisionState.turning, 0., VisionState.leaving),
+    ("leaving", VisionState.leaving, 0.0035, VisionState.leaving),
+    ("leaving_exit", VisionState.leaving, 0., VisionState.enabled),
+    ("override_exit", VisionState.overriding, 0., VisionState.enabled),
+  ])
+  def test_zero_prediction_preserves_turn_transitions_without_dividing(self, _, initial_state, curvature, expected_state):
+    self.sm['modelV2'].orientationRate.z = [0.] * len(ModelConstants.T_IDXS)
+    self.sm['controlsState'].curvature = curvature
+    self.scc_v.state = initial_state
+
+    with np.errstate(divide='raise', invalid='raise'):
+      self.scc_v.update(self.sm, True, False, 20., 0.2, 30.)
+
+    assert self.scc_v.max_pred_lat_acc == 0.
+    assert self.scc_v.v_target == float('inf')
+    assert self.scc_v.state == expected_state
+    active = expected_state in (VisionState.turning, VisionState.leaving)
+    assert self.scc_v.is_active == active
+    assert self.scc_v.output_v_target == (float('inf') if active else V_CRUISE_UNSET)
+    assert np.isfinite(self.scc_v.output_a_target)
+    if not active:
+      assert self.scc_v.output_a_target == 0.2
+
+  @parameterized.expand([(False, 0.), (True, 0.), (False, 20.), (True, 20.)])
+  def test_zero_model_velocity_is_safe_with_feature_on_or_off(self, enabled, speed):
+    self.sm['modelV2'].velocity.x = [0.] * len(ModelConstants.T_IDXS)
+    self.sm['controlsState'].curvature = 0.
+    self.params.put_bool("SmartCruiseControlVision", enabled, block=True)
+    self.scc_v.enabled = enabled
+
+    with np.errstate(divide='raise', invalid='raise'):
+      for _ in range(2):
+        self.scc_v.update(self.sm, True, False, speed, 0., 30.)
+
+    assert self.scc_v.v_target == float('inf')
+    assert self.scc_v.state == (VisionState.enabled if enabled else VisionState.disabled)
+    assert not self.scc_v.is_active
+    assert self.scc_v.output_v_target == V_CRUISE_UNSET
+    assert self.scc_v.output_a_target == 0.
+
+  @parameterized.expand([
       ("p97_just_above_threshold", True),
       ("single_spike_filtered", False),
       ("persistent_high_values", True),

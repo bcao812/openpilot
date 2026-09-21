@@ -97,7 +97,9 @@ class SmartCruiseControlVision:
       max_curve = self.max_pred_lat_acc / (v_ego**2)
 
       # Get the target velocity for the maximum curve
-      self.v_target = (_A_LAT_REG_MAX / max_curve) ** 0.5
+      # A straight prediction imposes no curve speed limit. Keep the unbounded
+      # target explicit instead of relying on NumPy's divide-by-zero result.
+      self.v_target = float("inf") if max_curve == 0. else (_A_LAT_REG_MAX / max_curve) ** 0.5
 
   def _update_state_machine(self) -> tuple[bool, bool]:
     # ENABLED, ENTERING, TURNING, LEAVING, OVERRIDING
