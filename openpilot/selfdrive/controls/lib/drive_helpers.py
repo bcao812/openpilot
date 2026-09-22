@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
 from openpilot.common.realtime import DT_CTRL, DT_MDL
@@ -80,7 +81,7 @@ def get_departure_accel_from_plan(speeds, accels, t_idxs, action_t, constraint_a
     return None
   try:
     action_t, constraint_accel = float(action_t), float(constraint_accel)
-    if not np.isfinite(action_t) or not np.isfinite(constraint_accel):
+    if not math.isfinite(action_t) or not math.isfinite(constraint_accel):
       return None
     with np.errstate(over='ignore', invalid='ignore'):
       speeds = np.asarray(speeds, dtype=np.float32).astype(float)
@@ -90,12 +91,12 @@ def get_departure_accel_from_plan(speeds, accels, t_idxs, action_t, constraint_a
   except (TypeError, ValueError, OverflowError):
     return None
   if (t_idxs.ndim != 1 or len(t_idxs) < 2 or speeds.shape != t_idxs.shape or accels.shape != t_idxs.shape
-      or not all(np.all(np.isfinite(values)) for values in (speeds, accels, t_idxs))
-      or not np.isfinite(constraint_accel) or t_idxs[0] != 0.0 or np.any(np.diff(t_idxs) <= 0.0)
+      or not all(np.isfinite(values).all() for values in (speeds, accels, t_idxs))
+      or not math.isfinite(constraint_accel) or t_idxs[0] != 0.0 or (t_idxs[1:] <= t_idxs[:-1]).any()
       or action_t <= 0.0 or max(action_t, MIN_STABLE_DELAY) > t_idxs[-1]):
     return None
   strength = get_accel_from_plan(speeds, accels, t_idxs, action_t)
-  return float(min(strength, constraint_accel)) if np.isfinite(strength) else None
+  return float(min(strength, constraint_accel)) if math.isfinite(strength) else None
 
 
 def curv_from_psis(psi_target, psi_rate, vego, action_t):

@@ -110,10 +110,62 @@ def test_strength_cannot_exceed_an_independent_current_constraint(constraint):
   assert departure_strength(constraint_accel=constraint) == pytest.approx(min(RECORDED_STRENGTH, constraint))
 
 
+@pytest.mark.parametrize('scalar_type', [np.int32, np.uint64, np.float32, np.float64])
+def test_strength_accepts_numpy_numeric_scalars(scalar_type):
+  expected = departure_strength(action_t=1.0, constraint_accel=1.0)
+  assert expected is not None
+  assert departure_strength(action_t=scalar_type(1), constraint_accel=scalar_type(1)) == expected
+
+
+@pytest.mark.parametrize('constraint', [-0.0, 0.0])
+def test_strength_preserves_the_constraints_signed_zero(constraint):
+  strength = departure_strength(constraint_accel=constraint)
+  assert strength == 0.0
+  assert np.signbit(strength) == np.signbit(constraint)
+
+
+@pytest.mark.parametrize('constraint,releases', [
+  (np.nextafter(STOP_RELEASE_ACCEL, -np.inf), True),
+  (STOP_RELEASE_ACCEL, True),
+  (np.nextafter(STOP_RELEASE_ACCEL, np.inf), True),
+  (np.nextafter(np.float32(STOP_RELEASE_ACCEL), np.float32(-np.inf)), False),
+  (np.nextafter(np.float32(STOP_RELEASE_ACCEL), np.float32(np.inf)), True),
+])
+def test_strength_keeps_float32_constraint_precision_at_the_release_threshold(constraint, releases):
+  strength = departure_strength(constraint_accel=constraint)
+  assert strength == float(np.float32(constraint))
+  assert (strength >= STOP_RELEASE_ACCEL) == releases
+
+
+@pytest.mark.parametrize('field', ['speeds', 'accels', 'constraint_accel'])
+def test_finite_values_outside_float32_cannot_supply_departure_evidence(field):
+  overflow = float(np.finfo(np.float32).max) * 2.0
+  if field == 'constraint_accel':
+    values = overflow
+  else:
+    values = list(RECORDED_SPEEDS if field == 'speeds' else RECORDED_ACCELS)
+    values[-1] = overflow
+  assert departure_strength(**{field: values}) is None
+
+
+def test_strength_accepts_extreme_finite_increasing_times():
+  assert departure_strength(speeds=[0.0, 0.25, 0.25], accels=[0.0, 0.0, 0.0],
+                            times=[0.0, 0.5, np.finfo(float).max], action_t=0.5) == 1.0
+
+
+@pytest.mark.parametrize('reverse_first', [False, True])
+def test_strength_rejects_extreme_finite_time_reversals(reverse_first):
+  extreme = np.finfo(float).max
+  times = [0.0, -extreme, extreme] if reverse_first else [0.0, extreme, -extreme]
+  # These finite inputs overflow subtraction but still contain a reversal.
+  with np.errstate(over='ignore'):
+    assert departure_strength(speeds=[0.0] * 3, accels=[0.0] * 3, times=times) is None
+
+
 @pytest.mark.parametrize('fault', [
-  'short_speeds', 'short_accels', 'nested_speeds', 'nan_speed', 'inf_accel', 'nonmonotonic_times',
-  'nan_times', 'zero_horizon', 'negative_horizon', 'nan_horizon', 'infinite_horizon', 'past_trajectory',
-  'boolean_horizon', 'nan_constraint', 'infinite_constraint', 'boolean_constraint',
+  'short_speeds', 'short_accels', 'nested_speeds', 'nan_speed', 'inf_accel', 'nonmonotonic_times', 'descending_times',
+  'nan_times', 'zero_horizon', 'negative_zero_horizon', 'negative_horizon', 'nan_horizon', 'infinite_horizon', 'past_trajectory',
+  'boolean_horizon', 'numpy_boolean_horizon', 'nan_constraint', 'infinite_constraint', 'boolean_constraint', 'numpy_boolean_constraint',
 ])
 def test_malformed_strength_input_cannot_produce_departure_evidence(fault):
   speeds, accels, times = list(RECORDED_SPEEDS), list(RECORDED_ACCELS), CONTROL_TIMES.copy()
@@ -130,13 +182,17 @@ def test_malformed_strength_input_cannot_produce_departure_evidence(fault):
     accels[-1] = float('inf')
   elif fault == 'nonmonotonic_times':
     times[3] = times[2]
+  elif fault == 'descending_times':
+    times[3] = times[1]
   elif fault == 'nan_times':
     times[-1] = float('nan')
   elif fault.endswith('_horizon') or fault == 'past_trajectory':
-    horizon = {'zero_horizon': 0.0, 'negative_horizon': -0.1, 'nan_horizon': float('nan'),
-               'infinite_horizon': float('inf'), 'past_trajectory': times[-1] + 1.0, 'boolean_horizon': True}[fault]
+    horizon = {'zero_horizon': 0.0, 'negative_zero_horizon': -0.0, 'negative_horizon': -0.1, 'nan_horizon': float('nan'),
+               'infinite_horizon': float('inf'), 'past_trajectory': times[-1] + 1.0,
+               'boolean_horizon': True, 'numpy_boolean_horizon': np.bool_(True)}[fault]
   else:
-    constraint = {'nan_constraint': float('nan'), 'infinite_constraint': float('inf'), 'boolean_constraint': True}[fault]
+    constraint = {'nan_constraint': float('nan'), 'infinite_constraint': float('inf'),
+                  'boolean_constraint': True, 'numpy_boolean_constraint': np.bool_(True)}[fault]
   assert departure_strength(speeds, accels, times, horizon, constraint) is None
 
 
