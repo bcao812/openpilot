@@ -16,7 +16,7 @@ from openpilot.selfdrive.controls.lib.cruise_response import (
 from openpilot.selfdrive.controls.lib.drive_helpers import (CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED,
                                                           get_departure_accel_from_plan, should_stop)
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
-from openpilot.selfdrive.controls.lib.lead_closing import LeadClosingConstraint
+from openpilot.selfdrive.controls.lib.lead_closing import LeadClosingConstraint, LeadClosingRequest
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS, get_T_FOLLOW,
 )
@@ -153,6 +153,7 @@ class UnifiedLongitudinalPlanner:
     self._forward_execution_instance_ns = 0
     self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
     self.lead_closing = LeadClosingConstraint()
+    self.lead_closing_request = LeadClosingRequest()
     self.closing_constraint = None
     self.model_reference_adapter = ModelReferenceAdapter()
     self.model_evidence = None
@@ -169,6 +170,7 @@ class UnifiedLongitudinalPlanner:
     planner = self.planner
     self.cruise_response.clear()
     self.lead_closing.reset()
+    self.lead_closing_request.clear()
     self.closing_constraint = None
     self.reference_initialized = False
     self.reference_source_epoch_ns = None
@@ -485,6 +487,7 @@ class UnifiedLongitudinalPlanner:
       v_ego=speed, a_ego=measured_accel,
       leads=(state['radarState'].leadOne, state['radarState'].leadTwo),
       actuator_delay=delay, t_follow=get_T_FOLLOW(state['selfdriveState'].personality),
+      request=self.lead_closing_request.step(now_ns),
     )
     urgency = 0.0
     if active and healthy and not reset and not forced_decel and planner.source == LongitudinalPlanSourceSP.cruise:
@@ -560,6 +563,8 @@ class UnifiedLongitudinalPlanner:
       # The native trajectory and its source remain recorded independently.
       # This is an absolute target ceiling, not a replacement lead, a proof of
       # physical clearance, or permission to exceed the existing brake limit.
+      # During build-up it can remain positive. A min-only ceiling cannot
+      # increase a native request or independently grant departure authority.
       self.constraint_accel = self.closing_constraint.accel
       self.constraint_source = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)[self.closing_constraint.lead_index]
     planner._observe(constraintKnown=True, constraintAccel=float(self.constraint_accel))
@@ -765,6 +770,11 @@ class UnifiedLongitudinalPlanner:
 
   def publish(self, message):
     intent = self.planner.motion_intent
+    timing = self.planner.reference_timing.pending
+    if intent.valid and self.planner.mpc.solution_status == 0 and timing is not None:
+      self.lead_closing_request.publish(timing.producer_ns, float(message.aTarget))
+    else:
+      self.lead_closing_request.clear()
     message.motionIntent.version = intent.version
     message.motionIntent.mode = intent.mode
     message.motionIntent.reasons = int(intent.reasons)

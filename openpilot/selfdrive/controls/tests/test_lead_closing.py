@@ -6,7 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from openpilot.selfdrive.controls.lib.lead_closing import LeadClosingConstraint
+from openpilot.selfdrive.controls.lib.lead_closing import (
+  ClosingRequestStep, LeadClosingConstraint, LeadClosingRequest, REQUEST_DECEL_RATE,
+)
 
 
 BASE_NS = 1_000_000_000
@@ -20,8 +22,11 @@ def lead(speed=25.0, closing=10.0, distance=70.0, **overrides):
 
 
 def update(guard, sample, frame=0, **overrides):
+  # Geometry-only fixtures start from an already published -2.5 request.
+  # Request-establishment cases below supply their actual publication history.
   values = dict(now_ns=BASE_NS + frame * STEP_NS, source_ns=BASE_NS + frame * STEP_NS, eligible=True,
-                v_ego=25.0, a_ego=0.0, leads=[sample], actuator_delay=0.5, t_follow=1.2)
+                v_ego=25.0, a_ego=0.0, leads=[sample], actuator_delay=0.5, t_follow=1.2,
+                request=ClosingRequestStep(-2.5, 0.05))
   values.update(overrides)
   return guard.update(**values)
 
@@ -50,8 +55,10 @@ def test_constant_speed_geometry_has_a_hand_calculated_answer():
 
 @pytest.mark.parametrize('speed_kph', [50.0, 60.0, 80.0, 100.0, 120.0, 140.0])
 def test_all_requested_speed_bands_can_act_without_an_existing_brake_request(speed_kph):
-  _, result = qualify(speed=speed_kph / 3.6, closing=5.0, distance=35.0 + (speed_kph - 50.0) / 3.6, a_ego=0.0)
+  _, result = qualify(speed=speed_kph / 3.6, closing=5.0, distance=35.0 + (speed_kph - 50.0) / 3.6, a_ego=0.0,
+                      request=ClosingRequestStep(0.0, 0.05))
   assert result is not None and -2.5 <= result.accel < 0.0
+  assert result.accel >= -0.125
 
 
 def test_smaller_gap_and_larger_closing_speed_never_relax_the_bound():
@@ -308,6 +315,15 @@ def test_matching_lead_speed_releases_the_active_constraint():
   assert update(guard, lead(distance=69.5), 8) is None
 
 
+def test_leaving_the_comfort_domain_revokes_below_entry_hysteresis():
+  guard, result = qualify(speed=14.0, closing=1.2, distance=33.0, t_follow=1.75)
+  assert result is not None
+  assert update(guard, lead(speed=13.5, closing=1.2, distance=32.94), 7, v_ego=13.5, t_follow=1.25) is None
+  # The still-observed lead re-enters the comfort domain, but this is a new
+  # activation below the entry threshold, not continuation of an active cap.
+  assert update(guard, lead(speed=13.5, closing=1.2, distance=32.88), 8, v_ego=13.5, t_follow=1.75) is None
+
+
 def test_lead_acceleration_jumps_have_no_effect_and_inputs_are_not_mutated():
   normal, altered = LeadClosingConstraint(), LeadClosingConstraint()
   for frame in range(7):
@@ -334,3 +350,117 @@ def test_invalid_numeric_inputs_fail_closed_and_erase_previous_history():
     setattr(bad, field, value)
     assert update(guard, bad, 7) is None
     assert update(guard, lead(distance=69.0), 8) is None
+
+
+def test_request_history_requires_a_real_fresh_publication():
+  request = LeadClosingRequest()
+  assert request.step(BASE_NS) is None
+  request.publish(BASE_NS, 0.4)
+  step = request.step(BASE_NS + STEP_NS)
+  assert step == ClosingRequestStep(0.4, 0.05)
+  assert step.minimum_accel == pytest.approx(0.275)
+  # Neither a second read nor an unissued computed target advances history.
+  assert request.step(BASE_NS + STEP_NS) == step
+  assert request.step(BASE_NS + 2 * STEP_NS).minimum_accel == pytest.approx(0.15)
+  request.publish(BASE_NS + 2 * STEP_NS, -0.3)
+  assert request.step(BASE_NS + 3 * STEP_NS).minimum_accel == pytest.approx(-0.425)
+
+
+def test_republishing_one_unchanged_request_does_not_refresh_its_epoch():
+  request = LeadClosingRequest()
+  request.publish(BASE_NS, 0.0)
+  request.publish(BASE_NS, 0.0)
+  assert request.step(BASE_NS + 200_000_000).elapsed == 0.2
+  assert request.step(BASE_NS + 200_000_001) is None
+
+
+@pytest.mark.parametrize('bad', [None, float('nan'), float('inf'), True, -3.5001, 2.0001])
+def test_invalid_published_request_erases_request_history(bad):
+  request = LeadClosingRequest()
+  request.publish(BASE_NS, -0.5)
+  request.publish(BASE_NS + STEP_NS, bad)
+  assert request.step(BASE_NS + 2 * STEP_NS) is None
+
+
+@pytest.mark.parametrize('kind', ['same_epoch_changed', 'publication_rollback', 'computation_rollback', 'future', 'expired'])
+def test_invalid_request_clocks_cannot_keep_a_building_constraint(kind):
+  request = LeadClosingRequest()
+  request.publish(BASE_NS, -0.5)
+  if kind == 'same_epoch_changed':
+    request.publish(BASE_NS, -1.0)
+    now = BASE_NS + STEP_NS
+  elif kind == 'publication_rollback':
+    request.publish(BASE_NS - 1, -0.5)
+    now = BASE_NS + STEP_NS
+  elif kind == 'computation_rollback':
+    assert request.step(BASE_NS + 2 * STEP_NS) is not None
+    now = BASE_NS + STEP_NS
+  elif kind == 'future':
+    now = BASE_NS - 1
+  else:
+    now = BASE_NS + 200_000_001
+  assert request.step(now) is None
+  guard, _ = qualify()
+  assert update(guard, lead(distance=69.5), 7, request=None) is None
+  assert update(guard, lead(distance=69.0), 8) is None
+
+
+@pytest.mark.parametrize('bad', [None, ClosingRequestStep(float('nan'), 0.05), ClosingRequestStep(True, 0.05),
+                                ClosingRequestStep(2.01, 0.05), ClosingRequestStep(-3.51, 0.05),
+                                ClosingRequestStep(0.0, 0.0), ClosingRequestStep(0.0, 0.200001)])
+def test_invalid_request_step_revokes_the_lead_constraint(bad):
+  guard, _ = qualify()
+  assert update(guard, lead(distance=69.5), 7, request=bad) is None
+  assert update(guard, lead(distance=69.0), 8) is None
+
+
+def test_added_request_build_time_is_separate_from_actuator_allowance():
+  _, result = qualify(request=ClosingRequestStep(2.0, 0.05), a_ego=-1.0)
+  assert result.request_build_time == 1.8
+  assert result.actuator_build_time == 0.4
+  assert result.response_time == 2.75  # 0.5 delay + 0.05 planner + 0.4 actuator + 1.8 request
+  # Reserve positive published effort even when the measured car is braking.
+  assert result.remaining_gap == pytest.approx(70.0 - 15.0 - 10.0 * 2.75 - 2.75 ** 2)
+  assert result.accel == 1.875  # A min-only ceiling; never a new acceleration request.
+  assert result.geometric_accel == -2.5
+
+
+def test_establishing_a_constraint_is_bounded_from_each_published_request():
+  guard, request = LeadClosingConstraint(), LeadClosingRequest()
+  previous = 0.0
+  request.publish(BASE_NS - STEP_NS, previous)
+  first_frame = None
+  for frame in range(26):
+    now = BASE_NS + frame * STEP_NS
+    sample = lead(closing=5.0, distance=15.5 - 0.25 * frame)
+    result = update(guard, sample, frame, request=request.step(now))
+    if result is None:
+      assert frame < 6
+      output = 0.0
+    else:
+      first_frame = frame if first_frame is None else first_frame
+      assert result.geometric_accel == -2.5
+      assert result.accel == pytest.approx(max(-2.5, previous - REQUEST_DECEL_RATE * 0.05))
+      assert result.request_build_time == pytest.approx(max(previous + 2.5, 0.0) / REQUEST_DECEL_RATE)
+      output = result.accel
+    request.publish(now, output)
+    previous = output
+  assert first_frame == 6
+  assert previous == -2.5
+
+
+def test_slot_switch_uses_the_same_latest_publication_and_loss_is_immediate():
+  guard = LeadClosingConstraint()
+  request = ClosingRequestStep(0.2, 0.05)
+  for frame in range(7):
+    result = update(guard, None, frame, leads=[lead(distance=73.0 - 0.5 * frame), lead(distance=63.0 - 0.5 * frame)],
+                    request=request)
+  assert result.lead_index == 1 and result.accel == pytest.approx(0.075)
+  # Slot 0 has its own qualified history; it cannot inherit a stronger ramp
+  # simply because the previously selected slot disappeared.
+  request = ClosingRequestStep(result.accel, 0.05)
+  result = update(guard, None, 7, leads=[lead(distance=69.5), None], request=request)
+  assert result.lead_index == 0 and result.accel == pytest.approx(-0.05)
+  assert update(guard, None, 8, leads=[None, None], request=ClosingRequestStep(result.accel, 0.05)) is None
+  # An actual new lead observation needs a complete new qualification.
+  assert update(guard, lead(distance=68.5), 9, request=ClosingRequestStep(-0.05, 0.05)) is None

@@ -25,16 +25,74 @@ COMFORT_DECEL = 2.5
 # An engineering allowance for response build-up, not a measured actuator model.
 RESPONSE_BUILD_TIME = 0.4
 PLANNER_INTERVAL = 0.05
+# Engineering limit on the added request's rate of decrease, not vehicle jerk.
+# It affects only this comfort ceiling; stronger native requests bypass it.
+REQUEST_DECEL_RATE = 2.5
+# Match the existing final target domain without importing the native planner.
+MAX_REQUEST_ACCEL = 2.0
+
+
+@dataclass(frozen=True)
+class ClosingRequestStep:
+  previous_accel: float
+  # Elapsed producer time of actual published plans, not actuator delivery time.
+  elapsed: float
+
+  @property
+  def minimum_accel(self):
+    return max(-COMFORT_DECEL, self.previous_accel - REQUEST_DECEL_RATE * self.elapsed)
+
+  @property
+  def build_time(self):
+    # Reserve the full time from the last published request to the strongest
+    # added comfort request. This is separate from actuator response time.
+    return max(self.previous_accel + COMFORT_DECEL, 0.0) / REQUEST_DECEL_RATE
+
+
+class LeadClosingRequest:
+  """Remember wire requests, never an independently persistent lead target."""
+
+  def __init__(self):
+    self.clear()
+
+  def clear(self):
+    self._published_ns = self._last_now_ns = 0
+    self._published_accel = None
+
+  def publish(self, producer_ns, accel):
+    # The caller supplies the exact aTarget written to its published message
+    # and that message's producer epoch, never aEgo or an unissued MPC sample.
+    if (not _timestamp(producer_ns) or not _bounded(accel, -MAX_DECEL, MAX_REQUEST_ACCEL)
+        or producer_ns < max(self._published_ns, self._last_now_ns)
+        or producer_ns == self._published_ns and accel != self._published_accel):
+      self.clear()
+      return
+    self._published_ns, self._published_accel = producer_ns, float(accel)
+
+  def step(self, now_ns):
+    if (not _timestamp(now_ns) or self._published_accel is None or now_ns < self._last_now_ns
+        or not 0 < now_ns - self._published_ns <= MAX_SAMPLE_GAP_NS):
+      self.clear()
+      return None
+    self._last_now_ns = now_ns
+    # Repeated computation from the same published request is idempotent:
+    # updates alone do not accumulate an imaginary request history. A plan
+    # publication does not certify reception or actuator delivery.
+    return ClosingRequestStep(self._published_accel, (now_ns - self._published_ns) / 1e9)
 
 
 @dataclass(frozen=True)
 class ClosingConstraint:
   accel: float
+  geometric_accel: float
   lead_index: int
   required_decel: float
   clearance: float
   remaining_gap: float
   qualified_duration: float
+  request_build_time: float
+  actuator_build_time: float
+  response_time: float
   # Geometry exceeds the total 3.5 m/s^2 budget, not merely this comfort cap.
   # False does not imply that this additional constraint alone preserves 15 m.
   infeasible: bool
@@ -137,17 +195,23 @@ class LeadClosingConstraint:
     self._last_now_ns = self._last_source_ns = 0
 
   def update(self, *, now_ns: int, source_ns: int, eligible: bool, v_ego: float, a_ego: float,
-             leads: Sequence, actuator_delay: float, t_follow: float) -> ClosingConstraint | None:
+             leads: Sequence, actuator_delay: float, t_follow: float,
+             request: ClosingRequestStep | None) -> ClosingConstraint | None:
     """Return an additional acceleration ceiling, or no participating constraint.
 
     ``source_ns`` is radarState.mdMonoTime: the real model epoch, not receipt
     time. Valid repeated epochs may retain a fresh constraint but never qualify
     it. Lead slots qualify independently; their inputs are never modified.
+    ``request`` must come from a fresh actual publication. No request history
+    means no additional constraint, rather than seeding one from measurement.
     """
     if (eligible is not True or not _timestamp(now_ns) or not _timestamp(source_ns)
         or not 0 <= now_ns - source_ns <= MAX_SOURCE_AGE_NS
         or not _bounded(v_ego, 0.0, 100.0) or not _bounded(a_ego, -20.0, 20.0)
         or not _bounded(actuator_delay, 0.0, 1.0) or not _bounded(t_follow, 0.0, 3.0) or t_follow <= 0.0
+        or not isinstance(request, ClosingRequestStep)
+        or not _bounded(request.previous_accel, -MAX_DECEL, MAX_REQUEST_ACCEL)
+        or not _bounded(request.elapsed, 0.0, MAX_SAMPLE_GAP_NS / 1e9) or request.elapsed <= 0.0
         or not isinstance(leads, Sequence)):
       self.reset()
       return None
@@ -178,24 +242,32 @@ class LeadClosingConstraint:
         continue
       comfort = (v_ego ** 2 - lead_speed ** 2) / 5.0 + t_follow * v_ego + 6.0
       if comfort <= 0.0 or distance > comfort:
+        history.active = False
         continue
 
       history.active = True
       # A desired time gap is an admission policy, not a hard clearance. Using
       # it here would turn an ordinary small gap error into emergency braking.
       clearance = 15.0
-      response_time = actuator_delay + PLANNER_INTERVAL + RESPONSE_BUILD_TIME
-      positive_accel = max(a_ego, 0.0)
+      # Conservatively hold the greater positive measured/published request
+      # over the entire delay, actuator allowance and added request build-up.
+      # The actual ramp brakes during this time, but that benefit is not
+      # credited here. Neither allowance is a calibrated response guarantee.
+      response_time = actuator_delay + PLANNER_INTERVAL + RESPONSE_BUILD_TIME + request.build_time
+      positive_accel = max(a_ego, request.previous_accel, 0.0)
       closing_speed = -relative_speed
       remaining = distance - clearance - closing_speed * response_time - 0.5 * positive_accel * response_time ** 2
       response_closing_speed = closing_speed + positive_accel * response_time
       required = response_closing_speed ** 2 / (2.0 * remaining) if remaining > 0.0 else math.inf
       comfort_cap = COMFORT_DECEL * min(max((closing_speed - 1.0) / 2.0, 0.0), 1.0)
+      geometric_accel = -min(required, comfort_cap, MAX_DECEL)
       constraint = ClosingConstraint(
-        accel=-min(required, comfort_cap, MAX_DECEL), lead_index=index, required_decel=required, clearance=clearance,
+        accel=max(geometric_accel, request.minimum_accel), geometric_accel=geometric_accel,
+        lead_index=index, required_decel=required, clearance=clearance,
         remaining_gap=remaining, qualified_duration=(source_ns - history.first_ns) / 1e9,
+        request_build_time=request.build_time, actuator_build_time=RESPONSE_BUILD_TIME, response_time=response_time,
         infeasible=remaining <= 0.0 or required > MAX_DECEL,
       )
-      if selected is None or constraint.accel < selected.accel:
+      if selected is None or constraint.geometric_accel < selected.geometric_accel:
         selected = constraint
     return selected
