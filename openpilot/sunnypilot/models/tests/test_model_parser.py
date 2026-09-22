@@ -3,8 +3,6 @@ import tempfile
 import unittest
 from unittest import mock
 
-from capnp.lib.capnp import KjException
-
 from openpilot.cereal import custom
 from openpilot.common.hardware.hw import Paths
 from openpilot.sunnypilot.models.fetcher import ModelParser
@@ -129,7 +127,7 @@ class TestModelParser(unittest.TestCase):
     invalid_index["index"] = "invalid"
     invalid_model = catalogue_bundle(version=REQUIRED_JSON_VERSION + 1)
     invalid_model["models"][0]["type"] = "invalid"
-    for bundle, exception in ((invalid_index, ValueError), (invalid_model, KjException)):
+    for bundle, exception in ((invalid_index, ValueError), (invalid_model, AttributeError)):
       with self.subTest(exception=exception), self.assertRaises(exception):
         ModelParser.parse_models({"bundles": [catalogue_bundle(1), bundle]})
 
