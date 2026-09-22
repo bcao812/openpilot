@@ -96,7 +96,9 @@ class ModelParser:
   @staticmethod
   def parse_models(json_data: dict) -> list[custom.ModelManagerSP.ModelBundle]:
     found_bundles = [ModelParser._parse_bundle(bundle) for bundle in json_data.get("bundles", [])]
-    return [bundle for bundle in found_bundles if is_bundle_version_compatible(bundle.to_dict())]
+    # Compatibility only needs the normalized version, not a copy of every model and chunk.
+    return [bundle for bundle in found_bundles
+            if is_bundle_version_compatible({"minimumSelectorVersion": bundle.minimumSelectorVersion})]
 
 
 class ModelCache:
