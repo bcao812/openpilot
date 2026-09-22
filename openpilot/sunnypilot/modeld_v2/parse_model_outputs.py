@@ -132,7 +132,13 @@ class Parser:
     if 'wide_from_device_euler' in outs:
       self.parse_mdn('wide_from_device_euler', outs, out_shape=(ModelConstants.WIDE_FROM_DEVICE_WIDTH,))
     if 'lead' in outs:
-      self.parse_mdn('lead', outs, out_shape=(ModelConstants.LEAD_TRAJ_LEN, ModelConstants.LEAD_WIDTH))
+      lead_shape = (ModelConstants.LEAD_MHP_SELECTION, ModelConstants.LEAD_TRAJ_LEN, ModelConstants.LEAD_WIDTH)
+      if outs['lead'].shape[1] == 2 * int(np.prod(lead_shape)):
+        # Non-MDN leads store all three trajectories' means before all log stds,
+        # not interleaved mean/std pairs for three unweighted hypotheses.
+        self.parse_mdn('lead', outs, out_shape=lead_shape, in_N=1, out_N=0)
+      else:
+        self.parse_mdn('lead', outs, out_shape=(ModelConstants.LEAD_TRAJ_LEN, ModelConstants.LEAD_WIDTH))
     if 'lat_planner_solution' in outs:
       self.parse_mdn('lat_planner_solution', outs, out_shape=(ModelConstants.IDX_N, ModelConstants.LAT_PLANNER_SOLUTION_WIDTH))
     if 'desired_curvature' in outs:

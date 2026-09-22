@@ -4,7 +4,6 @@ import numpy as np
 
 from opendbc.car.honda.values import CAR, CarControllerParams
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
-from openpilot.cereal import log
 from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import DT_MDL
@@ -16,9 +15,8 @@ from openpilot.selfdrive.controls.lib.cruise_response import (
 from openpilot.selfdrive.controls.lib.drive_helpers import (CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED,
                                                           get_departure_accel_from_plan, should_stop)
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
-from openpilot.selfdrive.controls.lib.lead_closing import LeadClosingConstraint, LeadClosingRequest
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS, get_T_FOLLOW,
+  LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS,
 )
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter, stationary_lead_departure_compatible
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
@@ -152,9 +150,6 @@ class UnifiedLongitudinalPlanner:
     self.reference_source_epoch_ns = None
     self._forward_execution_instance_ns = 0
     self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
-    self.lead_closing = LeadClosingConstraint()
-    self.lead_closing_request = LeadClosingRequest()
-    self.closing_constraint = None
     self.model_reference_adapter = ModelReferenceAdapter()
     self.model_evidence = None
     self.model_reference_mode = 'not_admitted'
@@ -169,9 +164,6 @@ class UnifiedLongitudinalPlanner:
   def invalidate(self, speed, reason):
     planner = self.planner
     self.cruise_response.clear()
-    self.lead_closing.reset()
-    self.lead_closing_request.clear()
-    self.closing_constraint = None
     self.reference_initialized = False
     self.reference_source_epoch_ns = None
     self._forward_execution_instance_ns = 0
@@ -471,24 +463,6 @@ class UnifiedLongitudinalPlanner:
       typed_model=None if ordinary_model_motion else self.model_evidence, allow_future_rest_reschedule=True,
       comfort_stop_distance=low_speed_follow_distance(speed),
     )
-    # Additional braking is confined to ordinary ACC and the straight-road
-    # domain observed in the approach audit. Independent model/policy goals,
-    # driver intervention and stale/invalid inputs revoke its history.
-    closing_eligible = (
-      planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl
-      and active and healthy and not reset and not forced_decel
-      and not self.e2e_allowed and self.model_evidence is None
-      and planner.source == LongitudinalPlanSourceSP.cruise
-      and abs(steering) <= 5.0 and not car_state.leftBlinker and not car_state.rightBlinker
-      and model.meta.laneChangeState == log.LaneChangeState.off
-    )
-    self.closing_constraint = self.lead_closing.update(
-      now_ns=now_ns, source_ns=int(state['radarState'].mdMonoTime), eligible=closing_eligible,
-      v_ego=speed, a_ego=measured_accel,
-      leads=(state['radarState'].leadOne, state['radarState'].leadTwo),
-      actuator_delay=delay, t_follow=get_T_FOLLOW(state['selfdriveState'].personality),
-      request=self.lead_closing_request.step(now_ns),
-    )
     urgency = 0.0
     if active and healthy and not reset and not forced_decel and planner.source == LongitudinalPlanSourceSP.cruise:
       urgency = max(
@@ -559,14 +533,6 @@ class UnifiedLongitudinalPlanner:
     if model_stop_evidence and speed < STOP_SPEED and CarControllerParams.BOSCH_GAS_LOOKUP_BP[0] < self.constraint_accel:
       self.constraint_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
       self.constraint_source = LongitudinalPlanSource.e2e
-    if self.closing_constraint is not None and self.closing_constraint.accel < self.constraint_accel:
-      # The native trajectory and its source remain recorded independently.
-      # This is an absolute target ceiling, not a replacement lead, a proof of
-      # physical clearance, or permission to exceed the existing brake limit.
-      # During build-up it can remain positive. A min-only ceiling cannot
-      # increase a native request or independently grant departure authority.
-      self.constraint_accel = self.closing_constraint.accel
-      self.constraint_source = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)[self.closing_constraint.lead_index]
     planner._observe(constraintKnown=True, constraintAccel=float(self.constraint_accel))
     output = float(np.clip(min(self.reference_accel, self.constraint_accel), ACCEL_MIN, ACCEL_MAX))
     if evidence is not None and evidence.unknown is not None and self.model_reference_mode == 'invalid':
@@ -682,10 +648,6 @@ class UnifiedLongitudinalPlanner:
                         and self.constraint_source == LongitudinalPlanSource.cruise
                         and self.reference_accel > maximum_accel
                         and output == self.constraint_accel)
-    closing_acc_cap = (self.closing_constraint is not None and not self.e2e_allowed and evidence is None
-                       and self.constraint_source == (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)[
-                         self.closing_constraint.lead_index]
-                       and output == self.constraint_accel == self.closing_constraint.accel)
     # Retain feedback qualification outside the separately certified request
     # domain below. A binding independent maximum still retains the
     # nonpositive-correction contract.
@@ -726,7 +688,7 @@ class UnifiedLongitudinalPlanner:
       # acquire MODEL positive-I permission merely from a tiny raw slope.
       response_kind = MotionResponseKind.ABSOLUTE_ACC
     elif (active and healthy and not reset and not forced_decel and not reasons
-        and (not self.reference_overridden or ordinary_acc_cap or cruise_response_bound or closing_acc_cap)
+        and (not self.reference_overridden or ordinary_acc_cap or cruise_response_bound)
         and planner.source == LongitudinalPlanSourceSP.cruise):
       lead_sources = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
       lead_index = lead_sources.index(planner.mpc.source) if planner.mpc.source in lead_sources else None
@@ -770,11 +732,6 @@ class UnifiedLongitudinalPlanner:
 
   def publish(self, message):
     intent = self.planner.motion_intent
-    timing = self.planner.reference_timing.pending
-    if intent.valid and self.planner.mpc.solution_status == 0 and timing is not None:
-      self.lead_closing_request.publish(timing.producer_ns, float(message.aTarget))
-    else:
-      self.lead_closing_request.clear()
     message.motionIntent.version = intent.version
     message.motionIntent.mode = intent.mode
     message.motionIntent.reasons = int(intent.reasons)
