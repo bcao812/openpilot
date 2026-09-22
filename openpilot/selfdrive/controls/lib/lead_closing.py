@@ -88,7 +88,16 @@ class _LeadHistory:
     if gap_ns <= 0 or gap_ns > MAX_SAMPLE_GAP_NS:
       self.seed(source_ns, distance, relative_speed, lead_speed)
       return False
-    predicted_change = 0.5 * (relative_speed + self.relative_speed) * (gap_ns / 1e9)
+    dt = gap_ns / 1e9
+    # Independent speed checks catch a single-frame velocity jump that hardly
+    # changes trapezoidal distance over 50 ms. These are engineering anomaly
+    # bounds with 0.5 m/s jitter allowance, not calibrated acceleration limits;
+    # sustained 8 m/s^2 lead braking remains inside the accepted domain.
+    if (abs(lead_speed - self.lead_speed) > 0.5 + 10.0 * dt
+        or abs(relative_speed - self.relative_speed) > 0.5 + 15.0 * dt):
+      self.seed(source_ns, distance, relative_speed, lead_speed)
+      return False
+    predicted_change = 0.5 * (relative_speed + self.relative_speed) * dt
     residual = abs(distance - self.distance - predicted_change)
     if residual > max(1.5, 0.03 * min(distance, self.distance)):
       self.seed(source_ns, distance, relative_speed, lead_speed)

@@ -198,6 +198,38 @@ def test_single_range_jump_restarts_the_full_qualification():
   assert update(guard, lead(distance=47.0), 13) is not None
 
 
+def test_single_speed_jump_and_rebound_restart_the_full_qualification():
+  # Both speeds jump; then relative speed alone; then absolute lead speed alone.
+  # Each case passes the instantaneous vLead - vEgo == vRel consistency check.
+  for speed, closing in ((25.0, 20.0), (35.0, 11.2), (35.0, 1.2)):
+    guard, before = qualify(closing=1.2, distance=30.0)
+    assert before.accel == pytest.approx(-1.44 / 27.72)
+    # The first case's trapezoidal range residual is only 0.47 m, despite an
+    # 18.8 m/s velocity jump. Range continuity alone would still admit it.
+    jumped = lead(speed=speed, closing=closing, distance=29.94)
+    assert update(guard, jumped, 7, v_ego=speed) is None, (speed, closing)
+    assert update(guard, lead(closing=1.2, distance=29.88), 8) is None
+    for frame in range(9, 14):
+      assert update(guard, lead(closing=1.2, distance=30.0 - 0.06 * (frame - 6)), frame) is None
+    restored = update(guard, lead(closing=1.2, distance=29.52), 14)
+    assert restored is not None and restored.qualified_duration == 0.3
+
+
+def test_sustained_eight_meter_per_second_squared_lead_braking_can_qualify_and_continue():
+  guard = LeadClosingConstraint()
+  for frame in range(21):
+    elapsed = frame * 0.05
+    # vLead = 23.8 - 8*t, and dRel is the integral of -1.2 - 8*t.
+    sample = lead(closing=1.2 + 8.0 * elapsed, distance=30.0 - 1.2 * elapsed - 4.0 * elapsed ** 2, aLeadK=-8.0)
+    result = update(guard, sample, frame)
+    if frame < 6:
+      assert result is None
+    else:
+      assert result is not None
+      assert result.qualified_duration == pytest.approx(elapsed)
+      assert -2.5 <= result.accel < 0.0
+
+
 def test_small_but_persistent_range_velocity_mismatch_cannot_qualify():
   guard = LeadClosingConstraint()
   # Each residual is 0.8 m (< the per-step limit), but six sum to 4.8 m.
@@ -258,10 +290,13 @@ def test_far_lead_can_qualify_before_it_enters_the_comfort_gap():
 def test_active_constraint_persists_below_entry_speed_but_releases_below_eight():
   guard, result = qualify(speed=14.0, closing=5.0, distance=26.0)
   assert result is not None
-  assert update(guard, lead(speed=13.5, closing=5.0, distance=25.75), 7, v_ego=13.5) is not None
-  assert update(guard, lead(speed=8.0, closing=5.0, distance=25.5), 8, v_ego=8.0) is not None
-  assert update(guard, lead(speed=7.99, closing=5.0, distance=25.25), 9, v_ego=7.99) is None
-  assert update(guard, lead(speed=13.5, closing=5.0, distance=25.0), 10, v_ego=13.5) is None
+  # Decelerate through the entry boundary with continuous lead velocities.
+  for step in range(1, 13):
+    speed = 14.0 - 0.5 * step
+    sample = lead(speed=speed, closing=5.0, distance=26.0 - 0.25 * step)
+    assert update(guard, sample, 6 + step, v_ego=speed) is not None
+  assert update(guard, lead(speed=7.99, closing=5.0, distance=22.75), 19, v_ego=7.99) is None
+  assert update(guard, lead(speed=13.5, closing=5.0, distance=22.5), 20, v_ego=13.5) is None
   # A never-active target cannot start braking below 50 km/h.
   _, result = qualify(speed=13.5, closing=5.0, distance=30.0)
   assert result is None

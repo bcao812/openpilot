@@ -4,7 +4,7 @@ Injected sampled targets isolate source/authority arbitration; continuous
 physical following is exercised separately with the actual native solution.
 """
 from copy import deepcopy
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -126,8 +126,30 @@ def test_mpc_failure_invalidates_closing_history(ordinary_policy):
   state = make_state(speed=25.0, target=28.0)
   warm(planner, controller, state)
   assert planner.reference_planner.closing_constraint is not None
-  planner.reference_planner.invalidate(25.0, 'test_input_loss')
+  failing_solver = Mock(wraps=planner.mpc.solver)
+  failing_solver.solve.return_value = 4
+  now = inputs(state, 9)
+  with patch.object(planner.mpc, 'solver', failing_solver):
+    planner.update(state, now_ns=now)
+  assert planner.mpc.solution_status == 4
+  assert not planner.motion_intent.valid
   assert planner.reference_planner.closing_constraint is None
   now = inputs(state, 10)
   planner.update(state, now_ns=now)
   assert planner.reference_planner.closing_constraint is None
+
+
+def test_closing_bound_discards_positive_feedback_history(ordinary_policy):
+  planner, controller = make_planner_owner(speed=25.0)
+  state = make_state(speed=25.0, target=28.0)
+  warm(planner, controller, state)
+  # Inject a previous-domain correction after establishing real TRACK history;
+  # the next actual wire contract must still revoke positive ACC feedback.
+  controller.pid.i = 0.2
+  inputs(state, 9)
+  with patch(SAMPLE, return_value=0.6):
+    plan, outputs = consume(planner, controller, state, 9)
+  assert planner.reference_planner.closing_constraint is not None
+  assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+  assert controller.pid.i <= 0.0
+  assert all(-3.5 <= value <= 0.0 for value in outputs)
