@@ -133,6 +133,21 @@ class TestModelParser(unittest.TestCase):
       with self.subTest(exception=exception), self.assertRaises(exception):
         ModelParser.parse_models({"bundles": [catalogue_bundle(1), bundle]})
 
+  def test_unknown_numeric_enums_fail_after_all_bundle_manifests_are_created(self):
+    for version in (REQUIRED_JSON_VERSION, REQUIRED_JSON_VERSION + 1):
+      for field in ("runner", "model_type"):
+        with self.subTest(version=version, field=field):
+          invalid_bundle = catalogue_bundle(1, version)
+          if field == "runner":
+            invalid_bundle["runner"] = 65535
+          else:
+            invalid_bundle["models"][0]["type"] = 65535
+          manifest = self.model_root / "vision-2.pkl.chunkmanifest"
+          manifest.unlink(missing_ok=True)
+          with self.assertRaisesRegex(RuntimeError, r"^Member was null\.$"):
+            ModelParser.parse_models({"bundles": [invalid_bundle, catalogue_bundle(2)]})
+          self.assertEqual(manifest.read_text(), "2")
+
   def test_empty_catalogue(self):
     self.assertEqual(ModelParser.parse_models({}), [])
     self.assertEqual(ModelParser.parse_models({"bundles": []}), [])

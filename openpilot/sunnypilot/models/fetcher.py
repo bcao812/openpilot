@@ -96,9 +96,15 @@ class ModelParser:
   @staticmethod
   def parse_models(json_data: dict) -> list[custom.ModelManagerSP.ModelBundle]:
     found_bundles = [ModelParser._parse_bundle(bundle) for bundle in json_data.get("bundles", [])]
-    # Compatibility only needs the normalized version, not a copy of every model and chunk.
-    return [bundle for bundle in found_bundles
-            if is_bundle_version_compatible({"minimumSelectorVersion": bundle.minimumSelectorVersion})]
+    compatible_bundles = []
+    for bundle in found_bundles:
+      # Preserve to_dict's rejection of unknown numeric enums without copying every artifact and chunk.
+      for model in bundle.models:
+        str(model.type)
+      str(bundle.runner)
+      if is_bundle_version_compatible({"minimumSelectorVersion": bundle.minimumSelectorVersion}):
+        compatible_bundles.append(bundle)
+    return compatible_bundles
 
 
 class ModelCache:
