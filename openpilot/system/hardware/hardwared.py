@@ -16,7 +16,7 @@ from openpilot.common.utils import strip_deprecated_keys
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_HW, set_core_affinity
-from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
+from openpilot.selfdrive.selfdrived.alertmanager import OFFROAD_ALERTS, set_offroad_alert
 from openpilot.common.hardware import HARDWARE, COMMA_HARDWARE
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.git import get_short_branch
@@ -109,12 +109,22 @@ prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
 
 
 def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_text: str | None=None):
-  state = (show_alert, extra_text if show_alert else None)
+  if not show_alert:
+    prev_offroad_states.pop(offroad_alert, None)
+    # remove() can fail without raising. Check each update so failed clears and
+    # externally re-created alerts are retried, without repeatedly removing absent keys.
+    if os.path.lexists(Params().get_param_path(offroad_alert)):
+      set_offroad_alert(offroad_alert, False, extra_text)
+    return
+
+  state = (show_alert, extra_text)
   if prev_offroad_states.get(offroad_alert, None) == state:
     return
+  prev_offroad_states.pop(offroad_alert, None)
   set_offroad_alert(offroad_alert, show_alert, extra_text)
-  # A failed write must remain eligible for retry on the next update.
-  prev_offroad_states[offroad_alert] = state
+  # Params.put() also discards error returns; only cache a confirmed visible alert.
+  if Params().get(offroad_alert) == dict(OFFROAD_ALERTS[offroad_alert], extra=extra_text or ''):
+    prev_offroad_states[offroad_alert] = state
 
 def touch_thread(end_event):
   count = 0
