@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from itertools import product
 from types import SimpleNamespace
 from pathlib import Path
 import tempfile
@@ -26,8 +27,86 @@ class FakeParams:
 
 class FakeDiagnostics:
   @staticmethod
-  def new_message():
-    return SimpleNamespace()
+  def new_message(**values):
+    return SimpleNamespace(**values)
+
+
+def attach_diagnostics_reference(message, field, factory, recorder, sample, values):
+  # Pre-optimization implementation, kept as an independent wire/error oracle.
+  if recorder is None or not recorder.enabled or sample is None:
+    return False
+  try:
+    diagnostics = factory.new_message()
+    for name, value in values.items():
+      setattr(diagnostics, name, value)
+    diagnostics.context = recorder.context(sample)
+    setattr(message, field, diagnostics)
+    return True
+  except Exception:
+    recorder.record_error()
+    return False
+
+
+def diagnostic_cases():
+  from opendbc.car.structs import car
+  from openpilot.cereal import log
+
+  def inputs():
+    return [
+      {"service": "carState", "monoTime": (1 << 63) + 17, "idKnown": True,
+       "knownFlags": 31, "flags": 27, "kind": "consumerSnapshot"},
+      {"service": "modelV2", "monoTime": 0, "idKnown": False,
+       "knownFlags": 0, "flags": 0, "kind": "consumerSnapshot"},
+      {"service": "carControl", "monoTime": UINT64_MAX, "idKnown": True,
+       "knownFlags": 1, "flags": 0, "kind": "localPublished"},
+    ]
+
+  return (
+    (log.LongitudinalPlan, "diagnostics", log.LongitudinalPlanDiagnostics, {"aTarget": -1.25}, {
+      "inputs": inputs(), "unified": True, "updateCompleted": True, "outcome": "completed",
+      "mpcUpdated": True, "solverAttempted": True, "solverCalls": UINT64_MAX, "solverResets": 7,
+      "solutionStatus": -1, "solverReturnKnown": False, "solverReturnStatus": 0,
+      "initialStateKnown": True, "initialSpeed": 2.5, "initialAccel": float("nan"),
+      "previousRequest": -0.0, "sampledAccelKnown": True, "sampledAccel": -1.125,
+      "pitchBiasBefore": float("-inf"), "pitchBiasAfter": float("inf"), "pitchCalls": 13,
+      "detailedTraceEnabled": True, "traceSequence": (1 << 53) + 7, "traceDropped": 2,
+      "analysis": {"version": 1, "planningMode": 2, "decisionMonoTimeKnown": True, "decisionMonoTime": UINT64_MAX,
+                   "passiveBefore": {"known": True, "consumerMonoTime": UINT64_MAX, "pitchFilterValue": float("nan")},
+                   "referenceCandidates": {"known": True, "mpcSource": "lead0", "mpcAccel": -1.25},
+                   "obstacleSummary": {"known": True, "times": [0.0, 0.2, 0.8], "sources": ["lead0", "lead1", "cruise"],
+                                       "distances": [12.0, float("inf"), float("nan")], "sourceRule": "fixture"}},
+    }),
+    (log.ControlsState, "longitudinalDiagnostics", log.LongitudinalControlDiagnostics, {"forceDecel": True}, {
+      "inputs": inputs(), "carControlMonoTime": UINT64_MAX, "controllerCalled": True, "targetAccel": -1.25,
+      "controllerAccel": float("nan"), "publishedAccel": -0.0, "accelMin": float("-inf"), "accelMax": float("inf"),
+      "stateBefore": "pid", "stateAfter": "stopping", "longActiveAtController": True,
+      "longActivePublished": False, "resumePublished": True, "nonfiniteActuators": True, "unified": True,
+      "decisionMonoTime": (1 << 63) + 11, "decisionMonoTimeKnown": True,
+      "analysis": {"version": 1, "motionInputsKnown": True, "planValid": True, "brakingPlanValid": False,
+                   "motionBefore": {"known": True, "phase": "tracking", "ids": inputs(), "creepT": float("nan")},
+                   "motionAfter": {"known": True, "phase": "stopping", "reasons": 3, "rearmAfterFault": True},
+                   "pose": {"known": True, "inputs": inputs(), "calibrationKnown": False, "deviceTimestamp": UINT64_MAX},
+                   "forceDecelKnown": True, "forceDecel": True},
+    }),
+    (log.SelfdriveState, "longitudinalDiagnostics", log.LongitudinalSelfdriveDiagnostics, {"enabled": True}, {
+      "inputs": inputs(), "version": 1, "carStateReused": True, "stateMachineInputKnown": True, "stateMachineCalled": True,
+      "stateBefore": "enabled", "stateAfter": "softDisabling", "enabledBefore": True, "activeBefore": True,
+      "enabledAfter": False, "activeAfter": False, "softDisableTimerBefore": (1 << 32) - 1, "softDisableTimerAfter": 7,
+      "events": [0, 1, (1 << 16) - 1], "eventsSP": [7, 9], "currentAlertTypes": ["warning", "softDisable"],
+      "motionCheckKnown": True, "motionVersion": 1, "motionDegraded": True, "motionWaitingForFreshInput": True,
+      "motionCommIssueAdded": True, "controlsForceDecel": True, "controlsForceDecelKnown": True,
+      "statePublished": "softDisabling", "enabledPublished": True, "activePublished": False,
+    }),
+    (car.CarOutput, "longitudinalDiagnostics", car.LongitudinalApplyDiagnostics, {"actuatorsOutput": {"accel": -1.25}}, {
+      "inputs": inputs(), "hasApply": True, "applySequence": UINT64_MAX, "applyFrame": 123, "controllerFrame": 456,
+      "controllerFrameKnown": True, "carControlMonoTime": UINT64_MAX, "carControlSPMonoTime": (1 << 63) + 9,
+      "carStateMonoTime": (1 << 53) + 3, "applyStartMonoTime": 100, "applyEndMonoTime": 110, "sendcanMonoTime": 120,
+      "canCount": 2, "canDigest": "a" * 64, "requestedAccel": float("nan"), "appliedAccel": -0.0,
+      "requestedLongActive": True, "appliedLongActive": False, "requestedResume": True, "appliedResume": False,
+      "authorityRestricted": True, "authorityReason": "gasPressed+brakePressed", "appliedLongControlState": "off",
+      "lastDisposition": "applying", "dispositionFrame": 123, "dispositionMonoTime": 90, "initialized": True, "passive": False,
+    }),
+  )
 
 
 class TestLongitudinalLogging(unittest.TestCase):
@@ -122,6 +201,82 @@ class TestLongitudinalLogging(unittest.TestCase):
       item, = capture_inputs(state, ("carState",))
       self.assertEqual(item["knownFlags"], sum(CHECK_FLAGS.values()))
       self.assertEqual(item["flags"], sum(CHECK_FLAGS.values()) if value else 0)
+
+  def test_all_health_bit_combinations_and_seen_zero_identity(self):
+    for health in product((True, False, None), repeat=len(CHECK_FLAGS)):
+      with self.subTest(health=health):
+        state = SimpleNamespace(logMonoTime={"carState": 0},
+                                **{name: {"carState": value} for name, value in zip(CHECK_FLAGS, health, strict=True)})
+        item, = capture_inputs(state, ("carState",))
+        expected_flags = sum(flag for flag, value in zip(CHECK_FLAGS.values(), health, strict=True) if value is True)
+        expected_known = sum(flag for flag, value in zip(CHECK_FLAGS.values(), health, strict=True) if value is not None)
+        self.assertEqual(item["flags"], expected_flags)
+        self.assertEqual(item["knownFlags"], expected_known)
+        self.assertEqual(item["idKnown"], bool(expected_flags & CHECK_FLAGS["seen"]))
+
+  def test_health_membership_changes_and_service_order_are_not_cached(self):
+    state = SimpleNamespace(logMonoTime={"carState": 0, "modelV2": UINT64_MAX}, valid={"modelV2": True},
+                            seen={"carState": True}, updated={"modelV2": False})
+    services = ("modelV2", "absent", "carState", "modelV2")
+    first = capture_inputs(state, iter(services))
+    self.assertEqual([item["service"] for item in first], ["modelV2", "carState", "modelV2"])
+    self.assertEqual([item["flags"] for item in first], [1, 8, 1])
+    self.assertEqual([item["knownFlags"] for item in first], [17, 8, 17])
+    self.assertTrue(first[1]["idKnown"])
+
+    state.valid["modelV2"] = False
+    state.seen.pop("carState")
+    del state.updated
+    state.freq_ok = {"carState": True}
+    state.logMonoTime["absent"] = 123
+    second = capture_inputs(state, iter(services))
+    self.assertEqual([item["service"] for item in second], list(services))
+    self.assertEqual([item["flags"] for item in second], [0, 0, 4, 0])
+    self.assertEqual([item["knownFlags"] for item in second], [1, 0, 4, 1])
+    self.assertFalse(second[2]["idKnown"])
+    self.assertEqual([item["flags"] for item in first], [1, 8, 1])
+
+  def test_health_values_never_invoke_bool_equality_or_integer_coercion(self):
+    import numpy as np
+
+    class PoisonHealth:
+      def __bool__(self):
+        raise AssertionError("health __bool__")
+
+      def __eq__(self, other):
+        raise AssertionError("health __eq__")
+
+      def __int__(self):
+        raise AssertionError("health __int__")
+
+    for value in (np.bool_(True), np.int64(1), np.array([True, False]), float("nan"), PoisonHealth()):
+      with self.subTest(value_type=type(value).__name__):
+        state = SimpleNamespace(logMonoTime={"carState": 0}, **{name: {"carState": value} for name in CHECK_FLAGS})
+        item, = capture_inputs(state, ("carState",))
+        self.assertEqual(item["knownFlags"], 0)
+        self.assertEqual(item["flags"], 0)
+        self.assertFalse(item["idKnown"])
+
+  def test_health_getter_order_and_failed_snapshot_isolation(self):
+    accesses = []
+
+    class HealthSource(dict):
+      def __init__(self, name):
+        self.name = name
+
+      def get(self, service):
+        accesses.append((self.name, service))
+        if self.name == "updated" and service == "modelV2":
+          raise RuntimeError("health source failed")
+        return True
+
+    state = SimpleNamespace(logMonoTime={"carState": 1, "modelV2": 2},
+                            **{name: HealthSource(name) for name in CHECK_FLAGS})
+    recorder = self.recorder()
+    observer = SimpleNamespace(recorder=recorder, capture=lambda: capture_inputs(state, ("carState", "modelV2")))
+    self.assertIsNone(observe(observer, "capture"))
+    self.assertEqual(recorder.errors, 1)
+    self.assertEqual(accesses, [(name, service) for service in ("carState", "modelV2") for name in CHECK_FLAGS])
 
   def test_local_input_does_not_invent_subscriber_health(self):
     source = local_input("carState", (1 << 53) + 1, False)
@@ -255,6 +410,76 @@ class TestLongitudinalLogging(unittest.TestCase):
     with patch.object(recorder, "context", side_effect=RuntimeError("context")):
       self.assertFalse(attach_diagnostics(message, "diagnostics", FakeDiagnostics, recorder, sample, {}))
     self.assertEqual(vars(message), {"accel": 0.12})
+
+  def test_real_diagnostic_messages_match_reference_fields_and_wire(self):
+    for parent_factory, field_name, factory, parent_values, values in diagnostic_cases():
+      for frame in (0, UINT64_MAX):
+        with self.subTest(schema=factory, frame=frame):
+          recorder = self.recorder(clock=lambda: (1 << 63) + 5, manifest_interval=2)
+          recorder.session = UINT64_MAX
+          sample = recorder.finish(recorder.begin(frame))
+          expected = parent_factory.new_message(**parent_values)
+          actual = parent_factory.new_message(**parent_values)
+          before = json.dumps(values, sort_keys=True)
+          self.assertTrue(attach_diagnostics_reference(expected, field_name, factory, recorder, sample, values))
+          self.assertTrue(attach_diagnostics(actual, field_name, factory, recorder, sample, values))
+          # JSON preserves NaN/Inf tokens and signed zero for the field comparison;
+          # exact bytes additionally check lossless integers, lists and pointers.
+          self.assertEqual(json.dumps(actual.to_dict(), sort_keys=True), json.dumps(expected.to_dict(), sort_keys=True))
+          self.assertEqual(actual.to_bytes(), expected.to_bytes())
+          self.assertEqual(json.dumps(values, sort_keys=True), before)
+          self.assertEqual(recorder.errors, 0)
+
+  def test_real_diagnostic_context_replaces_values_context_as_before(self):
+    for parent_factory, field_name, factory, parent_values, values in diagnostic_cases():
+      with self.subTest(schema=factory):
+        recorder = self.recorder(clock=lambda: 100)
+        sample = recorder.finish(recorder.begin())
+        values = {**values, "context": {"producer": "caller context", "sequence": 999}}
+        actual = parent_factory.new_message(**parent_values)
+        expected = parent_factory.new_message(**parent_values)
+        self.assertTrue(attach_diagnostics_reference(expected, field_name, factory, recorder, sample, values))
+        self.assertTrue(attach_diagnostics(actual, field_name, factory, recorder, sample, values))
+        self.assertEqual(actual.to_bytes(), expected.to_bytes())
+        self.assertEqual(getattr(actual, field_name).context.producer, "fixture")
+        self.assertEqual(getattr(actual, field_name).context.sequence, 1)
+
+  def test_real_diagnostic_failures_leave_existing_parent_bytes_unchanged(self):
+    for parent_factory, field_name, factory, parent_values, values in diagnostic_cases():
+      failures = (
+        {**values, "noSuchDiagnosticField": 1},
+        {**values, "num_first_segment_words": 64},
+        {**values, "which": "invalidDiagnosticUnion"},
+        {**values, None: 1},
+        {**values, "inputs": object()},
+        {**values, "inputs": [{"service": "partially written", "monoTime": -1}]},
+        {**values, "inputs": [{"service": "partially written", "kind": "invalidInputKind"}]},
+        {**values, "context": {"producer": "partially written", "sequence": -1}},
+      )
+      for failed_values in failures:
+        for implementation in (attach_diagnostics_reference, attach_diagnostics):
+          with self.subTest(schema=factory, failure=failed_values, implementation=implementation.__name__):
+            recorder = self.recorder(clock=lambda: 100)
+            sample = recorder.finish(recorder.begin())
+            actual = parent_factory.new_message(**parent_values)
+            self.assertTrue(implementation(actual, field_name, factory, recorder, sample, values))
+            before = actual.as_reader().as_builder().to_bytes()
+            self.assertFalse(implementation(actual, field_name, factory, recorder, sample, failed_values))
+            self.assertEqual(actual.as_reader().as_builder().to_bytes(), before)
+            self.assertEqual(recorder.errors, 1)
+
+  def test_real_diagnostic_context_serialization_failure_keeps_parent(self):
+    for parent_factory, field_name, factory, parent_values, values in diagnostic_cases():
+      with self.subTest(schema=factory):
+        recorder = self.recorder(clock=lambda: 100)
+        sample = recorder.finish(recorder.begin())
+        actual = parent_factory.new_message(**parent_values)
+        self.assertTrue(attach_diagnostics(actual, field_name, factory, recorder, sample, values))
+        before = actual.as_reader().as_builder().to_bytes()
+        with patch.object(recorder, "context", return_value={"producer": "invalid context", "session": -1}):
+          self.assertFalse(attach_diagnostics(actual, field_name, factory, recorder, sample, values))
+        self.assertEqual(actual.as_reader().as_builder().to_bytes(), before)
+        self.assertEqual(recorder.errors, 1)
 
   def test_observe_isolates_a_broken_observer(self):
     recorder = self.recorder()

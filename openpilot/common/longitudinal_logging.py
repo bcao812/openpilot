@@ -207,24 +207,32 @@ def configuration_encoding(params):
 def capture_inputs(state, services):
   result = []
   identities = getattr(state, "logMonoTime", {})
-  health_sources = None
+  get_valid = None
   for service in services:
     if service not in identities:
       continue
-    if health_sources is None:
-      health_sources = tuple((getattr(state, name, {}).get, flag) for name, flag in CHECK_FLAGS.items())
+    if get_valid is None:
+      # Bind once per snapshot, not across calls: SubMaster can replace these
+      # mappings, and observers must also see newly added or removed health.
+      get_valid = getattr(state, "valid", {}).get
+      get_alive = getattr(state, "alive", {}).get
+      get_freq_ok = getattr(state, "freq_ok", {}).get
+      get_seen = getattr(state, "seen", {}).get
+      get_updated = getattr(state, "updated", {}).get
     mono = identities[service]
     valid_id = is_uint64(mono)
-    known_flags = flags = 0
-    for get_health, flag in health_sources:
-      value = get_health(service)
-      # Missing and malformed values both leave the health bit unknown.
-      # Never coerce a value or invoke its __bool__ during observation.
-      if value is True:
-        known_flags |= flag
-        flags |= flag
-      elif value is False:
-        known_flags |= flag
+    valid = get_valid(service)
+    alive = get_alive(service)
+    freq_ok = get_freq_ok(service)
+    seen = get_seen(service)
+    updated = get_updated(service)
+    # The five bits are the fixed CHECK_FLAGS wire layout. Avoid an inner
+    # Python loop for every service; only raw booleans are known, never a
+    # coerced truth value (which may run arbitrary __bool__ code).
+    flags = ((1 if valid is True else 0) | (2 if alive is True else 0) | (4 if freq_ok is True else 0)
+             | (8 if seen is True else 0) | (16 if updated is True else 0))
+    known_flags = (flags | (1 if valid is False else 0) | (2 if alive is False else 0) | (4 if freq_ok is False else 0)
+                   | (8 if seen is False else 0) | (16 if updated is False else 0))
     known_id = valid_id and (mono > 0 or bool(flags & CHECK_FLAGS["seen"]))
     result.append({
       "service": service, "monoTime": int(mono) if valid_id else 0, "idKnown": known_id,
@@ -326,9 +334,17 @@ def attach_diagnostics(message, field, factory, recorder, sample, values):
   if recorder is None or not recorder.enabled or sample is None:
     return False
   try:
-    diagnostics = factory.new_message()
-    for name, value in values.items():
-      setattr(diagnostics, name, value)
+    # Let the message library populate fields without a Python setattr loop.
+    # Keep the private builder until every field and context has serialized:
+    # an observer failure must not leave a partially written parent message.
+    if "num_first_segment_words" in values or "which" in values:
+      # pycapnp treats the former as an allocation argument and ignores the
+      # latter in from_dict. Preserve the old setter/error behavior for both.
+      diagnostics = factory.new_message()
+      for name, value in values.items():
+        setattr(diagnostics, name, value)
+    else:
+      diagnostics = factory.new_message(**values)
     diagnostics.context = recorder.context(sample)
     setattr(message, field, diagnostics)
     return True
