@@ -255,7 +255,7 @@ def test_sp_update_sees_merged_events_and_preserves_external_message_decode(can_
     external = EventsSP()
     external.add(EventNameSP.manualLongitudinalRequired)
     incoming.longitudinalPlanSP.events = external.to_msg()
-    daemon.sm.update_msgs(2.0, [serialized(incoming)])
+    daemon.sm.update_msgs(2.05, [serialized(incoming)])
     results.append(event_step(daemon, car_state, legacy=legacy))
     assert daemon.car_events.update.call_count == int(can_valid)
     assert daemon.car_events_sp.update.call_count == int(can_valid)
