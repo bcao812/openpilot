@@ -110,7 +110,7 @@ def test_merge_retains_receiver_lifetime_and_permanent_alert_delay(event_class, 
 def event_daemon(initial_state=State.enabled):
   control_state = new_event('controlsState')
   control_state.controlsState.lateralControlState.init('pidState')
-  daemon, car_state = selfdrive_event_harness(control_state)
+  daemon, car_state = selfdrive_event_harness(control_state.as_reader())
   daemon.CP.brand = 'honda'
   daemon.CP.carFingerprint = CAR.HONDA_ACCORD
   daemon.CP.pcmCruise = daemon.cp_pcm_cruise = True

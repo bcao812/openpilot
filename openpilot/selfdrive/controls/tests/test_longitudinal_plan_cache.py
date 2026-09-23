@@ -151,10 +151,14 @@ def test_cached_plan_cannot_restore_authority_after_a_driver_override(authority)
   harness.car_state.gasPressed = False
   harness.selfdrive_state.enabled = True
   command, motion = harness.step(new_plan=False)
-  assert motion.degraded and command.actuators.accel <= DEGRADED_ACCEL + 1e-6
+  # A healthy override waits for a fresh plan without reporting an input
+  # fault. The existing owner still constrains acceleration and resume.
+  assert harness.control._longitudinal_plan_cache is cached
+  assert command.longActive and motion.waitingForFreshInput and not motion.degraded
+  assert command.actuators.accel <= DEGRADED_ACCEL + 1e-6
   assert not command.cruiseControl.resume
   command, motion = harness.step()
-  assert command.longActive and not motion.degraded
+  assert command.longActive and not motion.waitingForFreshInput and not motion.degraded
 
 
 def test_actuator_delay_change_invalidates_projection_and_requires_new_plan_identity():
@@ -215,8 +219,13 @@ def test_reader_with_mutable_backing_redecodes_and_rejects_mutation_without_a_ne
   backing = bytearray(event.to_bytes())
   buffer = memoryview(backing).toreadonly() if backing_kind == 'readonly_memoryview' else backing
   with log.Event.from_bytes(buffer) as reader:
-    harness.control.sm.update_msgs(harness.now_ns / 1e9, [reader])
+    # Receive the duplicate at the next control tick, preserving its Event
+    # identity. Two receives at the same wall time would give FrequencyTracker
+    # an artificial zero interval before the controller can examine the input.
+    receipt_ns = harness.now_ns + CONTROL_STEP_NS
+    harness.control.sm.update_msgs(receipt_ns / 1e9, [reader])
     harness.step(new_plan=False)
+    assert harness.now_ns == receipt_ns
     assert harness.control._longitudinal_plan_cache is None
     receipt = harness.control.sm.recv_frame['longitudinalPlan']
     message = harness.control.sm['longitudinalPlan']
