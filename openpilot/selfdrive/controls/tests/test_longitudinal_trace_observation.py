@@ -441,7 +441,7 @@ def test_complete_trace_emission_matches_previous_json_bytes_and_counters(unifie
          patch.object(longitudinal_trace, 'json_value', convert), \
          patch.object(longitudinal_trace.secrets, 'randbits', return_value=(1 << 64) - 1), \
          patch.object(longitudinal_trace.time, 'monotonic_ns', return_value=(1 << 63) + 3):
-      recorder = LongitudinalTrace(emit=lambda event, **payload: events.append((event, payload)), capacity=2, batch_size=1)
+      recorder = LongitudinalTrace(emit=lambda event, _events=events, **payload: _events.append((event, payload)), capacity=2, batch_size=1)
       for index, status in enumerate((0, 4, 0)):
         enqueue_attempt(recorder, unified=unified, mono=(1 << 64) - 1 - index, status=status)
       recorder._emit(list(recorder.queue))
