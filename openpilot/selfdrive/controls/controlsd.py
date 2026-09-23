@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
+import gc
 import math
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from functools import cache
 from numbers import Number
+
+import capnp
 
 from openpilot.cereal import log
 from opendbc.car.structs import car
@@ -40,6 +44,60 @@ LaneChangeDirection = log.LaneChangeDirection
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
 
+@dataclass(frozen=True)
+class _LongitudinalPlanCache:
+  message: object
+  car_params: object
+  subscriber: object
+  key: tuple
+  intent: MotionIntent
+  command_identity: tuple
+
+
+@cache
+def _bytes_reader_owner_type():
+  # The concrete internal class is not exported by pycapnp. Derive its type
+  # from an actual bytes input, and require the checked reference layout.
+  try:
+    payload = log.Event.new_message().to_bytes()
+    with log.Event.from_bytes(payload) as reader:
+      owner = reader._parent
+      refs = gc.get_referents(owner)
+      if (type(owner).__name__ == '_FlatArrayMessageReader' and len(refs) == 3
+          and sum(ref is payload for ref in refs) == 1 and all(ref is None or ref is payload for ref in refs)):
+        return type(owner)
+  except Exception:
+    pass
+  return None
+
+
+def _has_received_reader_owner(message):
+  # A reader interface alone is insufficient: builder views and from_bytes
+  # on bytearray/read-only memoryview can still share mutable storage. In
+  # pycapnp 2.1.0, this owner's GC slots are _parent, _object_to_pin and
+  # _buffer_view. Require a single direct bytes pin and two empty slots.
+  # Unknown versions, ownership APIs or reference layouts decode each frame.
+  try:
+    if getattr(capnp, '__version__', None) != '2.1.0':
+      return False
+    reader_type = getattr(capnp.lib.capnp, '_DynamicStructReader', None)
+    owner_type = getattr(capnp.lib.capnp, '_MessageReader', None)
+    if reader_type is None or owner_type is None:
+      return False
+    owner = message
+    for _ in range(3):  # longitudinalPlan -> Event -> message reader
+      if not isinstance(owner, reader_type):
+        if not isinstance(owner, owner_type) or type(owner) is not _bytes_reader_owner_type():
+          return False
+        refs = gc.get_referents(owner)
+        return (len(refs) == 3 and sum(type(ref) is bytes for ref in refs) == 1
+                and all(ref is None or type(ref) is bytes for ref in refs))
+      owner = owner._parent
+  except Exception:
+    return False
+  return False
+
+
 class Controls(ControlsExt):
   def __init__(self) -> None:
     self.params = Params()
@@ -66,6 +124,7 @@ class Controls(ControlsExt):
     self.calibrated_pose: Pose | None = None
 
     self.LoC = LongControl(self.CP, self.CP_SP)
+    self._longitudinal_plan_cache = None
     self.reference_timing = ReferenceTimingConsumer()
     self.reference_timing_check = None
     self.longitudinal_observation = ControlObservation.create(self.CP, self.CP_SP)
@@ -93,6 +152,40 @@ class Controls(ControlsExt):
       device_motion = Pose.from_device_motion(self.sm['deviceMotion'])
       self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_motion)
       observe(longitudinal_observation, "pose_updated", self.sm, self.pose_calibrator, self.calibrated_pose)
+
+  def _decode_longitudinal_plan(self, long_plan):
+    mode = self.LoC.longitudinal_mode
+    action_t = self.CP.longitudinalActuatorDelay + DT_MDL if mode == LongitudinalMode.UNIFIED else None
+    recv_frame = getattr(self.sm, 'recv_frame', {}).get('longitudinalPlan')
+    key = (recv_frame, self.sm.logMonoTime['longitudinalPlan'], mode, action_t)
+    cached = getattr(self, '_longitudinal_plan_cache', None)
+    if (cached is not None and cached.message is long_plan and cached.car_params is self.CP
+        and cached.subscriber is self.sm and cached.key == key):
+      return cached.intent, cached.command_identity
+
+    self._longitudinal_plan_cache = None
+    intent = MotionIntent.from_message(long_plan.motionIntent)
+    command_identity = ()
+    projection_numbers = ()
+    if mode == LongitudinalMode.UNIFIED:
+      speeds, accels = tuple(long_plan.speeds), tuple(long_plan.accels)
+      reference = long_plan.reference
+      # This local fact restores the old strong-departure interpretation; it
+      # cannot replace the sampled execution target or producer permission.
+      intent = replace(intent, release_accel=get_departure_accel_from_plan(
+        speeds, accels, ModelConstants.T_IDXS[:CONTROL_N], action_t, reference.constraintAccel))
+      command_identity = (int(long_plan.modelMonoTime), float(long_plan.aTarget), bool(long_plan.shouldStop),
+                          int(long_plan.solverStatus), intent, float(reference.accel),
+                          float(reference.constraintAccel), bool(reference.overridden), speeds, accels, action_t)
+      projection_numbers = (command_identity[1], command_identity[5], command_identity[6], action_t, *speeds, *accels)
+    if recv_frame is not None and _has_received_reader_owner(long_plan):
+      # Reusing a tuple containing NaN can change identity comparisons (NaN
+      # is not equal to itself). Preserve the original decoding path for it.
+      if intent.braking_accel is not None:
+        projection_numbers += (intent.braking_accel,)
+      if all(math.isfinite(value) for value in projection_numbers):
+        self._longitudinal_plan_cache = _LongitudinalPlanCache(long_plan, self.CP, self.sm, key, intent, command_identity)
+    return intent, command_identity
 
   def state_control(self):
     longitudinal_observation = getattr(self, "longitudinal_observation", None)
@@ -144,25 +237,18 @@ class Controls(ControlsExt):
       CC.longActive = False
     if self.LoC.unified or long_plan.solverStatus != 0:
       CC.longActive = CC.longActive and not CS.gasPressed and not CS.brakePressed
-    motion_intent = MotionIntent.from_message(long_plan.motionIntent) if self.LoC.unified else None
+    motion_intent, command_identity = self._decode_longitudinal_plan(long_plan) if self.LoC.unified else (None, ())
+    if not self.LoC.unified:
+      self._longitudinal_plan_cache = None
     now_ns = time.monotonic_ns() if self.LoC.unified else None
     reference_valid = True
     self.reference_timing_check = None
     if self.LoC.longitudinal_mode == LongitudinalMode.UNIFIED:
-      # This local fact restores the old strong-departure interpretation; it
-      # cannot replace the sampled execution target or producer permission.
-      speeds, accels = tuple(long_plan.speeds), tuple(long_plan.accels)
-      action_t = self.CP.longitudinalActuatorDelay + DT_MDL
-      motion_intent = replace(motion_intent, release_accel=get_departure_accel_from_plan(
-        speeds, accels, ModelConstants.T_IDXS[:CONTROL_N], action_t, long_plan.reference.constraintAccel))
       # Preserve all three times: source epoch, LP Event availability and this
       # actual consumption. Only source age can qualify a measured reference.
       self.reference_timing_check = self.reference_timing.consume(
         long_plan.reference, self.sm.logMonoTime['longitudinalPlan'], now_ns,
-        command_identity=(int(long_plan.modelMonoTime), float(long_plan.aTarget), bool(long_plan.shouldStop),
-                          int(long_plan.solverStatus), motion_intent, float(long_plan.reference.accel),
-                          float(long_plan.reference.constraintAccel), bool(long_plan.reference.overridden),
-                          speeds, accels, action_t))
+        command_identity=command_identity)
       if (self.reference_timing_check.valid
           and (motion_intent.producer_instance_ns <= 0 or motion_intent.producer_instance_ns != self.reference_timing_check.timing.instance_ns)):
         self.reference_timing_check = replace(self.reference_timing_check, valid=False, reason='intent_reference_instance_mismatch')

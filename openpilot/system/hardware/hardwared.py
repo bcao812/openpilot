@@ -109,10 +109,12 @@ prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
 
 
 def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_text: str | None=None):
-  if prev_offroad_states.get(offroad_alert, None) == (show_alert, extra_text):
+  state = (show_alert, extra_text if show_alert else None)
+  if prev_offroad_states.get(offroad_alert, None) == state:
     return
-  prev_offroad_states[offroad_alert] = (show_alert, extra_text)
   set_offroad_alert(offroad_alert, show_alert, extra_text)
+  # A failed write must remain eligible for retry on the next update.
+  prev_offroad_states[offroad_alert] = state
 
 def touch_thread(end_event):
   count = 0
@@ -372,7 +374,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     is_unsupported_combo=False
     startup_conditions["not_tici"] = not is_unsupported_combo
     onroad_conditions["not_tici"] = not is_unsupported_combo
-    set_offroad_alert("Offroad_TiciSupport", is_unsupported_combo, extra_text=build_metadata.channel)
+    set_offroad_alert_if_changed("Offroad_TiciSupport", is_unsupported_combo, extra_text=build_metadata.channel)
 
     # if the temperature enters the danger zone, go offroad to cool down
     onroad_conditions["device_temp_good"] = thermal_status < ThermalStatus.critical

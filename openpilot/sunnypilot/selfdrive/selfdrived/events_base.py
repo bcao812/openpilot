@@ -143,6 +143,12 @@ class EventsBase:
     for e in events:
       bisect.insort(self.events, e.name.raw)
 
+  def add_from(self, events: 'EventsBase') -> None:
+    """Merge a local collection in the same namespace, without its static/counter state."""
+    if events.events:
+      self.events.extend(events.events)
+      self.events.sort()
+
   def to_msg(self):
     ret = []
     for event_name in self.events:
