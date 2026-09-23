@@ -1,10 +1,12 @@
 import ast
 import json
 import logging
+import math
 import threading
 import time
 from collections import deque
 from collections.abc import Mapping
+from numbers import Integral, Real
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from unittest.mock import Mock, patch
@@ -17,12 +19,55 @@ from opendbc.car.honda.values import CAR
 from openpilot.common.logging_extra import SwagFormatter, SwagLogger
 from openpilot.common.longitudinal_logging import PLANNER_INPUTS
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
+from openpilot.selfdrive.controls.lib import longitudinal_trace
 from openpilot.selfdrive.controls.lib.longitudinal_trace import (
   DETAIL_SCHEMA, INPUT_SERVICES, LEAD_FIELDS, MOTION_TRACE_SCHEMA, TRACE_FIELDS, UNIFIED_TRACE_FIELDS,
-  LongitudinalTrace, TraceSample, TraceSerializationError, UnixDomainSocketHandler, immutable_value, json_value,
+  LongitudinalTrace, TraceSample, TraceSerializationError, UnixDomainSocketHandler, _TraceMapping, _TraceTuple, immutable_value, json_value,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
+
+
+def immutable_value_reference(value):
+  # Frozen b4a2318e conversion, independent of the production fast paths.
+  if type(value) is _TraceMapping or type(value) is _TraceTuple:
+    return value
+  if type(value) is int or type(value) is float:
+    return value
+  if value is None or isinstance(value, (str, bool)):
+    return value
+  if isinstance(value, Integral):
+    return int(value)
+  if isinstance(value, Real):
+    return float(value)
+  if isinstance(value, Mapping):
+    return _TraceMapping(value)
+  if isinstance(value, (tuple, list)):
+    return _TraceTuple(value)
+  if hasattr(value, 'tolist'):
+    return immutable_value_reference(value.tolist())
+  raise TypeError('Unsupported trace value')
+
+
+def json_value_reference(value):
+  value_type = type(value)
+  if value_type is float:
+    return value if math.isfinite(value) else None
+  if value is None or value_type is str or value_type is bool or value_type is int:
+    return value
+  if isinstance(value, Mapping):
+    return {key: json_value_reference(item) for key, item in value.items()}
+  if isinstance(value, (tuple, list)):
+    return tuple(json_value_reference(item) for item in value)
+  if isinstance(value, float) and not math.isfinite(value):
+    return None
+  if value is None or isinstance(value, (str, bool, int, float)):
+    return value
+  raise TypeError('Trace payload is not an immutable JSON snapshot')
+
+
+def encoded_json(value):
+  return json.dumps(value, separators=(',', ':'), allow_nan=False).encode('utf8')
 
 
 class InputState(dict):
@@ -352,6 +397,106 @@ def test_external_readonly_view_is_copied_before_reusing_trace_snapshot():
     del frozen._data
 
 
+def test_frozen_trace_json_bytes_match_reference_and_keep_both_sides_detached():
+  maximum_id = (1 << 64) - 1
+  matrix = np.array([[0.0, -0.0, float('nan')], [float('inf'), float('-inf'), 1.25]])
+  labels = ['control "sample"', 'line\nnext', '控制']
+  backing = {'identity': np.uint64(maximum_id), 'decimal': str(maximum_id)}
+  values = {
+    'schema': MOTION_TRACE_SCHEMA,
+    'native': {'matrix': matrix, 'labels': labels},
+    'inputs': [MappingProxyType(backing)],
+    'scalars': (np.int64(-7), np.float32(0.25), np.float64('nan'), np.bool_(True), False, None),
+    'empty': ({}, [], ()),
+  }
+  with patch.object(longitudinal_trace, 'immutable_value', immutable_value_reference):
+    reference = immutable_value_reference(values)
+  frozen = immutable_value(values)
+  expected = encoded_json(json_value_reference(reference))
+  converted = json_value(frozen)
+  assert encoded_json(converted) == expected
+  assert encoded_json(json_value_reference(frozen)) == expected
+  assert converted['inputs'][0]['identity'] == maximum_id
+  assert converted['inputs'][0]['decimal'] == str(maximum_id)
+  assert converted['native']['matrix'] == ((0.0, -0.0, None), (None, None, 1.25))
+
+  matrix.fill(99.0)
+  labels.append('later frame')
+  backing['identity'] = 0
+  values['native']['new_field'] = True
+  # The JSON copy can be modified too without changing the queued snapshot.
+  converted['native']['matrix'] = ((999.0,),)
+  converted['inputs'][0]['identity'] = 0
+  assert encoded_json(json_value(frozen)) == expected
+  assert immutable_value(frozen) is frozen
+  assert immutable_value(frozen['native']['matrix']) is frozen['native']['matrix']
+
+
+@pytest.mark.parametrize('unified', [False, True])
+def test_complete_trace_emission_matches_previous_json_bytes_and_counters(unified):
+  results = []
+  for freeze, convert in ((immutable_value_reference, json_value_reference), (immutable_value, json_value)):
+    events = []
+    with patch.object(longitudinal_trace, 'immutable_value', freeze), \
+         patch.object(longitudinal_trace, 'json_value', convert), \
+         patch.object(longitudinal_trace.secrets, 'randbits', return_value=(1 << 64) - 1), \
+         patch.object(longitudinal_trace.time, 'monotonic_ns', return_value=(1 << 63) + 3):
+      recorder = LongitudinalTrace(emit=lambda event, **payload: events.append((event, payload)), capacity=2, batch_size=1)
+      for index, status in enumerate((0, 4, 0)):
+        enqueue_attempt(recorder, unified=unified, mono=(1 << 64) - 1 - index, status=status)
+      recorder._emit(list(recorder.queue))
+      assert recorder.dropped == 1
+      assert recorder.transport_accepted_samples == 2
+      assert recorder.failures == 0
+      assert events[0][1]['schema'] == (MOTION_TRACE_SCHEMA if unified else 1)
+      results.append((encoded_json(events), recorder.status()))
+  assert results[0] == results[1]
+
+
+def test_private_container_subclasses_keep_their_overridden_public_iteration():
+  class MappingSubclass(_TraceMapping):
+    def items(self):
+      return (('visible', ((1 << 64) - 1, float('inf'))),)
+
+  class TupleSubclass(_TraceTuple):
+    def __iter__(self):
+      return iter(((1 << 64) - 1, float('nan')))
+
+  for value, expected in (
+    (MappingSubclass({'hidden': [1, 2]}), {'visible': ((1 << 64) - 1, None)}),
+    (TupleSubclass([1, 2]), ((1 << 64) - 1, None)),
+  ):
+    assert json_value(value) == expected
+    assert encoded_json(json_value(value)) == encoded_json(json_value_reference(value))
+    with patch.object(longitudinal_trace, 'immutable_value', immutable_value_reference):
+      reference = immutable_value_reference(value)
+    frozen = immutable_value(value)
+    assert frozen is not value
+    assert type(frozen) in (_TraceMapping, _TraceTuple)
+    assert encoded_json(json_value(frozen)) == encoded_json(json_value_reference(reference))
+
+
+@pytest.mark.parametrize('sequence_type', [tuple, list])
+def test_sequence_mapping_subclasses_keep_mapping_precedence(sequence_type):
+  class SequenceMapping(sequence_type, Mapping):
+    def __getitem__(self, key):
+      return {'second': ((1 << 64) - 1, float('nan')), 'first': True}[key]
+
+    def __iter__(self):
+      return iter(('second', 'first'))
+
+    def __len__(self):
+      return 2
+
+  value = SequenceMapping()
+  expected = {'second': ((1 << 64) - 1, None), 'first': True}
+  assert json_value(value) == expected
+  assert encoded_json(json_value(value)) == encoded_json(json_value_reference(value))
+  with patch.object(longitudinal_trace, 'immutable_value', immutable_value_reference):
+    reference = immutable_value_reference(value)
+  assert encoded_json(json_value(immutable_value(value))) == encoded_json(json_value_reference(reference))
+
+
 def test_trace_scalar_fast_path_preserves_numpy_subclass_and_nonfinite_values():
   class IntSubclass(int):
     pass
@@ -367,8 +512,10 @@ def test_trace_scalar_fast_path_preserves_numpy_subclass_and_nonfinite_values():
   assert json_value(frozen) == ((1 << 64) - 1, 7, 1.5, 4, 2.5, True, False, None, None, None, None)
 
 
-@pytest.mark.parametrize('scalar_type', [int, float, str])
-def test_json_scalar_mapping_subclasses_keep_mapping_semantics(scalar_type):
+@pytest.mark.parametrize(('scalar_type', 'scalar_value'), [
+  (int, 0), (int, (1 << 64) - 1), (float, 0.0), (float, float('inf')), (float, float('nan')), (str, ''), (str, '控制'),
+])
+def test_json_scalar_mapping_subclasses_keep_mapping_semantics(scalar_type, scalar_value):
   class ScalarMapping(scalar_type, Mapping):
     def __getitem__(self, key):
       if key != 'native':
@@ -381,7 +528,16 @@ def test_json_scalar_mapping_subclasses_keep_mapping_semantics(scalar_type):
     def __len__(self):
       return 1
 
-  assert json_value(ScalarMapping()) == {'native': ((1 << 64) - 1, None)}
+  value = ScalarMapping(scalar_value)
+  assert json_value(value) == {'native': ((1 << 64) - 1, None)}
+  assert encoded_json(json_value(value)) == encoded_json(json_value_reference(value))
+  with patch.object(longitudinal_trace, 'immutable_value', immutable_value_reference):
+    reference = immutable_value_reference(value)
+  frozen = immutable_value(value)
+  assert type(frozen) is type(reference)
+  assert encoded_json(json_value(frozen)) == encoded_json(json_value_reference(reference))
+  if scalar_type is str:
+    assert frozen is value
 
 
 def test_json_scalar_subclasses_preserve_values_without_snapshot_normalization():

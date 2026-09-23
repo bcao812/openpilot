@@ -119,9 +119,10 @@ class _TraceTuple(tuple):
 
 
 def immutable_value(value):
-  if type(value) is _TraceMapping or type(value) is _TraceTuple:
+  value_type = type(value)
+  if value_type is _TraceMapping or value_type is _TraceTuple:
     return value
-  if type(value) is int or type(value) is float:
+  if value_type is int or value_type is float:
     return value
   if value is None or isinstance(value, (str, bool)):
     return value
@@ -145,6 +146,12 @@ def json_value(value):
     return value if math.isfinite(value) else None
   if value is None or value_type is str or value_type is bool or value_type is int:
     return value
+  # Only our exact frozen containers can bypass the generic Mapping protocol;
+  # subclasses may override items/iteration and keep the existing precedence.
+  if value_type is _TraceMapping:
+    return {key: json_value(item) for key, item in value._data.items()}
+  if value_type is _TraceTuple:
+    return tuple(json_value(item) for item in value)
   if isinstance(value, Mapping):
     return {key: json_value(item) for key, item in value.items()}
   if isinstance(value, (tuple, list)):
