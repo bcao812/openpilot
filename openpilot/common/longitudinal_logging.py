@@ -334,17 +334,9 @@ def attach_diagnostics(message, field, factory, recorder, sample, values):
   if recorder is None or not recorder.enabled or sample is None:
     return False
   try:
-    # Let the message library populate fields without a Python setattr loop.
-    # Keep the private builder until every field and context has serialized:
-    # an observer failure must not leave a partially written parent message.
-    if "num_first_segment_words" in values or "which" in values:
-      # pycapnp treats the former as an allocation argument and ignores the
-      # latter in from_dict. Preserve the old setter/error behavior for both.
-      diagnostics = factory.new_message()
-      for name, value in values.items():
-        setattr(diagnostics, name, value)
-    else:
-      diagnostics = factory.new_message(**values)
+    diagnostics = factory.new_message()
+    for name, value in values.items():
+      setattr(diagnostics, name, value)
     diagnostics.context = recorder.context(sample)
     setattr(message, field, diagnostics)
     return True

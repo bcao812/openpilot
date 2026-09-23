@@ -27,8 +27,8 @@ class FakeParams:
 
 class FakeDiagnostics:
   @staticmethod
-  def new_message(**values):
-    return SimpleNamespace(**values)
+  def new_message():
+    return SimpleNamespace()
 
 
 def attach_diagnostics_reference(message, field, factory, recorder, sample, values):
@@ -395,6 +395,9 @@ class TestLongitudinalLogging(unittest.TestCase):
     sample = recorder.finish(recorder.begin(0))
     message = SimpleNamespace(accel=-1.25, valid=True)
     self.assertTrue(attach_diagnostics(message, "diagnostics", FakeDiagnostics, recorder, sample, {"status": "tracking"}))
+    # A factory supporting only zero-argument construction remains valid.
+    self.assertEqual(message.diagnostics.status, "tracking")
+    self.assertEqual(message.diagnostics.context, recorder.context(sample))
     self.assertEqual(message.accel, -1.25)
     self.assertTrue(message.valid)
     previous = message.diagnostics
