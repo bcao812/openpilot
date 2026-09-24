@@ -214,43 +214,34 @@ def test_zero_speed_with_closed_activation_gate_returns_default_targets():
     previous_speed = speed
 
 
-def test_new_lead_needs_half_second_stability_then_half_second_ramp():
+def test_new_lead_cannot_reuse_speed_history_collected_without_a_target():
   policy = LowSpeedStopDistance()
   absent = radar(0)
   absent.leadOne.present = absent.leadTwo.present = False
   assert_default_low_speed(run(policy, observations=absent))
-  assert_default_low_speed(run(policy, first=221, last=230))  # 450 ms of lead observations.
-  assert_default_low_speed(update(policy, 231))  # Stability just reaches 500 ms.
-  halfway = run(policy, first=232, last=236)  # Another 250 ms, halfway through the ramp.
-  assert halfway[0] == pytest.approx(3.5)
-  assert halfway[1] == pytest.approx((5.0, 5.0))
-  complete = run(policy, first=237, last=241)
-  assert complete[0] == pytest.approx(3.0)
-  assert complete[1] == pytest.approx((4.0, 4.0))
+  observations = radar(221)
+  assert_default_low_speed(update(policy, 221, observations=observations))
+  # This is a new target after an established absent stream, not the first
+  # publication of a fresh context. Its earlier no-target ego history is gone.
+  assert_fresh_five_second_requalification(policy, 222,
+      (observations.leadOne.dRel, observations.leadTwo.dRel))
 
 
 def test_repeated_radar_publication_does_not_advance_an_in_progress_ramp():
-  policy = LowSpeedStopDistance()
-  absent = radar(0)
-  absent.leadOne.present = absent.leadTwo.present = False
-  run(policy, observations=absent)
-  before = run(policy, first=221, last=233)
+  policy, before = halfway_through_approach_ramp()
   assert 4.0 < before[1][0] < 6.0
-  held = radar(233)
-  for frame in range(234, 238):
-    after = update(policy, frame, observations=held, radar_ns=stamp(233))
+  held = estimated_approach_radar(236)
+  for frame in range(237, 241):
+    after = update(policy, frame, observations=held, radar_ns=stamp(236))
     assert after[0] == pytest.approx(before[0])
     assert after[1] == pytest.approx(before[1])
 
 
 def test_same_timestamp_replays_never_create_more_compact_targets():
-  policy = LowSpeedStopDistance()
-  absent = radar(0)
-  absent.leadOne.present = absent.leadTwo.present = False
-  run(policy, observations=absent)
-  before = run(policy, first=221, last=233)
+  policy, before = halfway_through_approach_ramp()
+  assert 4.0 < before[1][0] < 6.0
   for _ in range(30):
-    after = update(policy, 233)
+    after = update(policy, 236, observations=estimated_approach_radar(236))
     assert after[0] >= before[0]
     assert all(actual >= earlier for actual, earlier in zip(after[1], before[1], strict=True))
 
@@ -848,3 +839,51 @@ def test_three_continuous_stop_hold_launch_brake_cycles_do_not_restart_five_seco
       assert_default_low_speed(sample(0.0, 0.0, 0.0, allow_activation=False))
   assert completed_stops == 3
   assert gap == pytest.approx(6.0)
+
+
+@pytest.mark.parametrize('hold_fault_source', [False, True])
+@pytest.mark.parametrize('fault', ['target_loss', 'distance_jump', 'new_near_slot', 'low_confidence',
+                                   'nonfinite_quality', 'radar_rollback', 'radar_stream_gap'])
+def test_fault_at_four_seconds_cannot_reuse_history_before_first_compaction(fault, hold_fault_source):
+  policy = LowSpeedStopDistance()
+  second_present = fault != 'new_near_slot'
+  for frame in range(80):
+    # For the radar-gap case, hold the 3.7 s publication while CS/consumer
+    # clocks continue. The next distinct radar at 4 s will have a 300 ms gap.
+    held_radar = fault == 'radar_stream_gap' and frame >= 75
+    radar_frame = 74 if held_radar else frame
+    observations = radar(radar_frame)
+    observations.leadTwo.present = second_present
+    assert_default_low_speed(update(policy, frame, observations=observations, radar_ns=stamp(radar_frame)))
+
+  # Exactly four seconds: there has never been a compact request, but a real
+  # target/quality/clock failure must still invalidate all earlier ego history.
+  observations = radar(80)
+  observations.leadTwo.present = second_present
+  changes = {}
+  if fault == 'target_loss':
+    observations.leadOne.present = False
+  elif fault == 'distance_jump':
+    observations.leadOne.dRel += 2.0
+  elif fault == 'new_near_slot':
+    observations.leadTwo.present = True
+    observations.leadTwo.dRel = 5.0
+  elif fault == 'low_confidence':
+    observations.leadOne.modelProb = .97
+  elif fault == 'nonfinite_quality':
+    observations.leadOne.aLeadK = math.nan
+  elif fault == 'radar_rollback':
+    changes['radar_ns'] = stamp(78)
+  assert_default_low_speed(update(policy, 80, observations=observations, **changes))
+  distances = (observations.leadOne.dRel, observations.leadTwo.dRel)
+  first_fresh_frame = 81
+  if hold_fault_source:
+    held = radar(81)
+    held.leadOne.dRel = distances[0] - .3 * .05
+    held.leadTwo.dRel = distances[1] - .3 * .05
+    # Even a fresh healthy radar cannot make the failed transaction's cached
+    # CS publication count as recovery's first genuinely new sample.
+    assert_default_low_speed(update(policy, 81, source_ns=stamp(80), observations=held))
+    distances = (held.leadOne.dRel, held.leadTwo.dRel)
+    first_fresh_frame = 82
+  assert_fresh_five_second_requalification(policy, first_fresh_frame, distances)

@@ -66,7 +66,6 @@ class LowSpeedStopDistance:
     self._last_approach_ns = [None, None]
     self._fractions = [0.0, 0.0]
     self._applied_fraction = 0.0
-    self._has_compact_history = False
     self._source_barrier_ns = source_barrier_ns
 
   def update(self, *, now_ns, source_ns, radar_ns, speed, radar, permitted, allow_activation=True):
@@ -105,19 +104,9 @@ class LowSpeedStopDistance:
                          and all(value < MAX_COMPACT_SPEED for _, value in self._speeds))
 
     radar_delta = radar_ns - self._last_radar_ns if self._last_radar_ns is not None else None
-    armed = self._has_compact_history or any(fraction > 0.0 for fraction in self._fractions)
     if radar_delta is not None and not 0 <= radar_delta <= MAX_SOURCE_GAP_NS:
-      if armed:
-        self.clear(source_barrier_ns=source_ns)
-        return fallback
-      self._lead_since = [None, None]
-      self._lead_previous = [None, None]
-      self._lead_was_present = [False, False]
-      self._approach_since = [None, None]
-      self._last_approach_ns = [None, None]
-      self._fractions = [0.0, 0.0]
-      self._applied_fraction = 0.0
-      radar_delta = None
+      self.clear(source_barrier_ns=source_ns)
+      return fallback
     fractions = []
     confirmed_approaches = []
     for i, lead in enumerate(leads):
@@ -136,10 +125,11 @@ class LowSpeedStopDistance:
         else:
           predicted = previous[0] + 0.5 * (previous[1] + tracked[1]) * radar_delta / 1e9
           continuous = abs(tracked[0] - predicted) <= 0.5 and abs(tracked[5] - previous[5]) <= 0.3
-      if armed and ((previous is not None and not continuous)
-                    or (lead.present and not self._lead_was_present[i])):
+      if self._last_radar_ns is not None and ((self._lead_was_present[i] and not continuous)
+                                             or (lead.present and not self._lead_was_present[i])):
         # A changed/lost target must not regain a smaller risk envelope one
         # second later using speed history collected before that uncertainty.
+        # This applies during initial confirmation as well as after use.
         # The next fresh carState starts a new complete confirmation window.
         # An absent second slot that has stayed absent is not a target loss.
         self.clear(source_barrier_ns=source_ns)
@@ -198,10 +188,6 @@ class LowSpeedStopDistance:
       # ego-speed factor. Slowing down is not new lead-approach evidence.
       common_fraction = min(common_fraction, self._applied_fraction)
     self._applied_fraction = common_fraction
-    # Revoking today's request does not undo forward travel that a previous
-    # compact target may have induced. Preserve the uncertainty barrier until
-    # the complete policy history is cleared, including through HOLD/grace.
-    self._has_compact_history |= common_fraction > 0.0
     self._lead_was_present = present
     comfort = fallback[0] + common_fraction * (_distance_profile(speed, COMPACT_COMFORT_DISTANCE) - fallback[0])
     risk = tuple(DEFAULT_RISK_DISTANCE + (common_fraction if exists else 0.0)
