@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
+from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LOW_SPEED_WINDOW_NS, LowSpeedStopDistance
 
 
 BASE_NS = 10_000_000_000
@@ -90,11 +90,11 @@ def halfway_through_approach_ramp():
   return policy, result
 
 
-def assert_fresh_ten_second_requalification(policy, first_frame, distances, *, previous_speed=.3,
-                                          present=(True, True)):
+def assert_fresh_five_second_requalification(policy, first_frame, distances, *, previous_speed=.3,
+                                           present=(True, True)):
   """Follow the same stationary slots through recovery; no private state access."""
   distances = list(distances)
-  for frame in range(first_frame, first_frame + 213):
+  for frame in range(first_frame, first_frame + 113):
     speed = .3
     travelled = .5 * (previous_speed + speed) * .05
     distances = [distance - travelled for distance in distances]
@@ -103,36 +103,58 @@ def assert_fresh_ten_second_requalification(policy, first_frame, distances, *, p
       item.present = present[index]
       item.dRel = distances[index]
     result = update(policy, frame, speed=speed, observations=observations)
-    if frame < first_frame + 200:
+    if frame < first_frame + 100:
       # The first genuinely new source sample is time zero. In particular,
-      # first_frame+199 is only 9.95 s, even if the fault sample was valid CS.
+      # first_frame+99 is only 4.95 s, even if the fault sample was valid CS.
       assert_default_low_speed(result)
+    elif frame == first_frame + 105:
+      # A five-second policy must already be ramping at 5.25 s. Waiting an
+      # obsolete ten-second window cannot satisfy this recovery contract.
+      assert 3.0 < result[0] < 4.0
+      for value, exists in zip(result[1], present, strict=True):
+        if exists:
+          assert 4.0 < value < 6.0
+        else:
+          assert value == pytest.approx(6.0)
     previous_speed = speed
   # Recovery must remain possible after the new complete window and ramp.
   assert result[0] == pytest.approx(3.0)
   assert result[1] == pytest.approx(tuple(4.0 if exists else 6.0 for exists in present))
 
 
-def test_short_low_speed_recording_does_not_shorten_the_ten_second_requirement():
+def test_controller_low_speed_confirmation_window_is_explicitly_five_seconds():
+  # This controller setting is independent from the descriptive stop audit's
+  # unchanged maximum ten-second event lookback.
+  assert LOW_SPEED_WINDOW_NS == 5_000_000_000
+
+
+def test_short_low_speed_recording_requires_five_seconds_then_the_separate_ramp():
   policy = LowSpeedStopDistance()
   # A fully observed lead does not substitute for the missing 50 ms of ego history.
-  assert_default_low_speed(run(policy, last=199))
-  # Allow both a complete history and the documented settling/ramp duration.
-  assert run(policy, first=200, last=240)[1] == pytest.approx((4.0, 4.0))
+  assert_default_low_speed(run(policy, last=99))
+  first_complete = update(policy, 100)
+  assert 3.0 < first_complete[0] <= 4.0
+  assert all(4.0 < value <= 6.0 for value in first_complete[1])
+  halfway = run(policy, first=101, last=105)
+  assert 3.0 < halfway[0] < 4.0
+  assert all(4.0 < value < 6.0 for value in halfway[1])
+  complete = run(policy, first=106, last=112)
+  assert complete[0] == pytest.approx(3.0)
+  assert complete[1] == pytest.approx((4.0, 4.0))
 
 
 def test_held_car_state_cannot_complete_history_using_processing_time():
   policy = LowSpeedStopDistance()
-  assert_default_low_speed(run(policy, last=196))  # Only 9.8 s of source history.
-  for frame in range(197, 202):
-    # Processing time crosses 10 s, but this is the same last carState publication.
-    assert_default_low_speed(update(policy, frame, source_ns=stamp(196)))
+  assert_default_low_speed(run(policy, last=96))  # Only 4.8 s of source history.
+  for frame in range(97, 102):
+    # Processing time crosses 5 s, but this is the same last carState publication.
+    assert_default_low_speed(update(policy, frame, source_ns=stamp(96)))
 
 
 def test_recent_high_speed_tail_cannot_acquire_compact_distance():
   policy = qualified()
   distance, previous_speed = lead(220).dRel, .3
-  for frame in range(221, 462):
+  for frame in range(221, 334):
     speed = 40.0 / 3.6 if frame == 221 else .3
     # Keep dRel consistent across the speed changes, so the test cannot pass
     # merely because an artificial target jump erased the earlier history.
@@ -143,8 +165,8 @@ def test_recent_high_speed_tail_cannot_acquire_compact_distance():
     result = update(policy, frame, speed=speed, observations=observations)
     if frame == 221:
       assert result[1] == pytest.approx((6.0, 6.0))
-    elif frame <= 421:
-      # Include the old high-speed sample at the exact ten-second boundary.
+    elif frame <= 321:
+      # Include the old high-speed sample at the exact five-second boundary.
       assert_default_low_speed(result)
     previous_speed = speed
   assert result[1] == pytest.approx((4.0, 4.0))
@@ -153,8 +175,8 @@ def test_recent_high_speed_tail_cannot_acquire_compact_distance():
 def test_exactly_thirty_kmh_in_recent_history_is_not_below_thirty():
   policy = LowSpeedStopDistance()
   update(policy, 0, speed=30.0 / 3.6)
-  assert_default_low_speed(run(policy, first=1, last=200))
-  assert run(policy, first=201, last=241)[1] == pytest.approx((4.0, 4.0))
+  assert_default_low_speed(run(policy, first=1, last=100))
+  assert run(policy, first=101, last=112)[1] == pytest.approx((4.0, 4.0))
 
 
 @pytest.mark.parametrize('speed_kmh, comfort, risk', [
@@ -373,8 +395,12 @@ def test_invalid_timestamp_types_and_values_do_not_grant_compact_distance(field,
 def test_observation_gap_requires_a_new_complete_speed_history():
   policy = qualified()
   assert_default_low_speed(update(policy, 227))  # 350 ms after the last update.
-  assert_default_low_speed(run(policy, first=228, last=426))  # Only 9.95 s since recovery.
-  assert run(policy, first=427, last=467)[1] == pytest.approx((4.0, 4.0))
+  for frame in range(228, 327):
+    assert_default_low_speed(update(policy, frame))  # At most 4.95 s since first post-gap CS.
+  halfway = run(policy, first=327, last=332)
+  assert 3.0 < halfway[0] < 4.0
+  assert all(4.0 < value < 6.0 for value in halfway[1])
+  assert run(policy, first=333, last=339)[1] == pytest.approx((4.0, 4.0))
 
 
 @pytest.mark.parametrize('speed', [math.nan, math.inf, -math.inf, -.01])
@@ -412,7 +438,7 @@ def test_closing_activation_gate_immediately_revokes_previously_active_targets()
   assert_default_low_speed(run(policy, first=222, last=260, allow_activation=False))
 
 
-def test_reopening_activation_gate_reramps_without_requiring_another_ten_seconds():
+def test_reopening_activation_gate_reramps_without_requiring_another_five_seconds():
   policy = qualified()
   result = run(policy, first=221, last=260, allow_activation=False)
   assert_default_low_speed(result)
@@ -553,7 +579,7 @@ def test_returning_approach_needs_new_continuous_confirmation_then_reramp():
   assert result[1] == pytest.approx((4.0, 4.0))
 
 
-@pytest.mark.parametrize('fault', ['distance_jump', 'target_loss', 'confidence', 'nonfinite', 'strong_acceleration',
+@pytest.mark.parametrize('fault', ['distance_jump', 'target_loss', 'confidence', 'nonfinite',
                                    'radar_rollback', 'source_rollback', 'message_gap'])
 def test_grace_does_not_mask_target_quality_or_time_failures(fault):
   policy, _ = halfway_through_approach_ramp()
@@ -569,8 +595,6 @@ def test_grace_does_not_mask_target_quality_or_time_failures(fault):
     observations.leadOne.modelProb = .97
   elif fault == 'nonfinite':
     observations.leadOne.vLead = math.nan
-  elif fault == 'strong_acceleration':
-    observations.leadOne.aLeadK = .201
   elif fault == 'radar_rollback':
     changes['radar_ns'] = stamp(236)
   elif fault == 'source_rollback':
@@ -658,7 +682,7 @@ def test_armed_target_failure_requires_new_history_even_before_geometry_reductio
     changes['radar_ns'] = stamp(219)
   assert_default_low_speed(update(policy, 221, speed=warm_speed, observations=observations, **changes))
   # Recover every target's healthy fields, but retain the actual slot gaps.
-  assert_fresh_ten_second_requalification(policy, 222,
+  assert_fresh_five_second_requalification(policy, 222,
       (observations.leadOne.dRel, observations.leadTwo.dRel), previous_speed=warm_speed)
 
 
@@ -671,11 +695,11 @@ def test_armed_radar_stream_gap_discards_all_previous_speed_history():
   # publication is 300 ms after the previous one.
   observations = radar(226)
   assert_default_low_speed(update(policy, 226, observations=observations))
-  assert_fresh_ten_second_requalification(policy, 227,
+  assert_fresh_five_second_requalification(policy, 227,
       (observations.leadOne.dRel, observations.leadTwo.dRel))
 
 
-def test_held_fault_time_car_state_cannot_seed_the_new_ten_second_window():
+def test_held_fault_time_car_state_cannot_seed_the_new_five_second_window():
   policy = qualified()
   observations = radar(221)
   observations.leadOne.modelProb = .97
@@ -684,7 +708,7 @@ def test_held_fault_time_car_state_cannot_seed_the_new_ten_second_window():
   # transaction's publication. It must not become recovery's time zero.
   held_source_observations = radar(222)
   assert_default_low_speed(update(policy, 222, source_ns=stamp(221), observations=held_source_observations))
-  assert_fresh_ten_second_requalification(policy, 223,
+  assert_fresh_five_second_requalification(policy, 223,
       (held_source_observations.leadOne.dRel, held_source_observations.leadTwo.dRel))
 
 
@@ -708,5 +732,119 @@ def test_prior_actual_compaction_still_requires_new_history_if_target_is_lost_af
   observations.leadOne.present = False
   assert_default_low_speed(update(policy, fault_frame, observations=observations,
                                   allow_activation=withdrawal != 'activation_closed'))
-  assert_fresh_ten_second_requalification(policy, fault_frame + 1,
+  assert_fresh_five_second_requalification(policy, fault_frame + 1,
       (observations.leadOne.dRel, observations.leadTwo.dRel))
+
+
+def test_acceleration_exit_during_grace_revokes_eligibility_without_losing_speed_history():
+  policy, _ = halfway_through_approach_ramp()
+  update(policy, 237, observations=estimated_approach_radar(237, 0.0))
+  # Keep the former grace/+.201 counterexample: withdrawal must be immediate.
+  # These remain continuous, high-confidence observations of the same slots.
+  assert_default_low_speed(update(policy, 238, observations=estimated_approach_radar(238, .201)))
+  for frame in range(239, 260):
+    result = update(policy, frame, observations=estimated_approach_radar(frame, -.1))
+    if frame <= 249:  # New 500 ms approach/eligibility confirmation is still required.
+      assert_default_low_speed(result)
+    elif frame < 259:
+      assert 3.0 < result[0] < 4.0
+      assert all(4.0 < value < 6.0 for value in result[1])
+  # One second after valid braking observations resumed, not another 5 s.
+  assert result[0] == pytest.approx(3.0)
+  assert result[1] == pytest.approx((4.0, 4.0))
+
+
+def test_continuous_lead_speed_above_parking_domain_does_not_erase_low_speed_history():
+  policy = LowSpeedStopDistance()
+  for frame in range(221):
+    observations = radar(frame, lead_speed=2.0)
+    observations.leadOne.aLeadK = observations.leadTwo.aLeadK = -.1
+    result = update(policy, frame, observations=observations)
+  assert result[0] == pytest.approx(3.0)
+  assert result[1] == pytest.approx((4.0, 4.0))
+  distance, previous_lead_speed = lead(220, lead_speed=2.0).dRel, 2.0
+  # A .2 m/s^2 step from 2.00 to 2.01 m/s exits only the speed domain.
+  # Its acceleration, field validity and relative-speed consistency are good.
+  distance += .5 * ((2.0 - .3) + (2.01 - .3)) * .05
+  observations = radar(221, lead_speed=2.01)
+  observations.leadOne.dRel = distance
+  observations.leadTwo.dRel = distance + 30.0
+  observations.leadOne.aLeadK = observations.leadTwo.aLeadK = .2
+  assert_default_low_speed(update(policy, 221, observations=observations))
+  previous_lead_speed = 2.01
+  for frame in range(222, 243):
+    lead_speed = 2.01 - .4 * (frame - 221) * .05
+    distance += .5 * ((previous_lead_speed - .3) + (lead_speed - .3)) * .05
+    observations = radar(frame, lead_speed=lead_speed)
+    observations.leadOne.dRel = distance
+    observations.leadTwo.dRel = distance + 30.0
+    observations.leadOne.aLeadK = observations.leadTwo.aLeadK = -.4
+    result = update(policy, frame, observations=observations)
+    if frame <= 232:
+      assert_default_low_speed(result)
+    elif frame < 242:
+      assert 3.0 < result[0] < 4.0
+      assert all(4.0 < value < 6.0 for value in result[1])
+    previous_lead_speed = lead_speed
+  assert result[0] == pytest.approx(3.0)
+  assert result[1] == pytest.approx((4.0, 4.0))
+
+
+def test_three_continuous_stop_hold_launch_brake_cycles_do_not_restart_five_second_wait():
+  policy = LowSpeedStopDistance()
+  frame, gap, previous_relative = -1, 6.0, 0.0
+
+  def sample(ego_speed, lead_speed, lead_acceleration, *, allow_activation=True):
+    nonlocal frame, gap, previous_relative
+    frame += 1
+    relative = lead_speed - ego_speed
+    gap += .5 * (previous_relative + relative) * .05
+    observations = radar(frame, ego_speed, lead_speed)
+    observations.leadOne.dRel = gap
+    observations.leadOne.aLeadK = lead_acceleration
+    observations.leadTwo.present = False
+    previous_relative = relative
+    return update(policy, frame, speed=ego_speed, observations=observations, allow_activation=allow_activation)
+
+  # Build the first complete 5 s history and its 500 ms ramp. This is a coherent
+  # co-moving pair, not independently resampled positions or a changing slot.
+  for _ in range(113):
+    result = sample(.3, .3, 0.0)
+  assert result[0] == pytest.approx(3.0)
+  assert result[1] == pytest.approx((4.0, 6.0))
+  for step in range(1, 21):
+    speed = .3 * (1.0 - step / 20.0)
+    result = sample(speed, speed, -.3, allow_activation=speed > 0.0)
+  assert_default_low_speed(result)
+  for _ in range(10):
+    assert_default_low_speed(sample(0.0, 0.0, 0.0, allow_activation=False))
+
+  completed_stops = 0
+  for _cycle in range(3):
+    # The same car pulls away normally. +.6 m/s^2 and then vLead>2 are outside
+    # parking eligibility, but neither represents a lost/low-quality target.
+    for step in range(1, 81):
+      speed = .6 * step * .05
+      assert_default_low_speed(sample(speed, speed, .6))
+    for _ in range(10):
+      assert_default_low_speed(sample(2.4, 2.4, 0.0))
+    eligibility_return = None
+    terminal_seen = False
+    for step in range(1, 121):
+      speed = max(0.0, 2.4 - .4 * step * .05)
+      result = sample(speed, speed, -.4, allow_activation=speed > 0.0)
+      if speed <= 2.0 and eligibility_return is None:
+        eligibility_return = frame
+      if 0.0 < speed <= .3:
+        assert eligibility_return is not None
+        assert (frame - eligibility_return) * .05 < 5.0
+        assert result[0] == pytest.approx(3.0)
+        assert result[1] == pytest.approx((4.0, 6.0))
+        terminal_seen = True
+    assert terminal_seen
+    assert_default_low_speed(result)  # Actual standstill withdraws the request for HOLD.
+    completed_stops += 1
+    for _ in range(10):
+      assert_default_low_speed(sample(0.0, 0.0, 0.0, allow_activation=False))
+  assert completed_stops == 3
+  assert gap == pytest.approx(6.0)

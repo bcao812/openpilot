@@ -12,7 +12,7 @@ from numbers import Real
 DEFAULT_RISK_DISTANCE = 6.0
 COMPACT_COMFORT_DISTANCE = 3.0
 COMPACT_RISK_DISTANCE = 4.0  # Existing 0.75 risk factor -> nominal 3 m at zero speed.
-LOW_SPEED_WINDOW_NS = 10_000_000_000
+LOW_SPEED_WINDOW_NS = 5_000_000_000
 MAX_SOURCE_GAP_NS = 250_000_000
 LEAD_STABLE_NS = 500_000_000
 LEAD_RAMP_NS = 500_000_000
@@ -29,7 +29,7 @@ def _distance_profile(speed, low):
   return low + (DEFAULT_RISK_DISTANCE - low) * fraction
 
 
-def _observation(lead, speed):
+def _tracked_observation(lead, speed):
   if not getattr(lead, 'present', False):
     return None
   values = tuple(getattr(lead, name, None) for name in ('dRel', 'vRel', 'vLead', 'aLeadK', 'modelProb', 'yRel'))
@@ -37,9 +37,15 @@ def _observation(lead, speed):
     return None
   values = tuple(float(value) for value in values)
   distance, relative_speed, lead_speed, lead_accel, probability, lateral = values
-  if (distance <= 0.0 or not 0.0 <= lead_speed <= 2.0 or not -0.5 <= lead_accel <= 0.2
-      or not 0.98 <= probability <= 1.0 or abs(lateral) > 1.2
+  if (distance <= 0.0 or not 0.98 <= probability <= 1.0 or abs(lateral) > 1.2
       or abs(lead_speed - speed - relative_speed) > 0.5):
+    return None
+  return values
+
+
+def _observation(lead, speed):
+  values = _tracked_observation(lead, speed)
+  if values is None or not 0.0 <= values[2] <= 2.0 or not -0.5 <= values[3] <= 0.2:
     return None
   return values
 
@@ -115,22 +121,26 @@ class LowSpeedStopDistance:
     fractions = []
     confirmed_approaches = []
     for i, lead in enumerate(leads):
+      tracked = _tracked_observation(lead, speed)
       observation = _observation(lead, speed)
       previous = self._lead_previous[i]
-      continuous = observation is not None and previous is not None and radar_delta is not None
+      # Normal lead acceleration or speed outside the parking domain revokes
+      # this request, but does not turn a continuously observed car into a lost
+      # target. Keep the ego history through ordinary stop-and-go.
+      continuous = tracked is not None and previous is not None and radar_delta is not None
       if continuous:
         if radar_delta == 0:
           # vRel is an observation from this radar publication, not resampled
           # against a new ego-speed estimate. Other fields must be unchanged.
-          continuous = observation == previous
+          continuous = tracked == previous
         else:
-          predicted = previous[0] + 0.5 * (previous[1] + observation[1]) * radar_delta / 1e9
-          continuous = abs(observation[0] - predicted) <= 0.5 and abs(observation[5] - previous[5]) <= 0.3
+          predicted = previous[0] + 0.5 * (previous[1] + tracked[1]) * radar_delta / 1e9
+          continuous = abs(tracked[0] - predicted) <= 0.5 and abs(tracked[5] - previous[5]) <= 0.3
       if armed and ((previous is not None and not continuous)
                     or (lead.present and not self._lead_was_present[i])):
         # A changed/lost target must not regain a smaller risk envelope one
         # second later using speed history collected before that uncertainty.
-        # The next fresh carState starts a new complete ten-second window.
+        # The next fresh carState starts a new complete confirmation window.
         # An absent second slot that has stayed absent is not a target loss.
         self.clear(source_barrier_ns=source_ns)
         return fallback
@@ -143,10 +153,10 @@ class LowSpeedStopDistance:
       if not continuous:
         self._approach_since[i] = None
         self._last_approach_ns[i] = None
-      self._lead_previous[i] = observation
+      self._lead_previous[i] = tracked
       # Start reducing the parking target only during an observed stopping
       # approach. A constant slow lead does not ask us to catch up merely
-      # because the ten-second speed-history timer has become complete.
+      # because the speed-history timer has become complete.
       approaching = (observation is not None
                      and (observation[2] <= NEAR_STOP_LEAD_SPEED or observation[3] <= APPROACH_LEAD_DECEL))
       if not approaching:
