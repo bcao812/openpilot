@@ -213,7 +213,111 @@ def owner_feedback(state, planner, controller, producer_ns, consumer_ns):
   motion.referenceProducerInstanceMonoTime = planner.motion_intent.producer_instance_ns
   motion.referenceProducerMonoTime = producer_ns
   motion.referenceConsumerMonoTime = consumer_ns
+  motion.referenceSourceMonoTime = planner.reference_timing.pending.source_ns
+  motion.referenceEpochMonoTime = planner.reference_timing.pending.epoch_ns
   state.logMonoTime['controlsState'] = state.logMonoTime['carControl'] = consumer_ns
+
+
+def parking_owner_step(planner, owner, state, frame, *, gap=6.4, lead_speed=0.0, speed=0.0,
+                       model_accel=.5, model_stop=False):
+  previous_feedback = {name: state.logMonoTime[name] for name in ('controlsState', 'carControl')}
+  now = advance(state, frame)
+  state.logMonoTime.update(previous_feedback)
+  state['carState'].vEgo = speed
+  state['carState'].standstill = speed == 0.0
+  state['modelV2'].velocity.x = [speed] * len(state['modelV2'].velocity.x)
+  state['modelV2'].action.desiredAcceleration = model_accel
+  state['modelV2'].action.shouldStop = model_stop
+  set_vision_lead(state, now, gap)
+  source, lead = state['modelV2'].leadsV3[0], state['radarState'].leadOne
+  source.v = [lead_speed] * 6
+  lead.vRel = float(np.float32(source.v[0] - state['modelV2'].velocity.x[0]))
+  lead.vLead = float(state['carState'].vEgo + lead.vRel)
+  planner.update(state, now_ns=now)
+  assert planner.mpc.solution_status == 0
+  owner.now_ns = now
+  owner.state.vEgo = speed
+  owner.state.standstill = speed == 0.0
+  for _ in range(4):
+    owner.step(planner.output_a_target, planner.motion_intent, new_input=False,
+                plan_time_ns=now + 1_000_000, model_time_ns=now)
+  owner_feedback(state, planner, owner.control, now, owner.now_ns)
+  return planner.reference_planner.parking_approach.decision
+
+
+def parking_episode_in_hold():
+  planner, extension, state = warm_parking()
+  assert planner.reference_planner.parking_approach.decision.cap_effective
+  owner = ControlHarness(LongControl(planner.CP, extension))
+  # The existing owner genuinely consumes the stop and reaches HOLD. Keep
+  # fresh source history while stopped, so departure need not invent a new
+  # five-second delay. This is a contract fixture, not a vehicle plant model.
+  for frame in range(121, 235):
+    parking_owner_step(planner, owner, state, frame)
+    assert owner.control.motion_phase == MotionPhase.HOLD
+  assert planner.reference_planner.stop_distance_policy.evidence.low_speed_history
+  assert planner.reference_planner.parking_approach.decision.held_episode
+  return planner, owner, state
+
+
+def test_stationary_lead_and_positive_gap_request_cannot_release_parking_hold():
+  with patch(SAMPLE_ACCEL, return_value=.4):
+    planner, owner, state = parking_episode_in_hold()
+    for frame in range(235, 255):
+      decision = parking_owner_step(planner, owner, state, frame)
+      assert planner.output_a_target > 0.0
+      assert decision.release_blocked and decision.held_episode
+      assert decision.accel_cap is None and not decision.require_stop
+      assert not planner.motion_intent.release_allowed
+      assert owner.control.motion_phase == MotionPhase.HOLD and owner.control.last_output_accel < 0.0
+
+
+def test_sustained_independent_departure_retires_episode_only_after_moving_track():
+  with patch(SAMPLE_ACCEL, return_value=.4):
+    planner, owner, state = parking_episode_in_hold()
+    saw_pending_release = False
+    saw_consumed_departure = False
+    for frame in range(235, 255):
+      moving = owner.control.motion_phase == MotionPhase.TRACK and owner.control.last_output_accel > 0.0
+      decision = parking_owner_step(planner, owner, state, frame, gap=6.4 + .03 * (frame - 234),
+                                     lead_speed=.6, speed=.35 if moving else 0.0)
+      if decision.reason == 'independent_departure_consumed':
+        saw_consumed_departure = True
+        assert moving and not decision.held_episode
+      elif not saw_consumed_departure:
+        assert decision.held_episode and not decision.release_blocked
+        assert planner.reference_planner.parking_approach.braking_since_ns is not None
+        saw_pending_release |= owner.control.motion_phase == MotionPhase.RELEASE
+    assert saw_pending_release and saw_consumed_departure
+    assert owner.control.motion_phase == MotionPhase.TRACK and owner.control.last_output_accel > 0.0
+
+
+def test_transient_departure_withdrawal_restores_hold_before_episode_can_retire():
+  with patch(SAMPLE_ACCEL, return_value=.4):
+    planner, owner, state = parking_episode_in_hold()
+    pending = parking_owner_step(planner, owner, state, 235, gap=6.43, lead_speed=.6)
+    assert pending.held_episode and not pending.release_blocked
+    assert owner.control.motion_phase == MotionPhase.RELEASE
+    withdrawn = parking_owner_step(planner, owner, state, 236, gap=6.43)
+    assert withdrawn.held_episode and withdrawn.release_blocked and withdrawn.require_stop
+    assert planner.output_a_target <= FALLBACK_ACCEL
+    assert owner.control.motion_phase == MotionPhase.HOLD
+    for frame in range(237, 255):
+      held = parking_owner_step(planner, owner, state, frame, gap=6.43)
+      assert held.held_episode and held.release_blocked and not held.require_stop
+      assert not planner.motion_intent.release_allowed
+      assert owner.control.motion_phase == MotionPhase.HOLD
+
+
+def test_positive_lead_cannot_override_model_braking_or_stop_during_parking_hold():
+  with patch(SAMPLE_ACCEL, return_value=.4):
+    planner, owner, state = parking_episode_in_hold()
+    for frame, model_accel, model_stop in ((235, -.5, False), (236, .5, True)):
+      decision = parking_owner_step(planner, owner, state, frame, gap=6.4 + .03 * (frame - 234),
+                                     lead_speed=.6, model_accel=model_accel, model_stop=model_stop)
+      assert decision.held_episode and decision.release_blocked
+      assert not planner.motion_intent.release_allowed
+      assert owner.control.motion_phase == MotionPhase.HOLD
 
 
 def test_only_actual_fresh_hold_acknowledges_braking_not_approach_or_stale_feedback():

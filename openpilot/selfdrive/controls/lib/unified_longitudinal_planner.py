@@ -516,6 +516,30 @@ class UnifiedLongitudinalPlanner:
       allow_activation=compact_activation,
     )
     self.parking_policy_distances = (comfort_distance, lead_risk_distances)
+    # This is independent departure evidence evaluated before this episode's
+    # stop constraints. Reusing final lead_departure would depend on the very
+    # CLOSE_LEAD reason being withdrawn. Keep the original 5 m lead budget.
+    parking_model_departure = (
+      not model.action.shouldStop and model.action.desiredAcceleration >= STOP_RELEASE_ACCEL
+      and (self.model_evidence is None or self.model_evidence.allows_external_departure
+           or stationary_lead_departure_compatible(
+             self.model_evidence, actual_standstill=bool(car_state.standstill), measured_speed=float(car_state.vEgo)))
+    )
+    parking_departure = (
+      self.parking_approach.held_episode and compact_permitted and uncertainty.qualified
+      and self.stop_distance_policy.evidence.low_speed_history and parking_model_departure
+      and (has_departing_lead(state['radarState'], speed, delay) if speed < STOP_SPEED
+           else has_safe_moving_lead(state['radarState'], speed, delay))
+    )
+    parking_departure_consumed = (
+      reference_continuous and self.parking_approach.departure_pending
+      and state['controlsState'].motionState.phase == 'track' and not car_state.standstill and speed >= STOP_SPEED
+      and state['carControl'].actuators.accel > 0.0
+      and consumed_forward_reference(
+        state['carControl'], state['controlsState'], control_ns=state.logMonoTime.get('carControl'),
+        controls_ns=state.logMonoTime.get('controlsState'), source_ns=previous_source_ns,
+        producer_ns=previous_producer_ns, instance_ns=self.producer_instance_ns, now_ns=now_ns)
+    )
     parking = self.parking_approach.update(
       now_ns=now_ns, source_ns=source_epoch_ns, radar_ns=state.logMonoTime.get('radarState'),
       speed=speed, measured_accel=measured_accel, actuator_delay=delay, radar=state['radarState'],
@@ -523,6 +547,7 @@ class UnifiedLongitudinalPlanner:
       allow_activation=compact_activation and not car_state.standstill,
       uncertainty=uncertainty,
       owner_stopping=self.parking_stop_acknowledged(state, now_ns),
+      departure_qualified=parking_departure, departure_consumed=parking_departure_consumed,
     )
     if not parking.allow_compact:
       comfort_distance, lead_risk_distances = low_speed_follow_distance(speed), (STOP_DISTANCE, STOP_DISTANCE)
@@ -720,7 +745,7 @@ class UnifiedLongitudinalPlanner:
                       and cruise_speed >= CREEP_SPEED and has_departing_lead(state['radarState'], speed, delay))
     observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
             trajectory_departure, lead_departure, qualified, no_model_risk)
-    release_allowed = bool((trajectory_departure or lead_departure) and parking.accel_cap is None)
+    release_allowed = bool((trajectory_departure or lead_departure) and parking.accel_cap is None and not parking.release_blocked)
     response_kind = MotionResponseKind.NONE
     # An ACC cruise cap still describes an absolute acceleration target. Track
     # that final target with nonpositive correction instead of erasing braking

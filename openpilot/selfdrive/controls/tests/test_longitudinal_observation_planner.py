@@ -1,7 +1,7 @@
 import math
-from collections import deque
+from collections import OrderedDict, deque
 from copy import deepcopy
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -22,6 +22,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_observation import PlannerObs
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner, MIN_ALLOW_THROTTLE_SPEED, PitchBiasEstimator
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
+from openpilot.selfdrive.controls.lib.parking_approach import ParkingApproach, VisionLeadUncertainty
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -50,6 +51,11 @@ def snapshot_value(value):
     return ('ndarray', value.dtype.str, value.shape, value.flags.writeable, value.tolist())
   if is_dataclass(value):
     return (type(value).__qualname__, {field.name: snapshot_value(getattr(value, field.name)) for field in fields(value)})
+  if isinstance(value, (ParkingApproach, VisionLeadUncertainty)):
+    return (type(value).__qualname__, snapshot_value(vars(value)))
+  if isinstance(value, OrderedDict):
+    # The vision cache evicts its oldest entry; ordering is control state too.
+    return ('OrderedDict', tuple((snapshot_value(name), snapshot_value(item)) for name, item in value.items()))
   if isinstance(value, dict):
     return {name: snapshot_value(item) for name, item in value.items()}
   if isinstance(value, deque):
@@ -107,6 +113,38 @@ def control_snapshot(planner):
     for name in ("stop_latched", "creep_t", "creep_stop", "creep_total_t"):
       result[name] = getattr(planner, name)
   return result
+
+
+@pytest.mark.parametrize('mutation', ['braking_latch', 'decision', 'model_payload', 'model_clock', 'model_poison', 'cache_order'])
+def test_control_snapshot_detects_parking_state_and_model_cache_mutations(mutation):
+  baseline, observed = make_planner(diagnostics=False), make_planner(diagnostics=True)
+  for planner in (baseline, observed):
+    cache = planner.reference_planner.parking_approach.uncertainty_cache
+    lead = (0.0, 10.0, 0.0, 0.2, 0.0, 0.15, 0.999)
+    cache._models.update(((950_000_000, (0.5, (lead, lead))), (1_000_000_000, (0.6, (lead, lead)))))
+    cache._last_model_ns = 1_000_000_000
+  before, unchanged_copy = control_snapshot(baseline), control_snapshot(observed)
+  assert before == unchanged_copy  # Separate instances with identical complete state.
+
+  approach = observed.reference_planner.parking_approach
+  cache = approach.uncertainty_cache
+  if mutation == 'braking_latch':
+    approach.braking_since_ns = 1_000_000_000
+  elif mutation == 'decision':
+    approach.decision = replace(approach.decision, require_stop=True, margin=-0.1)
+  elif mutation == 'model_payload':
+    speed, slots = cache._models[1_000_000_000]
+    changed = slots[0][:5] + (0.25,) + slots[0][6:]
+    cache._models[1_000_000_000] = (speed, (changed, slots[1]))
+  elif mutation == 'model_clock':
+    cache._last_model_ns += 50_000_000
+  elif mutation == 'model_poison':
+    cache._models[1_000_000_000] = None
+  else:
+    cache._models.move_to_end(950_000_000)
+
+  assert control_snapshot(observed) != before
+  assert control_snapshot(baseline) == unchanged_copy == before  # No snapshot aliases the changed live cache.
 
 
 def control_messages(publisher):

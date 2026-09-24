@@ -127,7 +127,7 @@ def test_fault_after_real_application_keeps_braking_until_owner_ack(fault):
   assert retained.require_stop and retained.accel_cap == FALLBACK_ACCEL
   assert not retained.allow_compact
   # Fresh/recovered data and elapsed time cannot silently release the pending
-  # stop. Only the separately checked owner acknowledgement transfers it.
+  # stop. A checked HOLD transfers scalar braking, retaining release limits.
   for frame in range(122, 325):
     retained, _, radar = frame_update(guard, policy, frame, gaps=(14.97, 19.97))
     assert retained.require_stop and retained.accel_cap == FALLBACK_ACCEL
@@ -136,8 +136,38 @@ def test_fault_after_real_application_keeps_braking_until_owner_ack(fault):
                              actuator_delay=.3, radar=radar, qualification=None, permitted=True,
                              allow_activation=False, owner_stopping=True)
   assert handed_over.reason == 'owner_stopping' and handed_over.accel_cap is None
-  assert guard.braking_since_ns is None
+  assert guard.braking_since_ns is not None
+  assert handed_over.held_episode and handed_over.release_blocked
   assert not handed_over.allow_compact and not handed_over.require_stop
+
+
+def test_held_episode_cannot_end_on_one_unconsumed_departure_sample():
+  guard, _, decision, _, radar = qualified_approach()
+  guard.record_application(accel_before=.4, accel_after=decision.accel_cap)
+
+  def update_held(frame, **changes):
+    now = BASE_NS + frame * STEP_NS
+    return guard.update(now_ns=now, source_ns=now, radar_ns=now, speed=0.0, measured_accel=0.0,
+                         actuator_delay=.3, radar=radar, qualification=None, permitted=True,
+                         allow_activation=False, **changes)
+
+  held = update_held(121, owner_stopping=True)
+  assert held.release_blocked and not held.require_stop
+  pending = update_held(122, owner_stopping=True, departure_qualified=True)
+  assert not pending.release_blocked and pending.held_episode and guard.departure_pending
+  # The independently qualified observation was withdrawn before moving
+  # TRACK consumed it. A matching old acknowledgement alone cannot retire it.
+  withdrawn = update_held(123, departure_consumed=True)
+  assert withdrawn.release_blocked and withdrawn.require_stop
+  assert withdrawn.accel_cap == FALLBACK_ACCEL and guard.braking_since_ns is not None
+  held = update_held(124, owner_stopping=True)
+  assert held.release_blocked and not held.require_stop
+  pending = update_held(125, departure_qualified=True)
+  assert pending.held_episode and guard.braking_since_ns is not None
+  completed = update_held(126, departure_qualified=True, departure_consumed=True)
+  assert completed.reason == 'independent_departure_consumed'
+  assert not completed.held_episode and not completed.release_blocked
+  assert guard.braking_since_ns is None
 
 
 def test_stronger_independent_braking_is_not_reported_as_candidate_application():

@@ -20,6 +20,7 @@ from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import MODEL_TIMES, typed_reference
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state, solve_reference
+from openpilot.selfdrive.controls.tests.test_unified_parking_approach import set_vision_lead
 
 
 PERSONALITIES = (
@@ -243,27 +244,56 @@ def test_compact_base_preserves_the_original_minimum_moving_lead_speed(lead_spee
   assert has_safe_moving_lead(radar, 0.5, 0.5, minimum_gap_base=3.0) is expected
 
 
-def rolling_budget_run(comfort, risks, present, *, confirmation=False):
-  """Keep the native producer path, substituting only an already tested policy result."""
+def rolling_budget_run(comfort, risks, present, *, confirmation=False, complete_history=True):
+  """Test budget arithmetic after real qualification, replacing only distances."""
   planner, _ = make_planner(speed=1.0)
+  planner.CP.radarUnavailable = True
   state = make_state(speed=1.0, target=2.0)
   state['modelV2'].action.desiredAcceleration = 2.0
-  for index, lead in enumerate((state['radarState'].leadOne, state['radarState'].leadTwo)):
-    lead.present = present[index]
-    lead.dRel = 20.0 + index * 5.0
-    lead.vLead = 1.0
-    lead.vRel = 0.0
-    lead.aLeadK = 0.0
-    lead.aLeadTau = 1.5
-    lead.modelProb = .999
-    lead.yRel = 0.0
+
+  def update_frame(frame):
+    timestamp = advance(state, frame)
+    # Both slots have continuous, exact model/radard identity and ample
+    # engineering margin. A .5 m/s decelerating lead fits both the existing
+    # moving-lead gate and the new terminal-approach observation domain.
+    set_vision_lead(state, timestamp, 150.0 - .5 * frame * .05)
+    for index, lead in enumerate((state['radarState'].leadOne, state['radarState'].leadTwo)):
+      source = state['modelV2'].leadsV3[index]
+      source.v = [.5] * 6
+      source.a = [-.05] * 6
+      lead.present = present[index]
+      lead.vRel = float(np.float32(source.v[0] - state['modelV2'].velocity.x[0]))
+      lead.vLead = float(state['carState'].vEgo + lead.vRel)
+      lead.aLeadK = float(np.float32(source.a[0]))
+      lead.aLeadTau = 1.5
+    planner.update(state, now_ns=timestamp)
+    assert planner.mpc.solution_status == 0
+
+  first_frame = 120 if complete_history else 0
+  for frame in range(first_frame):
+    update_frame(frame)
+  policy = planner.reference_planner.stop_distance_policy
+  update_policy = policy.update
+
+  def declared_distances(**kwargs):
+    update_policy(**kwargs)
+    return comfort, risks
+
   requests, intents = [], []
-  with patch.object(planner.reference_planner.stop_distance_policy, 'update', return_value=(comfort, risks)), \
+  with patch.object(policy, 'update', side_effect=declared_distances), \
        patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.has_safe_moving_lead',
              return_value=confirmation) as confirmation_check:
-    for frame in range(4):
-      planner.update(state, now_ns=advance(state, frame))
-      assert planner.mpc.solution_status == 0
+    for frame in range(first_frame, first_frame + 4):
+      update_frame(frame)
+      producer = planner.reference_planner
+      decision = producer.parking_approach.decision
+      if any(present) and complete_history:
+        assert policy.evidence.low_speed_history and decision.uncertainty_qualified
+        assert decision.eligible and decision.margin >= 0.0 and decision.allow_compact
+        assert producer.parking_mpc_distances == (comfort, risks)
+      else:
+        assert not decision.allow_compact
+        assert producer.parking_mpc_distances == (4.0, (6.0, 6.0))
       requests.append(planner.output_a_target)
       intents.append(planner.motion_intent)
   assert confirmation_check.called
@@ -283,6 +313,14 @@ def rolling_budget_run(comfort, risks, present, *, confirmation=False):
 def test_unified_rolling_budget_uses_only_present_slots_and_the_strictest_risk(comfort, risks, present, expected_base):
   calls, _, _ = rolling_budget_run(comfort, risks, present)
   assert all(call.kwargs['minimum_gap_base'] == pytest.approx(expected_base) for call in calls)
+
+
+def test_mocked_compact_distance_cannot_bypass_incomplete_approach_history():
+  # The budget fixture does not mock the new admission gate. Source/quality
+  # withdrawal and five-second recovery are separately exercised through ULP
+  # by test_uncertainty_failure_before_cap_application_rebuilds_full_history_in_producer.
+  calls, _, _ = rolling_budget_run(3.0, (4.0, 6.0), (True, False), complete_history=False)
+  assert all(call.kwargs['minimum_gap_base'] == pytest.approx(4.5) for call in calls)
 
 
 def test_rolling_confirmation_changes_no_numeric_producer_request():

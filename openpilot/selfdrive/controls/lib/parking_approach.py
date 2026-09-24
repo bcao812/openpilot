@@ -2,9 +2,10 @@
 
 These fixed engineering assumptions are not measured vehicle guarantees. The
 envelope grants no motion or release authority and does not modify the native
-trajectory. A failed assumption or an unobservable margin ends the compact
-request; an applied braking request survives observation loss until the motion
-owner acknowledges stopping. Driver/off/fault authority remains outside it.
+trajectory. An applied braking request survives observation loss until a held
+stop is acknowledged. Its episode then vetoes distance-only release until an
+independent lead departure is actually consumed in moving TRACK. Driver/off/
+fault authority remains outside it.
 """
 from collections import OrderedDict
 from dataclasses import dataclass, replace
@@ -171,6 +172,10 @@ class ParkingApproachDecision:
   accel_before: float | None = None
   accel_after: float | None = None
   stop_evidence_added: bool = False
+  held_episode: bool = False
+  release_blocked: bool = False
+  departure_qualified: bool = False
+  departure_consumed: bool = False
 
 
 class ParkingApproach:
@@ -182,10 +187,20 @@ class ParkingApproach:
     self.braking_since_ns = None
     self._braking_lead = None
     self._retaining_reason = None
+    self._owner_held = False
+    self._departure_pending = False
     self._last_now_ns = None
     self._last_source_ns = None
     self._last_radar_ns = None
     self.uncertainty_cache = VisionLeadUncertainty()
+
+  @property
+  def departure_pending(self):
+    return self._departure_pending
+
+  @property
+  def held_episode(self):
+    return self._owner_held
 
   def _unavailable(self, decision, reason):
     if self.braking_since_ns is not None:
@@ -199,7 +214,8 @@ class ParkingApproach:
     return decision
 
   def update(self, *, now_ns, source_ns, radar_ns, speed, measured_accel, actuator_delay,
-             radar, qualification, permitted, allow_activation, uncertainty=None, owner_stopping=False):
+             radar, qualification, permitted, allow_activation, uncertainty=None, owner_stopping=False,
+             departure_qualified=False, departure_consumed=False):
     decision = ParkingApproachDecision(now_ns=now_ns, source_ns=source_ns, radar_ns=radar_ns)
     if isinstance(uncertainty, ParkingObservationUncertainty):
       decision = replace(decision, uncertainty_qualified=uncertainty.qualified, uncertainty_reason=uncertainty.reason,
@@ -209,10 +225,32 @@ class ParkingApproach:
       self.clear()
       self.decision = replace(decision, reason='not_permitted')
       return self.decision
-    if owner_stopping:
-      # This is a fresh consumer acknowledgement supplied by the planner,
-      # never the raw standstill bit. The existing owner now retains the stop.
-      self.clear()
+    if owner_stopping and self.braking_since_ns is not None:
+      # A fresh held-stop acknowledgement completes scalar braking delivery.
+      # Retain this episode's release veto: distance error in the subsequent
+      # MPC trajectory is not independent evidence that the lead departed.
+      self._owner_held = True
+      self._retaining_reason = None
+    if self._owner_held:
+      decision = replace(decision, held_episode=True, release_blocked=True,
+                         departure_qualified=bool(departure_qualified), departure_consumed=bool(departure_consumed))
+      if self._retaining_reason is not None:
+        return self._unavailable(decision, self._retaining_reason)
+      if departure_qualified:
+        if self._departure_pending and departure_consumed:
+          self.clear()
+          self.decision = replace(decision, held_episode=False, release_blocked=False,
+                                   reason='independent_departure_consumed')
+          return self.decision
+        self._departure_pending = True
+        self.decision = replace(decision, release_blocked=False, reason='independent_departure_pending')
+        return self.decision
+      withdrawn = self._departure_pending
+      self._departure_pending = False
+      if withdrawn and not owner_stopping:
+        # The owner may already be unwinding HOLD. A withdrawn departure
+        # must restore a stop until a real HOLD is acknowledged again.
+        return self._unavailable(decision, 'departure_withdrawn')
       self.decision = replace(decision, reason='owner_stopping')
       return self.decision
     if self._retaining_reason is not None:
