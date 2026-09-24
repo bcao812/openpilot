@@ -318,7 +318,7 @@ def test_unified_rolling_budget_uses_only_present_slots_and_the_strictest_risk(c
 def test_mocked_compact_distance_cannot_bypass_incomplete_approach_history():
   # The budget fixture does not mock the new admission gate. Source/quality
   # withdrawal and five-second recovery are separately exercised through ULP
-  # by test_uncertainty_failure_before_cap_application_rebuilds_full_history_in_producer.
+  # by test_uncertainty_failure_after_native_compact_use_rebuilds_full_history_in_producer.
   calls, _, _ = rolling_budget_run(3.0, (4.0, 6.0), (True, False), complete_history=False)
   assert all(call.kwargs['minimum_gap_base'] == pytest.approx(4.5) for call in calls)
 

@@ -1,11 +1,9 @@
-"""Conservative scalar braking envelope for an already qualified slow stop.
+"""Engineering margin evidence for admission of compact stopping geometry.
 
-These fixed engineering assumptions are not measured vehicle guarantees. The
-envelope grants no motion or release authority and does not modify the native
-trajectory. An applied braking request survives observation loss until a held
-stop is acknowledged. Its episode then vetoes distance-only release until an
-independent lead departure is actually consumed in moving TRACK. Driver/off/
-fault authority remains outside it.
+The fixed assumptions are not measured vehicle guarantees. The result selects
+only comfort/risk distance parameters. It supplies no scalar acceleration,
+stop evidence, retained braking state or release permission; those remain in
+the existing MPC, model and motion-owner paths.
 """
 from collections import OrderedDict
 from dataclasses import dataclass, replace
@@ -26,7 +24,6 @@ SPEED_UNCERTAINTY = 0.1
 RESPONSE_ACCEL_FLOOR = 0.2
 BRAKE_BUILD_TIME = 1.2
 MIN_NET_BRAKING = 1.0
-FALLBACK_ACCEL = -1.5
 MAX_TERMINAL_LEAD_SPEED = 0.5
 # Quality domain and scale multiplier are engineering assumptions, not a
 # calibrated coverage probability or an absolute vision-error bound.
@@ -145,6 +142,7 @@ class VisionLeadUncertainty:
 
 @dataclass(frozen=True)
 class ParkingApproachDecision:
+  policy_kind: str = 'geometry_margin_only'
   now_ns: int | None = None
   source_ns: int | None = None
   radar_ns: int | None = None
@@ -155,8 +153,6 @@ class ParkingApproachDecision:
   stopping_distance: float | None = None
   margin: float | None = None
   speed_cap: float | None = None
-  accel_cap: float | None = None
-  require_stop: bool = False
   allow_compact: bool = False
   reason: str = 'inactive'
   observation_age: float | None = None
@@ -168,6 +164,10 @@ class ParkingApproachDecision:
   uncertainty_model_ns: int | None = None
   position_std: tuple[float | None, float | None] = (None, None)
   distance_uncertainty: float | None = None
+  # Compatibility with historical trace records. Geometry-only decisions
+  # never populate actuator/owner authority or application fields.
+  accel_cap: float | None = None
+  require_stop: bool = False
   cap_effective: bool = False
   accel_before: float | None = None
   accel_after: float | None = None
@@ -184,38 +184,17 @@ class ParkingApproach:
 
   def clear(self):
     self.decision = ParkingApproachDecision()
-    self.braking_since_ns = None
-    self._braking_lead = None
-    self._retaining_reason = None
-    self._owner_held = False
-    self._departure_pending = False
     self._last_now_ns = None
     self._last_source_ns = None
     self._last_radar_ns = None
     self.uncertainty_cache = VisionLeadUncertainty()
 
-  @property
-  def departure_pending(self):
-    return self._departure_pending
-
-  @property
-  def held_episode(self):
-    return self._owner_held
-
   def _unavailable(self, decision, reason):
-    if self.braking_since_ns is not None:
-      if self._retaining_reason is None:
-        self._retaining_reason = reason
-      decision = replace(decision, limiting_lead=self._braking_lead, accel_cap=FALLBACK_ACCEL,
-                         require_stop=True, reason='braking_retained_' + self._retaining_reason)
-    else:
-      decision = replace(decision, reason=reason)
-    self.decision = decision
-    return decision
+    self.decision = replace(decision, reason=reason)
+    return self.decision
 
   def update(self, *, now_ns, source_ns, radar_ns, speed, measured_accel, actuator_delay,
-             radar, qualification, permitted, allow_activation, uncertainty=None, owner_stopping=False,
-             departure_qualified=False, departure_consumed=False):
+             radar, qualification, permitted, allow_activation, uncertainty=None):
     decision = ParkingApproachDecision(now_ns=now_ns, source_ns=source_ns, radar_ns=radar_ns)
     if isinstance(uncertainty, ParkingObservationUncertainty):
       decision = replace(decision, uncertainty_qualified=uncertainty.qualified, uncertainty_reason=uncertainty.reason,
@@ -225,36 +204,6 @@ class ParkingApproach:
       self.clear()
       self.decision = replace(decision, reason='not_permitted')
       return self.decision
-    if owner_stopping and self.braking_since_ns is not None:
-      # A fresh held-stop acknowledgement completes scalar braking delivery.
-      # Retain this episode's release veto: distance error in the subsequent
-      # MPC trajectory is not independent evidence that the lead departed.
-      self._owner_held = True
-      self._retaining_reason = None
-    if self._owner_held:
-      decision = replace(decision, held_episode=True, release_blocked=True,
-                         departure_qualified=bool(departure_qualified), departure_consumed=bool(departure_consumed))
-      if self._retaining_reason is not None:
-        return self._unavailable(decision, self._retaining_reason)
-      if departure_qualified:
-        if self._departure_pending and departure_consumed:
-          self.clear()
-          self.decision = replace(decision, held_episode=False, release_blocked=False,
-                                   reason='independent_departure_consumed')
-          return self.decision
-        self._departure_pending = True
-        self.decision = replace(decision, release_blocked=False, reason='independent_departure_pending')
-        return self.decision
-      withdrawn = self._departure_pending
-      self._departure_pending = False
-      if withdrawn and not owner_stopping:
-        # The owner may already be unwinding HOLD. A withdrawn departure
-        # must restore a stop until a real HOLD is acknowledged again.
-        return self._unavailable(decision, 'departure_withdrawn')
-      self.decision = replace(decision, reason='owner_stopping')
-      return self.decision
-    if self._retaining_reason is not None:
-      return self._unavailable(decision, self._retaining_reason)
     if (not all(_timestamp(value) for value in (now_ns, source_ns, radar_ns))
         or not 0 <= now_ns - source_ns <= MAX_SOURCE_GAP_NS
         or not 0 <= now_ns - radar_ns <= MAX_SOURCE_GAP_NS):
@@ -311,33 +260,11 @@ class ParkingApproach:
     radicand = (MIN_NET_BRAKING * (MIN_NET_BRAKING + response_accel_upper) * response_time ** 2
                 + 2.0 * MIN_NET_BRAKING * max(0.0, clearance_lower))
     speed_cap = max(0.0, math.sqrt(radicand) - (MIN_NET_BRAKING + response_accel_upper) * response_time - SPEED_UNCERTAINTY)
-    require_stop = margin < 0.0
-    # While admissible, reduce speed using the distance left after the same
-    # response interval. On deficient/unknown margins request the separately
-    # specified fallback; never create a positive catch-up request.
-    braking_space = clearance_lower - response_distance
-    accel_cap = (FALLBACK_ACCEL if require_stop
-                 else -min(MIN_NET_BRAKING, terminal_speed * terminal_speed / (2.0 * braking_space)))
+    allow_compact = margin >= 0.0
     self.decision = replace(
       decision, eligible=True, limiting_lead=limiting_lead, raw_gap=raw_gap, clearance_lower=clearance_lower,
-      stopping_distance=stopping_distance, margin=margin, speed_cap=speed_cap, accel_cap=accel_cap,
-      require_stop=require_stop, allow_compact=not require_stop,
-      reason='margin_deficient' if require_stop else 'margin_admissible', observation_age=observation_age,
+      stopping_distance=stopping_distance, margin=margin, speed_cap=speed_cap, allow_compact=allow_compact,
+      reason='margin_admissible' if allow_compact else 'margin_deficient', observation_age=observation_age,
       response_time=response_time, speed_upper=speed_upper, response_accel_upper=response_accel_upper,
     )
-    return self.decision
-
-  def record_application(self, *, accel_before, accel_after, stop_evidence_added=False):
-    """Record the actual scalar arbitration; eligibility alone arms nothing."""
-    decision = self.decision
-    effective = (decision.accel_cap is not None and decision.accel_cap < 0.0
-                 and _finite(accel_before) and _finite(accel_after)
-                 and accel_after < accel_before and accel_after == min(accel_before, decision.accel_cap))
-    self.decision = replace(decision, cap_effective=effective, accel_before=accel_before, accel_after=accel_after,
-                            stop_evidence_added=bool(stop_evidence_added))
-    if (effective or stop_evidence_added) and self.braking_since_ns is None:
-      self.braking_since_ns = decision.now_ns
-      self._braking_lead = decision.limiting_lead
-    if decision.require_stop and self.braking_since_ns is not None and self._retaining_reason is None:
-      self._retaining_reason = decision.reason
     return self.decision

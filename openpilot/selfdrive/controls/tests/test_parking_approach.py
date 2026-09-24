@@ -5,9 +5,7 @@ import struct
 import pytest
 
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
-from openpilot.selfdrive.controls.lib.parking_approach import (
-  FALLBACK_ACCEL, MAX_POSITION_STD, ParkingApproach, VisionLeadUncertainty,
-)
+from openpilot.selfdrive.controls.lib.parking_approach import MAX_POSITION_STD, ParkingApproach, VisionLeadUncertainty
 
 
 BASE_NS = 10_000_000_000
@@ -65,16 +63,14 @@ def qualified_approach(*, speed=.6, gaps=(15.0, 20.0), lead_speeds=(0.0, 0.0), *
   return guard, policy, decision, model, radar
 
 
-def test_complete_history_has_distinct_eligibility_and_actual_application():
-  guard, _, decision, _, _ = qualified_approach()
+def test_complete_history_admits_geometry_without_actuator_or_owner_authority():
+  _, _, decision, _, _ = qualified_approach()
   assert decision.eligible and decision.allow_compact
   assert decision.reason == 'margin_admissible'
-  assert decision.accel_cap < 0.0
-  assert not decision.cap_effective
-  assert guard.braking_since_ns is None
-  applied = guard.record_application(accel_before=.4, accel_after=decision.accel_cap)
-  assert applied.cap_effective
-  assert guard.braking_since_ns == decision.now_ns
+  assert decision.policy_kind == 'geometry_margin_only'
+  assert decision.accel_cap is None and not decision.cap_effective
+  assert not decision.require_stop and not decision.stop_evidence_added
+  assert not decision.held_episode and not decision.release_blocked
 
 
 @pytest.mark.parametrize('variable,values,increasing', [
@@ -96,14 +92,14 @@ def test_margin_monotonicity(variable, values, increasing):
   assert all(delta > 0.0 if increasing else delta < 0.0 for delta in differences)
 
 
-def test_budget_deficit_requests_a_farther_stop_without_a_three_meter_goal():
+def test_budget_deficit_rejects_compact_geometry_without_adding_stop_evidence():
   _, _, decision, _, _ = qualified_approach(gaps=(5.0, 20.0))
   assert decision.eligible and decision.margin < 0.0
-  assert not decision.allow_compact and decision.require_stop
-  assert decision.accel_cap == FALLBACK_ACCEL
+  assert not decision.allow_compact and not decision.require_stop
+  assert decision.accel_cap is None
 
 
-def test_every_present_slot_limits_admission_and_raw_nearest_slot_owns_cap():
+def test_every_present_slot_limits_admission_and_raw_nearest_slot_defines_margin():
   _, _, decision, _, _ = qualified_approach(gaps=(15.0, 8.0), present=(True, True), stds=(.1, .5))
   assert decision.eligible and decision.limiting_lead == 1
   assert decision.raw_gap == pytest.approx(8.0)
@@ -113,79 +109,29 @@ def test_every_present_slot_limits_admission_and_raw_nearest_slot_owns_cap():
   assert not invalid.eligible and not invalid.allow_compact and invalid.accel_cap is None
 
 
-def test_ordinary_moving_lead_cannot_acquire_a_new_stop_cap():
+def test_ordinary_moving_lead_cannot_acquire_compact_geometry():
   _, _, decision, _, _ = qualified_approach(lead_speeds=(.8, .8))
   assert not decision.eligible and decision.accel_cap is None and not decision.require_stop
 
 
 @pytest.mark.parametrize('fault', ['lost_lead', 'raw_standstill', 'unknown_std'])
-def test_fault_after_real_application_keeps_braking_until_owner_ack(fault):
+def test_fault_after_admission_withdraws_only_compact_geometry(fault):
   guard, policy, decision, _, _ = qualified_approach()
-  assert guard.record_application(accel_before=.4, accel_after=decision.accel_cap).cap_effective
+  assert decision.allow_compact
   kwargs = {'present': (False, False)} if fault == 'lost_lead' else {'allow_activation': False} if fault == 'raw_standstill' else {'stds': (float('nan'), .1)}
-  retained, _, radar = frame_update(guard, policy, 121, gaps=(14.97, 19.97), **kwargs)
-  assert retained.require_stop and retained.accel_cap == FALLBACK_ACCEL
-  assert not retained.allow_compact
-  # Fresh/recovered data and elapsed time cannot silently release the pending
-  # stop. A checked HOLD transfers scalar braking, retaining release limits.
-  for frame in range(122, 325):
-    retained, _, radar = frame_update(guard, policy, frame, gaps=(14.97, 19.97))
-    assert retained.require_stop and retained.accel_cap == FALLBACK_ACCEL
-  now = BASE_NS + 325 * STEP_NS
-  handed_over = guard.update(now_ns=now, source_ns=now, radar_ns=now, speed=0.0, measured_accel=0.0,
-                             actuator_delay=.3, radar=radar, qualification=None, permitted=True,
-                             allow_activation=False, owner_stopping=True)
-  assert handed_over.reason == 'owner_stopping' and handed_over.accel_cap is None
-  assert guard.braking_since_ns is not None
-  assert handed_over.held_episode and handed_over.release_blocked
-  assert not handed_over.allow_compact and not handed_over.require_stop
+  withdrawn, _, _ = frame_update(guard, policy, 121, gaps=(14.97, 19.97), **kwargs)
+  assert not withdrawn.allow_compact
+  assert withdrawn.accel_cap is None and not withdrawn.require_stop
+  assert not withdrawn.held_episode and not withdrawn.release_blocked
 
 
-def test_held_episode_cannot_end_on_one_unconsumed_departure_sample():
+def test_inactive_inputs_withdraw_geometry_admission():
   guard, _, decision, _, radar = qualified_approach()
-  guard.record_application(accel_before=.4, accel_after=decision.accel_cap)
-
-  def update_held(frame, **changes):
-    now = BASE_NS + frame * STEP_NS
-    return guard.update(now_ns=now, source_ns=now, radar_ns=now, speed=0.0, measured_accel=0.0,
-                         actuator_delay=.3, radar=radar, qualification=None, permitted=True,
-                         allow_activation=False, **changes)
-
-  held = update_held(121, owner_stopping=True)
-  assert held.release_blocked and not held.require_stop
-  pending = update_held(122, owner_stopping=True, departure_qualified=True)
-  assert not pending.release_blocked and pending.held_episode and guard.departure_pending
-  # The independently qualified observation was withdrawn before moving
-  # TRACK consumed it. A matching old acknowledgement alone cannot retire it.
-  withdrawn = update_held(123, departure_consumed=True)
-  assert withdrawn.release_blocked and withdrawn.require_stop
-  assert withdrawn.accel_cap == FALLBACK_ACCEL and guard.braking_since_ns is not None
-  held = update_held(124, owner_stopping=True)
-  assert held.release_blocked and not held.require_stop
-  pending = update_held(125, departure_qualified=True)
-  assert pending.held_episode and guard.braking_since_ns is not None
-  completed = update_held(126, departure_qualified=True, departure_consumed=True)
-  assert completed.reason == 'independent_departure_consumed'
-  assert not completed.held_episode and not completed.release_blocked
-  assert guard.braking_since_ns is None
-
-
-def test_stronger_independent_braking_is_not_reported_as_candidate_application():
-  guard, policy, decision, _, _ = qualified_approach()
-  assert not guard.record_application(accel_before=-3.0, accel_after=-3.0).cap_effective
-  assert guard.braking_since_ns is None
-  lost, _, _ = frame_update(guard, policy, 121, gaps=(14.97, 19.97), present=(False, False))
-  assert lost.accel_cap is None and not lost.require_stop
-
-
-def test_inactive_authority_clears_pending_braking_without_new_motion_permission():
-  guard, _, decision, _, radar = qualified_approach()
-  guard.record_application(accel_before=.4, accel_after=decision.accel_cap)
   cleared = guard.update(now_ns=decision.now_ns + STEP_NS, source_ns=decision.source_ns + STEP_NS,
                          radar_ns=decision.radar_ns + STEP_NS, speed=.6, measured_accel=0.0,
                          actuator_delay=.3, radar=radar, qualification=None, permitted=False, allow_activation=True)
   assert cleared.reason == 'not_permitted' and cleared.accel_cap is None
-  assert not cleared.allow_compact and guard.braking_since_ns is None
+  assert not cleared.allow_compact and not cleared.require_stop and not cleared.release_blocked
 
 
 @pytest.mark.parametrize('std', [0.0, -.1, MAX_POSITION_STD + .001, 34469.535, float('nan'), float('inf')])
@@ -232,7 +178,7 @@ def test_envelope_counts_underlying_model_age_even_with_new_radar_publication():
 
 def test_uncertainty_fault_before_application_requires_new_complete_history():
   guard, policy, decision, _, _ = qualified_approach()
-  assert decision.eligible and guard.braking_since_ns is None
+  assert decision.eligible and decision.allow_compact and decision.accel_cap is None
   invalid, _, _ = frame_update(guard, policy, 121, gaps=(14.97, 19.97), stds=(100.0, .1))
   assert not invalid.eligible and not invalid.require_stop
   for frame in range(122, 235):
