@@ -9,7 +9,7 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_MAX_T, CREEP_STOP_T
 from openpilot.selfdrive.controls.lib.launch_response import ResponseDomain
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_STOP_DISTANCE
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_STOP_DISTANCE, RISK_STOP_DISTANCE
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionPhase, MotionResponseKind, StopReason
 from openpilot.selfdrive.controls.lib.parking_approach import FALLBACK_ACCEL
@@ -85,6 +85,49 @@ def test_stronger_model_cap_remains_stronger_and_is_not_counted_as_parking_use()
   assert not decision.cap_effective
   assert planner.output_a_target <= -3.0
   assert planner.reference_planner.constraint_source == LongitudinalPlanSource.e2e
+
+
+@pytest.mark.parametrize('fault', ['std', 'source'])
+def test_uncertainty_failure_before_cap_application_rebuilds_full_history_in_producer(fault):
+  planner, _, state = warm_parking(experimental=True, model_accel=-3.0)
+  producer = planner.reference_planner
+  assert producer.stop_distance_policy.evidence.low_speed_history
+  assert producer.parking_approach.decision.allow_compact
+  assert producer.parking_mpc_distances[0] < 4.0
+  assert producer.parking_mpc_distances[1][0] < 6.0
+  assert not producer.parking_approach.decision.cap_effective
+  assert producer.parking_approach.braking_since_ns is None
+
+  with patch(SAMPLE_ACCEL, return_value=.4):
+    for frame in range(121, 235):
+      now = advance(state, frame)
+      set_vision_lead(state, now, 15.0 - .03 * (frame - 120),
+                      std=1000.0 if frame == 121 and fault == 'std' else .1)
+      if frame == 121 and fault == 'source':
+        # Fresh, nearby time is still not an exact observed model identity.
+        state['radarState'].mdMonoTime = now - 1
+      planner.update(state, now_ns=now)
+      assert planner.mpc.solution_status == 0
+      assert planner.output_a_target <= -3.0
+      assert not producer.parking_approach.decision.cap_effective
+      assert producer.parking_approach.braking_since_ns is None
+      if frame < 222:
+        # The first valid carState after the fault is frame 122. Frame 221
+        # contains only 4.95 seconds of new history. Exercise ULP's own reset,
+        # its public returned distances and the values actually sent native.
+        assert not producer.stop_distance_policy.evidence.low_speed_history
+        assert not producer.parking_approach.decision.allow_compact
+        assert producer.parking_policy_distances == (4.0, (6.0, 6.0))
+        assert producer.parking_mpc_distances == (4.0, (6.0, 6.0))
+        assert np.min(planner.mpc.params[:, COMFORT_STOP_DISTANCE]) >= 4.0
+        np.testing.assert_array_equal(planner.mpc.params[:, RISK_STOP_DISTANCE],
+                                      np.full_like(planner.mpc.params[:, RISK_STOP_DISTANCE], 6.0))
+
+  assert producer.stop_distance_policy.evidence.low_speed_history
+  assert producer.parking_approach.decision.allow_compact
+  assert producer.parking_policy_distances[0] < 4.0
+  assert producer.parking_mpc_distances == producer.parking_policy_distances
+  assert np.min(planner.mpc.params[:, RISK_STOP_DISTANCE]) < 6.0
 
 
 def test_radar_available_platform_cannot_acquire_vision_parking_policy():
