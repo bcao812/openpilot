@@ -19,6 +19,8 @@ LEAD_RAMP_NS = 500_000_000
 APPROACH_GRACE_NS = 500_000_000
 NEAR_STOP_LEAD_SPEED = 0.3
 APPROACH_LEAD_DECEL = -0.05
+PARKING_START_SPEED = 1.2
+PARKING_FULL_SPEED = 0.3
 MAX_COMPACT_SPEED = 30.0 / 3.6
 
 
@@ -46,16 +48,20 @@ class LowSpeedStopDistance:
   def __init__(self):
     self.clear()
 
-  def clear(self):
+  def clear(self, *, source_barrier_ns=None):
     self._speeds = deque()
     self._last_now_ns = None
     self._last_source_ns = None
     self._last_radar_ns = None
     self._lead_since = [None, None]
     self._lead_previous = [None, None]
+    self._lead_was_present = [False, False]
     self._approach_since = [None, None]
     self._last_approach_ns = [None, None]
     self._fractions = [0.0, 0.0]
+    self._applied_fraction = 0.0
+    self._has_compact_history = False
+    self._source_barrier_ns = source_barrier_ns
 
   def update(self, *, now_ns, source_ns, radar_ns, speed, radar, permitted, allow_activation=True):
     speed_valid = isinstance(speed, Real) and not isinstance(speed, bool) and math.isfinite(speed) and speed >= 0.0
@@ -68,8 +74,12 @@ class LowSpeedStopDistance:
         or any(lead is None or getattr(lead, 'present', None) is None for lead in leads)
         or not 0 <= now_ns - source_ns <= MAX_SOURCE_GAP_NS
         or not 0 <= now_ns - radar_ns <= MAX_SOURCE_GAP_NS):
-      self.clear()
+      self.clear(source_barrier_ns=self._source_barrier_ns)
       return fallback
+    if self._source_barrier_ns is not None:
+      if source_ns <= self._source_barrier_ns:
+        return fallback
+      self._source_barrier_ns = None
     if self._last_now_ns is not None and not 0 < now_ns - self._last_now_ns <= MAX_SOURCE_GAP_NS:
       self.clear()
     if self._last_source_ns is not None:
@@ -89,14 +99,21 @@ class LowSpeedStopDistance:
                          and all(value < MAX_COMPACT_SPEED for _, value in self._speeds))
 
     radar_delta = radar_ns - self._last_radar_ns if self._last_radar_ns is not None else None
+    armed = self._has_compact_history or any(fraction > 0.0 for fraction in self._fractions)
     if radar_delta is not None and not 0 <= radar_delta <= MAX_SOURCE_GAP_NS:
+      if armed:
+        self.clear(source_barrier_ns=source_ns)
+        return fallback
       self._lead_since = [None, None]
       self._lead_previous = [None, None]
+      self._lead_was_present = [False, False]
       self._approach_since = [None, None]
       self._last_approach_ns = [None, None]
       self._fractions = [0.0, 0.0]
+      self._applied_fraction = 0.0
       radar_delta = None
     fractions = []
+    confirmed_approaches = []
     for i, lead in enumerate(leads):
       observation = _observation(lead, speed)
       previous = self._lead_previous[i]
@@ -109,6 +126,14 @@ class LowSpeedStopDistance:
         else:
           predicted = previous[0] + 0.5 * (previous[1] + observation[1]) * radar_delta / 1e9
           continuous = abs(observation[0] - predicted) <= 0.5 and abs(observation[5] - previous[5]) <= 0.3
+      if armed and ((previous is not None and not continuous)
+                    or (lead.present and not self._lead_was_present[i])):
+        # A changed/lost target must not regain a smaller risk envelope one
+        # second later using speed history collected before that uncertainty.
+        # The next fresh carState starts a new complete ten-second window.
+        # An absent second slot that has stayed absent is not a target loss.
+        self.clear(source_barrier_ns=source_ns)
+        return fallback
       if observation is None:
         self._lead_since[i] = None
         self._fractions[i] = 0.0
@@ -133,6 +158,7 @@ class LowSpeedStopDistance:
                             and radar_ns - approach_since >= LEAD_STABLE_NS)
       if approach_confirmed:
         self._last_approach_ns[i] = radar_ns
+      confirmed_approaches.append(approach_confirmed)
       since = self._lead_since[i]
       if not low_speed_history or not allow_activation or since is None:
         self._fractions[i] = 0.0
@@ -152,6 +178,21 @@ class LowSpeedStopDistance:
     # cannot shorten the comfort target for a bad/close second observation.
     present = [bool(getattr(lead, 'present', False)) for lead in leads]
     common_fraction = min((fraction for fraction, exists in zip(fractions, present, strict=True) if exists), default=0.0)
+    # Retain ordinary following geometry until the final rolling-stop range.
+    # Reducing the stand-off earlier can move the car closer before a cut-in
+    # or a lead dropout, even though the later fault restores the old target.
+    parking_fraction = min(1.0, max(0.0, (PARKING_START_SPEED - speed) / (PARKING_START_SPEED - PARKING_FULL_SPEED)))
+    common_fraction *= parking_fraction
+    if not all(confirmed for confirmed, exists in zip(confirmed_approaches, present, strict=True) if exists):
+      # Freeze actual relaxation during grace, including any change of the
+      # ego-speed factor. Slowing down is not new lead-approach evidence.
+      common_fraction = min(common_fraction, self._applied_fraction)
+    self._applied_fraction = common_fraction
+    # Revoking today's request does not undo forward travel that a previous
+    # compact target may have induced. Preserve the uncertainty barrier until
+    # the complete policy history is cleared, including through HOLD/grace.
+    self._has_compact_history |= common_fraction > 0.0
+    self._lead_was_present = present
     comfort = fallback[0] + common_fraction * (_distance_profile(speed, COMPACT_COMFORT_DISTANCE) - fallback[0])
     risk = tuple(DEFAULT_RISK_DISTANCE + (common_fraction if exists else 0.0)
                  * (_distance_profile(speed, COMPACT_RISK_DISTANCE) - DEFAULT_RISK_DISTANCE) for exists in present)

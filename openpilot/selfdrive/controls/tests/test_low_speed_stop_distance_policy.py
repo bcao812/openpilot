@@ -21,7 +21,7 @@ def stamp(frame):
   return BASE_NS + frame * FRAME_NS
 
 
-def lead(frame, ego_speed=1.0, lead_speed=0.0, initial_distance=150.0, **changes):
+def lead(frame, ego_speed=.3, lead_speed=0.0, initial_distance=150.0, **changes):
   relative_speed = lead_speed - ego_speed
   values = {'present': True, 'dRel': initial_distance + relative_speed * frame * .05,
             'vRel': relative_speed, 'vLead': lead_speed, 'aLeadK': 0.0, 'modelProb': .995, 'yRel': 0.0}
@@ -29,12 +29,12 @@ def lead(frame, ego_speed=1.0, lead_speed=0.0, initial_distance=150.0, **changes
   return SimpleNamespace(**values)
 
 
-def radar(frame, speed=1.0, lead_speed=0.0):
+def radar(frame, speed=.3, lead_speed=0.0):
   return SimpleNamespace(leadOne=lead(frame, speed, lead_speed),
                          leadTwo=lead(frame, speed, lead_speed, initial_distance=180.0))
 
 
-def update(policy, frame, *, speed=1.0, observations=AUTO, now_ns=AUTO,
+def update(policy, frame, *, speed=.3, observations=AUTO, now_ns=AUTO,
            source_ns=AUTO, radar_ns=AUTO, permitted=True, allow_activation=True):
   return policy.update(now_ns=stamp(frame) if now_ns is AUTO else now_ns,
                        source_ns=stamp(frame) if source_ns is AUTO else source_ns,
@@ -90,6 +90,29 @@ def halfway_through_approach_ramp():
   return policy, result
 
 
+def assert_fresh_ten_second_requalification(policy, first_frame, distances, *, previous_speed=.3,
+                                          present=(True, True)):
+  """Follow the same stationary slots through recovery; no private state access."""
+  distances = list(distances)
+  for frame in range(first_frame, first_frame + 213):
+    speed = .3
+    travelled = .5 * (previous_speed + speed) * .05
+    distances = [distance - travelled for distance in distances]
+    observations = radar(frame, speed)
+    for index, item in enumerate((observations.leadOne, observations.leadTwo)):
+      item.present = present[index]
+      item.dRel = distances[index]
+    result = update(policy, frame, speed=speed, observations=observations)
+    if frame < first_frame + 200:
+      # The first genuinely new source sample is time zero. In particular,
+      # first_frame+199 is only 9.95 s, even if the fault sample was valid CS.
+      assert_default_low_speed(result)
+    previous_speed = speed
+  # Recovery must remain possible after the new complete window and ramp.
+  assert result[0] == pytest.approx(3.0)
+  assert result[1] == pytest.approx(tuple(4.0 if exists else 6.0 for exists in present))
+
+
 def test_short_low_speed_recording_does_not_shorten_the_ten_second_requirement():
   policy = LowSpeedStopDistance()
   # A fully observed lead does not substitute for the missing 50 ms of ego history.
@@ -108,12 +131,23 @@ def test_held_car_state_cannot_complete_history_using_processing_time():
 
 def test_recent_high_speed_tail_cannot_acquire_compact_distance():
   policy = qualified()
-  assert update(policy, 221, speed=40.0 / 3.6)[1] == pytest.approx((6.0, 6.0))
-  # Nine seconds of slow driving after that high-speed sample are insufficient.
-  assert_default_low_speed(run(policy, first=222, last=401))
-  assert_default_low_speed(run(policy, first=402, last=420))
-  # The high-speed observation has now left a complete recent 10 s window.
-  assert run(policy, first=421, last=461)[1] == pytest.approx((4.0, 4.0))
+  distance, previous_speed = lead(220).dRel, .3
+  for frame in range(221, 462):
+    speed = 40.0 / 3.6 if frame == 221 else .3
+    # Keep dRel consistent across the speed changes, so the test cannot pass
+    # merely because an artificial target jump erased the earlier history.
+    distance -= .5 * (previous_speed + speed) * .05
+    observations = radar(frame, speed)
+    observations.leadOne.dRel = distance
+    observations.leadTwo.dRel = distance + 30.0
+    result = update(policy, frame, speed=speed, observations=observations)
+    if frame == 221:
+      assert result[1] == pytest.approx((6.0, 6.0))
+    elif frame <= 421:
+      # Include the old high-speed sample at the exact ten-second boundary.
+      assert_default_low_speed(result)
+    previous_speed = speed
+  assert result[1] == pytest.approx((4.0, 4.0))
 
 
 def test_exactly_thirty_kmh_in_recent_history_is_not_below_thirty():
@@ -125,8 +159,11 @@ def test_exactly_thirty_kmh_in_recent_history_is_not_below_thirty():
 
 @pytest.mark.parametrize('speed_kmh, comfort, risk', [
   (0.0, 3.0, 4.0),
-  (15.0, 3.0, 4.0),
-  (22.5, 4.5, 5.0),
+  (1.08, 3.0, 4.0),   # .3 m/s: full terminal reduction.
+  (2.7, 3.5, 5.0),    # .75 m/s: halfway between .3 and 1.2.
+  (4.32, 4.0, 6.0),   # 1.2 m/s: no geometric reduction.
+  (15.0, 4.0, 6.0),
+  (22.5, 5.0, 6.0),
   (30.0, 6.0, 6.0),
 ])
 def test_speed_profile_boundaries_and_midpoint(speed_kmh, comfort, risk):
@@ -139,9 +176,9 @@ def test_zero_speed_with_closed_activation_gate_returns_default_targets():
   policy = qualified()
   # Ego slows toward a stationary lead, integrating the distance explicitly
   # so changing ego speed does not fabricate a lead-slot position jump.
-  distance, previous_speed = lead(220).dRel, 1.0
+  distance, previous_speed = lead(220).dRel, .3
   for frame in range(221, 282):
-    speed = max(0.0, 1.0 - (frame - 220) / 60.0)
+    speed = max(0.0, .3 - .3 * (frame - 220) / 60.0)
     distance -= .5 * (previous_speed + speed) * .05
     observations = radar(frame, speed)
     observations.leadOne.dRel = distance
@@ -206,13 +243,11 @@ def test_unqualified_present_slot_blocks_shared_compact_targets(bad_slot):
   assert_default_low_speed(update(policy, 221, observations=observations))
 
 
-def test_absent_slot_keeps_its_default_without_blocking_qualified_present_lead():
+def test_participating_slot_loss_cannot_keep_compact_target_from_surviving_slot():
   policy = qualified()
   observations = radar(221)
   observations.leadOne.present = False
-  comfort, distances = update(policy, 221, observations=observations)
-  assert comfort == pytest.approx(3.0)
-  assert distances == pytest.approx((6.0, 4.0))
+  assert_default_low_speed(update(policy, 221, observations=observations))
 
 
 def test_swapped_distinct_slots_restart_observation_qualification():
@@ -352,7 +387,7 @@ def test_invalid_ego_speed_returns_conservative_six_metre_targets(speed):
 
 def test_rewritten_held_car_state_speed_invalidates_the_old_history():
   policy = qualified()
-  result = update(policy, 221, speed=1.01, source_ns=stamp(220))
+  result = update(policy, 221, speed=.31, source_ns=stamp(220))
   assert_default_low_speed(result)
 
 
@@ -443,7 +478,7 @@ def test_gentle_lead_deceleration_requires_confirmation_before_gradual_entry():
   requests = []
   for frame in range(221, 242):
     lead_speed = .8 - .1 * (frame - 220) * .05
-    distance += .5 * ((previous_lead_speed - 1.0) + (lead_speed - 1.0)) * .05
+    distance += .5 * ((previous_lead_speed - .3) + (lead_speed - .3)) * .05
     observations = radar(frame, lead_speed=lead_speed)
     observations.leadOne.dRel = distance
     observations.leadTwo.dRel = distance + 30.0
@@ -541,3 +576,137 @@ def test_grace_does_not_mask_target_quality_or_time_failures(fault):
   elif fault == 'source_rollback':
     changes['source_ns'] = stamp(236)
   assert_default_low_speed(update(policy, frame, observations=observations, **changes))
+
+
+@pytest.mark.parametrize('boundary,expected_comfort,expected_risk', [(.3, 3.0, 4.0), (1.2, 4.0, 6.0)])
+def test_terminal_speed_blend_is_continuous_at_both_boundaries(boundary, expected_comfort, expected_risk):
+  results = [run(LowSpeedStopDistance(), last=240, speed=speed)
+             for speed in (boundary - 1e-7, boundary, boundary + 1e-7)]
+  assert results[1][0] == pytest.approx(expected_comfort)
+  assert results[1][1] == pytest.approx((expected_risk, expected_risk))
+  for result in results:
+    assert abs(result[0] - expected_comfort) < 1e-6
+    assert all(abs(value - expected_risk) < 1e-6 for value in result[1])
+  assert results[0][0] <= results[1][0] <= results[2][0]
+
+
+@pytest.mark.parametrize('initial_speed,expected_comfort,expected_risk', [(.75, 3.5, 5.0), (1.2, 4.0, 6.0)])
+def test_weakened_approach_cannot_shorten_target_merely_because_ego_slows(initial_speed, expected_comfort, expected_risk):
+  policy = LowSpeedStopDistance()
+  for frame in range(221):
+    observations = radar(frame, initial_speed, lead_speed=.8)
+    observations.leadOne.aLeadK = observations.leadTwo.aLeadK = -.1
+    result = update(policy, frame, speed=initial_speed, observations=observations)
+  assert result[0] == pytest.approx(expected_comfort)
+  assert result[1] == pytest.approx((expected_risk, expected_risk))
+  distance = lead(220, initial_speed, lead_speed=.8).dRel
+  previous_speed = initial_speed
+  for frame in range(221, 231):
+    speed = max(.3, initial_speed - (initial_speed - .3) * (frame - 220) / 9.0)
+    distance += .5 * ((.8 - previous_speed) + (.8 - speed)) * .05
+    observations = radar(frame, speed, lead_speed=.8)
+    observations.leadOne.dRel = distance
+    observations.leadTwo.dRel = distance + 30.0
+    # vLead remains above .3 and the acceleration estimate no longer says
+    # braking. The observations are still fresh, valid and continuous.
+    result = update(policy, frame, speed=speed, observations=observations)
+    assert result[0] == pytest.approx(expected_comfort)
+    assert result[1] == pytest.approx((expected_risk, expected_risk))
+    previous_speed = speed
+
+
+def test_second_slot_absent_from_start_does_not_repeatedly_reset_single_lead():
+  policy = LowSpeedStopDistance()
+  for frame in range(321):
+    observations = radar(frame)
+    observations.leadTwo.present = False
+    result = update(policy, frame, observations=observations)
+    if frame >= 220:
+      assert result[0] == pytest.approx(3.0)
+      assert result[1] == pytest.approx((4.0, 6.0))
+
+
+@pytest.mark.parametrize('warm_speed', [.3, 1.5])
+@pytest.mark.parametrize('fault', ['participating_loss', 'quality_failure', 'slot_swap', 'new_near_slot', 'radar_rollback'])
+def test_armed_target_failure_requires_new_history_even_before_geometry_reduction(warm_speed, fault):
+  policy = LowSpeedStopDistance()
+  initial_second_present = fault != 'new_near_slot'
+  for frame in range(221):
+    observations = radar(frame, warm_speed)
+    observations.leadTwo.present = initial_second_present
+    result = update(policy, frame, speed=warm_speed, observations=observations)
+  if warm_speed == .3:
+    assert result[0] == pytest.approx(3.0)
+    assert result[1] == pytest.approx((4.0, 4.0 if initial_second_present else 6.0))
+  else:
+    # The same complete speed/approach history exists at 1.5 m/s, although
+    # the terminal-speed blend has not yet relaxed geometric distances.
+    assert_default_low_speed(result)
+  observations = radar(221, warm_speed)
+  observations.leadTwo.present = initial_second_present
+  changes = {}
+  if fault == 'participating_loss':
+    observations.leadOne.present = False  # The second qualified lead survives.
+  elif fault == 'quality_failure':
+    observations.leadOne.modelProb = .97
+  elif fault == 'slot_swap':
+    observations.leadOne, observations.leadTwo = observations.leadTwo, observations.leadOne
+  elif fault == 'new_near_slot':
+    observations.leadTwo.present = True
+    observations.leadTwo.dRel = 5.0
+  elif fault == 'radar_rollback':
+    changes['radar_ns'] = stamp(219)
+  assert_default_low_speed(update(policy, 221, speed=warm_speed, observations=observations, **changes))
+  # Recover every target's healthy fields, but retain the actual slot gaps.
+  assert_fresh_ten_second_requalification(policy, 222,
+      (observations.leadOne.dRel, observations.leadTwo.dRel), previous_speed=warm_speed)
+
+
+def test_armed_radar_stream_gap_discards_all_previous_speed_history():
+  policy = qualified()
+  for frame in range(221, 226):
+    result = update(policy, frame, radar_ns=stamp(220), observations=radar(220))
+    assert result[1] == pytest.approx((4.0, 4.0))
+  # Source/consumer updates stayed at 50 ms; only the next distinct radar
+  # publication is 300 ms after the previous one.
+  observations = radar(226)
+  assert_default_low_speed(update(policy, 226, observations=observations))
+  assert_fresh_ten_second_requalification(policy, 227,
+      (observations.leadOne.dRel, observations.leadTwo.dRel))
+
+
+def test_held_fault_time_car_state_cannot_seed_the_new_ten_second_window():
+  policy = qualified()
+  observations = radar(221)
+  observations.leadOne.modelProb = .97
+  assert_default_low_speed(update(policy, 221, observations=observations))
+  # The next consumer/radar messages are fresh, but CS is still the failed
+  # transaction's publication. It must not become recovery's time zero.
+  held_source_observations = radar(222)
+  assert_default_low_speed(update(policy, 222, source_ns=stamp(221), observations=held_source_observations))
+  assert_fresh_ten_second_requalification(policy, 223,
+      (held_source_observations.leadOne.dRel, held_source_observations.leadTwo.dRel))
+
+
+@pytest.mark.parametrize('withdrawal', ['activation_closed', 'approach_grace_expired'])
+def test_prior_actual_compaction_still_requires_new_history_if_target_is_lost_after_withdrawal(withdrawal):
+  if withdrawal == 'activation_closed':
+    policy = qualified()  # Actual 3/4 m targets were applied before HOLD.
+    assert_default_low_speed(run(policy, first=221, last=240, allow_activation=False))
+    fault_frame = 241
+    observations = radar(fault_frame)
+  else:
+    policy, applied = halfway_through_approach_ramp()
+    assert applied[0] < 4.0 and applied[1][0] < 6.0
+    for frame in range(237, 248):
+      withdrawn = update(policy, frame, observations=estimated_approach_radar(frame, 0.0))
+    assert_default_low_speed(withdrawn)  # No current fraction remains after grace expires.
+    fault_frame = 248
+    observations = estimated_approach_radar(fault_frame, 0.0)
+  # A surviving second lead cannot preserve history through loss of a target
+  # that participated in earlier actual compaction, even with fraction now 0.
+  observations.leadOne.present = False
+  assert_default_low_speed(update(policy, fault_frame, observations=observations,
+                                  allow_activation=withdrawal != 'activation_closed'))
+  assert_fresh_ten_second_requalification(policy, fault_frame + 1,
+      (observations.leadOne.dRel, observations.leadTwo.dRel))
