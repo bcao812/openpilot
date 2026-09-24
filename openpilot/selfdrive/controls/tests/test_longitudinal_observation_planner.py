@@ -1,4 +1,5 @@
 import math
+from collections import deque
 from copy import deepcopy
 from dataclasses import fields, is_dataclass
 from types import SimpleNamespace
@@ -51,6 +52,8 @@ def snapshot_value(value):
     return (type(value).__qualname__, {field.name: snapshot_value(getattr(value, field.name)) for field in fields(value)})
   if isinstance(value, dict):
     return {name: snapshot_value(item) for name, item in value.items()}
+  if isinstance(value, deque):
+    return ('deque', value.maxlen, tuple(snapshot_value(item) for item in value))
   if isinstance(value, (tuple, list)):
     return type(value)(snapshot_value(item) for item in value)
   return deepcopy(value)
@@ -58,7 +61,7 @@ def snapshot_value(value):
 
 def reference_snapshot(reference):
   return {
-    name: snapshot_value(vars(value) if name in ('model_reference_adapter', 'cruise_response') else value)
+    name: snapshot_value(vars(value) if name in ('model_reference_adapter', 'cruise_response', 'stop_distance_policy') else value)
     for name, value in vars(reference).items() if name != 'planner'
   }
 

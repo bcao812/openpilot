@@ -60,7 +60,7 @@ def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float, *, mi
   if not (math.isfinite(v_ego) and STOP_SPEED <= v_ego < CREEP_FOLLOW_MAX_SPEED
           and math.isfinite(actuator_delay) and 0.0 <= actuator_delay <= 1.0
           and not isinstance(minimum_gap_base, bool) and math.isfinite(minimum_gap_base)
-          and LEAD_DANGER_FACTOR * STOP_DISTANCE <= minimum_gap_base <= CREEP_FOLLOW_MIN_GAP
+          and 3.0 <= minimum_gap_base <= CREEP_FOLLOW_MIN_GAP
           and radar_state.leadOne.present):
     return False
   minimum_gap = minimum_gap_base + v_ego * (actuator_delay + DT_MDL) + v_ego ** 2 / (2.0 * COMFORT_BRAKE)

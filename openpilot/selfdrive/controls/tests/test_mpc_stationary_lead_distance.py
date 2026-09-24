@@ -11,11 +11,13 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
+from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL, STOP_SPEED, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib import long_mpc
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_STOP_DISTANCE, LEAD_DANGER_FACTOR, MPC_SOURCES, N, PARAM_DIM, QP_FEASIBILITY_TOL,
   RISK_STOP_DISTANCE, STOP_DISTANCE, T_IDXS, LongitudinalMpc, LongitudinalPlanSource, MpcReference,
 )
+from openpilot.selfdrive.controls.tests.test_due_rest_reference import typed_due_reference
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state, solve_reference
 
 
@@ -158,7 +160,43 @@ def test_three_meter_stationary_lead_parameters_reach_every_native_stage(lead_in
     assert parameters[RISK_STOP_DISTANCE] == 4.0
     assert parameters[4] == 1.45 and parameters[5] == 0.75
   np.testing.assert_array_equal(mpc.diagnostic_last_parameters, [writes[stage] for stage in range(N+1)])
-  np.testing.assert_allclose(mpc.x_sol, 0.0, atol=1e-8, rtol=0.0)
+  # An untyped reference has soft speed/distance rows, with no native rest
+  # constraint. A successful RTI solve need not return exact zero motion at
+  # the zero-cost equilibrium; use its actual finite/dynamics contract.
+  assert mpc.rest_goal is None
+  assert np.all(np.isfinite(mpc.x_sol)) and np.all(np.isfinite(mpc.j_solution))
+  np.testing.assert_allclose(mpc.x_sol[0], mpc.x0, atol=QP_FEASIBILITY_TOL, rtol=0.0)
+  assert np.max(np.abs(mpc.trajectory_dynamics_defects(mpc.x_sol, mpc.j_solution))) <= QP_FEASIBILITY_TOL
+  # These existing thresholds bound this mathematical fixture's output. They
+  # do not replace the independent owner/actuator HOLD and release contracts.
+  assert np.max(mpc.v_solution) < STOP_SPEED
+  assert get_accel_from_plan(mpc.v_solution, mpc.a_solution, T_IDXS, action_t=0.55) < STOP_RELEASE_ACCEL
+
+
+@pytest.mark.parametrize('lead_index', [0, 1])
+def test_compact_lead_preserves_the_typed_due_rest_contract(lead_index):
+  radar = radar_state(distance=3.0)
+  if lead_index:
+    radar.leadOne, radar.leadTwo = radar.leadTwo, radar.leadOne
+  risk_bases = (4.0, 6.0) if lead_index == 0 else (6.0, 4.0)
+  reference = replace(typed_due_reference(0.0), comfort_stop_distance=3.0, lead_risk_stop_distances=risk_bases)
+  mpc = LongitudinalMpc()
+  mpc.set_cur_state(0.0, 0.0)
+  mpc.update(radar, reference=reference)
+  assert mpc.solution_status == mpc.last_solver_status == 0
+  assert mpc.rest_goal.native_node == 0 and mpc.rest_goal_state == 'satisfied'
+  np.testing.assert_array_equal(mpc.params[:, COMFORT_STOP_DISTANCE], 3.0)
+  np.testing.assert_array_equal(mpc.params[:, RISK_STOP_DISTANCE], 4.0)
+  lower, upper = mpc.diagnostic_reference_bounds
+  np.testing.assert_array_equal(lower[1:], 0.0)
+  np.testing.assert_array_equal(upper[1:], 0.0)
+  assert np.all(np.isfinite(mpc.x_sol)) and np.all(np.isfinite(mpc.j_solution))
+  np.testing.assert_allclose(mpc.x_sol[0], mpc.x0, atol=QP_FEASIBILITY_TOL, rtol=0.0)
+  assert np.all(mpc.x_sol[1:, 1:] >= lower[1:] - QP_FEASIBILITY_TOL)
+  assert np.all(mpc.x_sol[1:, 1:] <= upper[1:] + QP_FEASIBILITY_TOL)
+  assert np.max(np.abs(mpc.trajectory_dynamics_defects(mpc.x_sol, mpc.j_solution))) <= QP_FEASIBILITY_TOL
+  assert mpc.trajectory_minimum_velocity(mpc.x_sol, mpc.j_solution) >= -QP_FEASIBILITY_TOL
+  assert get_accel_from_plan(mpc.v_solution, mpc.a_solution, T_IDXS, action_t=0.55) < STOP_RELEASE_ACCEL
 
 
 @pytest.mark.parametrize('cruise,model', [(None, False), (0.0, False), (10.0, False), (10.0, True)])

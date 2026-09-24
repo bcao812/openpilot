@@ -644,10 +644,13 @@ class UnifiedLongitudinalPlanner:
                      and model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN)
     # This confirms continued rolling; it grants neither release nor extra
     # throttle. Keep the original reaction/stopping reserve and lead guards,
-    # while aligning its base with the compact goal and the unchanged native
-    # standstill risk boundary. Otherwise the old 5 m base forces a stop when
+    # while aligning its base with the compact goal and the selected native
+    # standstill risk boundaries. Otherwise the old 5 m base forces a stop when
     # a correctly followed compact lead crosses the old confirmation budget.
-    moving_gap_base = max(LEAD_DANGER_FACTOR * STOP_DISTANCE,
+    present_risk = max((reference.lead_risk_stop_distances[i]
+                        for i, lead in enumerate((state['radarState'].leadOne, state['radarState'].leadTwo))
+                        if lead.present), default=STOP_DISTANCE)
+    moving_gap_base = max(LEAD_DANGER_FACTOR * present_risk,
                           min(CREEP_FOLLOW_MIN_GAP, reference.comfort_stop_distance))
     moving_lead = bool(qualified and not admission_reasons and no_model_risk and output >= CREEP_FOLLOW_MIN_ACCEL
                        and cruise_speed >= CREEP_SPEED and has_safe_moving_lead(

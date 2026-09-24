@@ -14,6 +14,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
 )
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import low_speed_follow_distance
 from openpilot.selfdrive.controls.lib.longitudinal_planner import has_safe_moving_lead
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionPhase, StopReason
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import MODEL_TIMES, typed_reference
@@ -214,13 +216,94 @@ def test_compact_rolling_confirmation_retains_the_original_reaction_and_stopping
   assert has_safe_moving_lead(radar, 1.0, 0.5, minimum_gap_base=4.5)  # 5.25 m budget
   radar.leadOne.dRel = 5.24
   assert not has_safe_moving_lead(radar, 1.0, 0.5, minimum_gap_base=4.5)
+  # The qualified 3 m base retains the same 0.55 m reaction and 0.20 m
+  # braking reserves. It is not permission to roll at a bare 3 m clearance.
+  radar.leadOne.dRel = 3.75
+  assert has_safe_moving_lead(radar, 1.0, 0.5, minimum_gap_base=3.0)
+  assert not has_safe_moving_lead(radar, 1.0, 0.5)
+  radar.leadOne.dRel = 3.749999
+  assert not has_safe_moving_lead(radar, 1.0, 0.5, minimum_gap_base=3.0)
   radar.leadOne.dRel = 6.0
   radar.leadOne.vLead = 0.0
   radar.leadOne.vRel = -1.0
   assert not has_safe_moving_lead(radar, 1.0, 0.5, minimum_gap_base=4.5)
 
 
-@pytest.mark.parametrize('minimum_gap_base', [4.499, 5.001, True, float('nan'), float('inf')])
+@pytest.mark.parametrize('minimum_gap_base', [2.999999, 0.0, -1.0, 5.001, True, float('nan'), float('inf')])
 def test_rolling_confirmation_base_cannot_leave_its_declared_range(minimum_gap_base):
   assert not has_safe_moving_lead(radar_state(distance=20.0, speed=1.0), 1.0, 0.5,
                                   minimum_gap_base=minimum_gap_base)
+
+
+@pytest.mark.parametrize('lead_speed,expected', [(0.384, False), (0.5, True)])
+def test_compact_base_preserves_the_original_minimum_moving_lead_speed(lead_speed, expected):
+  radar = radar_state(distance=20.0, speed=lead_speed)
+  radar.leadOne.vRel = lead_speed - 0.5
+  # The E0858-like slow lead is still below the unchanged 0.5 m/s gate.
+  assert has_safe_moving_lead(radar, 0.5, 0.5, minimum_gap_base=3.0) is expected
+
+
+def rolling_budget_run(comfort, risks, present, *, confirmation=False):
+  """Keep the native producer path, substituting only an already tested policy result."""
+  planner, _ = make_planner(speed=1.0)
+  state = make_state(speed=1.0, target=2.0)
+  state['modelV2'].action.desiredAcceleration = 2.0
+  for index, lead in enumerate((state['radarState'].leadOne, state['radarState'].leadTwo)):
+    lead.present = present[index]
+    lead.dRel = 20.0 + index * 5.0
+    lead.vLead = 1.0
+    lead.vRel = 0.0
+    lead.aLeadK = 0.0
+    lead.aLeadTau = 1.5
+    lead.modelProb = .999
+    lead.yRel = 0.0
+  requests, intents = [], []
+  with patch.object(planner.reference_planner.stop_distance_policy, 'update', return_value=(comfort, risks)), \
+       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.has_safe_moving_lead',
+             return_value=confirmation) as confirmation_check:
+    for frame in range(4):
+      planner.update(state, now_ns=advance(state, frame))
+      assert planner.mpc.solution_status == 0
+      requests.append(planner.output_a_target)
+      intents.append(planner.motion_intent)
+  assert confirmation_check.called
+  return confirmation_check.call_args_list, requests, intents
+
+
+@pytest.mark.parametrize('comfort,risks,present,expected_base', [
+  (3.0, (4.0, 6.0), (True, False), 3.0),
+  (3.0, (6.0, 4.0), (False, True), 3.0),
+  (3.0, (4.0, 6.0), (True, True), 4.5),
+  (3.0, (5.0, 4.0), (True, True), 3.75),
+  (4.0, (6.0, 6.0), (True, False), 4.5),
+  (5.0, (6.0, 6.0), (True, False), 5.0),
+  (6.0, (6.0, 6.0), (True, False), 5.0),
+  (3.0, (4.0, 4.0), (False, False), 4.5),
+])
+def test_unified_rolling_budget_uses_only_present_slots_and_the_strictest_risk(comfort, risks, present, expected_base):
+  calls, _, _ = rolling_budget_run(comfort, risks, present)
+  assert all(call.kwargs['minimum_gap_base'] == pytest.approx(expected_base) for call in calls)
+
+
+def test_rolling_confirmation_changes_no_numeric_producer_request():
+  _, without_confirmation, original_intents = rolling_budget_run(3.0, (4.0, 6.0), (True, False))
+  _, with_confirmation, confirmed_intents = rolling_budget_run(3.0, (4.0, 6.0), (True, False), confirmation=True)
+  assert any(intent.moving_lead for intent in confirmed_intents)
+  assert not any(intent.moving_lead for intent in original_intents)
+  np.testing.assert_allclose(with_confirmation, without_confirmation, rtol=0.0, atol=1e-10)
+  assert [intent.release_allowed for intent in confirmed_intents] == [intent.release_allowed for intent in original_intents]
+
+
+def test_compact_rolling_confirmation_does_not_release_hold_or_grant_positive_request():
+  radar = radar_state(distance=3.8, speed=0.8)
+  radar.leadOne.vRel = -0.2
+  confirmation = has_safe_moving_lead(radar, 1.0, 0.5, minimum_gap_base=3.0)
+  assert confirmation
+  owner = ControlHarness()
+  owner.hold()
+  intent = MotionIntent(moving_lead=confirmation, release_allowed=False, allow_creep=False)
+  for _ in range(10):
+    output = owner.step(0.5, intent)
+    assert owner.control.motion_phase == MotionPhase.HOLD
+    assert owner.control.motion_supervisor.reasons & StopReason.HOLD
+    assert output <= 0.0
