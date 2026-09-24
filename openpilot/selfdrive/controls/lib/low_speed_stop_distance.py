@@ -16,6 +16,9 @@ LOW_SPEED_WINDOW_NS = 10_000_000_000
 MAX_SOURCE_GAP_NS = 250_000_000
 LEAD_STABLE_NS = 500_000_000
 LEAD_RAMP_NS = 500_000_000
+APPROACH_GRACE_NS = 500_000_000
+NEAR_STOP_LEAD_SPEED = 0.3
+APPROACH_LEAD_DECEL = -0.05
 MAX_COMPACT_SPEED = 30.0 / 3.6
 
 
@@ -50,6 +53,8 @@ class LowSpeedStopDistance:
     self._last_radar_ns = None
     self._lead_since = [None, None]
     self._lead_previous = [None, None]
+    self._approach_since = [None, None]
+    self._last_approach_ns = [None, None]
     self._fractions = [0.0, 0.0]
 
   def update(self, *, now_ns, source_ns, radar_ns, speed, radar, permitted, allow_activation=True):
@@ -87,6 +92,8 @@ class LowSpeedStopDistance:
     if radar_delta is not None and not 0 <= radar_delta <= MAX_SOURCE_GAP_NS:
       self._lead_since = [None, None]
       self._lead_previous = [None, None]
+      self._approach_since = [None, None]
+      self._last_approach_ns = [None, None]
       self._fractions = [0.0, 0.0]
       radar_delta = None
     fractions = []
@@ -108,13 +115,35 @@ class LowSpeedStopDistance:
       elif not continuous or self._lead_since[i] is None:
         self._lead_since[i] = radar_ns
         self._fractions[i] = 0.0
+      if not continuous:
+        self._approach_since[i] = None
+        self._last_approach_ns[i] = None
       self._lead_previous[i] = observation
+      # Start reducing the parking target only during an observed stopping
+      # approach. A constant slow lead does not ask us to catch up merely
+      # because the ten-second speed-history timer has become complete.
+      approaching = (observation is not None
+                     and (observation[2] <= NEAR_STOP_LEAD_SPEED or observation[3] <= APPROACH_LEAD_DECEL))
+      if not approaching:
+        self._approach_since[i] = None
+      elif self._approach_since[i] is None:
+        self._approach_since[i] = radar_ns
+      approach_since = self._approach_since[i]
+      approach_confirmed = (continuous and approach_since is not None
+                            and radar_ns - approach_since >= LEAD_STABLE_NS)
+      if approach_confirmed:
+        self._last_approach_ns[i] = radar_ns
       since = self._lead_since[i]
       if not low_speed_history or not allow_activation or since is None:
         self._fractions[i] = 0.0
-      elif continuous and radar_delta and radar_ns - since >= LEAD_STABLE_NS:
-        stable_increment = min(radar_delta, radar_ns - since - LEAD_STABLE_NS)
+      elif approach_confirmed and radar_delta and radar_ns - since >= LEAD_STABLE_NS:
+        stable_increment = min(radar_delta, radar_ns - since - LEAD_STABLE_NS, radar_ns - approach_since - LEAD_STABLE_NS)
         self._fractions[i] = min(1.0, self._fractions[i] + stable_increment / LEAD_RAMP_NS)
+      elif self._last_approach_ns[i] is None or radar_ns - self._last_approach_ns[i] > APPROACH_GRACE_NS:
+        self._fractions[i] = 0.0
+      # Briefly weakened approach evidence can only freeze an existing
+      # fraction. The deadline comes from the last continuously confirmed
+      # approach, so isolated noisy samples cannot keep renewing it.
       fraction = self._fractions[i]
       fractions.append(fraction)
     self._last_radar_ns = radar_ns
@@ -122,7 +151,7 @@ class LowSpeedStopDistance:
     # every present lead to qualify before reducing it, so a good far target
     # cannot shorten the comfort target for a bad/close second observation.
     present = [bool(getattr(lead, 'present', False)) for lead in leads]
-    common_fraction = min((fraction for fraction, exists in zip(fractions, present) if exists), default=0.0)
+    common_fraction = min((fraction for fraction, exists in zip(fractions, present, strict=True) if exists), default=0.0)
     comfort = fallback[0] + common_fraction * (_distance_profile(speed, COMPACT_COMFORT_DISTANCE) - fallback[0])
     risk = tuple(DEFAULT_RISK_DISTANCE + (common_fraction if exists else 0.0)
                  * (_distance_profile(speed, COMPACT_RISK_DISTANCE) - DEFAULT_RISK_DISTANCE) for exists in present)

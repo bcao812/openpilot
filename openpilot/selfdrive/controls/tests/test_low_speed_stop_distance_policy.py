@@ -21,15 +21,15 @@ def stamp(frame):
   return BASE_NS + frame * FRAME_NS
 
 
-def lead(frame, ego_speed=1.0, lead_speed=1.0, initial_distance=150.0, **changes):
+def lead(frame, ego_speed=1.0, lead_speed=0.0, initial_distance=150.0, **changes):
   relative_speed = lead_speed - ego_speed
-  values = dict(present=True, dRel=initial_distance + relative_speed * frame * .05,
-                vRel=relative_speed, vLead=lead_speed, aLeadK=0.0, modelProb=.995, yRel=0.0)
+  values = {'present': True, 'dRel': initial_distance + relative_speed * frame * .05,
+            'vRel': relative_speed, 'vLead': lead_speed, 'aLeadK': 0.0, 'modelProb': .995, 'yRel': 0.0}
   values.update(changes)
   return SimpleNamespace(**values)
 
 
-def radar(frame, speed=1.0, lead_speed=1.0):
+def radar(frame, speed=1.0, lead_speed=0.0):
   return SimpleNamespace(leadOne=lead(frame, speed, lead_speed),
                          leadTwo=lead(frame, speed, lead_speed, initial_distance=180.0))
 
@@ -62,6 +62,32 @@ def assert_default_low_speed(result):
   comfort, risk = result
   assert comfort == pytest.approx(4.0)
   assert risk == pytest.approx((6.0, 6.0))
+
+
+def estimated_approach_radar(frame, acceleration=-.1):
+  """Continuous .8 m/s slot observations with a chosen acceleration estimate."""
+  observations = radar(frame, lead_speed=.8)
+  observations.leadOne.aLeadK = observations.leadTwo.aLeadK = acceleration
+  return observations
+
+
+def cruising_history():
+  policy = LowSpeedStopDistance()
+  for frame in range(221):
+    result = update(policy, frame, observations=radar(frame, lead_speed=.8))
+  assert_default_low_speed(result)
+  return policy
+
+
+def halfway_through_approach_ramp():
+  policy = cruising_history()
+  # 500 ms continuously negative acceleration establishes an approach; the
+  # next 250 ms reaches the middle of the separate 500 ms target ramp.
+  for frame in range(221, 237):
+    result = update(policy, frame, observations=estimated_approach_radar(frame))
+  assert result[0] == pytest.approx(3.5)
+  assert result[1] == pytest.approx((5.0, 5.0))
+  return policy, result
 
 
 def test_short_low_speed_recording_does_not_shorten_the_ten_second_requirement():
@@ -111,18 +137,22 @@ def test_speed_profile_boundaries_and_midpoint(speed_kmh, comfort, risk):
 
 def test_zero_speed_with_closed_activation_gate_returns_default_targets():
   policy = qualified()
-  # Ego and slow lead decelerate together: constant gap, matching v/vRel and
-  # a bounded lead deceleration. No discontinuous target jump is fabricated.
+  # Ego slows toward a stationary lead, integrating the distance explicitly
+  # so changing ego speed does not fabricate a lead-slot position jump.
+  distance, previous_speed = lead(220).dRel, 1.0
   for frame in range(221, 282):
     speed = max(0.0, 1.0 - (frame - 220) / 60.0)
-    observations = radar(frame, speed, lead_speed=speed)
-    observations.leadOne.aLeadK = observations.leadTwo.aLeadK = -1.0 / 3.0
+    distance -= .5 * (previous_speed + speed) * .05
+    observations = radar(frame, speed)
+    observations.leadOne.dRel = distance
+    observations.leadTwo.dRel = distance + 30.0
     result = update(policy, frame, speed=speed, observations=observations, allow_activation=speed > 0.0)
     if speed > 0.0:
       assert result[0] == pytest.approx(3.0)
       assert result[1] == pytest.approx((4.0, 4.0))
     else:
       assert_default_low_speed(result)
+    previous_speed = speed
 
 
 def test_new_lead_needs_half_second_stability_then_half_second_ramp():
@@ -189,7 +219,7 @@ def test_swapped_distinct_slots_restart_observation_qualification():
   policy = qualified()
   observations = radar(221)
   observations.leadOne, observations.leadTwo = observations.leadTwo, observations.leadOne
-  # Both distance slots jump by 30 m, inconsistent with zero relative speed.
+  # Both distance slots jump by 30 m, inconsistent with the observed vRel.
   assert_default_low_speed(update(policy, 221, observations=observations))
 
 
@@ -205,7 +235,12 @@ def test_observable_distance_or_lateral_jump_blocks_shared_qualification(field, 
 def test_stationary_and_two_mps_leads_are_both_supported(lead_speed):
   policy = LowSpeedStopDistance()
   for frame in range(241):
-    result = update(policy, frame, observations=radar(frame, lead_speed=lead_speed))
+    observations = radar(frame, lead_speed=lead_speed)
+    if lead_speed > .3:
+      # Isolate the original 2 m/s quality boundary with explicit stopping
+      # approach evidence; a constant 2 m/s lead is no longer an entry case.
+      observations.leadOne.aLeadK = observations.leadTwo.aLeadK = -.1
+    result = update(policy, frame, observations=observations)
   assert result[0] == pytest.approx(3.0)
   assert result[1] == pytest.approx((4.0, 4.0))
 
@@ -272,7 +307,8 @@ def test_missing_radar_object_safely_returns_default_distances():
 def test_freshness_boundary_is_250_ms_and_expiry_falls_back(field):
   policy = qualified()
   for frame in range(221, 226):
-    result = update(policy, frame, **{field: stamp(220)})
+    observations = radar(220 if field == 'radar_ns' else frame)
+    result = update(policy, frame, observations=observations, **{field: stamp(220)})
     assert result[1] == pytest.approx((4.0, 4.0))
   expiry = stamp(220) + 251_000_000
   other = 'radar_ns' if field == 'source_ns' else 'source_ns'
@@ -374,3 +410,134 @@ def test_explicit_clear_discards_prior_qualification():
   policy = qualified()
   policy.clear()
   assert_default_low_speed(update(policy, 221))
+
+
+def test_constant_point_eight_mps_lead_never_creates_a_catchup_target():
+  policy = LowSpeedStopDistance()
+  for frame in range(601):
+    # Thirty seconds spans both history completion and many stability/ramp
+    # durations. Time alone must not change the requested stopping distance.
+    assert_default_low_speed(update(policy, frame, observations=radar(frame, lead_speed=.8)))
+
+
+@pytest.mark.parametrize('lead_speed,acceleration,eligible', [
+  (.3, 0.0, True), (.300001, 0.0, False),
+  (.8, -.05, True), (.8, -.049999, False),
+])
+def test_stopping_approach_evidence_thresholds_are_inclusive(lead_speed, acceleration, eligible):
+  policy = LowSpeedStopDistance()
+  for frame in range(241):
+    observations = radar(frame, lead_speed=lead_speed)
+    observations.leadOne.aLeadK = observations.leadTwo.aLeadK = acceleration
+    result = update(policy, frame, observations=observations)
+  if eligible:
+    assert result[0] == pytest.approx(3.0)
+    assert result[1] == pytest.approx((4.0, 4.0))
+  else:
+    assert_default_low_speed(result)
+
+
+def test_gentle_lead_deceleration_requires_confirmation_before_gradual_entry():
+  policy = cruising_history()
+  distance, previous_lead_speed = lead(220, lead_speed=.8).dRel, .8
+  requests = []
+  for frame in range(221, 242):
+    lead_speed = .8 - .1 * (frame - 220) * .05
+    distance += .5 * ((previous_lead_speed - 1.0) + (lead_speed - 1.0)) * .05
+    observations = radar(frame, lead_speed=lead_speed)
+    observations.leadOne.dRel = distance
+    observations.leadTwo.dRel = distance + 30.0
+    observations.leadOne.aLeadK = observations.leadTwo.aLeadK = -.1
+    result = update(policy, frame, observations=observations)
+    if frame <= 231:  # At most 500 ms of newly continuous approach evidence.
+      assert_default_low_speed(result)
+    elif frame < 241:
+      assert 3.0 < result[0] < 4.0
+      assert all(4.0 < value < 6.0 for value in result[1])
+    requests.append(result[0])
+    previous_lead_speed = lead_speed
+  assert result[0] == pytest.approx(3.0)
+  assert result[1] == pytest.approx((4.0, 4.0))
+  assert all(after <= before for before, after in zip(requests, requests[1:], strict=False))
+
+
+def test_one_frame_deceleration_noise_cannot_activate_compact_target():
+  policy = cruising_history()
+  assert_default_low_speed(update(policy, 221, observations=estimated_approach_radar(221, -.05)))
+  for frame in range(222, 262):
+    assert_default_low_speed(update(policy, frame, observations=estimated_approach_radar(frame, 0.0)))
+
+
+def test_briefly_weakened_evidence_freezes_but_cannot_increase_fraction():
+  policy, before = halfway_through_approach_ramp()
+  for frame in range(237, 242):
+    result = update(policy, frame, observations=estimated_approach_radar(frame, -.049))
+    assert result[0] == pytest.approx(before[0])
+    assert result[1] == pytest.approx(before[1])
+
+
+def test_grace_expires_after_500_ms_since_last_confirmed_approach():
+  policy, before = halfway_through_approach_ramp()
+  for frame in range(237, 247):
+    result = update(policy, frame, observations=estimated_approach_radar(frame, 0.0))
+    assert result[0] == pytest.approx(before[0])
+    assert result[1] == pytest.approx(before[1])
+  # All streams remain fresh. Only the approach evidence is 550 ms old.
+  assert_default_low_speed(update(policy, 247, observations=estimated_approach_radar(247, 0.0)))
+
+
+def test_alternating_single_frame_noise_does_not_renew_the_grace_deadline():
+  policy, before = halfway_through_approach_ramp()
+  for frame in range(237, 278):
+    acceleration = -.05 if frame % 2 == 0 else 0.0
+    result = update(policy, frame, observations=estimated_approach_radar(frame, acceleration))
+    if frame <= 246:
+      assert result[0] == pytest.approx(before[0])
+      assert result[1] == pytest.approx(before[1])
+    else:
+      assert_default_low_speed(result)
+
+
+def test_returning_approach_needs_new_continuous_confirmation_then_reramp():
+  policy, before = halfway_through_approach_ramp()
+  update(policy, 237, observations=estimated_approach_radar(237, 0.0))
+  for frame in range(238, 247):
+    result = update(policy, frame, observations=estimated_approach_radar(frame))
+    assert result[0] == pytest.approx(before[0])
+    assert result[1] == pytest.approx(before[1])
+  # The old grace expires before the new 500 ms run is complete. Completing
+  # confirmation must not restore the old fraction as a one-frame jump.
+  for frame in (247, 248):
+    assert_default_low_speed(update(policy, frame, observations=estimated_approach_radar(frame)))
+  first_new = update(policy, 249, observations=estimated_approach_radar(249))
+  assert 3.0 < first_new[0] < 4.0
+  assert all(4.0 < value < 6.0 for value in first_new[1])
+  for frame in range(250, 259):
+    result = update(policy, frame, observations=estimated_approach_radar(frame))
+  assert result[0] == pytest.approx(3.0)
+  assert result[1] == pytest.approx((4.0, 4.0))
+
+
+@pytest.mark.parametrize('fault', ['distance_jump', 'target_loss', 'confidence', 'nonfinite', 'strong_acceleration',
+                                   'radar_rollback', 'source_rollback', 'message_gap'])
+def test_grace_does_not_mask_target_quality_or_time_failures(fault):
+  policy, _ = halfway_through_approach_ramp()
+  update(policy, 237, observations=estimated_approach_radar(237, 0.0))
+  frame = 244 if fault == 'message_gap' else 238
+  observations = estimated_approach_radar(frame, 0.0)
+  changes = {}
+  if fault == 'distance_jump':
+    observations.leadOne.dRel += 2.0
+  elif fault == 'target_loss':
+    observations.leadOne.present = observations.leadTwo.present = False
+  elif fault == 'confidence':
+    observations.leadOne.modelProb = .97
+  elif fault == 'nonfinite':
+    observations.leadOne.vLead = math.nan
+  elif fault == 'strong_acceleration':
+    observations.leadOne.aLeadK = .201
+  elif fault == 'radar_rollback':
+    changes['radar_ns'] = stamp(236)
+  elif fault == 'source_rollback':
+    changes['source_ns'] = stamp(236)
+  assert_default_low_speed(update(policy, frame, observations=observations, **changes))

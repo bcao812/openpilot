@@ -169,7 +169,7 @@ def test_three_meter_stationary_lead_parameters_reach_every_native_stage(lead_in
   assert np.max(np.abs(mpc.trajectory_dynamics_defects(mpc.x_sol, mpc.j_solution))) <= QP_FEASIBILITY_TOL
   # These existing thresholds bound this mathematical fixture's output. They
   # do not replace the independent owner/actuator HOLD and release contracts.
-  assert np.max(mpc.v_solution) < STOP_SPEED
+  assert np.max(np.abs(mpc.v_solution)) < STOP_SPEED
   assert get_accel_from_plan(mpc.v_solution, mpc.a_solution, T_IDXS, action_t=0.55) < STOP_RELEASE_ACCEL
 
 
