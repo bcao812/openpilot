@@ -5,6 +5,7 @@ the compact target merely by passing through its low-speed tail. Slot history
 checks continuity of observations, not an asserted physical tracking identity.
 """
 from collections import deque
+from dataclasses import dataclass
 import math
 from numbers import Real
 
@@ -22,6 +23,21 @@ APPROACH_LEAD_DECEL = -0.05
 PARKING_START_SPEED = 1.2
 PARKING_FULL_SPEED = 0.3
 MAX_COMPACT_SPEED = 30.0 / 3.6
+
+
+@dataclass(frozen=True)
+class LowSpeedStopDistanceEvidence:
+  """Current consumed observations and qualification, without new authority."""
+
+  now_ns: int | None = None
+  source_ns: int | None = None
+  radar_ns: int | None = None
+  low_speed_history: bool = False
+  present: tuple[bool, bool] = (False, False)
+  lead_observations: tuple[tuple | None, tuple | None] = (None, None)
+  lead_fractions: tuple[float, float] = (0.0, 0.0)
+  confirmed_approaches: tuple[bool, bool] = (False, False)
+  applied_fraction: float = 0.0
 
 
 def _distance_profile(speed, low):
@@ -55,6 +71,7 @@ class LowSpeedStopDistance:
     self.clear()
 
   def clear(self, *, source_barrier_ns=None):
+    self.evidence = LowSpeedStopDistanceEvidence()
     self._speeds = deque()
     self._last_now_ns = None
     self._last_source_ns = None
@@ -189,6 +206,11 @@ class LowSpeedStopDistance:
       common_fraction = min(common_fraction, self._applied_fraction)
     self._applied_fraction = common_fraction
     self._lead_was_present = present
+    self.evidence = LowSpeedStopDistanceEvidence(
+      now_ns=now_ns, source_ns=source_ns, radar_ns=radar_ns, low_speed_history=low_speed_history,
+      present=tuple(present), lead_observations=tuple(self._lead_previous), lead_fractions=tuple(fractions),
+      confirmed_approaches=tuple(confirmed_approaches), applied_fraction=common_fraction,
+    )
     comfort = fallback[0] + common_fraction * (_distance_profile(speed, COMPACT_COMFORT_DISTANCE) - fallback[0])
     risk = tuple(DEFAULT_RISK_DISTANCE + (common_fraction if exists else 0.0)
                  * (_distance_profile(speed, COMPACT_RISK_DISTANCE) - DEFAULT_RISK_DISTANCE) for exists in present)

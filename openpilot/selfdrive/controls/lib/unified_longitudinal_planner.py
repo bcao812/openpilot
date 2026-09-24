@@ -32,6 +32,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
 from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VERSION, MotionIntent, MotionReferenceKind, MotionResponseKind, StopReason,
                                                                consumed_forward_reference)
 from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
+from openpilot.selfdrive.controls.lib.parking_approach import ParkingApproach
+from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource as LongitudinalPlanSourceSP
 
@@ -155,6 +157,9 @@ class UnifiedLongitudinalPlanner:
     self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
     self.model_reference_adapter = ModelReferenceAdapter()
     self.stop_distance_policy = LowSpeedStopDistance()
+    self.parking_approach = ParkingApproach()
+    self.parking_policy_distances = None
+    self.parking_mpc_distances = None
     self.model_evidence = None
     self.model_reference_mode = 'not_admitted'
     self.model_fallback_reason = ''
@@ -169,6 +174,9 @@ class UnifiedLongitudinalPlanner:
     planner = self.planner
     self.cruise_response.clear()
     self.stop_distance_policy.clear()
+    self.parking_approach.clear()
+    self.parking_policy_distances = None
+    self.parking_mpc_distances = None
     self.reference_initialized = False
     self.reference_source_epoch_ns = None
     self._forward_execution_instance_ns = 0
@@ -277,6 +285,25 @@ class UnifiedLongitudinalPlanner:
     if self.planner.reference_timing.pending is not None:
       return self.planner.reference_timing.pending.instance_ns
     return 0
+
+  def parking_stop_acknowledged(self, state, now_ns):
+    """A dated held stop; APPROACH alone can still return to TRACK."""
+    since = self.parking_approach.braking_since_ns
+    if since is None:
+      return False
+    controls, control = state['controlsState'], state['carControl']
+    motion = controls.motionState
+    controls_ns, control_ns = (state.logMonoTime.get(service) for service in ('controlsState', 'carControl'))
+    return bool(
+      controls.longControlState == control.actuators.longControlState == LongCtrlState.stopping
+      and motion.phase == 'hold' and motion.resolvedStop and not motion.degraded and not motion.waitingForFreshInput
+      and state['carState'].standstill and max(0.0, state['carState'].vEgo) < STOP_SPEED
+      and all(valid_timestamp(stamp) and since < stamp <= now_ns
+              and now_ns - stamp <= self.planner.reference_timing.max_age_ns for stamp in (controls_ns, control_ns))
+      and motion.referenceTimingVersion == REFERENCE_TIMING_VERSION and motion.referenceTimingValid
+      and motion.referenceProducerInstanceMonoTime == self.producer_instance_ns != 0
+      and since <= motion.referenceProducerMonoTime < motion.referenceConsumerMonoTime <= min(controls_ns, control_ns)
+    )
 
   def describe_motion_reference(self, state):
     """Describe this admitted raw source without creating a goal or stop latch."""
@@ -464,7 +491,7 @@ class UnifiedLongitudinalPlanner:
     )
     compact_permitted = (healthy and active and not reset and not forced_decel
                          and planner.CP.carFingerprint == CAR.HONDA_ACCORD
-                         and planner.CP.openpilotLongitudinalControl and planner.unified)
+                         and planner.CP.openpilotLongitudinalControl and planner.CP.radarUnavailable and planner.unified)
     # A stopped car never acquires a closer target from distance error alone.
     # Re-entry from standstill additionally needs an independently departing
     # lead plus a positive, non-stopping model; the existing owner still decides
@@ -475,11 +502,31 @@ class UnifiedLongitudinalPlanner:
                           and has_departing_lead(state['radarState'], speed, delay, minimum_gap_base=3.0))
     compact_activation = ((not car_state.standstill and state['controlsState'].longControlState == LongCtrlState.pid)
                           or observed_departure)
+    uncertainty = self.parking_approach.uncertainty_cache.update(
+      now_ns=now_ns, model_ns=state.logMonoTime.get('modelV2'), model=model, radar_ns=state.logMonoTime.get('radarState'),
+      radar=state['radarState'], valid=healthy,
+    )
+    if not uncertainty.qualified:
+      # Source/quality failures invalidate the same complete history as a
+      # changed lead. A later good observation cannot spend pre-fault time.
+      self.stop_distance_policy.clear(source_barrier_ns=source_epoch_ns)
     comfort_distance, lead_risk_distances = self.stop_distance_policy.update(
       now_ns=now_ns, source_ns=source_epoch_ns, radar_ns=state.logMonoTime.get('radarState'),
       speed=speed, radar=state['radarState'], permitted=compact_permitted,
       allow_activation=compact_activation,
     )
+    self.parking_policy_distances = (comfort_distance, lead_risk_distances)
+    parking = self.parking_approach.update(
+      now_ns=now_ns, source_ns=source_epoch_ns, radar_ns=state.logMonoTime.get('radarState'),
+      speed=speed, measured_accel=measured_accel, actuator_delay=delay, radar=state['radarState'],
+      qualification=self.stop_distance_policy.evidence, permitted=compact_permitted,
+      allow_activation=compact_activation and not car_state.standstill,
+      uncertainty=uncertainty,
+      owner_stopping=self.parking_stop_acknowledged(state, now_ns),
+    )
+    if not parking.allow_compact:
+      comfort_distance, lead_risk_distances = low_speed_follow_distance(speed), (STOP_DISTANCE, STOP_DISTANCE)
+    self.parking_mpc_distances = (comfort_distance, lead_risk_distances)
     reference = MpcReference(
       cruise_speed=None if native_cruise_external else cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
@@ -556,6 +603,10 @@ class UnifiedLongitudinalPlanner:
     if model_stop_evidence and speed < STOP_SPEED and CarControllerParams.BOSCH_GAS_LOOKUP_BP[0] < self.constraint_accel:
       self.constraint_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
       self.constraint_source = LongitudinalPlanSource.e2e
+    before_parking = float(np.clip(min(self.reference_accel, self.constraint_accel), ACCEL_MIN, ACCEL_MAX))
+    if parking.accel_cap is not None and parking.accel_cap < self.constraint_accel:
+      self.constraint_accel = parking.accel_cap
+      self.constraint_source = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)[parking.limiting_lead]
     planner._observe(constraintKnown=True, constraintAccel=float(self.constraint_accel))
     output = float(np.clip(min(self.reference_accel, self.constraint_accel), ACCEL_MIN, ACCEL_MAX))
     if evidence is not None and evidence.unknown is not None and self.model_reference_mode == 'invalid':
@@ -596,6 +647,11 @@ class UnifiedLongitudinalPlanner:
     qualified = active and healthy and not forced_decel and not planner.fcw and planner.source == LongitudinalPlanSourceSP.cruise
     if qualified and should_stop_for_close_lead(speed, output, state['radarState'], delay, a_ego=car_state.aEgo):
       reasons |= StopReason.CLOSE_LEAD
+    parking_stop_added = parking.require_stop and not bool(reasons & StopReason.CLOSE_LEAD)
+    if parking.require_stop:
+      reasons |= StopReason.CLOSE_LEAD
+    self.parking_approach.record_application(accel_before=before_parking, accel_after=output,
+                                             stop_evidence_added=parking_stop_added)
     # A low-speed preference cannot prove a new release. Keep that original
     # admission mask even when it need not end already executed forward motion.
     admission_reasons = reasons | (StopReason.MPC if low_speed_preference_stop else StopReason(0))
@@ -664,7 +720,7 @@ class UnifiedLongitudinalPlanner:
                       and cruise_speed >= CREEP_SPEED and has_departing_lead(state['radarState'], speed, delay))
     observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
             trajectory_departure, lead_departure, qualified, no_model_risk)
-    release_allowed = bool(trajectory_departure or lead_departure)
+    release_allowed = bool((trajectory_departure or lead_departure) and parking.accel_cap is None)
     response_kind = MotionResponseKind.NONE
     # An ACC cruise cap still describes an absolute acceleration target. Track
     # that final target with nonpositive correction instead of erasing braking
@@ -674,6 +730,9 @@ class UnifiedLongitudinalPlanner:
                         and self.constraint_source == LongitudinalPlanSource.cruise
                         and self.reference_accel > maximum_accel
                         and output == self.constraint_accel)
+    parking_acc_cap = (not self.e2e_allowed and evidence is None and parking.eligible and parking.allow_compact
+                       and parking.accel_cap is not None and parking.accel_cap < 0.0
+                       and self.constraint_accel == parking.accel_cap == output)
     # Retain feedback qualification outside the separately certified request
     # domain below. A binding independent maximum still retains the
     # nonpositive-correction contract.
@@ -714,7 +773,7 @@ class UnifiedLongitudinalPlanner:
       # acquire MODEL positive-I permission merely from a tiny raw slope.
       response_kind = MotionResponseKind.ABSOLUTE_ACC
     elif (active and healthy and not reset and not forced_decel and not reasons
-        and (not self.reference_overridden or ordinary_acc_cap or cruise_response_bound)
+        and (not self.reference_overridden or ordinary_acc_cap or cruise_response_bound or parking_acc_cap)
         and planner.source == LongitudinalPlanSourceSP.cruise):
       lead_sources = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
       lead_index = lead_sources.index(planner.mpc.source) if planner.mpc.source in lead_sources else None

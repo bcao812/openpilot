@@ -10,6 +10,7 @@ import sys
 import time
 from collections import deque
 from collections.abc import Mapping
+from dataclasses import asdict
 from numbers import Integral, Real
 from types import MappingProxyType
 
@@ -165,6 +166,34 @@ def json_value(value):
 
 def decimal_id(value):
   return str(int(value)) if is_uint64(value) else None
+
+
+def parking_detail(planner, car_state_ns):
+  """Snapshot policy qualification separately from its request and execution.
+
+  This optional detail does not change the wire protocol or fixed trace row.
+  Source matching is explicit so an early return cannot make an older decision
+  look like evaluation of the current input. Native parameters remain in the
+  independently captured native detail; a policy fraction is not that evidence.
+  """
+  reference = getattr(planner, 'reference_planner', None)
+  approach = getattr(reference, 'parking_approach', None)
+  policy = getattr(reference, 'stop_distance_policy', None)
+  if approach is None or policy is None:
+    return None
+  decision = approach.decision
+
+  def record(value):
+    return {key: decimal_id(item) if key.endswith('_ns') else item for key, item in asdict(value).items()}
+
+  return immutable_value({
+    'schema': 1,
+    'matches_car_state_source': is_uint64(car_state_ns) and decision.source_ns == car_state_ns,
+    'qualification': record(policy.evidence),
+    'approach': record(decision),
+    'policy_returned_distances': getattr(reference, 'parking_policy_distances', None),
+    'mpc_reference_distances': getattr(reference, 'parking_mpc_distances', None),
+  })
 
 
 class TraceSample(tuple):
@@ -420,6 +449,7 @@ class LongitudinalTrace:
         'inputs': self.attempt['inputs'],
         'motion_version': self.attempt['motion_version'], 'motion_enabled': self.attempt['motion_enabled'],
         'native': self._native_detail(planner, values),
+        'parking': parking_detail(planner, self.attempt['base'].get('carState_mono')),
       })
       if not self.complete:
         row = dict(self.attempt['base'])
