@@ -44,7 +44,10 @@ def capture_polygons():
       points = np.array(vertices, dtype=np.float32)
     else:
       points = np.array([(vertices[i].x, vertices[i].y) for i in range(count)], dtype=np.float32)
-    frames.append((points.tobytes(), count, dict(uniforms), (color.r, color.g, color.b, color.a)))
+    rgba = color if isinstance(color, tuple) else (color.r, color.g, color.b, color.a)
+    active = ({name: value for name, value in uniforms.items() if name.startswith('gradient')}
+              if uniforms['useGradient'][0] else {'fillColor': uniforms['fillColor']})
+    frames.append((points.tobytes(), count, {'useGradient': uniforms['useGradient'], **active}, rgba))
 
   with ExitStack() as stack:
     stack.enter_context(patch.object(polygon.ShaderState, "_instance", None))
@@ -77,8 +80,8 @@ class TestPreparedPolygon(HeadlessUITestCase):
     points += 100
     rect = rl.Rectangle(0, 0, 100, 100)
     with capture_polygons() as frames:
-      polygon.draw_polygon(rect, prepared, rl.WHITE)
-      polygon.draw_polygon(rect, points, rl.WHITE)
+      polygon.draw_polygon(rect, prepared, rl.Color(*rl.WHITE))
+      polygon.draw_polygon(rect, points, rl.Color(*rl.WHITE))
     self.assertEqual(frames[0][0], reference_strip(original).tobytes())
     self.assertEqual(frames[1][0], reference_strip(points).tobytes())
     self.assertNotEqual(frames[0][0], frames[1][0])
@@ -92,20 +95,49 @@ class TestPreparedPolygon(HeadlessUITestCase):
     prepared = polygon.PreparedPolygon(np.arange(12, dtype=np.float32).reshape(6, 2))
     captured = []
 
-    @rl.ffi.callback("void(const Vector2 *, int)")
+    @rl.ffi.callback("void(*)(const struct Vector2 *, int)")
     def receive(points, count):
       captured.append((int(rl.ffi.cast("uintptr_t", points)), count))
 
     rl._wrap_function(receive)(prepared.vertices, prepared.vertex_count)
     self.assertEqual(captured, [(int(rl.ffi.cast("uintptr_t", prepared.vertices)), prepared.vertex_count)])
 
+  def test_buffer_layout_and_snapshot_owner_lifetime(self):
+    self.assertEqual(rl.ffi.sizeof("Vector2"), 2 * np.dtype(np.float32).itemsize)
+    self.assertEqual(rl.ffi.offsetof("Vector2", "x"), 0)
+    self.assertEqual(rl.ffi.offsetof("Vector2", "y"), np.dtype(np.float32).itemsize)
+    self.assertTrue(all(field.type.cname == 'float' for _, field in rl.ffi.typeof("Vector2").fields))
+    arrays = []
+    build_strip = polygon._triangle_strip_array
+
+    def capture_array(points):
+      strip = build_strip(points)
+      self.assertTrue(strip.flags.c_contiguous)
+      arrays.append(weakref.ref(strip))
+      return strip
+
+    points = np.arange(12, dtype=np.float32).reshape(6, 2).copy()
+    source_ref = weakref.ref(points)
+    expected = reference_strip(points)
+    with patch.object(polygon, "_triangle_strip_array", side_effect=capture_array):
+      prepared = polygon.PreparedPolygon(points)
+    del points
+    gc.collect()
+    self.assertIsNone(source_ref())
+    self.assertIsNotNone(arrays[0]())
+    self.assertEqual(int(rl.ffi.cast("uintptr_t", prepared.vertices)), arrays[0]().ctypes.data)
+    np.testing.assert_array_equal(prepared_points(prepared), expected)
+    del prepared
+    gc.collect()
+    self.assertIsNone(arrays[0]())
+
   def test_degenerate_polygons_keep_the_uncached_draw_behavior(self):
     rect = rl.Rectangle(0, 0, 100, 100)
     for count in range(7):
       points = np.full((count, 2), 5, dtype=np.float32)
       with self.subTest(count=count), capture_polygons() as frames:
-        polygon.draw_polygon(rect, points, rl.WHITE)
-        polygon.draw_polygon(rect, polygon.PreparedPolygon(points), rl.WHITE)
+        polygon.draw_polygon(rect, points, rl.Color(*rl.WHITE))
+        polygon.draw_polygon(rect, polygon.PreparedPolygon(points), rl.Color(*rl.WHITE))
         if count < 3:
           self.assertEqual(frames, [])
         else:
@@ -114,14 +146,14 @@ class TestPreparedPolygon(HeadlessUITestCase):
   def test_colors_gradient_and_origin_are_current_on_every_cached_draw(self):
     points = np.arange(12, dtype=np.float32).reshape(6, 2)
     prepared = polygon.PreparedPolygon(points)
-    gradient = polygon.Gradient((0.2, 0.1), (0.7, 0.9), [rl.RED, rl.BLUE], [0, 1])
+    gradient = polygon.Gradient((0.2, 0.1), (0.7, 0.9), [rl.Color(*rl.RED), rl.Color(*rl.BLUE)], [0, 1])
     with capture_polygons() as frames:
       for rect, color in ((rl.Rectangle(0, 0, 100, 200), rl.Color(20, 30, 40, 10)),
                           (rl.Rectangle(5, 10, 70, 150), rl.Color(50, 60, 70, 200))):
         for current_gradient in (None, gradient):
           kwargs = {"gradient": current_gradient} if current_gradient else {"color": color}
           polygon.draw_polygon(rect, points, **kwargs)
-          with patch.object(polygon, "triangulate", side_effect=AssertionError("cached draw rebuilt vertices")):
+          with patch.object(polygon, "_triangle_strip_array", side_effect=AssertionError("cached draw rebuilt vertices")):
             polygon.draw_polygon(rect, prepared, **kwargs)
           self.assertEqual(frames[-2], frames[-1])
         gradient.colors[0] = rl.Color(80, 90, 100, 120)
@@ -136,7 +168,7 @@ class TestModelPolygonCache(HeadlessUITestCase):
     from openpilot.selfdrive.ui.onroad import model_renderer as model
 
     x = np.linspace(1, 80, 33, dtype=np.float32)
-    lines = [SimpleNamespace(x=x, y=np.full(33, y), z=np.ones(33)) for y in (0, -4, -2, 2, 4, -6, 6)]
+    lines = [SimpleNamespace(x=x, y=np.full(33, y, dtype=np.float32), z=np.ones(33)) for y in (0, -4, -2, 2, 4, -6, 6)]
     model_message = SimpleNamespace(position=lines[0], laneLines=lines[1:5], roadEdges=lines[5:],
                                     laneLineProbs=[0.8] * 4, roadEdgeStds=[0.1, 0.2], acceleration=SimpleNamespace(x=np.zeros(33)))
 
@@ -169,7 +201,7 @@ class TestModelPolygonCache(HeadlessUITestCase):
       self.assertEqual(len(frames), 7)
       prepared = [shape.polygon for shape in self.shapes(renderer)]
       sm.updated['modelV2'] = False
-      with patch.object(polygon, "triangulate", side_effect=AssertionError("unchanged model rebuilt vertices")):
+      with patch.object(polygon, "_triangle_strip_array", side_effect=AssertionError("unchanged model rebuilt vertices")):
         renderer._render(renderer.rect)
         self.assertEqual(frames[:7], frames[7:])
         renderer._lane_line_probs[0] = 0.25

@@ -278,10 +278,50 @@ class TestLongitudinalLogging(unittest.TestCase):
     self.assertEqual(recorder.errors, 1)
     self.assertEqual(accesses, [(name, service) for service in ("carState", "modelV2") for name in CHECK_FLAGS])
 
+  def test_cached_inputs_promote_only_repeated_values_and_demote_on_change(self):
+    cache = InputSnapshotCache()
+    state = SimpleNamespace(logMonoTime={"carState": 100}, valid={"carState": True})
+    expected, = capture_inputs(state, ("carState",))
+    with patch.object(cache, "_new_message", Mock(wraps=cache._new_message)) as factory:
+      cold, = capture_inputs(state, ("carState",), cache=cache)
+      self.assertIsInstance(cold, dict)
+      self.assertEqual(cold, expected)
+      self.assertIsNone(cache._entries["carState"][1])
+      factory.assert_not_called()
+      cold["flags"] = 0
+
+      promoted, = capture_inputs(state, ("carState",), cache=cache)
+      self.assertEqual(promoted.to_dict(), expected)
+      self.assertIs(cache._entries["carState"][1], promoted)
+      factory.assert_called_once()
+      repeated, = capture_inputs(state, ("carState",), cache=cache)
+      self.assertIs(repeated, promoted)
+      factory.assert_called_once()
+
+      for timestamp in range(101, 111):
+        state.logMonoTime["carState"] = timestamp
+        changed, = capture_inputs(state, ("carState",), cache=cache)
+        self.assertIsInstance(changed, dict)
+        self.assertEqual(changed, capture_inputs(state, ("carState",))[0])
+        self.assertIsNone(cache._entries["carState"][1])
+        factory.assert_called_once()
+      self.assertEqual(promoted.to_dict(), expected)
+
+      state.logMonoTime["carState"] = 100
+      changed, = capture_inputs(state, ("carState",), cache=cache)
+      self.assertIsInstance(changed, dict)
+      self.assertEqual(changed, expected)
+      again, = capture_inputs(state, ("carState",), cache=cache)
+      self.assertEqual(again.to_dict(), expected)
+      self.assertIsNot(again, promoted)
+      self.assertEqual(factory.call_count, 2)
+
   def test_cached_inputs_refresh_every_health_field_at_the_same_timestamp(self):
     cache = InputSnapshotCache()
     state = SimpleNamespace(logMonoTime={"carState": UINT64_MAX},
                             **{name: {"carState": True} for name in CHECK_FLAGS})
+    cold, = capture_inputs(state, ("carState",), cache=cache)
+    self.assertIsInstance(cold, dict)
     original, = capture_inputs(state, ("carState",), cache=cache)
     original_value = original.to_dict()
     repeated, = capture_inputs(state, ("carState",), cache=cache)
@@ -293,10 +333,14 @@ class TestLongitudinalLogging(unittest.TestCase):
           setattr(state, name, {"carState": value})
           current, = capture_inputs(state, ("carState",), cache=cache)
           expected, = capture_inputs(state, ("carState",))
-          self.assertEqual(current.to_dict(), expected)
-          self.assertIsNot(current, previous)
+          self.assertIsInstance(current, dict)
+          self.assertEqual(current, expected)
+          self.assertIsNone(cache._entries["carState"][1])
+          promoted, = capture_inputs(state, ("carState",), cache=cache)
+          self.assertEqual(promoted.to_dict(), expected)
+          self.assertIsNot(promoted, previous)
           self.assertEqual(original.to_dict(), original_value)
-          previous = current
+          previous = promoted
 
     # A detached mutable copy cannot change a reader kept by an earlier frame.
     detached = original.as_builder()
@@ -318,6 +362,9 @@ class TestLongitudinalLogging(unittest.TestCase):
                                   **{name: {"carState": value} for name, value in zip(CHECK_FLAGS, health, strict=True)})
           actual, = capture_inputs(state, ("carState",), cache=cache)
           expected, = capture_inputs(state, ("carState",))
+          self.assertIsInstance(actual, dict)
+          self.assertEqual(actual, expected)
+          actual, = capture_inputs(state, ("carState",), cache=cache)
           self.assertEqual(actual.to_dict(), expected)
 
   def test_cached_inputs_never_compare_or_coerce_raw_unknown_health(self):
@@ -334,6 +381,8 @@ class TestLongitudinalLogging(unittest.TestCase):
         raise AssertionError("health __int__")
 
     cache = InputSnapshotCache()
+    cold, = capture_inputs(SimpleNamespace(logMonoTime={"carState": 0}), ("carState",), cache=cache)
+    self.assertEqual((cold["monoTime"], cold["idKnown"], cold["knownFlags"], cold["flags"]), (0, False, 0, 0))
     previous = None
     for value in (None, 0, 1, "true", [], np.bool_(True), np.array([True, False]), float("nan"), PoisonHealth()):
       state = SimpleNamespace(logMonoTime={"carState": 0}, **{name: {"carState": value} for name in CHECK_FLAGS})
@@ -348,6 +397,9 @@ class TestLongitudinalLogging(unittest.TestCase):
     state = SimpleNamespace(logMonoTime={"carState": 0, "modelV2": UINT64_MAX},
                             valid={"modelV2": True}, seen={"carState": True})
     services = ("modelV2", "absent", "carState", "modelV2")
+    cold = capture_inputs(state, iter(services), cache=cache)
+    self.assertEqual([entry["service"] for entry in cold], ["modelV2", "carState", "modelV2"])
+    self.assertTrue(all(entry[1] is None for entry in cache._entries.values()))
     first = capture_inputs(state, iter(services), cache=cache)
     self.assertEqual([entry.service for entry in first], ["modelV2", "carState", "modelV2"])
     self.assertEqual(set(cache._entries), {"carState", "modelV2"})
@@ -357,9 +409,11 @@ class TestLongitudinalLogging(unittest.TestCase):
     del state.seen
     state.updated = {"absent": True}
     second = capture_inputs(state, iter(services), cache=cache)
-    self.assertEqual([entry.to_dict() for entry in second], capture_inputs(state, iter(services)))
-    self.assertEqual([entry.service for entry in second], ["absent", "carState"])
+    self.assertEqual(second, capture_inputs(state, iter(services)))
+    self.assertEqual([entry["service"] for entry in second], ["absent", "carState"])
     self.assertEqual(set(cache._entries), {"absent", "carState"})
+    promoted = capture_inputs(state, iter(services), cache=cache)
+    self.assertEqual([entry.to_dict() for entry in promoted], second)
     self.assertEqual(first[1].monoTime, 0)
     self.assertTrue(first[1].idKnown)
 
@@ -369,6 +423,7 @@ class TestLongitudinalLogging(unittest.TestCase):
       state.logMonoTime = {service: index}
       capture_inputs(state, (service,), cache=cache)
       self.assertEqual(set(cache._entries), {service})
+      self.assertIsNone(cache._entries[service][1])
     capture_inputs(state, (), cache=cache)
     self.assertEqual(cache._entries, {})
 
@@ -388,6 +443,7 @@ class TestLongitudinalLogging(unittest.TestCase):
     cache = InputSnapshotCache()
     state = SimpleNamespace(logMonoTime={"carState": 1, "modelV2": 2},
                             **{name: {"carState": False, "modelV2": False} for name in CHECK_FLAGS})
+    capture_inputs(state, tuple(state.logMonoTime), cache=cache)
     before = capture_inputs(state, tuple(state.logMonoTime), cache=cache)
     previous = cache._entries
     accesses = []
@@ -414,8 +470,20 @@ class TestLongitudinalLogging(unittest.TestCase):
 
     for name in CHECK_FLAGS:
       setattr(state, name, {"carState": True, "modelV2": True})
-    with patch.object(cache, "_new_message", Mock(side_effect=RuntimeError("input serializer"))):
+    cold = observe(observer, "capture")
+    self.assertEqual([entry["flags"] for entry in cold], [31, 31])
+    self.assertTrue(all(entry[1] is None for entry in cache._entries.values()))
+    previous = cache._entries
+    new_message = cache._new_message
+
+    def fail_second_promotion(**values):
+      if values["service"] == "modelV2":
+        raise RuntimeError("input serializer")
+      return new_message(**values)
+
+    with patch.object(cache, "_new_message", side_effect=fail_second_promotion) as factory:
       self.assertIsNone(observe(observer, "capture"))
+    self.assertEqual(factory.call_count, 2)
     self.assertEqual(recorder.errors, 2)
     self.assertIs(cache._entries, previous)
     after = observe(observer, "capture")
@@ -444,7 +512,7 @@ class TestLongitudinalLogging(unittest.TestCase):
     state = SimpleNamespace(logMonoTime={"carState": UINT64_MAX, "modelV2": 0},
                             valid={"carState": True, "modelV2": False}, seen={"modelV2": True})
     services = ("modelV2", "absent", "carState", "modelV2")
-    for flags in (True, True, False, None):
+    for flags in (True, True, True, False, False, False, None, None, None):
       state.updated = {"carState": flags, "modelV2": flags}
       cached = [local_input("carControl", (1 << 63) + 9, False), *capture_inputs(state, services, cache=cache)]
       dictionaries = [local_input("carControl", (1 << 63) + 9, False), *capture_inputs(state, services)]

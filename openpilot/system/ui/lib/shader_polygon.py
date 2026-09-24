@@ -216,10 +216,14 @@ def triangulate(pts: np.ndarray) -> list[tuple[float, float]]:
   The output is byte-identical -- torque_bar_cost.py asserts equality against the old
   implementation at every size before reporting a timing.
 
-  .tolist() stays, and that was checked rather than assumed: rl.draw_triangle_strip needs a
-  Python sequence, and handing it the ndarray raises "initializer for ctype 'struct Vector2 *'
-  must be a cdata pointer".
+  This compatibility path retains .tolist(): rl.draw_triangle_strip accepts a Python
+  sequence or CFFI pointer, but not a bare ndarray. PreparedPolygon instead exposes the
+  independent strip array through a retained CFFI buffer.
   """
+  return cast(list, _triangle_strip_array(pts).tolist())
+
+
+def _triangle_strip_array(pts: np.ndarray) -> np.ndarray:
   # TODO: consider deduping close screenspace points
   if len(pts) % 2 != 0:
     pts = pts[:-1]
@@ -229,7 +233,7 @@ def triangulate(pts: np.ndarray) -> list[tuple[float, float]]:
   tri_strip[0::2] = pts[:n]
   tri_strip[1::2] = pts[n:][::-1]
 
-  return cast(list, tri_strip.tolist())
+  return tri_strip
 
 
 class PreparedPolygon:
@@ -249,8 +253,10 @@ class PreparedPolygon:
 
     pts = np.ascontiguousarray(points, dtype=np.float32)
     assert pts.ndim == 2 and pts.shape[1] == 2, "points must be (N,2)"
-    strip = triangulate(pts)
-    self._buffer = rl.ffi.new("Vector2[]", strip)
+    strip = _triangle_strip_array(pts)
+    # Vector2 is two consecutive C floats. from_buffer retains this independent,
+    # contiguous float32 array without a tolist() round trip or another vertex copy.
+    self._buffer = rl.ffi.from_buffer("Vector2[]", strip)
     # pyray treats a bare CFFI array as a struct and takes its address. Supply the
     # pointer expected by DrawTriangleStrip, while retaining the owning array above.
     self.vertices = rl.ffi.cast("Vector2 *", self._buffer)

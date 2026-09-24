@@ -174,22 +174,30 @@ def test_cached_subscriptions_refresh_health_at_unchanged_ids_and_keep_old_wire_
   observer = daemon.longitudinal_observation
   first = step(daemon, serialized(raw))
   before = first.to_dict()
-  original = observer.input_cache._entries["controlsState"][1]
+  assert observer.input_cache._entries["controlsState"][1] is None
   timestamps = dict(daemon.sm.logMonoTime)
+  step(daemon, None)
+  original = observer.input_cache._entries["controlsState"][1]
+  original_values = original.to_dict()
   step(daemon, None)
   assert observer.input_cache._entries["controlsState"][1] is original
 
   daemon.sm.valid = {**daemon.sm.valid, "controlsState": False}
   daemon.sm.freq_ok.pop("controlsState", None)
   changed = step(daemon, None)
-  current = observer.input_cache._entries["controlsState"][1]
+  assert observer.input_cache._entries["controlsState"][1] is None
   inputs = {entry.service: entry for entry in changed.inputs}
+  current = inputs["controlsState"]
   assert current is not original
   assert current.monoTime == original.monoTime == timestamps["controlsState"]
   assert current.knownFlags & CHECK_FLAGS["valid"]
   assert not current.flags & CHECK_FLAGS["valid"]
   assert not current.knownFlags & CHECK_FLAGS["freq_ok"]
-  assert inputs["controlsState"].to_dict() == current.to_dict()
+  step(daemon, None)
+  promoted = observer.input_cache._entries["controlsState"][1]
+  assert promoted is not original
+  assert promoted.to_dict() == current.to_dict()
+  assert original.to_dict() == original_values
   assert first.to_dict() == before
   assert daemon.sm.logMonoTime == timestamps
   assert changed.inputs[0].service == "carState"
@@ -293,18 +301,24 @@ def test_input_snapshot_serialization_failure_does_not_abort_real_selfdrive_publ
   candidate, _ = observed_selfdrive()
   observer = candidate.longitudinal_observation
   step(baseline, serialized(raw))
+  step(candidate, serialized(raw))
+  assert observer.recorder.errors == 0
+  previous = observer.input_cache._entries
+  assert previous and all(entry[1] is None for entry in previous.values())
+  step(baseline, None)
   with patch.object(observer.input_cache, "_new_message", side_effect=RuntimeError("input serializer")):
-    step(candidate, serialized(raw))
+    step(candidate, None)
   assert payload(baseline) == payload(candidate)
   assert candidate.pm.messages["selfdriveState"].selfdriveState.longitudinalDiagnostics.version == 0
   assert observer.recorder.errors == 1
-  assert observer.input_cache._entries == {}
+  assert observer.input_cache._entries is previous
 
   step(baseline, None)
   value = step(candidate, None)
   assert payload(baseline) == payload(candidate)
   assert value.context.version == value.version == 1
   assert value.carStateReused and value.inputs[0].idKnown
+  assert all(entry[1] is not None for entry in observer.input_cache._entries.values())
   assert observer.recorder.errors == 1
 
 

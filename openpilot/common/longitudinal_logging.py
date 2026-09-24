@@ -205,7 +205,7 @@ def configuration_encoding(params):
 
 
 class InputSnapshotCache:
-  """Latest immutable input per service, owned by one observation producer."""
+  """Promote repeated input values to immutable readers for one producer."""
 
   def __init__(self):
     from opendbc.car.structs import car
@@ -247,22 +247,27 @@ def capture_inputs(state, services, *, cache=None):
                    | (8 if seen is False else 0) | (16 if updated is False else 0))
     known_id = valid_id and (mono > 0 or bool(flags & CHECK_FLAGS["seen"]))
     mono_time = int(mono) if valid_id else 0
-    if cache is None or type(service) is not str:
-      result.append({
-        "service": service, "monoTime": mono_time, "idKnown": known_id,
-        "knownFlags": known_flags, "flags": flags, "kind": "consumerSnapshot",
-      })
-    else:
+    if cache is not None and type(service) is str:
       # The service key and fixed kind complete this wire identity. Compare
       # only normalized fields: raw health must never invoke __eq__ or __bool__.
       key = (mono_time, bool(known_id), known_flags, flags)
       entry = previous.get(service)
-      if entry is None or entry[0] != key:
-        reader = cache._new_message(service=service, monoTime=mono_time, idKnown=key[1],
-                                    knownFlags=known_flags, flags=flags, kind="consumerSnapshot").as_reader()
-        entry = (key, reader)
-      current[service] = entry
-      result.append(entry[1])
+      if entry is not None and entry[0] == key:
+        if entry[1] is None:
+          reader = cache._new_message(service=service, monoTime=mono_time, idKnown=key[1],
+                                      knownFlags=known_flags, flags=flags, kind="consumerSnapshot").as_reader()
+          entry = (key, reader)
+        current[service] = entry
+        result.append(entry[1])
+        continue
+      # Inputs changing every frame keep the original dictionary serialization
+      # path. Allocate an arena only after the same wire value repeats; retain
+      # no mutable dictionary that a caller could change after this capture.
+      current[service] = (key, None)
+    result.append({
+      "service": service, "monoTime": mono_time, "idKnown": known_id,
+      "knownFlags": known_flags, "flags": flags, "kind": "consumerSnapshot",
+    })
   if cache is not None:
     # Commit only complete captures and prune vanished services. Readers from
     # older samples own their arenas; neither a hit nor a miss mutates them.
