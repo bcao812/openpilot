@@ -232,7 +232,35 @@ def triangulate(pts: np.ndarray) -> list[tuple[float, float]]:
   return cast(list, tri_strip.tolist())
 
 
-def draw_polygon(origin_rect: rl.Rectangle, points: np.ndarray,
+class PreparedPolygon:
+  """Snapshot of a ribbon's float32 vertices, ready for repeated draws.
+
+  Keep one snapshot per current geometry in the caller. Colors and gradient coordinates
+  are deliberately not stored here. The original array can change without changing this
+  snapshot; callers must prepare a replacement when their geometry changes.
+  """
+  def __init__(self, points: np.ndarray):
+    self.point_count = len(points)
+    self.vertex_count = 0
+    self._buffer = None
+    self.vertices = rl.ffi.NULL
+    if self.point_count < 3:
+      return
+
+    pts = np.ascontiguousarray(points, dtype=np.float32)
+    assert pts.ndim == 2 and pts.shape[1] == 2, "points must be (N,2)"
+    strip = triangulate(pts)
+    self._buffer = rl.ffi.new("Vector2[]", strip)
+    # pyray treats a bare CFFI array as a struct and takes its address. Supply the
+    # pointer expected by DrawTriangleStrip, while retaining the owning array above.
+    self.vertices = rl.ffi.cast("Vector2 *", self._buffer)
+    self.vertex_count = len(strip)
+
+  def __len__(self):
+    return self.point_count
+
+
+def draw_polygon(origin_rect: rl.Rectangle, points: np.ndarray | PreparedPolygon,
                  color: Optional[rl.Color] = None, gradient: Gradient | None = None):  # noqa: UP045  # rl.Color is a function, so `rl.Color | None` fails
 
   """
@@ -246,19 +274,21 @@ def draw_polygon(origin_rect: rl.Rectangle, points: np.ndarray,
   state = ShaderState.get_instance()
   state.initialize()
 
-  # Ensure (N,2) float32 contiguous array
-  pts = np.ascontiguousarray(points, dtype=np.float32)
-  assert pts.ndim == 2 and pts.shape[1] == 2, "points must be (N,2)"
+  if isinstance(points, PreparedPolygon):
+    tri_strip, strip_count = points.vertices, points.vertex_count
+  else:
+    # Mutable callers retain the uncached behavior, including in-place changes.
+    pts = np.ascontiguousarray(points, dtype=np.float32)
+    assert pts.ndim == 2 and pts.shape[1] == 2, "points must be (N,2)"
+    tri_strip = triangulate(pts)
+    strip_count = len(tri_strip)
 
   # Configure gradient shader
   _configure_shader_color(state, color, gradient, origin_rect)
 
-  # Triangulate via interleaving
-  tri_strip = triangulate(pts)
-
   # Draw strip, color here doesn't matter
   rl.begin_shader_mode(state.shader)
-  rl.draw_triangle_strip(tri_strip, len(tri_strip), rl.WHITE)
+  rl.draw_triangle_strip(tri_strip, strip_count, rl.WHITE)
   rl.end_shader_mode()
 
 

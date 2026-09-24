@@ -169,6 +169,33 @@ def test_socket_timeout_retains_the_exact_previously_consumed_id_without_claimin
   assert not reused.flags & CHECK_FLAGS["updated"]
 
 
+def test_cached_subscriptions_refresh_health_at_unchanged_ids_and_keep_old_wire_snapshot():
+  daemon, raw = observed_selfdrive()
+  observer = daemon.longitudinal_observation
+  first = step(daemon, serialized(raw))
+  before = first.to_dict()
+  original = observer.input_cache._entries["controlsState"][1]
+  timestamps = dict(daemon.sm.logMonoTime)
+  step(daemon, None)
+  assert observer.input_cache._entries["controlsState"][1] is original
+
+  daemon.sm.valid = {**daemon.sm.valid, "controlsState": False}
+  daemon.sm.freq_ok.pop("controlsState", None)
+  changed = step(daemon, None)
+  current = observer.input_cache._entries["controlsState"][1]
+  inputs = {entry.service: entry for entry in changed.inputs}
+  assert current is not original
+  assert current.monoTime == original.monoTime == timestamps["controlsState"]
+  assert current.knownFlags & CHECK_FLAGS["valid"]
+  assert not current.flags & CHECK_FLAGS["valid"]
+  assert not current.knownFlags & CHECK_FLAGS["freq_ok"]
+  assert inputs["controlsState"].to_dict() == current.to_dict()
+  assert first.to_dict() == before
+  assert daemon.sm.logMonoTime == timestamps
+  assert changed.inputs[0].service == "carState"
+  assert changed.carStateReused and not changed.inputs[0].flags & CHECK_FLAGS["updated"]
+
+
 def test_missed_observation_of_a_receive_does_not_assign_a_stale_id_to_reused_carstate():
   daemon, first = observed_selfdrive()
   step(daemon, first)
@@ -259,6 +286,26 @@ def test_observer_serialization_failure_does_not_abort_real_selfdrive_publicatio
     step(candidate, serialized(raw))
   assert payload(baseline) == payload(candidate)
   assert candidate.longitudinal_observation.recorder.errors == 1
+
+
+def test_input_snapshot_serialization_failure_does_not_abort_real_selfdrive_publication():
+  baseline, raw = observed_selfdrive(enabled=False)
+  candidate, _ = observed_selfdrive()
+  observer = candidate.longitudinal_observation
+  step(baseline, serialized(raw))
+  with patch.object(observer.input_cache, "_new_message", side_effect=RuntimeError("input serializer")):
+    step(candidate, serialized(raw))
+  assert payload(baseline) == payload(candidate)
+  assert candidate.pm.messages["selfdriveState"].selfdriveState.longitudinalDiagnostics.version == 0
+  assert observer.recorder.errors == 1
+  assert observer.input_cache._entries == {}
+
+  step(baseline, None)
+  value = step(candidate, None)
+  assert payload(baseline) == payload(candidate)
+  assert value.context.version == value.version == 1
+  assert value.carStateReused and value.inputs[0].idKnown
+  assert observer.recorder.errors == 1
 
 
 def test_publication_without_another_decision_does_not_reuse_a_previous_snapshot():

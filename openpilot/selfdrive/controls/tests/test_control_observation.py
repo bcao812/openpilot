@@ -220,6 +220,26 @@ def test_diagnostic_serialization_error_does_not_abort_original_messages():
   assert failing.control.longitudinal_observation.recorder.errors == 1
 
 
+def test_input_snapshot_serialization_error_does_not_abort_original_messages():
+  baseline = observed_controls(enabled=False)
+  failing = observed_controls()
+  observer = failing.control.longitudinal_observation
+  baseline.step()
+  with patch.object(observer.input_cache, "_new_message", side_effect=RuntimeError("input serializer")):
+    failing.step()
+  assert control_payload(baseline) == control_payload(failing)
+  assert [service for service, _ in failing.control.pm.history] == ["controlsState", "carControl"]
+  assert failing.control.pm.messages["controlsState"].controlsState.longitudinalDiagnostics.context.version == 0
+  assert observer.recorder.errors == 1
+  assert observer.input_cache._entries == {}
+
+  baseline.step()
+  failing.step()
+  assert control_payload(baseline) == control_payload(failing)
+  assert failing.control.pm.messages["controlsState"].controlsState.longitudinalDiagnostics.context.version == 1
+  assert observer.recorder.errors == 1
+
+
 def test_control_exception_is_not_swallowed_or_replaced_by_observation():
   harness = observed_controls()
   error = RuntimeError("original control error")
@@ -241,6 +261,12 @@ def test_successive_publications_without_new_control_do_not_reuse_a_completed_sa
 def test_health_flags_preserve_invalid_and_unknown_as_different_observations():
   harness = observed_controls()
   harness.step()
+  observer = harness.control.longitudinal_observation
+  first_inputs = {entry.service: entry for entry in observer.inputs}
+  first_values = {name: entry.to_dict() for name, entry in first_inputs.items()}
+  timestamps = dict(harness.control.sm.logMonoTime)
+  observer.begin(harness.control.sm)
+  assert all(entry is first_inputs[entry.service] for entry in observer.inputs)
   harness.control.sm.valid["longitudinalPlan"] = False
   del harness.control.sm.freq_ok["carState"]
   with patch("openpilot.selfdrive.controls.controlsd.time.monotonic_ns", return_value=harness.now_ns):
@@ -252,3 +278,7 @@ def test_health_flags_preserve_invalid_and_unknown_as_different_observations():
   assert not inputs["longitudinalPlan"].flags & CHECK_FLAGS["valid"]
   assert not inputs["carState"].knownFlags & CHECK_FLAGS["freq_ok"]
   assert event.valid
+  assert harness.control.sm.logMonoTime == timestamps
+  assert {name: entry.to_dict() for name, entry in first_inputs.items()} == first_values
+  assert all(entry is not first_inputs[entry.service] for entry in observer.inputs
+             if entry.service in ("longitudinalPlan", "carState"))

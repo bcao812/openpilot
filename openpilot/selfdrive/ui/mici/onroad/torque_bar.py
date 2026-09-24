@@ -10,7 +10,7 @@ from openpilot.selfdrive.ui.mici.onroad import blend_colors
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.fastmath import clamp, lerp
-from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
+from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient, PreparedPolygon
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
 
@@ -148,6 +148,22 @@ def arc_bar_pts(r_mid: float, thickness: float,
 DEFAULT_MAX_LAT_ACCEL = 3.0  # m/s^2
 
 
+class _OffsetPolygon:
+  """One translated snapshot of an immutable arc_bar_pts cache entry."""
+  def __init__(self):
+    self._source = None
+    self._offset = None
+    self.points = np.empty((0, 2), dtype=np.float32)
+    self.polygon = PreparedPolygon(self.points)
+
+  def update(self, points: np.ndarray, offset: tuple[float, float]):
+    if self._source is not points or self._offset != offset:
+      self._source, self._offset = points, offset
+      # Match the original float32 addition exactly; do not quantize the offset.
+      self.points = points + np.array(offset, dtype=np.float32)
+      self.polygon = PreparedPolygon(self.points)
+
+
 class TorqueBar(Widget):
   def __init__(self, demo: bool = False, scale: float = 1.0, always: bool = False):
     super().__init__()
@@ -156,6 +172,9 @@ class TorqueBar(Widget):
     self._always = always
     self._torque_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
     self._torque_line_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
+    # Two entries per widget, independent of the shared 256-entry arc LRU.
+    self._bg_polygon = _OffsetPolygon()
+    self._sl_polygon = _OffsetPolygon()
 
   def update_filter(self, value: float):
     """Update the torque filter value (for demo mode)."""
@@ -217,16 +236,17 @@ class TorqueBar(Widget):
 
     cx = rect.x + rect.width / 2 + 8  # offset 8px to right of camera feed
     cy = rect.y + rect.height + torque_line_radius - torque_line_offset
-    offset = np.array([cx, cy], dtype=np.float32)
+    offset = (cx, cy)
 
     # draw bg torque indicator line
-    bg_pts = arc_bar_pts(mid_r, torque_line_height, torque_start_angle, torque_end_angle, cap_radius=7 * self._scale) + offset
-    draw_polygon(rect, bg_pts, color=torque_line_bg_color)
+    self._bg_polygon.update(arc_bar_pts(mid_r, torque_line_height, torque_start_angle, torque_end_angle, cap_radius=7 * self._scale), offset)
+    bg_pts = self._bg_polygon.points
+    draw_polygon(rect, self._bg_polygon.polygon, color=torque_line_bg_color)
 
     # draw torque indicator line
     a0s = top_angle
     a1s = a0s + torque_bg_angle_span / 2 * self._torque_filter.x
-    sl_pts = arc_bar_pts(mid_r, torque_line_height, a0s, a1s, cap_radius=7 * self._scale) + offset
+    self._sl_polygon.update(arc_bar_pts(mid_r, torque_line_height, a0s, a1s, cap_radius=7 * self._scale), offset)
 
     # draw beautiful gradient from center to 65% of the bg torque bar width
     start_grad_pt = cx / rect.width
@@ -260,7 +280,7 @@ class TorqueBar(Widget):
       stops=[0.0, 1.0],
     )
 
-    draw_polygon(rect, sl_pts, gradient=gradient)
+    draw_polygon(rect, self._sl_polygon.polygon, gradient=gradient)
 
     # draw center torque bar dot
     if abs(self._torque_filter.x) < 0.5:

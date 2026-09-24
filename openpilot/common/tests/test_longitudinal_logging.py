@@ -7,11 +7,11 @@ from types import SimpleNamespace
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import warnings
 
 from openpilot.common.longitudinal_logging import (
-  CHECK_FLAGS, ObservationRecorder, UINT64_MAX, attach_diagnostics, can_digest, capture_inputs, configuration_digest, is_uint64,
+  CHECK_FLAGS, InputSnapshotCache, ObservationRecorder, UINT64_MAX, attach_diagnostics, can_digest, capture_inputs, configuration_digest, is_uint64,
   local_input, observe,
 )
 from openpilot.common import longitudinal_logging
@@ -277,6 +277,188 @@ class TestLongitudinalLogging(unittest.TestCase):
     self.assertIsNone(observe(observer, "capture"))
     self.assertEqual(recorder.errors, 1)
     self.assertEqual(accesses, [(name, service) for service in ("carState", "modelV2") for name in CHECK_FLAGS])
+
+  def test_cached_inputs_refresh_every_health_field_at_the_same_timestamp(self):
+    cache = InputSnapshotCache()
+    state = SimpleNamespace(logMonoTime={"carState": UINT64_MAX},
+                            **{name: {"carState": True} for name in CHECK_FLAGS})
+    original, = capture_inputs(state, ("carState",), cache=cache)
+    original_value = original.to_dict()
+    repeated, = capture_inputs(state, ("carState",), cache=cache)
+    self.assertIs(repeated, original)
+    previous = original
+    for name in CHECK_FLAGS:
+      for value in (False, None, True):
+        with self.subTest(health=name, value=value):
+          setattr(state, name, {"carState": value})
+          current, = capture_inputs(state, ("carState",), cache=cache)
+          expected, = capture_inputs(state, ("carState",))
+          self.assertEqual(current.to_dict(), expected)
+          self.assertIsNot(current, previous)
+          self.assertEqual(original.to_dict(), original_value)
+          previous = current
+
+    # A detached mutable copy cannot change a reader kept by an earlier frame.
+    detached = original.as_builder()
+    detached.monoTime = 1
+    detached.flags = 0
+    self.assertEqual(original.to_dict(), original_value)
+    with self.assertRaises(AttributeError):
+      original.monoTime = 1
+
+  def test_cached_inputs_preserve_all_health_combinations_and_exact_ids(self):
+    import numpy as np
+
+    cache = InputSnapshotCache()
+    for mono in (0, (1 << 53) + 7, (1 << 63) + 9, UINT64_MAX, np.uint64(UINT64_MAX),
+                 -1, UINT64_MAX + 1, 1.5, True, None, "123"):
+      for health in product((True, False, None), repeat=len(CHECK_FLAGS)):
+        with self.subTest(mono=mono, health=health):
+          state = SimpleNamespace(logMonoTime={"carState": mono},
+                                  **{name: {"carState": value} for name, value in zip(CHECK_FLAGS, health, strict=True)})
+          actual, = capture_inputs(state, ("carState",), cache=cache)
+          expected, = capture_inputs(state, ("carState",))
+          self.assertEqual(actual.to_dict(), expected)
+
+  def test_cached_inputs_never_compare_or_coerce_raw_unknown_health(self):
+    import numpy as np
+
+    class PoisonHealth:
+      def __bool__(self):
+        raise AssertionError("health __bool__")
+
+      def __eq__(self, other):
+        raise AssertionError("health __eq__")
+
+      def __int__(self):
+        raise AssertionError("health __int__")
+
+    cache = InputSnapshotCache()
+    previous = None
+    for value in (None, 0, 1, "true", [], np.bool_(True), np.array([True, False]), float("nan"), PoisonHealth()):
+      state = SimpleNamespace(logMonoTime={"carState": 0}, **{name: {"carState": value} for name in CHECK_FLAGS})
+      actual, = capture_inputs(state, ("carState",), cache=cache)
+      self.assertEqual((actual.monoTime, actual.idKnown, actual.knownFlags, actual.flags), (0, False, 0, 0))
+      if previous is not None:
+        self.assertIs(actual, previous)
+      previous = actual
+
+  def test_cached_inputs_follow_service_order_replacement_and_prune_removed_services(self):
+    cache = InputSnapshotCache()
+    state = SimpleNamespace(logMonoTime={"carState": 0, "modelV2": UINT64_MAX},
+                            valid={"modelV2": True}, seen={"carState": True})
+    services = ("modelV2", "absent", "carState", "modelV2")
+    first = capture_inputs(state, iter(services), cache=cache)
+    self.assertEqual([entry.service for entry in first], ["modelV2", "carState", "modelV2"])
+    self.assertEqual(set(cache._entries), {"carState", "modelV2"})
+
+    state.logMonoTime = {"absent": (1 << 63) + 1, "carState": 17}
+    state.valid = {"carState": False}
+    del state.seen
+    state.updated = {"absent": True}
+    second = capture_inputs(state, iter(services), cache=cache)
+    self.assertEqual([entry.to_dict() for entry in second], capture_inputs(state, iter(services)))
+    self.assertEqual([entry.service for entry in second], ["absent", "carState"])
+    self.assertEqual(set(cache._entries), {"absent", "carState"})
+    self.assertEqual(first[1].monoTime, 0)
+    self.assertTrue(first[1].idKnown)
+
+    # A stream of new names cannot accumulate old input arenas in the cache.
+    for index in range(100):
+      service = f"input{index}"
+      state.logMonoTime = {service: index}
+      capture_inputs(state, (service,), cache=cache)
+      self.assertEqual(set(cache._entries), {service})
+    capture_inputs(state, (), cache=cache)
+    self.assertEqual(cache._entries, {})
+
+  def test_cached_absent_inputs_do_not_probe_health(self):
+    class NoInputs:
+      logMonoTime = {}
+
+      def __getattr__(self, name):
+        raise AssertionError(f"Absent input must not access {name}")
+
+    cache = InputSnapshotCache()
+    capture_inputs(SimpleNamespace(logMonoTime={"carState": 1}), ("carState",), cache=cache)
+    self.assertEqual(capture_inputs(NoInputs(), ("carState",), cache=cache), [])
+    self.assertEqual(cache._entries, {})
+
+  def test_cached_capture_failure_preserves_previous_entries_and_health_getter_order(self):
+    cache = InputSnapshotCache()
+    state = SimpleNamespace(logMonoTime={"carState": 1, "modelV2": 2},
+                            **{name: {"carState": False, "modelV2": False} for name in CHECK_FLAGS})
+    before = capture_inputs(state, tuple(state.logMonoTime), cache=cache)
+    previous = cache._entries
+    accesses = []
+
+    class HealthSource:
+      def __init__(self, name):
+        self.name = name
+
+      def get(self, service):
+        accesses.append((self.name, service))
+        if self.name == "updated" and service == "modelV2":
+          raise RuntimeError("health source failed")
+        return True
+
+    for name in CHECK_FLAGS:
+      setattr(state, name, HealthSource(name))
+    recorder = self.recorder()
+    observer = SimpleNamespace(recorder=recorder, capture=lambda: capture_inputs(state, tuple(state.logMonoTime), cache=cache))
+    self.assertIsNone(observe(observer, "capture"))
+    self.assertEqual(recorder.errors, 1)
+    self.assertIs(cache._entries, previous)
+    self.assertEqual([entry.flags for entry in before], [0, 0])
+    self.assertEqual(accesses, [(name, service) for service in ("carState", "modelV2") for name in CHECK_FLAGS])
+
+    for name in CHECK_FLAGS:
+      setattr(state, name, {"carState": True, "modelV2": True})
+    with patch.object(cache, "_new_message", Mock(side_effect=RuntimeError("input serializer"))):
+      self.assertIsNone(observe(observer, "capture"))
+    self.assertEqual(recorder.errors, 2)
+    self.assertIs(cache._entries, previous)
+    after = observe(observer, "capture")
+    self.assertEqual([entry.flags for entry in after], [31, 31])
+    self.assertEqual([entry.flags for entry in before], [0, 0])
+
+  def test_cached_non_string_services_keep_dictionary_and_serialization_semantics(self):
+    from openpilot.cereal import log
+
+    cache = InputSnapshotCache()
+    state = SimpleNamespace(logMonoTime={123: 17}, valid={123: True})
+    inputs = capture_inputs(state, (123,), cache=cache)
+    self.assertEqual(inputs, capture_inputs(state, (123,)))
+    self.assertEqual(cache._entries, {})
+    recorder = self.recorder(clock=lambda: 100)
+    sample = recorder.finish(recorder.begin())
+    actual = log.ControlsState.new_message(forceDecel=True)
+    before = actual.as_reader().as_builder().to_bytes()
+    self.assertFalse(attach_diagnostics(actual, "longitudinalDiagnostics", log.LongitudinalControlDiagnostics,
+                                      recorder, sample, {"inputs": inputs}))
+    self.assertEqual(actual.as_reader().as_builder().to_bytes(), before)
+    self.assertEqual(recorder.errors, 1)
+
+  def test_cached_inputs_match_dictionary_fields_and_real_diagnostic_wire(self):
+    cache = InputSnapshotCache()
+    state = SimpleNamespace(logMonoTime={"carState": UINT64_MAX, "modelV2": 0},
+                            valid={"carState": True, "modelV2": False}, seen={"modelV2": True})
+    services = ("modelV2", "absent", "carState", "modelV2")
+    for flags in (True, True, False, None):
+      state.updated = {"carState": flags, "modelV2": flags}
+      cached = [local_input("carControl", (1 << 63) + 9, False), *capture_inputs(state, services, cache=cache)]
+      dictionaries = [local_input("carControl", (1 << 63) + 9, False), *capture_inputs(state, services)]
+      for parent_factory, field_name, factory, parent_values, values in diagnostic_cases():
+        with self.subTest(schema=factory, flags=flags):
+          recorder = self.recorder(clock=lambda: 100)
+          sample = recorder.finish(recorder.begin())
+          actual = parent_factory.new_message(**parent_values)
+          expected = parent_factory.new_message(**parent_values)
+          self.assertTrue(attach_diagnostics(actual, field_name, factory, recorder, sample, {**values, "inputs": cached}))
+          self.assertTrue(attach_diagnostics_reference(expected, field_name, factory, recorder, sample, {**values, "inputs": dictionaries}))
+          self.assertEqual(json.dumps(actual.to_dict(), sort_keys=True), json.dumps(expected.to_dict(), sort_keys=True))
+          self.assertEqual(actual.to_bytes(), expected.to_bytes())
+          self.assertEqual(recorder.errors, 0)
 
   def test_local_input_does_not_invent_subscriber_health(self):
     source = local_input("carState", (1 << 53) + 1, False)

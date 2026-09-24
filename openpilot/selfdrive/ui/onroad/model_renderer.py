@@ -10,7 +10,7 @@ from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.fastmath import clamp, lerp
-from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
+from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient, PreparedPolygon
 from openpilot.system.ui.widgets import Widget
 
 from openpilot.selfdrive.ui.sunnypilot.onroad.model_renderer import ChevronMetrics, ModelRendererSP
@@ -36,6 +36,15 @@ NO_THROTTLE_COLORS = [
 class ModelPoints:
   raw_points: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.float32))
   projected_points: np.ndarray = field(default_factory=lambda: np.empty((0, 2), dtype=np.float32))
+  polygon: PreparedPolygon = field(init=False, repr=False)
+
+  def __post_init__(self):
+    self.set_projected_points(self.projected_points)
+
+  def set_projected_points(self, points: np.ndarray):
+    self.projected_points = points
+    # Only the current projection is retained: four lanes, two edges and one path.
+    self.polygon = PreparedPolygon(points)
 
 
 @dataclass
@@ -85,6 +94,10 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
   def set_transform(self, transform: np.ndarray):
     self._car_space_transform = transform.astype(np.float32)
+    self._transform_dirty = True
+
+  def _update_layout_rects(self):
+    # Projection also clips against the layout rectangle.
     self._transform_dirty = True
 
   def _render(self, rect: rl.Rectangle):
@@ -194,13 +207,13 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
     # Update lane lines using raw points
     for i, lane_line in enumerate(self._lane_lines):
-      lane_line.projected_points = self._map_line_to_polygon(
+      lane_line.set_projected_points(self._map_line_to_polygon(
         lane_line.raw_points, 0.025 * self._lane_line_probs[i], 0.0, max_idx, max_distance
-      )
+      ))
 
     # Update road edges using raw points
     for road_edge in self._road_edges:
-      road_edge.projected_points = self._map_line_to_polygon(road_edge.raw_points, 0.025, 0.0, max_idx, max_distance)
+      road_edge.set_projected_points(self._map_line_to_polygon(road_edge.raw_points, 0.025, 0.0, max_idx, max_distance))
 
     # Update path using raw points
     if lead and lead.present:
@@ -208,9 +221,9 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       max_distance = clamp(lead_d - min(lead_d * 0.35, 10.0), 0.0, max_distance)
 
     max_idx = self._get_path_length_idx(path_x_array, max_distance)
-    self._path.projected_points = self._map_line_to_polygon(
+    self._path.set_projected_points(self._map_line_to_polygon(
       self._path.raw_points, self._get_path_half_width(), self._path_offset_z, max_idx, max_distance, allow_invert=False
-    )
+    ))
 
     self._update_experimental_gradient()
 
@@ -307,7 +320,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
       alpha = clamp(self._lane_line_probs[i], 0.0, 0.7)
       color = rl.Color(255, 255, 255, int(alpha * 255))
-      draw_polygon(self._rect, lane_line.projected_points, color)
+      draw_polygon(self._rect, lane_line.polygon, color)
 
     for i, road_edge in enumerate(self._road_edges):
       if road_edge.projected_points.size == 0:
@@ -315,7 +328,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
       alpha = clamp(1.0 - self._road_edge_stds[i], 0.0, 1.0)
       color = rl.Color(255, 0, 0, int(alpha * 255))
-      draw_polygon(self._rect, road_edge.projected_points, color)
+      draw_polygon(self._rect, road_edge.polygon, color)
 
   def _draw_path(self, sm):
     """Draw path with dynamic coloring based on mode and throttle state."""
@@ -332,9 +345,9 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     if self._experimental_mode:
       # Draw with acceleration coloring
       if len(self._exp_gradient.colors) > 1:
-        draw_polygon(self._rect, self._path.projected_points, gradient=self._exp_gradient)
+        draw_polygon(self._rect, self._path.polygon, gradient=self._exp_gradient)
       else:
-        draw_polygon(self._rect, self._path.projected_points, rl.Color(255, 255, 255, 30))
+        draw_polygon(self._rect, self._path.polygon, rl.Color(255, 255, 255, 30))
     else:
       # Blend throttle/no throttle colors based on transition
       blend_factor = round(self._blend_filter.x * 100) / 100
@@ -345,7 +358,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
         colors=blended_colors,
         stops=[0.0, 0.5, 1.0],
       )
-      draw_polygon(self._rect, self._path.projected_points, gradient=gradient)
+      draw_polygon(self._rect, self._path.polygon, gradient=gradient)
 
   def _draw_lead_indicator(self):
     # Draw lead vehicles if available

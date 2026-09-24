@@ -1,5 +1,5 @@
 from openpilot.cereal import log
-from openpilot.common.longitudinal_logging import CHECK_FLAGS, ObservationRecorder, attach_diagnostics, capture_inputs, is_uint64
+from openpilot.common.longitudinal_logging import CHECK_FLAGS, InputSnapshotCache, ObservationRecorder, attach_diagnostics, capture_inputs, is_uint64
 
 
 class SelfdriveObservation:
@@ -7,6 +7,7 @@ class SelfdriveObservation:
 
   def __init__(self, params, params_sp, *, enabled=None, clock=None):
     self.recorder = ObservationRecorder("selfdrived", params, params_sp, enabled=enabled, clock=clock)
+    self.input_cache = InputSnapshotCache()
     self.sample = None
     self.sample_errors = 0
     self.values = None
@@ -49,7 +50,7 @@ class SelfdriveObservation:
         "service": "carState", "monoTime": 0, "idKnown": False, "knownFlags": CHECK_FLAGS["updated"],
         "flags": 0, "kind": "consumerSnapshot",
       }
-    inputs = [car_state_input, *capture_inputs(state, tuple(getattr(state, "logMonoTime", {})))]
+    inputs = [car_state_input, *capture_inputs(state, tuple(getattr(state, "logMonoTime", {})), cache=self.input_cache)]
     self.values = {
       "version": 1, "inputs": inputs, "carStateReused": car_state_message is None,
       "stateMachineInputKnown": False, "stateMachineCalled": False,
