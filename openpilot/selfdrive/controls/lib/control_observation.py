@@ -1,5 +1,5 @@
 from openpilot.cereal import log
-from openpilot.common.longitudinal_logging import CONTROL_INPUTS, InputSnapshotCache, ObservationRecorder, attach_diagnostics, capture_inputs, is_uint64
+from openpilot.common.longitudinal_logging import CONTROL_INPUTS, ObservationRecorder, attach_diagnostics, capture_inputs, is_uint64
 
 
 def _stored_identity(name, timestamp):
@@ -43,7 +43,6 @@ def supervisor_snapshot(controller):
 class ControlObservation:
   def __init__(self, params, params_sp, *, enabled=None, clock=None):
     self.recorder = ObservationRecorder("controlsd", params, params_sp, enabled=enabled, clock=clock)
-    self.input_cache = InputSnapshotCache()
     self.sample = None
     self.inputs = None
     self.controller = None
@@ -109,7 +108,7 @@ class ControlObservation:
     if sample is None:
       return
     services = tuple(dict.fromkeys((*CONTROL_INPUTS, *getattr(state, "logMonoTime", {}))))
-    inputs = capture_inputs(state, services, cache=self.input_cache)
+    inputs = capture_inputs(state, services)
     self.sample = sample
     self.inputs = inputs
     self.sample_pose = self.pose if self.pose_object is calibrated_pose and calibrated_pose is not None else {"known": False}
