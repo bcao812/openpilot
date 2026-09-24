@@ -15,6 +15,7 @@ from openpilot.selfdrive.controls.lib.cruise_response import (
 from openpilot.selfdrive.controls.lib.drive_helpers import (CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED,
                                                           get_departure_accel_from_plan, should_stop)
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
+from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS,
 )
@@ -117,11 +118,13 @@ def cruise_accel_limit(params, speed, steering_angle, e2e_allowed, coast_accel, 
   return maximum
 
 
-def has_departing_lead(radar_state, speed, delay):
+def has_departing_lead(radar_state, speed, delay, *, minimum_gap_base=CREEP_FOLLOW_MIN_GAP):
   if not (math.isfinite(speed) and 0.0 <= speed < STOP_SPEED and math.isfinite(delay)
-          and 0.0 <= delay <= 1.0 and radar_state.leadOne.present):
+          and 0.0 <= delay <= 1.0 and radar_state.leadOne.present
+          and not isinstance(minimum_gap_base, bool) and math.isfinite(minimum_gap_base)
+          and 3.0 <= minimum_gap_base <= CREEP_FOLLOW_MIN_GAP):
     return False
-  minimum_gap = CREEP_FOLLOW_MIN_GAP + speed * (delay + DT_MDL) + speed ** 2 / (2.0 * COMFORT_BRAKE)
+  minimum_gap = minimum_gap_base + speed * (delay + DT_MDL) + speed ** 2 / (2.0 * COMFORT_BRAKE)
   for lead in (radar_state.leadOne, radar_state.leadTwo):
     if not lead.present:
       continue
@@ -151,6 +154,7 @@ class UnifiedLongitudinalPlanner:
     self._forward_execution_instance_ns = 0
     self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
     self.model_reference_adapter = ModelReferenceAdapter()
+    self.stop_distance_policy = LowSpeedStopDistance()
     self.model_evidence = None
     self.model_reference_mode = 'not_admitted'
     self.model_fallback_reason = ''
@@ -164,6 +168,7 @@ class UnifiedLongitudinalPlanner:
   def invalidate(self, speed, reason):
     planner = self.planner
     self.cruise_response.clear()
+    self.stop_distance_policy.clear()
     self.reference_initialized = False
     self.reference_source_epoch_ns = None
     self._forward_execution_instance_ns = 0
@@ -457,11 +462,29 @@ class UnifiedLongitudinalPlanner:
       and ((not self.e2e_allowed and self.model_evidence is None) or ordinary_model_motion)
       and model_position is model_velocity is model_acceleration is None
     )
+    compact_permitted = (healthy and active and not reset and not forced_decel
+                         and planner.CP.carFingerprint == CAR.HONDA_ACCORD
+                         and planner.CP.openpilotLongitudinalControl and planner.unified)
+    # A stopped car never acquires a closer target from distance error alone.
+    # Re-entry from standstill additionally needs an independently departing
+    # lead plus a positive, non-stopping model; the existing owner still decides
+    # whether the resulting reference can release the brake.
+    observed_departure = (bool(car_state.standstill) and not model.action.shouldStop
+                          and model.action.desiredAcceleration >= STOP_RELEASE_ACCEL
+                          and (self.model_evidence is None or self.model_evidence.allows_external_departure)
+                          and has_departing_lead(state['radarState'], speed, delay, minimum_gap_base=3.0))
+    compact_activation = ((not car_state.standstill and state['controlsState'].longControlState == LongCtrlState.pid)
+                          or observed_departure)
+    comfort_distance, lead_risk_distances = self.stop_distance_policy.update(
+      now_ns=now_ns, source_ns=source_epoch_ns, radar_ns=state.logMonoTime.get('radarState'),
+      speed=speed, radar=state['radarState'], permitted=compact_permitted,
+      allow_activation=compact_activation,
+    )
     reference = MpcReference(
       cruise_speed=None if native_cruise_external else cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
       typed_model=None if ordinary_model_motion else self.model_evidence, allow_future_rest_reschedule=True,
-      comfort_stop_distance=low_speed_follow_distance(speed),
+      comfort_stop_distance=comfort_distance, lead_risk_stop_distances=lead_risk_distances,
     )
     urgency = 0.0
     if active and healthy and not reset and not forced_decel and planner.source == LongitudinalPlanSourceSP.cruise:

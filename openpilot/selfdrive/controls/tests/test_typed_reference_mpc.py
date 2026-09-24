@@ -103,7 +103,7 @@ def test_matching_generated_solver_has_real_path_and_terminal_slots():
   model_path = Path(__file__).resolve().parents[1] / 'lib/longitudinal_mpc_lib/acados_ocp_long.json'
   generated = json.loads(model_path.read_text())
   assert generated['dims']['nx'] == 3 and generated['dims']['nu'] == 1
-  assert generated['dims']['np'] == PARAM_DIM == 11
+  assert generated['dims']['np'] == PARAM_DIM == 12
   assert generated['dims']['nbx'] == generated['dims']['nbx_e'] == 2
   assert generated['constraints']['idxbx'] == generated['constraints']['idxbx_e'] == [1, 2]
 

@@ -16,7 +16,7 @@ from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState, STARTING_ACCEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  COMFORT_STOP_DISTANCE, STOP_DISTANCE, MPC_INVALID_INPUT, MPC_INVALID_SOLUTION, MPC_SOLVER_ERROR, T_IDXS, LongitudinalMpc, MpcReference,
+  COMFORT_STOP_DISTANCE, RISK_STOP_DISTANCE, STOP_DISTANCE, MPC_INVALID_INPUT, MPC_INVALID_SOLUTION, MPC_SOLVER_ERROR, T_IDXS, LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, StopReason
@@ -81,6 +81,7 @@ def test_failure_is_a_zero_sentinel_not_a_synthesized_deceleration(speed, accele
   # previous compact gap, while restoring the configured default distance.
   expected_parameters = np.zeros_like(planner.params)
   expected_parameters[:, COMFORT_STOP_DISTANCE] = STOP_DISTANCE
+  expected_parameters[:, RISK_STOP_DISTANCE] = STOP_DISTANCE
   np.testing.assert_array_equal(planner.params, expected_parameters)
   for delay in (0.05, 0.1, 0.55, 1.0):
     assert get_accel_from_plan(planner.v_solution, planner.a_solution, T_IDXS, action_t=delay) == 0.0

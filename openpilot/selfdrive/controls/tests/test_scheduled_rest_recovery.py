@@ -14,7 +14,7 @@ import pytest
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   CRASH_DISTANCE, LEAD_DANGER_FACTOR, MPC_INVALID_INPUT, N, PARAM_DIM, QP_FEASIBILITY_TOL,
-  REST_STATE_TOL, T_IDXS, LongitudinalMpc,
+  REST_STATE_TOL, RISK_STOP_DISTANCE, T_IDXS, LongitudinalMpc,
 )
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_mpc_rest_numerics import integrate
@@ -37,6 +37,7 @@ def parameters_for_deficit(states, deficit):
   parameters = np.zeros((N+1, PARAM_DIM))
   parameters[:, 0], parameters[:, 1] = ACCEL_MIN, ACCEL_MAX
   parameters[:, 4], parameters[:, 5] = 1.45, LEAD_DANGER_FACTOR
+  parameters[:, RISK_STOP_DISTANCE] = 6.0
   desired = LEAD_DANGER_FACTOR * (states[:, 1]**2 / 5.0 + 1.45 * states[:, 1] + 6.0)
   parameters[:, 2] = states[:, 0] + desired - np.asarray(deficit)
   return parameters

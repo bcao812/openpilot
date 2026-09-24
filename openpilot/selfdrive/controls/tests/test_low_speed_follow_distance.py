@@ -80,7 +80,7 @@ def test_real_lead_comfort_reaches_every_native_stage_without_moving_risk_geomet
 
 @pytest.mark.parametrize('value', [
   True, False, None, np.bool_(True), '4.0', 4.0 + 0j, [4.0], np.array(4.0), np.array([4.0]),
-  float('nan'), float('inf'), float('-inf'), 3.999999, 6.000001,
+  float('nan'), float('inf'), float('-inf'), 2.999999, 6.000001,
 ])
 def test_invalid_comfort_distance_is_rejected_before_solver(value):
   with pytest.raises(ValueError, match='Invalid comfort stop distance'):
@@ -144,7 +144,7 @@ def test_generated_cost_changes_comfort_without_reducing_the_original_risk_row(m
   monkeypatch.setattr(long_mpc, 'AcadosOcp', AcadosOcp, raising=False)
   model = long_mpc.gen_long_ocp().model
   evaluate = Function('comfort_and_risk', [model.x, model.u, model.p], [model.cost_y_expr, model.con_h_expr])
-  parameters = np.array([-3.5, 2.0, 4.0, 0.0, 1.45, 0.75, 0.0, 0.0, 0.0, 0.0, 6.0])
+  parameters = np.array([-3.5, 2.0, 4.0, 0.0, 1.45, 0.75, 0.0, 0.0, 0.0, 0.0, 6.0, 6.0])
   for speed in (0.0, 2.0, 10.0):
     for distance in (4.0, 5.0, 6.0):
       parameters[COMFORT_STOP_DISTANCE] = distance

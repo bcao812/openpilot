@@ -31,12 +31,13 @@ MPC_SOURCES = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
 
 X_DIM = 3
 U_DIM = 1
-PARAM_DIM = 11
+PARAM_DIM = 12
 MODEL_V_REF = 6
 MODEL_A_REF = 7
 MODEL_BRAKING_PRIORITY = 8
 TYPED_MODEL_MODE = 9
 COMFORT_STOP_DISTANCE = 10
+RISK_STOP_DISTANCE = 11
 COST_E_DIM = 5
 COST_DIM = COST_E_DIM + 1
 CONSTR_DIM = 4
@@ -107,15 +108,22 @@ class MpcReference:
   # The UNIFIED producer may schedule a witnessed later stop. Direct mathematical
   # callers keep the original source-goal contract unless they explicitly opt in.
   allow_future_rest_reschedule: bool = False
-  # This changes only the real-lead comfort target. Risk geometry and virtual
-  # cruise/model obstacles retain STOP_DISTANCE and the personality time gap.
+  # These explicit targets apply only to real leads. Virtual cruise/model
+  # obstacles retain STOP_DISTANCE, as do callers that omit these fields.
+  # Qualification for a compact stationary gap belongs to the producer.
   comfort_stop_distance: float = STOP_DISTANCE
+  lead_risk_stop_distances: tuple[float, float] = (STOP_DISTANCE, STOP_DISTANCE)
 
   def __post_init__(self):
     if (not isinstance(self.comfort_stop_distance, Real) or isinstance(self.comfort_stop_distance, (bool, np.bool_))
-        or not np.isfinite(self.comfort_stop_distance) or not 4.0 <= self.comfort_stop_distance <= STOP_DISTANCE):
+        or not 3.0 <= self.comfort_stop_distance <= STOP_DISTANCE or not np.isfinite(float(self.comfort_stop_distance))):
       raise ValueError('Invalid comfort stop distance')
     object.__setattr__(self, 'comfort_stop_distance', float(self.comfort_stop_distance))
+    if (not isinstance(self.lead_risk_stop_distances, tuple) or len(self.lead_risk_stop_distances) != len(MPC_SOURCES)
+        or any(not isinstance(value, Real) or isinstance(value, (bool, np.bool_))
+               or not 4.0 <= value <= STOP_DISTANCE or not np.isfinite(float(value)) for value in self.lead_risk_stop_distances)):
+      raise ValueError('Invalid lead risk stop distances')
+    object.__setattr__(self, 'lead_risk_stop_distances', tuple(float(value) for value in self.lead_risk_stop_distances))
     for field in ('cruise_speed', 'accel_min', 'accel_max', 'cruise_min_accel', 'model_position', 'model_velocity', 'model_acceleration'):
       values = getattr(self, field)
       if values is not None and not np.isscalar(values):
@@ -181,8 +189,9 @@ def gen_long_model():
   model_braking_priority = SX.sym('model_braking_priority')
   typed_model_mode = SX.sym('typed_model_mode')
   comfort_stop_distance = SX.sym('comfort_stop_distance')
+  risk_stop_distance = SX.sym('risk_stop_distance')
   model.p = vertcat(a_min, a_max, x_obstacle, a_prev, lead_t_follow, lead_danger_factor,
-                   model_v_ref, model_a_ref, model_braking_priority, typed_model_mode, comfort_stop_distance)
+                   model_v_ref, model_a_ref, model_braking_priority, typed_model_mode, comfort_stop_distance, risk_stop_distance)
 
   # dynamics model
   f_expl = vertcat(v_ego, a_ego, j_ego)
@@ -222,12 +231,14 @@ def gen_long_ocp():
   model_braking_priority = ocp.model.p[MODEL_BRAKING_PRIORITY]
   typed_model_mode = ocp.model.p[TYPED_MODEL_MODE]
   comfort_stop_distance = ocp.model.p[COMFORT_STOP_DISTANCE]
+  risk_stop_distance = ocp.model.p[RISK_STOP_DISTANCE]
 
   ocp.cost.yref = np.zeros((COST_DIM, ))
   ocp.cost.yref_e = np.zeros((COST_E_DIM, ))
 
   desired_dist_safe = get_safe_obstacle_distance(v_ego, lead_t_follow)
   desired_dist_comfort = desired_dist_safe - STOP_DISTANCE + comfort_stop_distance
+  desired_dist_risk = desired_dist_safe - STOP_DISTANCE + risk_stop_distance
 
   # The main cost in normal operation is how close you are to the "desired" distance
   # from an obstacle at every timestep. This obstacle can be a lead car
@@ -256,7 +267,7 @@ def gen_long_ocp():
   constraints = vertcat(v_ego,
                         (a_ego - a_min),
                         (a_max - a_ego),
-                        ((x_obstacle - x_ego) - lead_danger_factor * desired_dist_safe) / (v_ego + 10.))
+                        ((x_obstacle - x_ego) - lead_danger_factor * desired_dist_risk) / (v_ego + 10.))
   ocp.model.con_h_expr = constraints
 
   x0 = np.zeros(X_DIM)
@@ -276,7 +287,8 @@ def gen_long_ocp():
   ocp.constraints.D = np.zeros((2, U_DIM))
   ocp.constraints.lg = -np.ones(2)
   ocp.constraints.ug = np.ones(2)
-  ocp.parameter_values = np.array([-1.2, 1.2, 0.0, 0.0, get_T_FOLLOW(), LEAD_DANGER_FACTOR, 0.0, 0.0, 0.0, 0.0, STOP_DISTANCE])
+  ocp.parameter_values = np.array([-1.2, 1.2, 0.0, 0.0, get_T_FOLLOW(), LEAD_DANGER_FACTOR,
+                                   0.0, 0.0, 0.0, 0.0, STOP_DISTANCE, STOP_DISTANCE])
 
 
   # We put all constraint cost weights to 0 and only set them at runtime
@@ -369,6 +381,7 @@ class LongitudinalMpc:
 
     self.params = np.zeros((N+1, PARAM_DIM))
     self.params[:, COMFORT_STOP_DISTANCE] = STOP_DISTANCE
+    self.params[:, RISK_STOP_DISTANCE] = STOP_DISTANCE
     for i in range(N+1):
       self.solver.set(i, 'x', np.zeros(X_DIM))
 
@@ -732,9 +745,11 @@ class LongitudinalMpc:
     """
     if (not isinstance(node, Integral) or isinstance(node, bool) or not 1 <= node <= N
         or states.shape != (N+1, X_DIM) or jerks.shape != (N,)
-        or parameters.ndim != 2 or parameters.shape[0] != N+1 or parameters.shape[1] < 6
+        or parameters.shape != (N+1, PARAM_DIM)
         or not np.all(np.isfinite(states)) or not np.all(np.isfinite(jerks))
-        or not np.all(np.isfinite(parameters[:, [0, 1, 2, 4, 5]]))):
+        or not np.all(np.isfinite(parameters[:, [0, 1, 2, 4, 5, RISK_STOP_DISTANCE]]))
+        or np.any(parameters[:, 5] <= 0.0)
+        or np.any(parameters[:, RISK_STOP_DISTANCE] < 4.0) or np.any(parameters[:, RISK_STOP_DISTANCE] > STOP_DISTANCE)):
       return 'invalid_scheduled_rest_trajectory'
     defects = cls.trajectory_dynamics_defects(states, jerks)
     if max(float(np.max(np.abs(defects))), float(np.max(np.abs(states[0] - initial_state)))) > tolerance:
@@ -750,9 +765,11 @@ class LongitudinalMpc:
         or np.any(states[:, 2] > parameters[:, 1] + tolerance)):
       return 'scheduled_rest_acceleration_envelope_violated'
     distance_margin = ((parameters[:, 2] - states[:, 0])
-                       - parameters[:, 5] * get_safe_obstacle_distance(states[:, 1], parameters[:, 4]))
+                       - parameters[:, 5] * (get_safe_obstacle_distance(states[:, 1], parameters[:, 4])
+                                              - STOP_DISTANCE + parameters[:, RISK_STOP_DISTANCE]))
     initial_margin = ((parameters[0, 2] - initial_state[0])
-                      - parameters[0, 5] * get_safe_obstacle_distance(initial_state[1], parameters[0, 4]))
+                      - parameters[0, 5] * (get_safe_obstacle_distance(initial_state[1], parameters[0, 4])
+                                             - STOP_DISTANCE + parameters[0, RISK_STOP_DISTANCE]))
     if initial_margin >= -tolerance * (initial_state[1] + 10.0):
       # Keep the original admission rule when no existing deficit needs recovery.
       if np.any(distance_margin / (states[:, 1] + 10.0) < -tolerance):
@@ -766,12 +783,14 @@ class LongitudinalMpc:
         return 'scheduled_rest_recovery_position_limit_violated'
       # Carry the approach deficit in metres, not the speed-normalized residual.
       # At arrival the accepted rest box represents ideal v=0: the headway term
-      # ranges from factor*STOP_DISTANCE to factor*safe_distance(REST_STATE_TOL).
+      # ranges from factor*risk_stop_distance to that base plus the speed terms
+      # at REST_STATE_TOL, using the same stage base as the native risk row.
       # Test its lower endpoint using the ACTUAL position/obstacle. This changes
       # only a soft preference's precision, never the trajectory, numerical
       # tolerance or raw lead geometry. Real position loss is still counted.
       deficit = np.maximum(0.0, -distance_margin[:node+1])
-      deficit[node] = max(0.0, parameters[node, 5] * STOP_DISTANCE - (parameters[node, 2] - states[node, 0]))
+      deficit[node] = max(0.0, parameters[node, 5] * parameters[node, RISK_STOP_DISTANCE]
+                          - (parameters[node, 2] - states[node, 0]))
       best_previous = np.minimum.accumulate(np.concatenate(([-initial_margin], deficit[:-1])))
       distance_tolerance = tolerance * (initial_state[1] + 10.0)
       if np.any(deficit > best_previous + distance_tolerance):
@@ -820,7 +839,8 @@ class LongitudinalMpc:
       if not reason:
         self.effective_rest_node = node
         self.effective_rest_state = 'constrained'
-        initial_deficit = max(0.0, float(self.params[0, 5] * get_safe_obstacle_distance(self.x0[1], self.params[0, 4])
+        initial_deficit = max(0.0, float(self.params[0, 5] * (get_safe_obstacle_distance(self.x0[1], self.params[0, 4])
+                                                            - STOP_DISTANCE + self.params[0, RISK_STOP_DISTANCE])
                                          - (self.params[0, 2] - self.x0[0])))
         recovering = initial_deficit > arithmetic * (self.x0[1] + 10.0)
         self.diagnostic_rest_goal.update(
@@ -1139,6 +1159,21 @@ class LongitudinalMpc:
     selected = np.argmin(x_obstacles, axis=1)
     comfort_selected = selected
     self.params[:, COMFORT_STOP_DISTANCE] = STOP_DISTANCE
+    self.params[:, RISK_STOP_DISTANCE] = STOP_DISTANCE
+    if reference is not None and any(distance < STOP_DISTANCE for distance in reference.lead_risk_stop_distances):
+      lead_factors = self.params[:, 5]
+      if not np.all(np.isfinite(lead_factors)) or np.any(lead_factors <= 0.0):
+        raise ValueError('Invalid lead danger factor')
+      risk_obstacles = x_obstacles.copy()
+      for obstacle_index, source in enumerate(sources):
+        if source in MPC_SOURCES:
+          distance = reference.lead_risk_stop_distances[MPC_SOURCES.index(source)]
+          risk_obstacles[:, obstacle_index] += lead_factors * (STOP_DISTANCE - distance)
+      # min_i(x_i - factor * base_i) is a separate minimum from the raw
+      # obstacle and comfort minima. Fold only its base into the native row;
+      # p[2] remains the unmodified minimum, and virtual obstacles keep base 6.
+      distance_offset = np.min(risk_obstacles, axis=1) - np.min(x_obstacles, axis=1)
+      self.params[:, RISK_STOP_DISTANCE] = np.clip(STOP_DISTANCE - distance_offset / lead_factors, 4.0, STOP_DISTANCE)
     if reference is not None and reference.comfort_stop_distance < STOP_DISTANCE:
       comfort_obstacles = x_obstacles.copy()
       for obstacle_index, source in enumerate(sources):
@@ -1146,7 +1181,7 @@ class LongitudinalMpc:
           comfort_obstacles[:, obstacle_index] += STOP_DISTANCE - reference.comfort_stop_distance
       comfort_selected = np.argmin(comfort_obstacles, axis=1)
       # Fold the separate comfort minimum into one native cost parameter. The
-      # unchanged p[2] remains the original risk minimum, including raw leads.
+      # unchanged p[2] remains the original raw minimum, including real leads.
       # Virtual cruise/model limits never move: shortening those would invent
       # a distance deficit at rest and alter the requested cruise/model speed.
       distance_offset = np.min(comfort_obstacles, axis=1) - np.min(x_obstacles, axis=1)

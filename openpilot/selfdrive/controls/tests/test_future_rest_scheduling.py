@@ -12,7 +12,7 @@ import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  LEAD_DANGER_FACTOR, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, N, PARAM_DIM, QP_FEASIBILITY_TOL,
+  LEAD_DANGER_FACTOR, MPC_GOAL_INFEASIBLE, MPC_GOAL_UNSATISFIED, N, PARAM_DIM, QP_FEASIBILITY_TOL, RISK_STOP_DISTANCE,
   REST_STATE_TOL, T_IDXS, LongitudinalMpc,
 )
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, MotionReferenceKind
@@ -64,6 +64,7 @@ def short_template_scheduler():
   mpc.params = np.zeros((N+1, PARAM_DIM))
   mpc.params[:, 0], mpc.params[:, 1], mpc.params[:, 2] = ACCEL_MIN, ACCEL_MAX, 1000.0
   mpc.params[:, 4], mpc.params[:, 5] = 1.45, LEAD_DANGER_FACTOR
+  mpc.params[:, RISK_STOP_DISTANCE] = 6.0
   mpc.rest_goal = evidence(stopping_curve(speed, 0.03), speed).rest_goal
   assert mpc.rest_goal.native_node == 1
   mpc.diagnostic_rest_goal = {}
@@ -225,6 +226,7 @@ def test_a_kinematically_valid_primal_cannot_bypass_the_original_soft_constraint
   parameters = np.zeros((N+1, PARAM_DIM))
   parameters[:, 0], parameters[:, 1], parameters[:, 2] = ACCEL_MIN, ACCEL_MAX, 1000.0
   parameters[:, 4], parameters[:, 5] = 1.45, LEAD_DANGER_FACTOR
+  parameters[:, RISK_STOP_DISTANCE] = 6.0
   if constraint == 'acceleration':
     parameters[:, 0] = -3.0
   else:

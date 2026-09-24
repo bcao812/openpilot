@@ -15,7 +15,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  COMFORT_STOP_DISTANCE, N, PARAM_DIM, STOP_DISTANCE, LongitudinalMpc, MpcReference, MPC_INVALID_INPUT, MPC_SOLVER_ERROR,
+  COMFORT_STOP_DISTANCE, RISK_STOP_DISTANCE, N, PARAM_DIM, STOP_DISTANCE, LongitudinalMpc, MpcReference, MPC_INVALID_INPUT, MPC_SOLVER_ERROR,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_observation import PlannerObservation, TRACE_STATUS_COUNTERS
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner, MIN_ALLOW_THROTTLE_SPEED, PitchBiasEstimator
@@ -605,6 +605,7 @@ def test_mpc_failure_reset_preserves_attempted_problem_not_zero_sentinel():
   # all slots independently of the attempted solve's preserved diagnostics.
   expected_reset_parameters = np.zeros((N + 1, PARAM_DIM))
   expected_reset_parameters[:, COMFORT_STOP_DISTANCE] = STOP_DISTANCE
+  expected_reset_parameters[:, RISK_STOP_DISTANCE] = STOP_DISTANCE
   np.testing.assert_array_equal(mpc.params, expected_reset_parameters)
   mpc.reset()
   assert mpc.diagnostic_solve_calls == 1 and mpc.diagnostic_reset_calls == 3
