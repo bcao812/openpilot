@@ -1,5 +1,7 @@
 from openpilot.cereal import log
-from openpilot.common.longitudinal_logging import CHECK_FLAGS, InputSnapshotCache, ObservationRecorder, attach_diagnostics, capture_inputs, is_uint64, logging_enabled
+from openpilot.common.longitudinal_logging import (
+  CHECK_FLAGS, InputSnapshotCache, ObservationRecorder, attach_diagnostics, capture_inputs, is_uint64, logging_enabled,
+)
 
 
 class SelfdriveObservation:
