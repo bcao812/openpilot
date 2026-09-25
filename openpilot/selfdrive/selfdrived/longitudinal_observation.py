@@ -1,5 +1,5 @@
 from openpilot.cereal import log
-from openpilot.common.longitudinal_logging import CHECK_FLAGS, InputSnapshotCache, ObservationRecorder, attach_diagnostics, capture_inputs, is_uint64
+from openpilot.common.longitudinal_logging import CHECK_FLAGS, InputSnapshotCache, ObservationRecorder, attach_diagnostics, capture_inputs, is_uint64, logging_enabled
 
 
 class SelfdriveObservation:
@@ -17,7 +17,9 @@ class SelfdriveObservation:
   @classmethod
   def create(cls, params, params_sp):
     try:
-      return cls(params, params_sp)
+      if not logging_enabled("selfdrived", params, params_sp):
+        return None
+      return cls(params, params_sp, enabled=True)
     except Exception:
       return None
 

@@ -6,7 +6,7 @@ import pytest
 
 from opendbc.car.honda.values import CAR
 from openpilot.cereal import log, messaging
-from openpilot.common.longitudinal_logging import CHECK_FLAGS
+from openpilot.common.longitudinal_logging import CHECK_FLAGS, LOGGING_MARKERS
 from openpilot.selfdrive.controls.lib.control_observation import ControlObservation
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness, serialized
@@ -94,11 +94,16 @@ def test_actual_control_inputs_and_published_command_have_distinct_exact_identit
 
 
 @pytest.mark.parametrize("unified", [False, True])
-def test_automatic_observation_matches_the_vehicle_scope(unified):
+def test_marker_observation_matches_the_vehicle_scope(unified, tmp_path):
   harness = ControlsHarness(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH)
-  observer = ControlObservation.create(harness.control.CP, harness.control.CP_SP)
-  assert observer.recorder.enabled == unified
-  observer.recorder.clock = lambda: harness.now_ns
+  marker = tmp_path / "controlsd_logging"
+  marker.touch()
+  with patch.dict(LOGGING_MARKERS, {"controlsd": marker}):
+    observer = ControlObservation.create(harness.control.CP, harness.control.CP_SP)
+  assert (observer is not None) == unified
+  if observer is not None:
+    assert observer.recorder.enabled
+    observer.recorder.clock = lambda: harness.now_ns
   harness.control.longitudinal_observation = observer
   harness.step()
   diagnostics = harness.control.pm.messages["controlsState"].controlsState.longitudinalDiagnostics
@@ -107,7 +112,7 @@ def test_automatic_observation_matches_the_vehicle_scope(unified):
 
 
 @pytest.mark.parametrize("configuration", ["other_car", "stock_long", "interceptor"])
-def test_automatic_observation_remains_scoped(configuration):
+def test_marker_observation_remains_scoped(configuration, tmp_path):
   harness = ControlsHarness()
   if configuration == "other_car":
     harness.control.CP.carFingerprint = CAR.HONDA_CIVIC
@@ -115,13 +120,28 @@ def test_automatic_observation_remains_scoped(configuration):
     harness.control.CP.openpilotLongitudinalControl = False
   else:
     harness.control.CP_SP.enableGasInterceptor = True
-  assert not ControlObservation.create(harness.control.CP, harness.control.CP_SP).recorder.enabled
+  marker = tmp_path / "controlsd_logging"
+  marker.touch()
+  with patch.dict(LOGGING_MARKERS, {"controlsd": marker}):
+    assert ControlObservation.create(harness.control.CP, harness.control.CP_SP) is None
 
 
 @pytest.mark.parametrize("unified", [False, True])
-def test_on_off_observation_preserves_all_control_fields_across_state_changes(unified):
-  disabled = observed_controls(enabled=False, unified=unified)
-  enabled = observed_controls(unified=unified)
+def test_on_off_observation_preserves_all_control_fields_across_state_changes(unified, tmp_path):
+  if unified:
+    marker = tmp_path / "controlsd_logging"
+    with patch.dict(LOGGING_MARKERS, {"controlsd": marker}):
+      disabled = ControlsHarness()
+      disabled.control.longitudinal_observation = ControlObservation.create(disabled.control.CP, disabled.control.CP_SP)
+      marker.touch()
+      enabled = ControlsHarness()
+      enabled.control.longitudinal_observation = ControlObservation.create(enabled.control.CP, enabled.control.CP_SP)
+    assert disabled.control.longitudinal_observation is None
+    assert enabled.control.longitudinal_observation.recorder.enabled
+    enabled.control.longitudinal_observation.recorder.clock = lambda: enabled.now_ns
+  else:
+    disabled = observed_controls(enabled=False, unified=False)
+    enabled = observed_controls(unified=False)
   scenarios = (
     (10.0, 0.5, False, False, False, 0),
     (0.5, -2.5, True, False, False, 0),

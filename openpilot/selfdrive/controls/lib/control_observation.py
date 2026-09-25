@@ -1,5 +1,5 @@
 from openpilot.cereal import log
-from openpilot.common.longitudinal_logging import CONTROL_INPUTS, ObservationRecorder, attach_diagnostics, capture_inputs, is_uint64
+from openpilot.common.longitudinal_logging import CONTROL_INPUTS, ObservationRecorder, attach_diagnostics, capture_inputs, is_uint64, logging_enabled
 
 
 def _stored_identity(name, timestamp):
@@ -56,7 +56,9 @@ class ControlObservation:
   @classmethod
   def create(cls, params, params_sp):
     try:
-      return cls(params, params_sp)
+      if not logging_enabled("controlsd", params, params_sp):
+        return None
+      return cls(params, params_sp, enabled=True)
     except Exception:
       return None
 

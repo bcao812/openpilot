@@ -4,8 +4,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from opendbc.car.honda.values import CAR
 from openpilot.cereal import custom, log
-from openpilot.common.longitudinal_logging import CHECK_FLAGS
+from openpilot.common.longitudinal_logging import CHECK_FLAGS, LOGGING_MARKERS
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.controls.lib.control_observation import ControlObservation
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
@@ -37,8 +38,12 @@ def observed_selfdrive(control_state=None, *, enabled=True):
     harness.step()
     control_state = harness.control.pm.messages["controlsState"]
   daemon, car_state = selfdrive_event_harness(control_state)
+  daemon.CP.carFingerprint = CAR.HONDA_ACCORD
   daemon.CP_SP = custom.CarParamsSP.new_message()
-  daemon.longitudinal_observation = SelfdriveObservation(daemon.CP, daemon.CP_SP, enabled=enabled, clock=lambda: 20_000_000_000)
+  daemon.longitudinal_observation = (SelfdriveObservation.create(daemon.CP, daemon.CP_SP) if enabled is None else
+                                   SelfdriveObservation(daemon.CP, daemon.CP_SP, enabled=enabled))
+  if daemon.longitudinal_observation is not None:
+    daemon.longitudinal_observation.recorder.clock = lambda: 20_000_000_000
   daemon.active = True
   daemon.state_machine = StateMachine()
   daemon.state_machine.state = State.enabled
@@ -238,18 +243,27 @@ def test_skipped_decision_branches_are_unknown_instead_of_reported_healthy(early
 
 @pytest.mark.parametrize("failure", [None, "begin", "motion_check", "motion_comm_issue_added", "state_machine_input",
                                     "state_machine_output", "publish"])
-def test_observer_enable_disable_and_failure_preserve_actual_events_states_alerts_and_publications(failure):
+def test_observer_enable_disable_and_failure_preserve_actual_events_states_alerts_and_publications(failure, tmp_path):
   control = ControlsHarness()
   control.plan.motionIntent.valid = False
   control.step()
-  baseline, raw = observed_selfdrive(control.control.pm.messages["controlsState"], enabled=False)
-  candidate, _ = observed_selfdrive(control.control.pm.messages["controlsState"])
+  marker = tmp_path / "selfdrived_logging"
+  with patch.dict(LOGGING_MARKERS, {"selfdrived": marker}):
+    baseline, raw = observed_selfdrive(control.control.pm.messages["controlsState"], enabled=None)
+    marker.touch()
+    candidate, _ = observed_selfdrive(control.control.pm.messages["controlsState"], enabled=None)
+  assert baseline.longitudinal_observation is None
+  assert candidate.longitudinal_observation.recorder.enabled
   with ExitStack() as stack:
     if failure is not None:
       stack.enter_context(patch.object(candidate.longitudinal_observation, failure, side_effect=RuntimeError("observer")))
     for _ in range(3):
-      step(baseline, serialized(raw))
-      step(candidate, serialized(raw))
+      with patch("openpilot.selfdrive.selfdrived.longitudinal_observation.capture_inputs") as inputs:
+        assert step(baseline, serialized(raw)).context.version == 0
+      inputs.assert_not_called()
+      diagnostics = step(candidate, serialized(raw))
+      if failure is None:
+        assert diagnostics.context.version == 1
       assert payload(baseline) == payload(candidate)
       assert baseline.events.names == candidate.events.names
       assert baseline.state_machine.state == candidate.state_machine.state

@@ -186,10 +186,33 @@ Keep the earlier implementation record as historical evidence.
 
 ## Longitudinal observation version 1
 
-Routine observation follows the supported platform capability. For Accord
-openpilot longitudinal without a gas interceptor, it appends diagnostics to
-existing `longitudinalPlan`, `controlsState` and `carOutput` messages. No new
-high-frequency service or marker is required for this lightweight layer.
+Routine observation is **off by default**. Each process requires its own regular
+marker file as well as the supported platform capability (Accord openpilot
+longitudinal without a gas interceptor):
+
+| Process | Startup marker | Diagnostic field |
+|---|---|---|
+| `plannerd` | `/data/plannerd_longitudinal_logging` | `longitudinalPlan.diagnostics` |
+| `controlsd` | `/data/controlsd_longitudinal_logging` | `controlsState.longitudinalDiagnostics` |
+| `card` | `/data/card_longitudinal_logging` | `carOutput.longitudinalDiagnostics` |
+| `selfdrived` | `/data/selfdrived_longitudinal_logging` | `selfdriveState.longitudinalDiagnostics` |
+
+Create the selected marker to enable that process's observation, or remove it
+to disable observation, then restart the corresponding process (normally at the
+next ignition cycle). Marker contents are ignored; directories do not enable
+observation. No marker is created automatically. A missing marker or failed
+marker check leaves observation disabled. Each marker is checked only at observer creation,
+not on the control loop; changing it does not toggle an already-running observer.
+
+With observation disabled, its factory returns `None` before constructing the
+observer, input cache or source/configuration manifest. The existing `observe()`
+fast path skips input snapshots, CAN digests and diagnostic serialization. Small
+call-site argument preparation and counters shared with other observation paths
+can remain. The functional messages and control protocol fields are still
+published. Explicit `enabled`/`diagnostics` arguments remain available to tests
+and replay harnesses without depending on the device's marker files.
+
+Enabled observation appends to the existing messages; it does not add a service.
 Record **rlog**, not just qlog; analysis needs the underlying model and control
 messages as well as their identities.
 
@@ -202,6 +225,8 @@ The routine chain records:
 - CarD's immutable previous-apply receipt, the latest-pedal authority decision,
   consumed CC/CS identities, controller frame and exact `sendcan` identity,
   ordered payload digest and count.
+- Selfdrived's input identities, events, state-machine transitions, soft-disable
+  timer and motion/force-deceleration health observations.
 
 `controlsState` still publishes before `carControl`. CarD still publishes the
 previous apply's `carOutput` before publishing the next CS and applying the next
@@ -225,7 +250,11 @@ are not loaded-code/firmware attestation and do not cover all later Params reads
 No raw parameter store or secret values are dumped.
 
 The existing `/data/longitudinal_trace` marker remains a startup-only opt-in for
-the detailed planner transport. Legacy schema-1/2 recordings remain readable;
+the detailed planner transport, independently of the routine markers above.
+Detailed samples and native/parking snapshots can still be captured without
+routine planner observation, but its session/sequence/identity and completion
+context are then unavailable. Enable the planner routine marker too when that
+correlation is required. Legacy schema-1/2 recordings remain readable;
 new motion-stage samples use schema 3 for mode and braking-only evidence.
 `detail_schema=1` adds aligned companion snapshots with native MPC time/state,
 reference, constraint and trajectory arrays. Unpublished or failed attempts

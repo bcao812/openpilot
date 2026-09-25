@@ -15,6 +15,13 @@ LOGGING_VERSION = 1
 ANALYSIS_VERSION = 1
 SOURCE_MANIFEST_VERSION = 2
 UINT64_MAX = (1 << 64) - 1
+# Read once when each observer is created. No marker is created automatically.
+LOGGING_MARKERS = {
+  "planner": "/data/plannerd_longitudinal_logging",
+  "controlsd": "/data/controlsd_longitudinal_logging",
+  "card": "/data/card_longitudinal_logging",
+  "selfdrived": "/data/selfdrived_longitudinal_logging",
+}
 CHECK_FLAGS = {"valid": 1, "alive": 2, "freq_ok": 4, "seen": 8, "updated": 16}
 PLANNER_INPUTS = (
   "carState", "radarState", "modelV2", "controlsState", "carControl", "selfdriveState", "vehicleParameters",
@@ -125,6 +132,19 @@ def logging_supported(params, params_sp):
     return (params.carFingerprint == CAR.HONDA_ACCORD and params.openpilotLongitudinalControl
             and not params_sp.enableGasInterceptor)
   except Exception:
+    return False
+
+
+def logging_enabled(producer, params=None, params_sp=None, *, enabled=None):
+  """Resolve startup opt-in; explicit overrides remain available to tests/replays."""
+  if enabled is not None:
+    return bool(enabled)
+  marker = LOGGING_MARKERS.get(producer)
+  if marker is None:
+    return False
+  try:
+    return Path(marker).is_file() and logging_supported(params, params_sp)
+  except OSError:
     return False
 
 
@@ -293,7 +313,7 @@ def can_digest(frames):
 
 class ObservationRecorder:
   def __init__(self, producer, params=None, params_sp=None, *, enabled=None, clock=None, manifest_interval=1000):
-    self.enabled = logging_supported(params, params_sp) if enabled is None else bool(enabled)
+    self.enabled = logging_enabled(producer, params, params_sp, enabled=enabled)
     self.producer = producer
     self.clock = time.monotonic_ns if clock is None else clock
     self.sequence = 0

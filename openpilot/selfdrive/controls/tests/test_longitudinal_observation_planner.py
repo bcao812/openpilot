@@ -11,7 +11,7 @@ import pytest
 from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR
 from openpilot.cereal import messaging
-from openpilot.common.longitudinal_logging import CHECK_FLAGS, PLANNER_INPUTS
+from openpilot.common.longitudinal_logging import CHECK_FLAGS, LOGGING_MARKERS, PLANNER_INPUTS
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
@@ -29,7 +29,7 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP
 
 
-def make_planner(*, diagnostics=None, speed=20.0, trace=None, platform=CAR.HONDA_ACCORD, stock=False, interceptor=False):
+def make_planner(*, diagnostics=True, speed=20.0, trace=None, platform=CAR.HONDA_ACCORD, stock=False, interceptor=False):
   params = CarInterface.get_non_essential_params(platform)
   params.openpilotLongitudinalControl = not stock
   extension = CarInterface.get_non_essential_params_sp(params, platform)
@@ -167,8 +167,27 @@ def set_field(state, path, value):
   setattr(target, fields[-1], value)
 
 
-def test_regular_logging_defaults_on_for_supported_vehicle():
-  planner = make_planner()
+def test_regular_logging_defaults_off_without_marker(tmp_path):
+  with patch.dict(LOGGING_MARKERS, {"planner": tmp_path / "missing"}), \
+       patch("openpilot.common.longitudinal_logging.source_manifest") as manifest, \
+       patch("openpilot.selfdrive.controls.lib.longitudinal_observation.capture_inputs") as inputs, \
+       patch.object(PlannerObservation, "passive_snapshot") as snapshot:
+    planner = make_planner(diagnostics=None)
+    state = make_state()
+    update_at_fixture_clock(planner, state)
+    assert planner.observation is None
+    assert planner.observation_attempt is None and planner.observation_result is None
+    assert diagnostics(planner, state).context.version == 0
+  manifest.assert_not_called()
+  inputs.assert_not_called()
+  snapshot.assert_not_called()
+
+
+def test_regular_logging_enabled_by_marker_for_supported_vehicle(tmp_path):
+  marker = tmp_path / "planner_logging"
+  marker.touch()
+  with patch.dict(LOGGING_MARKERS, {"planner": marker}):
+    planner = make_planner(diagnostics=None)
   state = make_state()
   update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
@@ -194,15 +213,19 @@ def test_regular_logging_defaults_on_for_supported_vehicle():
   (CAR.HONDA_ACCORD, True, False),
   (CAR.HONDA_ACCORD, False, True),
 ])
-def test_regular_logging_respects_vehicle_scope(platform, stock, interceptor):
-  planner = make_planner(platform=platform, stock=stock, interceptor=interceptor)
-  assert not planner.observation.recorder.enabled
+def test_regular_logging_respects_vehicle_scope(platform, stock, interceptor, tmp_path):
+  marker = tmp_path / "planner_logging"
+  marker.touch()
+  with patch.dict(LOGGING_MARKERS, {"planner": marker}):
+    planner = make_planner(diagnostics=None, platform=platform, stock=stock, interceptor=interceptor)
+  assert planner.observation is None
 
 
 def test_explicit_disabled_observation_has_no_wire_context():
   planner = make_planner(diagnostics=False)
   state = make_state()
   update_at_fixture_clock(planner, state)
+  assert planner.observation is None
   assert planner.observation_attempt is None
   assert planner.observation_result is None
   assert diagnostics(planner, state).context.version == 0
@@ -463,9 +486,17 @@ def test_standalone_sp_publication_keeps_unknown_parent_as_zero():
 
 @pytest.mark.parametrize("unified", [False, True])
 @pytest.mark.parametrize("experimental", [False, True])
-def test_logging_on_off_preserves_control_messages_and_state(unified, experimental):
-  baseline = make_planner(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH, diagnostics=False)
-  observed = make_planner(platform=CAR.HONDA_ACCORD if unified else CAR.HONDA_CIVIC_BOSCH, diagnostics=True)
+def test_logging_on_off_preserves_control_messages_and_state(unified, experimental, tmp_path):
+  if unified:
+    marker = tmp_path / "planner_logging"
+    with patch.dict(LOGGING_MARKERS, {"planner": marker}):
+      baseline = make_planner(diagnostics=None)
+      marker.touch()
+      observed = make_planner(diagnostics=None)
+  else:
+    baseline = make_planner(platform=CAR.HONDA_CIVIC_BOSCH, diagnostics=False)
+    observed = make_planner(platform=CAR.HONDA_CIVIC_BOSCH, diagnostics=True)
+  assert baseline.observation is None and observed.observation.recorder.enabled
   for frame in range(30):
     speed = max(0.0, 20.0 - frame * 0.5)
     state = make_state(speed=speed, experimental=experimental, target=18.0)
@@ -480,7 +511,10 @@ def test_logging_on_off_preserves_control_messages_and_state(unified, experiment
     observed.update(state, now_ns=now_ns)
     assert baseline.pitch_bias.diagnostic_learn_calls == observed.pitch_bias.diagnostic_learn_calls == frame + 1
     assert control_snapshot(baseline) == control_snapshot(observed)
-    assert control_messages(publish(baseline, state)) == control_messages(publish(observed, state))
+    baseline_output, observed_output = publish(baseline, state), publish(observed, state)
+    assert control_messages(baseline_output) == control_messages(observed_output)
+    assert baseline_output.messages["longitudinalPlan"].longitudinalPlan.diagnostics.context.version == 0
+    assert observed_output.messages["longitudinalPlan"].longitudinalPlan.diagnostics.context.version == 1
 
 
 @pytest.mark.parametrize("method", ["begin", "record", "mpc_started", "finish", "publish"])

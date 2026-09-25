@@ -1,7 +1,7 @@
 from types import MappingProxyType
 
 from opendbc.car.structs import car
-from openpilot.common.longitudinal_logging import ObservationRecorder, attach_diagnostics, can_digest, capture_inputs, is_uint64, local_input
+from openpilot.common.longitudinal_logging import ObservationRecorder, attach_diagnostics, can_digest, capture_inputs, is_uint64, local_input, logging_enabled
 
 
 class ActuationObservation:
@@ -19,7 +19,9 @@ class ActuationObservation:
   @classmethod
   def create(cls, params, params_sp):
     try:
-      return cls(params, params_sp)
+      if not logging_enabled("card", params, params_sp):
+        return None
+      return cls(params, params_sp, enabled=True)
     except Exception:
       return None
 

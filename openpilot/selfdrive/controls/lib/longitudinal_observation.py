@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 
 from openpilot.cereal import log
-from openpilot.common.longitudinal_logging import ANALYSIS_VERSION, ObservationRecorder, PLANNER_INPUTS, attach_diagnostics, capture_inputs, is_uint64
+from openpilot.common.longitudinal_logging import ANALYSIS_VERSION, ObservationRecorder, PLANNER_INPUTS, attach_diagnostics, capture_inputs, is_uint64, logging_enabled
 
 
 TRACE_STATUS_COUNTERS = {
@@ -45,7 +45,9 @@ class PlannerObservation:
   @classmethod
   def create(cls, params, params_sp, *, enabled=None):
     try:
-      return cls(params, params_sp, enabled=enabled)
+      if not logging_enabled("planner", params, params_sp, enabled=enabled):
+        return None
+      return cls(params, params_sp, enabled=True)
     except Exception:
       return None
 

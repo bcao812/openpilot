@@ -11,8 +11,8 @@ from unittest.mock import Mock, patch
 import warnings
 
 from openpilot.common.longitudinal_logging import (
-  CHECK_FLAGS, InputSnapshotCache, ObservationRecorder, UINT64_MAX, attach_diagnostics, can_digest, capture_inputs, configuration_digest, is_uint64,
-  local_input, observe,
+  CHECK_FLAGS, LOGGING_MARKERS, InputSnapshotCache, ObservationRecorder, UINT64_MAX, attach_diagnostics, can_digest, capture_inputs,
+  configuration_digest, is_uint64, local_input, logging_enabled, observe,
 )
 from openpilot.common import longitudinal_logging
 
@@ -555,6 +555,77 @@ class TestLongitudinalLogging(unittest.TestCase):
     self.assertIsNone(recorder.finish(None))
     self.assertEqual(recorder.sequence, 0)
     self.assertEqual(recorder.manifest, "")
+
+  def test_missing_markers_skip_identity_hashing_and_clock_work(self):
+    from opendbc.car.honda.values import CAR
+
+    params = SimpleNamespace(carFingerprint=CAR.HONDA_ACCORD, openpilotLongitudinalControl=True)
+    params_sp = SimpleNamespace(enableGasInterceptor=False)
+    clock = Mock(side_effect=AssertionError("disabled recorder read the clock"))
+    with tempfile.TemporaryDirectory() as directory, \
+         patch.dict(LOGGING_MARKERS, {producer: Path(directory) / producer for producer in LOGGING_MARKERS}), \
+         patch.object(longitudinal_logging, "source_manifest") as source, \
+         patch.object(longitudinal_logging, "configuration_digest") as configuration, \
+         patch.object(longitudinal_logging.secrets, "randbits") as session:
+      for producer in LOGGING_MARKERS:
+        recorder = ObservationRecorder(producer, params, params_sp, clock=clock)
+        self.assertFalse(recorder.enabled)
+        self.assertIsNone(recorder.begin())
+        self.assertIsNone(recorder.finish(None))
+        self.assertEqual((recorder.sequence, recorder.session, recorder.errors), (0, 0, 0))
+        self.assertEqual((recorder.manifest, recorder.identity), ("", ""))
+      self.assertEqual(list(Path(directory).iterdir()), [])
+    source.assert_not_called()
+    configuration.assert_not_called()
+    session.assert_not_called()
+    clock.assert_not_called()
+
+  def test_markers_enable_only_the_matching_producer_and_require_a_file(self):
+    from opendbc.car.honda.values import CAR
+
+    params = SimpleNamespace(carFingerprint=CAR.HONDA_ACCORD, openpilotLongitudinalControl=True)
+    params_sp = SimpleNamespace(enableGasInterceptor=False)
+    self.assertEqual(set(LOGGING_MARKERS), {"planner", "controlsd", "card", "selfdrived"})
+    self.assertEqual(len(set(LOGGING_MARKERS.values())), 4)
+    with tempfile.TemporaryDirectory() as directory:
+      markers = {producer: Path(directory) / producer for producer in LOGGING_MARKERS}
+      with patch.dict(LOGGING_MARKERS, markers):
+        for selected, marker in markers.items():
+          with self.subTest(producer=selected):
+            marker.mkdir()
+            self.assertFalse(logging_enabled(selected, params, params_sp))
+            marker.rmdir()
+            marker.touch()
+            self.assertEqual({producer for producer in markers if logging_enabled(producer, params, params_sp)}, {selected})
+            self.assertFalse(logging_enabled("unknown_producer", params, params_sp))
+            marker.unlink()
+
+  def test_marker_lookup_failure_leaves_logging_disabled(self):
+    from opendbc.car.honda.values import CAR
+
+    params = SimpleNamespace(carFingerprint=CAR.HONDA_ACCORD, openpilotLongitudinalControl=True)
+    params_sp = SimpleNamespace(enableGasInterceptor=False)
+    with patch.object(Path, "is_file", side_effect=PermissionError("marker inaccessible")), \
+         patch.object(longitudinal_logging, "source_manifest") as source:
+      for producer in LOGGING_MARKERS:
+        self.assertFalse(logging_enabled(producer, params, params_sp))
+        recorder = ObservationRecorder(producer, params, params_sp)
+        self.assertFalse(recorder.enabled)
+        self.assertEqual(recorder.errors, 0)
+    source.assert_not_called()
+
+  def test_explicit_override_preserves_fixture_and_replay_without_marker_or_vehicle(self):
+    source = {"missing_source_files": [], "imported_native_module_files": {}, "missing_explicit_native_library_files": []}
+    with patch.object(Path, "is_file", side_effect=AssertionError("explicit override read marker")) as marker, \
+         patch.object(longitudinal_logging, "logging_supported", side_effect=AssertionError("explicit override checked vehicle")) as scope, \
+         patch.object(longitudinal_logging, "source_manifest", return_value=source):
+      for enabled in (False, True):
+        self.assertEqual(logging_enabled("fixture", enabled=enabled), enabled)
+        recorder = ObservationRecorder("fixture", enabled=enabled, clock=lambda: 100)
+        self.assertEqual(recorder.enabled, enabled)
+        self.assertEqual(recorder.begin() is not None, enabled)
+    marker.assert_not_called()
+    scope.assert_not_called()
 
   def test_missing_config_is_explicit(self):
     with patch("openpilot.common.longitudinal_logging.source_manifest", return_value={

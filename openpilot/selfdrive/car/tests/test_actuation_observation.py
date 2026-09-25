@@ -8,7 +8,7 @@ from opendbc.car import structs
 from opendbc.car.honda.values import CAR
 from opendbc.car.structs import car
 from openpilot.cereal import custom, log, messaging
-from openpilot.common.longitudinal_logging import CHECK_FLAGS, can_digest
+from openpilot.common.longitudinal_logging import CHECK_FLAGS, LOGGING_MARKERS, can_digest
 from openpilot.selfdrive.car.actuation_observation import ActuationObservation
 from openpilot.selfdrive.car.card import Car
 from openpilot.selfdrive.car.helpers import convert_to_capnp
@@ -68,8 +68,8 @@ class CardHarness:
       CC=self.chain.controller if native else SimpleNamespace(frame=0),
       update=lambda _: (self.state, structs.CarStateSP()), apply=self.apply, init=Mock(),
     )
-    card.longitudinal_observation = ActuationObservation(card.CP, card.CP_SP_capnp, enabled=enabled,
-                                                       clock=lambda: self.now_ns)
+    card.longitudinal_observation = (ActuationObservation.create(card.CP, card.CP_SP_capnp) if enabled is None else
+                                     ActuationObservation(card.CP, card.CP_SP_capnp, enabled=enabled, clock=lambda: self.now_ns))
     self.card = card
 
   def apply(self, command, extension, timestamp):
@@ -106,8 +106,9 @@ class CardHarness:
       offset += 1_003
       return self.now_ns + offset
 
-    self.card.longitudinal_observation.recorder.clock = (observation_clock if observation_clock is not None else
-                                                       clock if distinct_clock else lambda: int((self.now_ns / 1e9) * 1e9))
+    if self.card.longitudinal_observation is not None:
+      self.card.longitudinal_observation.recorder.clock = (observation_clock if observation_clock is not None else
+                                                         clock if distinct_clock else lambda: int((self.now_ns / 1e9) * 1e9))
     with patch("openpilot.selfdrive.car.card.REPLAY", False), \
          patch("time.monotonic", side_effect=(lambda: clock() / 1e9) if distinct_clock else lambda: self.now_ns / 1e9), \
          patch("time.monotonic_ns", side_effect=clock if distinct_clock else lambda: self.now_ns), \
@@ -128,6 +129,21 @@ def message_payloads(harness):
       payload[service].pop("longitudinalDiagnostics", None)
     payloads.append((service, payload))
   return payloads
+
+
+def test_missing_marker_skips_receipts_snapshots_and_can_digest(tmp_path):
+  with patch.dict(LOGGING_MARKERS, {"card": tmp_path / "missing"}), \
+       patch("openpilot.common.longitudinal_logging.source_manifest") as manifest, \
+       patch("openpilot.selfdrive.car.actuation_observation.capture_inputs") as inputs, \
+       patch("openpilot.selfdrive.car.actuation_observation.can_digest") as digest:
+    harness = CardHarness(enabled=None)
+    assert harness.card.longitudinal_observation is None
+    for _ in range(2):
+      assert harness.step().context.version == 0
+    assert len(harness.requests) == len(harness.sent_frames) == 2
+  manifest.assert_not_called()
+  inputs.assert_not_called()
+  digest.assert_not_called()
 
 
 def test_card_publishes_previous_immutable_apply_receipt_with_exact_consumed_identities():
@@ -545,9 +561,14 @@ def test_reconstructed_observer_restarts_sequences_in_a_distinct_session_without
 
 @pytest.mark.parametrize("pedal", ["gasPressed", "brakePressed"])
 @pytest.mark.parametrize("edge_parity", [0, 1])
-def test_logging_on_off_preserves_actual_honda_100hz_apply_and_50hz_acc_can(pedal, edge_parity):
-  baseline = CardHarness(enabled=False, native=True)
-  enabled = CardHarness(native=True)
+def test_logging_on_off_preserves_actual_honda_100hz_apply_and_50hz_acc_can(pedal, edge_parity, tmp_path):
+  marker = tmp_path / "card_logging"
+  with patch.dict(LOGGING_MARKERS, {"card": marker}):
+    baseline = CardHarness(enabled=None, native=True)
+    marker.touch()
+    enabled = CardHarness(enabled=None, native=True)
+  assert baseline.card.longitudinal_observation is None
+  assert enabled.card.longitudinal_observation.recorder.enabled
   for frame in range(100):
     for harness in (baseline, enabled):
       if frame < 20 + edge_parity:
@@ -566,6 +587,7 @@ def test_logging_on_off_preserves_actual_honda_100hz_apply_and_50hz_acc_can(peda
   assert baseline.requests == enabled.requests
   assert baseline.sent_frames == enabled.sent_frames
   assert message_payloads(baseline) == message_payloads(enabled)
+  assert all(event.carOutput.longitudinalDiagnostics.context.version == 0 for event in baseline.outputs)
   acc_address = enabled.chain.acc_parser.dbc.name_to_msg["ACC_CONTROL"].address
   assert sum(any(address == acc_address for address, _, _ in frames) for frames in enabled.sent_frames) == 50
   diagnostics = [event.carOutput.longitudinalDiagnostics for event in enabled.outputs]
