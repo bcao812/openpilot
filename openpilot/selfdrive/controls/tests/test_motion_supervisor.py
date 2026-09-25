@@ -266,11 +266,169 @@ def test_fresh_moving_lead_confirms_before_anti_creep_can_stop_a_follow():
 def test_discontinuous_moving_lead_samples_do_not_spend_the_unobserved_gap(period):
   harness = MotionHarness()
   intent = MotionIntent(moving_lead=True)
+  first_stop = None
   for frame in range(70):
     new_input = frame % period == 0
-    harness.step(intent, v_ego=1.0, a_target=-0.2, new_plan=new_input, new_model=new_input)
+    stopped = harness.step(intent, v_ego=1.0, a_target=-0.2, new_plan=new_input, new_model=new_input)
+    if stopped and first_stop is None:
+      first_stop = (frame + 1) * DT_CTRL
     assert harness.supervisor.moving_lead_t <= DT_MDL
+  assert first_stop == pytest.approx(CREEP_STOP_T + DT_CTRL)
   assert harness.supervisor.reasons & StopReason.CREEP
+
+
+def _pending_moving_follow():
+  """Late continuous evidence has already deferred an otherwise due stop."""
+  harness = MotionHarness()
+  for frame in range(60):
+    new_input = frame % 5 == 0
+    assert not harness.step(MotionIntent(moving_lead=frame >= 25), v_ego=0.7, a_target=-0.2,
+                            new_plan=new_input, new_model=new_input)
+  assert harness.supervisor.phase == MotionPhase.TRACK
+  assert DT_MDL < harness.supervisor.moving_lead_t < CREEP_STOP_T
+  assert harness.supervisor.creep_t > CREEP_STOP_T
+  return harness
+
+
+@pytest.mark.parametrize('reason', [StopReason.NONE, StopReason.MPC, StopReason.E2E, StopReason.CRUISE,
+                                  StopReason.CLOSE_LEAD, StopReason.FORCE_DECEL])
+def test_pending_moving_follow_revocation_restores_stop_on_the_same_tick(reason):
+  harness = _pending_moving_follow()
+  owner = harness.supervisor
+  previous_total, previous_distance = owner.creep_total_t, owner.creep_distance
+  # NONE withdraws moving eligibility; all other rows retain the moving flag
+  # while a new raw stop cause independently takes priority.
+  assert harness.step(MotionIntent(moving_lead=bool(reason), reasons=reason), v_ego=0.7, a_target=-0.2)
+  assert owner.phase == MotionPhase.APPROACH
+  assert owner.reasons & StopReason.CREEP
+  assert owner.reasons & reason == reason
+  assert owner.moving_lead_t == 0.0
+  assert owner.creep_total_t == pytest.approx(previous_total + DT_CTRL)
+  assert owner.creep_distance == pytest.approx(previous_distance + 0.7 * DT_CTRL)
+
+
+def test_a_first_moving_sample_cannot_defer_an_already_due_progress_stop():
+  harness = MotionHarness()
+  for frame in range(round(CREEP_STOP_T / DT_CTRL)):
+    new_input = frame % 5 == 0
+    assert not harness.step(v_ego=0.7, a_target=-0.2, new_plan=new_input, new_model=new_input)
+  assert harness.step(MotionIntent(moving_lead=True), v_ego=0.7, a_target=-0.2)
+  assert harness.supervisor.moving_lead_t == pytest.approx(DT_MDL)
+  assert harness.supervisor.reasons & StopReason.CREEP
+  assert harness.supervisor.creep_total_t == pytest.approx(CREEP_STOP_T + DT_CTRL)
+
+
+def test_a_producer_gap_ends_an_effective_pending_follow_on_the_recovery_tick():
+  harness = _pending_moving_follow()
+  owner = harness.supervisor
+  intent = MotionIntent(moving_lead=True)
+  assert not harness.step(intent, v_ego=0.7, a_target=-0.2)
+  publication_ns = harness.plan_time_ns
+  pending_t = owner.moving_lead_t
+  assert DT_MDL < pending_t < CREEP_STOP_T
+
+  # Silence lasts 150 ms from the last pair to recovery. Its cached samples
+  # remain transport-valid, but cannot add confirmation or clear the budget.
+  silence_ns = 150_000_000
+  assert 2 * DT_MDL * 1e9 < silence_ns < min(PLAN_LEASE_NS, MODEL_LEASE_NS)
+  for _ in range(round(silence_ns / CONTROL_INTERVAL_NS) - 1):
+    assert not harness.step(intent, v_ego=0.7, a_target=-0.2, new_plan=False, new_model=False)
+    assert owner.phase == MotionPhase.TRACK
+    assert owner.reasons == StopReason.NONE
+    assert not owner.degraded
+    assert owner.moving_lead_t == pending_t
+  previous_total = owner.creep_total_t
+
+  assert harness.step(intent, v_ego=0.7, a_target=-0.2)
+  assert harness.plan_time_ns == harness.model_time_ns == publication_ns + silence_ns
+  assert not owner.degraded
+  assert owner.moving_lead_t == pytest.approx(DT_MDL)
+  assert owner.phase == MotionPhase.APPROACH
+  assert owner.reasons & StopReason.CREEP
+  assert owner.creep_total_t == pytest.approx(previous_total + DT_CTRL)
+
+
+def test_pending_moving_follow_cannot_renew_the_total_creep_deadline():
+  harness = MotionHarness()
+  frames = round(CREEP_MAX_T / DT_CTRL)
+  for frame in range(frames):
+    # Continuous evidence first defers the progress stop. Then producer
+    # publications pause while the last pair remains within both leases;
+    # cached evidence cannot finish confirmation or renew the total budget.
+    new_input = frame <= 75 and frame % 5 == 0
+    stopped = harness.step(MotionIntent(moving_lead=frame >= 40), v_ego=0.7, a_target=-0.2,
+                           new_plan=new_input, new_model=new_input)
+    assert stopped == (frame == frames - 1)
+    assert not harness.supervisor.degraded
+    assert harness.supervisor.creep_total_t == pytest.approx((frame + 1) * DT_CTRL)
+    if frame >= 50:
+      assert DT_MDL < harness.supervisor.moving_lead_t < CREEP_STOP_T
+      assert harness.supervisor.creep_t == pytest.approx((frame + 1) * DT_CTRL)
+      assert harness.supervisor.creep_distance == pytest.approx(0.7 * (frame + 1) * DT_CTRL)
+  assert harness.supervisor.phase == MotionPhase.APPROACH
+  assert harness.supervisor.reasons & StopReason.CREEP
+
+
+def test_confirmation_completing_at_the_total_deadline_keeps_existing_follow_precedence():
+  harness = MotionHarness()
+  frames = round(CREEP_MAX_T / DT_CTRL)
+  for frame in range(frames):
+    # A late pair at frame 45, followed by 40 ms and 100 ms intervals,
+    # crosses the confirmation threshold exactly on the total-deadline tick.
+    new_input = (frame <= 45 and frame % 5 == 0) or (frame >= 49 and (frame - 49) % 10 == 0)
+    assert not harness.step(MotionIntent(moving_lead=frame >= 45), v_ego=0.7, a_target=-0.2,
+                            new_plan=new_input, new_model=new_input)
+    if 50 <= frame < frames - 1:
+      assert DT_MDL < harness.supervisor.moving_lead_t < CREEP_STOP_T
+      assert harness.supervisor.creep_total_t == pytest.approx((frame + 1) * DT_CTRL)
+  assert harness.supervisor.phase == MotionPhase.TRACK
+  assert harness.supervisor.moving_lead_t == pytest.approx(CREEP_STOP_T)
+  assert harness.supervisor.creep_t == harness.supervisor.creep_total_t == harness.supervisor.creep_distance == 0.0
+
+
+def test_pending_moving_follow_does_not_apply_to_an_uncompleted_release():
+  harness = MotionHarness()
+  assert harness.step(MotionIntent(reasons=StopReason.MPC), v_ego=0.7, a_target=-0.4)
+  assert not harness.step(MotionIntent(release_allowed=True), v_ego=0.7, a_target=STOP_RELEASE_ACCEL)
+  assert harness.supervisor.phase == MotionPhase.RELEASE
+  for frame in range(round(CREEP_STOP_T / DT_CTRL) + 1):
+    new_input = frame % 5 == 0
+    stopped = harness.step(MotionIntent(moving_lead=frame >= 25), v_ego=0.7, a_target=-0.2,
+                           new_plan=new_input, new_model=new_input)
+    assert stopped == (frame == 50)
+  assert DT_MDL < harness.supervisor.moving_lead_t < CREEP_STOP_T
+  assert harness.supervisor.phase == MotionPhase.APPROACH
+  assert harness.supervisor.reasons & StopReason.CREEP
+
+
+def test_actual_hold_discards_a_previously_effective_pending_follow():
+  harness = _pending_moving_follow()
+  assert harness.step(MotionIntent(reasons=StopReason.MPC, moving_lead=True), v_ego=0.0, standstill=True, a_target=-0.2)
+  assert harness.supervisor.phase == MotionPhase.HOLD
+  for _ in range(60):
+    assert harness.step(MotionIntent(moving_lead=True), v_ego=0.0, standstill=True, a_target=0.15)
+    assert harness.supervisor.phase == MotionPhase.HOLD
+    assert harness.supervisor.reasons & StopReason.HOLD
+    assert harness.supervisor.moving_lead_t == 0.0
+
+
+@pytest.mark.parametrize('fault', ['invalid_plan', 'expired_producers', 'solver_error'])
+def test_pending_moving_follow_does_not_survive_an_input_fault(fault):
+  harness = _pending_moving_follow()
+  if fault == 'expired_producers':
+    # Keep both recorded identities; the source failure is expiry rather
+    # than an artificial backward timestamp or a control-clock jump.
+    for _ in range(round(MODEL_LEASE_NS / CONTROL_INTERVAL_NS) + 1):
+      harness.step(MotionIntent(moving_lead=True), v_ego=0.7, a_target=-0.2, new_plan=False, new_model=False)
+      if harness.supervisor.degraded:
+        break
+  else:
+    options = {'plan_valid': False} if fault == 'invalid_plan' else {'solver_status': 1}
+    harness.step(MotionIntent(moving_lead=True), v_ego=0.7, a_target=-0.2, **options)
+  assert harness.supervisor.degraded
+  assert harness.supervisor.reasons & StopReason.INVALID
+  assert harness.supervisor.moving_lead_t == 0.0
+  assert harness.supervisor.creep_t == harness.supervisor.creep_total_t == harness.supervisor.creep_distance == 0.0
 
 
 def test_first_departure_sample_does_not_credit_the_preceding_unqualified_gap():

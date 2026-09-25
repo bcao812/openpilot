@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openpilot.common.realtime import DT_CTRL
+from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_SPEED, CREEP_STOP_T, STOP_SPEED
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionPhase, MotionReferenceKind, MotionSupervisor, StopReason
 
@@ -398,14 +398,26 @@ def test_pending_moving_lead_keeps_confirmation_and_confirmed_follow_clears_dist
 
 
 @pytest.mark.parametrize('evidence', ['late_moving_lead', 'forward_release'])
-def test_pending_movement_exempts_only_the_added_distance_trigger(evidence):
+def test_late_moving_confirmation_has_a_bounded_opportunity_but_forward_release_does_not(evidence):
   def intent(frame):
     if evidence == 'late_moving_lead':
       return MotionIntent(moving_lead=frame >= 25)
     return MotionIntent(reference_kind=MotionReferenceKind.FORWARD, release_allowed=True)
-  _, rows = _progress_window(lambda frame: 0.7 + 0.004 * frame, intent_for_frame=intent)
-  first = next(row for row in rows if row['stop'])
-  assert first['elapsed'] == pytest.approx(CREEP_STOP_T + DT_CTRL)
+  _, rows = _progress_window(lambda frame: 0.7 + 0.004 * frame, frames=80, intent_for_frame=intent)
+  if evidence == 'late_moving_lead':
+    assert not any(row['stop'] for row in rows)
+    # This intentionally changes the old late-moving policy: qualified,
+    # continuous confirmation may finish after the first progress deadline.
+    # Nothing renews the accumulated time or distance while it is pending.
+    assert DT_MDL < rows[50]['moving'] < CREEP_STOP_T
+    for row in rows[50:70]:
+      assert row['window'] == row['total'] == pytest.approx(row['elapsed'])
+      assert row['distance'] > 0.0
+    assert rows[70]['moving'] == pytest.approx(CREEP_STOP_T)
+    assert rows[70]['window'] == rows[70]['distance'] == rows[70]['total'] == 0.0
+  else:
+    first = next(row for row in rows if row['stop'])
+    assert first['elapsed'] == pytest.approx(CREEP_STOP_T + DT_CTRL)
 
 
 @pytest.mark.parametrize('profile', ['growing', 'prompt_deceleration'])

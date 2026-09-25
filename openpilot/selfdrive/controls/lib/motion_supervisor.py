@@ -428,7 +428,8 @@ class MotionSupervisor:
       return min(CREEP_STOP_T, previous + step)
     return previous
 
-  def _update_creep(self, v_ego, a_target, allowed, elapsed, *, movement_evidence=False, fresh_input=False):
+  def _update_creep(self, v_ego, a_target, allowed, elapsed, *, movement_evidence=False, fresh_input=False,
+                    pending_moving_confirmation=False):
     if not allowed or not (0.0 <= v_ego < CREEP_SPEED and a_target < CREEP_ACCEL):
       self._reset_creep()
       return False
@@ -465,7 +466,12 @@ class MotionSupervisor:
       return True
     if self.creep_t > CREEP_STOP_T + 1e-9:
       if (self.creep_v - v_ego) * CREEP_FINISH_T < v_ego * CREEP_STOP_T:
-        return True
+        # A moving lead can regain qualification partway through this window.
+        # Let its independently advancing observations finish confirmation
+        # before adding this derived stop. Keep the elapsed time and distance:
+        # revoked evidence immediately restores the check, and an unfinished
+        # confirmation still reaches the original total deadline above.
+        return not pending_moving_confirmation
       self.creep_t = 0.0
       self.creep_distance = 0.0
       self._creep_progress_v = None
@@ -599,8 +605,14 @@ class MotionSupervisor:
     release_eligible = intent.release_allowed and not raw_reasons and stopped_phase
     self.release_lead_t = self._confirmation_time(self.release_lead_t, release_eligible, new_input, plan_step, model_step)
     following_moving_lead = self.moving_lead_t >= CREEP_STOP_T - 1e-9
+    # A first observation (also the restart value after a producer gap) is not
+    # continuous evidence. This only defers the rolling progress check; it
+    # cannot release an existing stop or use departure permission as a proxy.
+    pending_moving_confirmation = (self.phase == MotionPhase.TRACK and moving_eligible
+                                   and DT_MDL < self.moving_lead_t < CREEP_STOP_T)
     creep_stop = self._update_creep(v_ego, a_target, intent.allow_creep and not following_moving_lead, elapsed_ns / 1e9,
-                                    movement_evidence=bool(intent.moving_lead or intent.release_allowed), fresh_input=new_input)
+                                    movement_evidence=bool(intent.moving_lead or intent.release_allowed), fresh_input=new_input,
+                                    pending_moving_confirmation=pending_moving_confirmation)
 
     reasons = raw_reasons
     if creep_stop:
