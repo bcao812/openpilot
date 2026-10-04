@@ -173,7 +173,7 @@ class TestHondaRadarObserver(unittest.TestCase):
             message.logMonoTime = now
             setattr(message, service, sm[service])
             pm.send(service, message)
-          pm.send('can', can_message(now, scan_frames(index=index % 16, life=1 + 2 * index)))
+          pm.send('can', can_message(now, scan_frames(index=index % 16, life=1 + 2 * index)).as_builder())
           index += 1
           candidate = messaging.recv_one(subscriber)
           if candidate is not None and candidate.hondaRadarObservations.active and candidate.hondaRadarObservations.observations:
