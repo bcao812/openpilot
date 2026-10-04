@@ -5,13 +5,22 @@ import uuid
 from opendbc.car.honda.bosch_a_radar import BoschARadarObserver, MAX_AGE_NS
 from opendbc.car.honda.hondacan import CanBus
 from openpilot.cereal import messaging
+from openpilot.common.realtime import drop_realtime, set_core_affinity
 from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, ObserverSettings, scope_state
 
 PUBLISH_PERIOD_NS = 50_000_000
 HEARTBEAT_NS = 1_000_000_000
 MAX_ENVELOPES = 64
 MAX_FRAMES_PER_ENVELOPE = 512
-DECODER_VERSION = 'bosch-a-observe-1'
+DECODER_VERSION = 'bosch-a-observe-2'
+
+
+def configure_observer_process():
+  # Diagnostic work stays in the ordinary small-core pool. CPU3 serves CAN/SPI,
+  # CPU4 the 100 Hz control chain; neither is a decoder worker. These helpers
+  # are no-ops on PC, preserving the host resource runner's CPU reservation.
+  drop_realtime()
+  set_core_affinity([0, 1, 2])
 
 
 class HondaRadarObserver:
@@ -79,6 +88,7 @@ class HondaRadarObserver:
 
 
 def main():
+  configure_observer_process()
   # Imports with runtime side effects belong only in the managed process.
   from opendbc.car.structs import car
   from openpilot.cereal import custom

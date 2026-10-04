@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 from opendbc.car.structs import car
 from opendbc.car.honda.tests.test_bosch_a_observer import START, scan_frames
@@ -12,7 +13,7 @@ from opendbc.car.honda.values import HondaFlags
 from openpilot.cereal import custom, messaging
 from openpilot.common.params import Params, ParamKeyFlag
 from openpilot.common.prefix import OpenpilotPrefix
-from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
+from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver, configure_observer_process
 from openpilot.selfdrive.car.honda_radar_observer_config import ObserverSettings, SERVICE, observer_requested
 
 SETTINGS = ObserverSettings(1, True, True, True)
@@ -50,6 +51,21 @@ def can_message(t, frames):
 
 
 class TestHondaRadarObserver(unittest.TestCase):
+  def test_observer_scheduling_excludes_control_cores_without_changing_host_affinity(self):
+    from openpilot.common import realtime
+    with patch.object(realtime, 'PC', False), patch.object(os, 'sched_setaffinity') as affinity, \
+         patch.object(os, 'sched_setscheduler') as scheduler:
+      configure_observer_process()
+      affinity.assert_called_once_with(0, [0, 1, 2])
+      scheduler.assert_called_once_with(0, os.SCHED_OTHER, os.sched_param(0))
+    before = os.sched_getaffinity(0)
+    with patch.object(realtime, 'PC', True), patch.object(os, 'sched_setaffinity') as affinity, \
+         patch.object(os, 'sched_setscheduler') as scheduler:
+      configure_observer_process()
+      affinity.assert_not_called()
+      scheduler.assert_not_called()
+    self.assertEqual(os.sched_getaffinity(0), before)
+
   def test_persistent_typed_settings_and_fail_closed_modes(self):
     cp, _ = configuration()
     with TemporaryDirectory() as directory:
@@ -102,6 +118,27 @@ class TestHondaRadarObserver(unittest.TestCase):
     self.assertFalse(observer.decoder.events)
     msg = observer.update([], state(START), SETTINGS, START + 900_000_000)
     self.assertEqual(msg.hondaRadarObservations.reason, 'scopeStale')
+
+  def test_can_socket_batch_boundaries_preserve_observations(self):
+    envelopes = [can_message(START + i * 1_000_000, [frame]) for i, frame in enumerate(scan_frames())]
+    expected = None
+    for cuts in ((), (1, 2, 3, 4), (4,), (1, 3), (2, 4)):
+      observer = HondaRadarObserver(*configuration(), session_id='batch-fixture')
+      events = []
+      left = 0
+      for right in (*cuts, 5):
+        t = envelopes[right - 1].logMonoTime + 1
+        msg = observer.update(envelopes[left:right], state(t), SETTINGS, t)
+        if msg is not None:
+          events.extend(msg.hondaRadarObservations.to_dict()['observations'])
+        left = right
+      msg = observer.update([], state(START + 60_000_000), SETTINGS, START + 60_000_000)
+      if msg is not None:
+        events.extend(msg.hondaRadarObservations.to_dict()['observations'])
+      if expected is None:
+        expected = events
+      self.assertEqual(events, expected)
+    self.assertEqual(len(expected), 2)
 
   def test_entry_boundary_does_not_expand_control_scope(self):
     for settings in (ObserverSettings(1, False, True, True), ObserverSettings(1, True, False, True),

@@ -86,7 +86,9 @@ class HondaRadarOverlay:
       base_y = max(rect.y, min(y - height, rect.y + rect.height - height))
       box = rl.Rectangle(x, base_y, width, height)
       # Bounded, deterministic label separation. Slot coordinates stay unchanged.
-      for row in range(16):
+      # At an edge, clamping collapses half of the alternating candidates. Search
+      # far enough in either direction to place all 16 labels on a C3 viewport.
+      for row in range(32):
         shift = ((row + 1) // 2) * (height + 2) * (-1 if row % 2 else 1)
         candidate = rl.Rectangle(x, max(rect.y, min(base_y + shift, rect.y + rect.height - height)), width, height)
         if not any(rl.check_collision_recs(candidate, old) for old in boxes):
@@ -94,6 +96,11 @@ class HondaRadarOverlay:
           break
       boxes.append(box)
       color = rl.Color(255, 215, 90, 255 if frame_ns - point.time_ns <= 80_000_000 else 140)
+      if abs(box.y - base_y) > 1:
+        # Preserve the actual projected location when text is moved for spacing.
+        endpoint = rl.Vector2(max(box.x, min(position[0], box.x + box.width)),
+                              max(box.y, min(position[1], box.y + box.height)))
+        rl.draw_line_v(rl.Vector2(*position), endpoint, color)
       rl.draw_rectangle_rec(box, rl.Color(0, 0, 0, 130))
       rl.draw_text_ex(self.font, point.text, rl.Vector2(box.x + 6, box.y), 32, 0, color)
     rl.draw_text_ex(self.font, tr('Radar: slot distance (m), uncalibrated'),

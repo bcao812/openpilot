@@ -30,6 +30,8 @@ class RadarLabelPoint:
 class RadarOverlayState:
   def __init__(self):
     self.history = [deque(maxlen=16) for _ in range(16)]
+    self.position_sequence = [0] * 16
+    self.invalid_before_ns = [0] * 16
     self.session = ''
     self.sequence = 0
     self.dropped = 0
@@ -51,6 +53,9 @@ class RadarOverlayState:
     dropped = _read(_read(body, 'counters', {}), 'dropped', 0)
     if session != self.session or sequence != self.sequence + 1 or dropped != self.dropped:
       self.clear()
+    if session != self.session:
+      self.position_sequence = [0] * 16
+      self.invalid_before_ns = [0] * 16
     self.session, self.sequence, self.dropped = session, sequence, dropped
     self.message_ns = message_ns
     scope = _read(body, 'scope', {})
@@ -67,26 +72,31 @@ class RadarOverlayState:
       history = self.history[slot]
       if _read(event, 'positionValid', False):
         sequence = _read(event, 'positionSeq')
-        if history and sequence == history[-1].sequence:
-          continue  # a velocity-only update needs no geometry decoding
+        if sequence <= self.position_sequence[slot]:
+          continue  # AUX cannot restore an invalidated/cleared position sample
         t = _read(event, 'positionMonoTime')
         d, y = _read(event, 'dRel'), _read(event, 'yRel')
-        if not (0 < t <= message_ns and math.isfinite(d) and math.isfinite(y) and d > 0):
+        if not (self.invalid_before_ns[slot] < t <= message_ns and math.isfinite(d) and math.isfinite(y) and d > 0):
           continue
         point = RadarLabelPoint(slot, d, y, t, sequence, _read(event, 'generation'))
         if history and t < history[-1].time_ns:
           continue
         if history and point.generation != history[-1].generation:
           history.clear()
+        self.position_sequence[slot] = sequence
         history.append(point)
-      elif history:
+      else:
         reason = _read(event, 'reason')
-        if reason == 'expired' and _read(event, 'generation') == history[-1].generation:
-          history.clear()
-        elif reason in ('invalidGeometry', 'conflictingFrame'):
-          t = max((_read(f, 'monoTime') for f in _read(event, 'frames', [])), default=0)
-          if t >= history[-1].time_ns:
-            history.clear()
+        if reason == 'conflictingFrame' and not _read(event, 'positionSeq', 0):
+          # A never-completed scan cannot identify a published position to
+          # retract. Previously accepted positions retain their own 200 ms TTL.
+          continue
+        if reason in ('expired', 'invalidGeometry', 'conflictingFrame'):
+          t = _read(event, 'positionMonoTime', 0)
+          if 0 < t <= message_ns:
+            self.invalid_before_ns[slot] = max(self.invalid_before_ns[slot], t)
+            while history and history[0].time_ns <= t:
+              history.popleft()
 
   def points(self, frame_ns, now_ns):
     if (not self.active or not 0 < frame_ns <= now_ns or now_ns - frame_ns > MESSAGE_MAX_AGE_NS

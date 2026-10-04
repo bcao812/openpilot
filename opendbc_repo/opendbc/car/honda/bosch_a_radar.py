@@ -48,9 +48,11 @@ class Scan:
   first_ns: int
   frames: dict[int, RadarFrame] = field(default_factory=dict)
   position_seq: int = 0
+  position_ns: int = 0
   velocity_seq: int = 0
   generation: int = 0
-  rejected: bool = False
+  rejection: str = ''
+  reported_frames: int = 0
 
 
 @dataclass
@@ -97,15 +99,25 @@ class BoschARadarObserver:
     for part in sorted(scan.frames):
       raw.update(scan.frames[part].values)
     frames = [dict(part=p, address=f.address, monoTime=f.time_ns, frameInEnvelope=f.index) for p, f in sorted(scan.frames.items())]
+    scan.reported_frames = len(scan.frames)
+    # Keep the original position time even if a conflicting F0 replaces its raw
+    # bytes. A late conflict invalidates that observation, not a newer scan.
+    t_pos = scan.position_ns or (scan.frames[0].time_ns if 0 in scan.frames else 0)
+    t_vel = scan.frames[4].time_ns if 4 in scan.frames else 0
     return dict(slot=slot, frameIndex=scan.index, frameMask=sum(1 << p for p in scan.frames), generation=scan.generation,
-                positionSeq=scan.position_seq, velocitySeq=scan.velocity_seq, positionMonoTime=0, velocityMonoTime=0,
+                positionSeq=scan.position_seq, velocitySeq=scan.velocity_seq, positionMonoTime=t_pos, velocityMonoTime=t_vel,
                 dRel=0.0, yRel=0.0, vRel=0.0, positionValid=False, velocityValid=False,
                 reason=reason, raw=raw, frames=frames)
 
   def _publish_scan(self, slot_num, scan):
     """A late AUX may add velocity, but never creates a second position sample."""
     slot = self.slots[slot_num]
-    if scan.rejected or not all(p in scan.frames for p in range(4)):
+    if not all(p in scan.frames for p in range(4)):
+      return
+    if scan.rejection:
+      # Empty/invalid slots carry useful AUX quality and sentinel evidence too.
+      # They stay invalid; only the raw snapshot and frame references are filled.
+      self._emit(self._event(slot_num, scan, scan.rejection))
       return
     raw = {k: v for p in range(4) for k, v in scan.frames[p].values.items()}
     t_pos = scan.frames[0].time_ns
@@ -113,20 +125,20 @@ class BoschARadarObserver:
       signature = tuple(scan.frames[p].data for p in range(4))
       if signature == slot.last_signature:
         self.counts['duplicate'] += 1
-        scan.rejected = True
+        scan.rejection = 'duplicateScan'
         self._emit(self._event(slot_num, scan, 'duplicateScan'))
         return
       if slot.last_index is not None and not slot.expired:
         delta = (scan.index - slot.last_index) & 15
         if delta == 0 or delta > 8 or t_pos <= slot.last_position_ns:
           self.counts['late'] += 1
-          scan.rejected = True
+          scan.rejection = 'oldScan'
           self._emit(self._event(slot_num, scan, 'oldScan'))
           return
       valid = (raw['statusRaw'] != 15 and raw['rangeRaw'] != 4095 and raw['azimuthRaw'] != 2047
                and raw['lifecycleRaw'] != 4095 and 1 <= raw['oemTrackId'] <= 63 and raw['rangeRaw'] * 0.05712 - 3.0 > 0)
       if not valid:
-        scan.rejected = True
+        scan.rejection = 'invalidGeometry'
         slot.expired = True
         self._emit(self._event(slot_num, scan, 'invalidGeometry'))
         return
@@ -138,6 +150,7 @@ class BoschARadarObserver:
         slot.generation = self.generation
       self.sequence += 1
       scan.position_seq = self.sequence
+      scan.position_ns = t_pos
       scan.generation = slot.generation
       slot.last_index, slot.last_life, slot.last_id = scan.index, raw['lifecycleRaw'], raw['oemTrackId']
       slot.last_position_ns = t_pos
@@ -197,8 +210,10 @@ class BoschARadarObserver:
           self.counts['duplicate'] += 1
         else:
           self.counts['conflict'] += 1
-          scan.rejected = True
+          scan.rejection = 'conflictingFrame'
           scan.frames[part] = incoming
+          if scan.position_seq and scan.position_ns == slot.last_position_ns:
+            slot.expired = True
           self._emit(self._event(slot_num, scan, 'conflictingFrame'))
         continue
       scan.frames[part] = incoming
@@ -208,9 +223,11 @@ class BoschARadarObserver:
 
   def _retire(self, slot_num, idx):
     scan = self.slots[slot_num].scans.pop(idx)
-    if not scan.position_seq and not scan.rejected:
+    if not scan.position_seq and not scan.rejection:
       self.counts['incomplete'] += 1
       self._emit(self._event(slot_num, scan, 'incomplete'))
+    elif scan.rejection and len(scan.frames) > scan.reported_frames:
+      self._emit(self._event(slot_num, scan, scan.rejection))
 
   def advance(self, now_ns):
     """Must be called on idle ticks too: absence of CAN cannot freeze validity."""

@@ -40,6 +40,27 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
         self.assertEqual(len(points), 1)
         self.assertEqual(points[0].text, '0 25.6')
 
+  def test_uncompleted_scan_conflict_cannot_retract_another_scan(self):
+    observer = HondaRadarObserver(*configuration(), session_id='fixture')
+    overlay = RadarOverlayState()
+    for t, incoming in ((START, [scan_frames()[1]]),
+                        (START + 60_000_000, scan_frames(index=1, life=3, distance=500)),
+                        (START + 120_000_000, [scan_frames()[0], scan_frames(distance=1001)[0]])):
+      msg = observer.update([can_message(t, incoming)], state(t), SETTINGS, t + 1)
+      overlay.ingest(msg.hondaRadarObservations.as_reader(), msg.logMonoTime, t + 1)
+    self.assertEqual(overlay.points(START + 120_000_000, START + 120_000_001)[0].text, '0 25.6')
+
+  def test_current_scan_conflict_retracts_only_until_a_new_observation(self):
+    observer = HondaRadarObserver(*configuration(), session_id='fixture')
+    overlay = RadarOverlayState()
+    for t, incoming, expected in ((START, scan_frames(), True),
+                                  (START + 60_000_000, [scan_frames(velocity=737)[4]], False),
+                                  (START + 120_000_000, scan_frames(index=1, life=3, distance=500), True)):
+      msg = observer.update([can_message(t, incoming)], state(t), SETTINGS, t + 1)
+      overlay.ingest(msg.hondaRadarObservations.as_reader(), msg.logMonoTime, t + 1)
+      self.assertEqual(bool(overlay.points(t, t + 1)), expected)
+    self.assertEqual(overlay.points(START + 120_000_000, START + 120_000_001)[0].text, '0 25.6')
+
   def test_format_exactly_slot_space_one_decimal(self):
     for slot, distance, expected in ((0, 8.0, '0 8.0'), (3, 24.74, '3 24.7'), (3, 24.76, '3 24.8'), (15, 120, '15 120.0')):
       self.assertEqual(RadarLabelPoint(slot, distance, 0, START, 1, 1).text, expected)
@@ -119,7 +140,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
          patch.object(renderer, 'measure_text_cached', return_value=SimpleNamespace(x=120, y=32)), \
-         patch.object(rl, 'draw_rectangle_rec'), patch.object(rl, 'draw_text_ex') as draw:
+         patch.object(rl, 'draw_line_v'), patch.object(rl, 'draw_rectangle_rec'), patch.object(rl, 'draw_text_ex') as draw:
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       self.assertEqual(draw.call_args_list[0].args[1], '0 54.1')
       self.assertEqual(draw.call_count, 2)
@@ -153,10 +174,12 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
          patch.object(renderer, 'measure_text_cached', return_value=SimpleNamespace(x=120, y=32)), \
-         patch.object(rl, 'draw_rectangle_rec') as rectangles, patch.object(rl, 'draw_text_ex') as text:
+         patch.object(rl, 'draw_line_v') as lines, patch.object(rl, 'draw_rectangle_rec') as rectangles, \
+         patch.object(rl, 'draw_text_ex') as text:
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
     boxes = [call.args[0] for call in rectangles.call_args_list]
     self.assertEqual(len(boxes), 16)
+    self.assertGreater(lines.call_count, 0)
     self.assertEqual([call.args[1] for call in text.call_args_list[:-1]], [f'{slot} 54.1' for slot in range(16)])
     for i, box in enumerate(boxes):
       self.assertTrue(0 <= box.x <= 1280 - box.width and 0 <= box.y <= 720 - box.height)

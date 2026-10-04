@@ -153,6 +153,14 @@ class TestBoschAObserver(unittest.TestCase):
         self.assertAlmostEqual(events[-1]['dRel'], 54.12)
         self.assertEqual(events[-1]['vRel'], -2.0)
 
+  def test_same_oem_id_in_two_slots_remains_two_observations(self):
+    decoder = BoschARadarObserver(2)
+    decoder.feed(START, scan_frames(slot=0, oem_id=5) + scan_frames(slot=1, oem_id=5))
+    observations = [e for e in decoder.drain() if e['velocityValid']]
+    self.assertEqual([e['slot'] for e in observations], [0, 1])
+    self.assertEqual([e['raw']['oemTrackId'] for e in observations], [5, 5])
+    self.assertNotEqual(observations[0]['generation'], observations[1]['generation'])
+
   def test_rejected_geometry_retains_late_aux_raw_fields(self):
     for slot in range(16):
       with self.subTest(slot=slot):
