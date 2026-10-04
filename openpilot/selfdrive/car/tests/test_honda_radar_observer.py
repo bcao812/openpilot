@@ -14,7 +14,8 @@ SETTINGS = ObserverSettings(1, True, True, True)
 
 
 def configuration():
-  return (car.CarParams.new_message(carFingerprint='HONDA_ACCORD', flags=int(HondaFlags.BOSCH), openpilotLongitudinalControl=True),
+  return (car.CarParams.new_message(carFingerprint='HONDA_ACCORD', flags=int(HondaFlags.BOSCH), openpilotLongitudinalControl=True,
+                                    safetyConfigs=[{'safetyModel': car.CarParams.SafetyModel.hondaBosch}]),
           custom.CarParamsSP.new_message())
 
 
@@ -115,6 +116,17 @@ class TestHondaRadarObserver(unittest.TestCase):
     for i in range(1, 20):
       self.assertIsNone(observer.update([], state(START + i), SETTINGS, START + i))
     self.assertIsNotNone(observer.update([], state(START + 1_000_000_000), SETTINGS, START + 1_000_000_000))
+
+  def test_bus_offset_is_derived_from_real_safety_configuration(self):
+    cp, cp_sp = configuration()
+    cp.safetyConfigs = [{'safetyModel': car.CarParams.SafetyModel.noOutput}, {'safetyModel': car.CarParams.SafetyModel.hondaBosch}]
+    observer = HondaRadarObserver(cp, cp_sp)
+    self.assertEqual(observer.decoder.bus, 6)
+    msg = observer.update([can_message(START, scan_frames(bus=6))], state(START), SETTINGS, START + 1)
+    self.assertTrue(msg.hondaRadarObservations.observations[-1].positionValid)
+    cp.safetyConfigs = []
+    with self.assertRaises(ValueError):
+      HondaRadarObserver(cp, cp_sp)
 
   def test_optional_process_health_exemption_is_narrow(self):
     import ast

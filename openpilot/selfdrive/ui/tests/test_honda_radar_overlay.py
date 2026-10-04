@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import unittest
 
-from openpilot.common.test import OpenpilotTestCase
+from openpilot.selfdrive.ui.tests.test_sunnylink_removed import HeadlessUITestCase
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import SETTINGS, START, can_message, configuration, scan_frames, state
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarLabelPoint, RadarOverlayState, project_radar_point
@@ -14,7 +14,7 @@ def sample():
   return msg.hondaRadarObservations.to_dict()
 
 
-class TestHondaRadarOverlay(OpenpilotTestCase):
+class TestHondaRadarOverlay(HeadlessUITestCase):
   def test_format_exactly_slot_space_one_decimal(self):
     for slot, distance, expected in ((0, 8.0, '0 8.0'), (3, 24.74, '3 24.7'), (3, 24.76, '3 24.8'), (15, 120, '15 120.0')):
       self.assertEqual(RadarLabelPoint(slot, distance, 0, START, 1, 1).text, expected)

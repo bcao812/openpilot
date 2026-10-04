@@ -17,7 +17,10 @@ DECODER_VERSION = 'bosch-a-observe-1'
 class HondaRadarObserver:
   def __init__(self, cp, cp_sp, session_id=None):
     self.cp, self.cp_sp = cp, cp_sp
-    self.decoder = BoschARadarObserver(CanBus(cp).camera)
+    bus = CanBus(cp).camera
+    if not 0 <= bus <= 255:
+      raise ValueError('Invalid CAN mapping: CarParams must include safetyConfigs')
+    self.decoder = BoschARadarObserver(bus)
     self.session_id = session_id or uuid.uuid4().hex
     self.active = False
     self.sequence = 0
