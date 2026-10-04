@@ -30,7 +30,7 @@ class TestHondaRadarOverlay(OpenpilotTestCase):
 
   def test_scope_exit_session_change_and_missing_batches_clear_history(self):
     data = sample()
-    for update in (dict(active=False), dict(sessionId='new', observations=[]), dict(sequence=3, observations=[])):
+    for update in ({'active': False}, {'sessionId': 'new', 'observations': []}, {'sequence': 3, 'observations': []}):
       overlay = RadarOverlayState()
       overlay.ingest(data, START + 1, START + 1)
       overlay.ingest(dict(data, sequence=2, **update) if 'sequence' not in update else dict(data, **update), START + 2, START + 2)

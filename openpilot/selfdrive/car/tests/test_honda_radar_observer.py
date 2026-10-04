@@ -38,7 +38,7 @@ def state(now_ns, mode='acc'):
 def can_message(t, frames):
   msg = messaging.new_message('can', len(frames))
   msg.logMonoTime = t
-  msg.can = [dict(address=a, dat=d, src=s) for a, d, s in frames]
+  msg.can = [{'address': a, 'dat': d, 'src': s} for a, d, s in frames]
   return msg.as_reader()
 
 

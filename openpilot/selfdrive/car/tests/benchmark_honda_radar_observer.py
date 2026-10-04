@@ -26,7 +26,7 @@ def measure(slots, seconds):
   observer = HondaRadarObserver(*configuration(), session_id='benchmark')
   overlay = RadarOverlayState()
   compressor = zstandard.ZstdCompressor(level=3).compressobj()
-  totals = dict(raw_bytes=0, compressed_bytes=0, messages=0, observations=0)
+  totals = {'raw_bytes': 0, 'compressed_bytes': 0, 'messages': 0, 'observations': 0}
   costs = {name: [] for name in ('update', 'serialize', 'compress', 'overlay_select_project')}
   started_cpu = time.process_time_ns()
   measured_cpu_ns = 0
@@ -78,10 +78,10 @@ def main():
   args = parser.parse_args()
   if not 1 <= args.seconds <= 60:
     parser.error('Use 1..60 simulated seconds for this bounded fixture.')
-  results = dict(method='synthetic-15Hz-host-v1', zstd_level=3, cases=[measure(n, args.seconds) for n in (0, 1, 16)],
-                 limitations=['Synthetic fields; real compression depends on traffic.',
-                              'Excludes CAN socket receive, loggerd queueing/fsync and actual GPU text drawing.',
-                              'Host measurements are not C3 CPU/load measurements.'])
+  results = {'method': 'synthetic-15Hz-host-v1', 'zstd_level': 3, 'cases': [measure(n, args.seconds) for n in (0, 1, 16)],
+             'limitations': ['Synthetic fields; real compression depends on traffic.',
+                             'Excludes CAN socket receive, loggerd queueing/fsync and actual GPU text drawing.',
+                             'Host measurements are not C3 CPU/load measurements.']}
   args.output.parent.mkdir(parents=True, exist_ok=True)
   args.output.write_text(json.dumps(results, indent=2) + '\n')
   print(json.dumps(results, indent=2))

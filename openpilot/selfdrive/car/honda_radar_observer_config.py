@@ -35,11 +35,11 @@ def observer_requested(started, params, cp):
 
 def scope_state(cp, cp_sp, settings, sm, now_ns):
   dec = sm['longitudinalPlanSP'].dec
-  scope = dict(alphaLong=bool(settings.alpha and cp.openpilotLongitudinalControl), experimentalSetting=settings.experimental,
-               decSetting=settings.dec, experimentalActive=bool(sm['selfdriveState'].experimentalMode),
-               decEnabled=bool(dec.enabled), decActive=bool(dec.active), decMode=int(dec.state.raw),
-               selfdriveMonoTime=sm.logMonoTime['selfdriveState'], planMonoTime=sm.logMonoTime['longitudinalPlanSP'],
-               longActive=bool(sm['carControl'].longActive))
+  scope = {'alphaLong': bool(settings.alpha and cp.openpilotLongitudinalControl), 'experimentalSetting': settings.experimental,
+           'decSetting': settings.dec, 'experimentalActive': bool(sm['selfdriveState'].experimentalMode),
+           'decEnabled': bool(dec.enabled), 'decActive': bool(dec.active), 'decMode': int(dec.state.raw),
+           'selfdriveMonoTime': sm.logMonoTime['selfdriveState'], 'planMonoTime': sm.logMonoTime['longitudinalPlanSP'],
+           'longActive': bool(sm['carControl'].longActive)}
   if not settings.requested(cp) or cp_sp.enableGasInterceptor:
     return False, 'configuration', scope
   for name in ('selfdriveState', 'longitudinalPlanSP'):
