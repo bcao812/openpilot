@@ -24,7 +24,8 @@ def percentiles(values):
           for k, p in (('p50_us', .5), ('p95_us', .95), ('p99_us', .99))}
 
 
-def measure(slots, seconds, level):
+def measure(slots, seconds, level, valid_slots=None):
+  valid_slots = slots if valid_slots is None else valid_slots
   observer = HondaRadarObserver(*configuration(), session_id='benchmark')
   overlay = RadarOverlayState()
   compressor = zstandard.ZstdCompressor(level=level).compressobj()
@@ -35,7 +36,9 @@ def measure(slots, seconds, level):
   for i in range(seconds * 15):
     t = START + i * 66_666_667
     frames = [f for s in range(slots) for f in scan_frames(s, index=i % 16, life=1 + 2 * i,
-                                                        distance=400 + s * 170 + ((i * 7 + s * 13) % 200), velocity=700 + i % 150)]
+                                                        distance=400 + s * 170 + ((i * 7 + s * 13) % 200) if s < valid_slots else 4095,
+                                                        oem_id=s + 1 if s < valid_slots else 0,
+                                                        velocity=700 + i % 150 if s < valid_slots else 2046)]
     envelopes = [can_message(t, frames)] if frames else []
     sm = state(t, 'acc' if i % 60 < 30 else 'blended')
     cpu_begin = time.thread_time_ns()
@@ -64,7 +67,7 @@ def measure(slots, seconds, level):
   cpu_begin = time.thread_time_ns()
   totals['compressed_bytes'] += len(compressor.flush())
   measured_cpu_ns += time.thread_time_ns() - cpu_begin
-  return dict(slots=slots, simulated_seconds=seconds, **totals,
+  return dict(slots=slots, valid_slots=valid_slots, scenario=f'frames_{slots}_valid_{valid_slots}', simulated_seconds=seconds, **totals,
               raw_mib_per_hour=totals['raw_bytes'] / seconds * 3600 / 2**20,
               compressed_mib_per_hour=totals['compressed_bytes'] / seconds * 3600 / 2**20,
               host_observer_and_zstd_one_core_percent=measured_cpu_ns / (seconds * 1e9) * 100,
@@ -82,7 +85,9 @@ def main():
     parser.error('Use 1..60 simulated seconds for this bounded fixture.')
   header = (Path(BASEDIR) / 'openpilot/system/loggerd/logger.h').read_text()
   level = int(re.search(r'LOG_COMPRESSION_LEVEL\s*=\s*(\d+)', header).group(1))
-  results = {'method': 'synthetic-15Hz-host-v1', 'zstd_level': level, 'cases': [measure(n, args.seconds, level) for n in (0, 1, 16)],
+  cases = [(0, 0), (1, 1), (16, 0), (16, 1), (16, 16)]
+  results = {'method': 'synthetic-15Hz-host-v2', 'zstd_level': level,
+             'cases': [measure(total, args.seconds, level, valid) for total, valid in cases],
              'limitations': ['Synthetic fields; real compression depends on traffic.',
                              'Excludes CAN socket receive, loggerd queueing/fsync and actual GPU text drawing.',
                              'Host measurements are not C3 CPU/load measurements.']}
