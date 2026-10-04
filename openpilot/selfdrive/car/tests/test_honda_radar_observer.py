@@ -148,6 +148,48 @@ class TestHondaRadarObserver(unittest.TestCase):
     self.assertFalse({'hondaRadarObserver'} - ignored)
     self.assertEqual({'radard', 'hondaRadarObserver'} - ignored, {'radard'})
 
+  def test_real_accord_interface_preserves_production_radar_configuration(self):
+    from opendbc.car import gen_empty_fingerprint
+    from opendbc.car.honda.interface import CarInterface
+    from opendbc.car.honda.radar_interface import RadarInterface
+    from opendbc.car.honda.values import CAR
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[1] = {0x184: 8, 0x191: 8}  # Accord Hybrid with automatic transmission
+    cp = CarInterface.get_params(CAR.HONDA_ACCORD, fingerprint, [], True, False, False)
+    cp_sp = CarInterface.get_params_sp(cp, CAR.HONDA_ACCORD, fingerprint, [], True, False, False)
+    self.assertTrue(cp.openpilotLongitudinalControl and cp.radarUnavailable)
+    self.assertFalse(cp.pcmCruise)
+    self.assertTrue(SETTINGS.requested(cp))
+    self.assertEqual(HondaRadarObserver(cp, cp_sp).decoder.bus, 2)
+    self.assertTrue(RadarInterface(cp, cp_sp).radar_off_can)
+
+  def test_full_event_update_distinguishes_optional_and_critical_failures(self):
+    from openpilot.cereal import log
+    from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import (
+      new_event, selfdrive_event_harness, serialized,
+    )
+    for mode in ('acc', 'blended'):
+      for failed in ([], ['hondaRadarObserver'], ['radard'], ['card'], ['controlsd'], ['hondaRadarObserver', 'radard']):
+        with self.subTest(mode=mode, failed=failed):
+          controls = new_event('controlsState')
+          controls.controlsState.lateralControlState.init('pidState')
+          daemon, cs = selfdrive_event_harness(controls.as_reader())
+          daemon.CP.carFingerprint = 'HONDA_ACCORD'
+          daemon.experimental_mode = True
+          daemon.ignored_processes = {'hondaRadarObserver'}  # separately checked against the real initializer above
+          plan = new_event('longitudinalPlanSP')
+          plan.longitudinalPlanSP.dec = {'enabled': True, 'active': True, 'state': mode}
+          manager = new_event('managerState')
+          manager.managerState.processes = [{'name': name, 'running': False, 'shouldBeRunning': True} for name in failed]
+          daemon.sm.update_msgs(2.01, [serialized(plan), serialized(manager)])
+          daemon.update_events(cs)
+          self.assertEqual(log.OnroadEvent.EventName.processNotRunning in daemon.events.names,
+                           bool(set(failed) - {'hondaRadarObserver'}))
+          # A cached manager message must not hide a subsequent critical failure.
+          daemon.update_events(cs)
+          self.assertEqual(log.OnroadEvent.EventName.processNotRunning in daemon.events.names,
+                           bool(set(failed) - {'hondaRadarObserver'}))
+
   def test_managed_entrypoint_receives_can_and_publishes_only_observations(self):
     # Private IPC namespace: these synthetic CAN/control messages cannot reach a
     # vehicle process or another test. No device connection is made.

@@ -1,4 +1,5 @@
 import unittest
+from itertools import permutations
 
 from opendbc.can.packer import CANPacker
 from opendbc.car.honda.bosch_a_radar import AUX_IDS, MAIN_IDS, MAX_AGE_NS, MAX_EVENTS, BoschARadarObserver
@@ -139,6 +140,33 @@ class TestBoschAObserver(unittest.TestCase):
     self.assertLessEqual(len(decoder.events), MAX_EVENTS)
     self.assertLessEqual(len(decoder.slots[0].scans), 3)
     self.assertGreater(decoder.counts['dropped'], 0)
+
+  def test_all_main_aux_orders_preserve_one_position_sample(self):
+    frames = scan_frames()
+    for order in permutations(range(5)):
+      with self.subTest(order=order):
+        decoder = BoschARadarObserver(2)
+        decoder.feed(START, [frames[i] for i in order])
+        events = decoder.drain()
+        self.assertEqual(len({e['positionSeq'] for e in events}), 1)
+        self.assertTrue(events[-1]['positionValid'] and events[-1]['velocityValid'])
+        self.assertAlmostEqual(events[-1]['dRel'], 54.12)
+        self.assertEqual(events[-1]['vRel'], -2.0)
+
+  def test_rejected_geometry_retains_late_aux_raw_fields(self):
+    for slot in range(16):
+      with self.subTest(slot=slot):
+        decoder = BoschARadarObserver(2)
+        frames = scan_frames(slot=slot, distance=4095, velocity=1728, ratio=1023)
+        decoder.feed(START, frames[:4])
+        self.assertEqual(decoder.drain()[-1]['reason'], 'invalidGeometry')
+        decoder.feed(START + 1_000_000, frames[4:])
+        events = decoder.drain()
+        self.assertTrue(events, 'AUX of an empty/rejected slot must remain available for analysis')
+        self.assertEqual(events[-1]['frameMask'], 31)
+        self.assertEqual(events[-1]['raw']['u11Raw'], 1728)
+        self.assertEqual(events[-1]['raw']['ratioRaw'], 1023)
+        self.assertFalse(events[-1]['positionValid'] or events[-1]['velocityValid'])
 
 
 if __name__ == '__main__':

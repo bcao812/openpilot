@@ -15,6 +15,31 @@ def sample():
 
 
 class TestHondaRadarOverlay(HeadlessUITestCase):
+  def test_late_aux_cannot_restore_a_slot_after_invalid_geometry(self):
+    observer = HondaRadarObserver(*configuration(), session_id='fixture')
+    overlay = RadarOverlayState()
+    frames = scan_frames()
+    for t, incoming in ((START, frames[:4]),
+                        (START + 60_000_000, scan_frames(index=1, life=3, distance=4095)),
+                        (START + 120_000_000, frames[4:])):
+      msg = observer.update([can_message(t, incoming)], state(t), SETTINGS, t + 1)
+      overlay.ingest(msg.hondaRadarObservations.as_reader(), msg.logMonoTime, t + 1)
+    self.assertFalse(overlay.points(START + 120_000_000, START + 120_000_001))
+
+  def test_conflicting_old_scan_does_not_hide_a_newer_position(self):
+    for part in (0, 4):
+      with self.subTest(part=part):
+        observer = HondaRadarObserver(*configuration(), session_id='fixture')
+        overlay = RadarOverlayState()
+        for t, incoming in ((START, scan_frames()),
+                            (START + 60_000_000, scan_frames(index=1, life=3, distance=500)),
+                            (START + 120_000_000, [scan_frames(distance=1001, velocity=737)[part]])):
+          msg = observer.update([can_message(t, incoming)], state(t), SETTINGS, t + 1)
+          overlay.ingest(msg.hondaRadarObservations.as_reader(), msg.logMonoTime, t + 1)
+        points = overlay.points(START + 120_000_000, START + 120_000_001)
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0].text, '0 25.6')
+
   def test_format_exactly_slot_space_one_decimal(self):
     for slot, distance, expected in ((0, 8.0, '0 8.0'), (3, 24.74, '3 24.7'), (3, 24.76, '3 24.8'), (15, 120, '15 120.0')):
       self.assertEqual(RadarLabelPoint(slot, distance, 0, START, 1, 1).text, expected)
@@ -103,6 +128,39 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       observer_sm.updated[renderer.SERVICE] = False
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       self.assertEqual(draw.call_count, 1)  # legend only; future position not drawn
+
+  def test_sixteen_labels_near_screen_edge_remain_readable(self):
+    import numpy as np
+    import pyray as rl
+    from openpilot.cereal import log, messaging
+    from openpilot.selfdrive.ui.sunnypilot.onroad import honda_radar_overlay as renderer
+    observer = HondaRadarObserver(*configuration(), session_id='fixture')
+    frames = [f for slot in range(16) for f in scan_frames(slot=slot)]
+    wire = observer.update([can_message(START, frames)], state(START), SETTINGS, START + 1)
+    sm = state(START)
+    calib = messaging.new_message('extrinsicsCalibration').extrinsicsCalibration
+    calib.calStatus = log.ExtrinsicsCalibration.Status.calibrated
+    calib.height = [1.2]
+    sm['extrinsicsCalibration'] = calib
+    sm.valid['extrinsicsCalibration'] = True
+    observer_sm = Mock(updated={renderer.SERVICE: True}, valid={renderer.SERVICE: True}, logMonoTime={renderer.SERVICE: START + 1})
+    observer_sm.__getitem__ = Mock(return_value=wire.hondaRadarObservations.as_reader())
+    overlay = renderer.HondaRadarOverlay()
+    overlay.sm, overlay.enabled, overlay.next_params_ns = observer_sm, True, START + 1_000_000_000
+    view = SimpleNamespace(frame=object(), client=SimpleNamespace(timestamp_eof=START), device_camera=object(),
+                           model_renderer=SimpleNamespace(_car_space_transform=np.array(((640., 1000., 0), (660., 0, 1000.), (1., 0, 0)))))
+    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
+    with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
+         patch.object(renderer.gui_app, 'font', return_value=object()), \
+         patch.object(renderer, 'measure_text_cached', return_value=SimpleNamespace(x=120, y=32)), \
+         patch.object(rl, 'draw_rectangle_rec') as rectangles, patch.object(rl, 'draw_text_ex') as text:
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+    boxes = [call.args[0] for call in rectangles.call_args_list]
+    self.assertEqual(len(boxes), 16)
+    self.assertEqual([call.args[1] for call in text.call_args_list[:-1]], [f'{slot} 54.1' for slot in range(16)])
+    for i, box in enumerate(boxes):
+      self.assertTrue(0 <= box.x <= 1280 - box.width and 0 <= box.y <= 720 - box.height)
+      self.assertFalse(any(rl.check_collision_recs(box, other) for other in boxes[:i]))
 
   def test_settings_callbacks_keep_other_switches_and_are_offroad_only(self):
     from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands import honda
