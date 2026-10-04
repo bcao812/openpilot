@@ -1,5 +1,9 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import os
+import subprocess
+import sys
+import time
 import unittest
 
 from opendbc.car.structs import car
@@ -7,6 +11,7 @@ from opendbc.car.honda.tests.test_bosch_a_observer import START, scan_frames
 from opendbc.car.honda.values import HondaFlags
 from openpilot.cereal import custom, messaging
 from openpilot.common.params import Params, ParamKeyFlag
+from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
 from openpilot.selfdrive.car.honda_radar_observer_config import ObserverSettings, SERVICE, observer_requested
 
@@ -140,6 +145,46 @@ class TestHondaRadarObserver(unittest.TestCase):
     ignored = values[0]
     self.assertFalse({'hondaRadarObserver'} - ignored)
     self.assertEqual({'radard', 'hondaRadarObserver'} - ignored, {'radard'})
+
+  def test_managed_entrypoint_receives_can_and_publishes_only_observations(self):
+    # Private IPC namespace: these synthetic CAN/control messages cannot reach a
+    # vehicle process or another test. No device connection is made.
+    with OpenpilotPrefix():
+      params = Params()
+      cp, cp_sp = configuration()
+      params.put('CarParams', cp.to_bytes(), block=True)
+      params.put('CarParamsSP', cp_sp.to_bytes(), block=True)
+      params.put('HondaBoschARadarMode', 1, block=True)
+      for key in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
+        params.put_bool(key, True, block=True)
+      pm = messaging.PubMaster(['can', 'selfdriveState', 'longitudinalPlanSP', 'carControl'])
+      subscriber = messaging.sub_sock(SERVICE, timeout=100)
+      process = subprocess.Popen([sys.executable, '-m', 'openpilot.selfdrive.car.honda_radar_observer'],
+                                 env=os.environ.copy(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+      received = None
+      try:
+        deadline = time.monotonic() + 8
+        index = 0
+        while time.monotonic() < deadline and process.poll() is None:
+          now = time.monotonic_ns()
+          sm = state(now)
+          for service in ('selfdriveState', 'longitudinalPlanSP', 'carControl'):
+            message = messaging.new_message(service)
+            message.logMonoTime = now
+            setattr(message, service, sm[service])
+            pm.send(service, message)
+          pm.send('can', can_message(now, scan_frames(index=index % 16, life=1 + 2 * index)))
+          index += 1
+          candidate = messaging.recv_one(subscriber)
+          if candidate is not None and candidate.hondaRadarObservations.active and candidate.hondaRadarObservations.observations:
+            received = candidate
+            break
+      finally:
+        process.terminate()
+        output, _ = process.communicate(timeout=5)
+      self.assertIsNotNone(received, output.decode(errors='replace'))
+      self.assertTrue(received.hondaRadarObservations.observations[-1].positionValid)
+      del pm, subscriber
 
 
 if __name__ == '__main__':
