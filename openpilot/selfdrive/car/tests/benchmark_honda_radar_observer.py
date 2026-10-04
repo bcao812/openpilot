@@ -5,10 +5,13 @@ sensor time; measured CPU cost is normalized per simulated second, not sleep tim
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import statistics
 import time
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import zstandard
 
@@ -76,6 +79,75 @@ def measure(slots, seconds, level, valid_slots=None):
               dropped_events=observer.decoder.counts['dropped'])
 
 
+def measure_render_logic(slots, seconds):
+  """Measure the actual label layout loop at 60 FPS, without a display/GPU.
+
+  Fixed text dimensions stand in for warmed font measurements; all rectangles,
+  collision searches, source-time selection and projection use production code.
+  The 16-slot case deliberately crowds the bottom edge to exercise separation.
+  """
+  os.environ.setdefault('SCALE', '1')
+  import numpy as np
+  import pyray as rl
+  from openpilot.cereal import log, messaging
+  from openpilot.selfdrive.ui.sunnypilot.onroad import honda_radar_overlay as renderer
+
+  class ObservationSubMaster:
+    def __init__(self):
+      self.updated = {renderer.SERVICE: True}
+      self.valid = {renderer.SERVICE: True}
+      self.logMonoTime = {renderer.SERVICE: START}
+      self.body = None
+
+    def update(self, _):
+      pass
+
+    def __getitem__(self, _):
+      return self.body
+
+  sm = state(START)
+  calib = messaging.new_message('extrinsicsCalibration').extrinsicsCalibration
+  calib.calStatus, calib.height = log.ExtrinsicsCalibration.Status.calibrated, [1.2]
+  sm['extrinsicsCalibration'] = calib
+  sm.valid['extrinsicsCalibration'] = True
+  observer_sm = ObservationSubMaster()
+  overlay = renderer.HondaRadarOverlay()
+  overlay.sm, overlay.enabled, overlay.font = observer_sm, True, object()
+  overlay.next_params_ns = START + seconds * 1_000_000_000 + 1
+  view = SimpleNamespace(frame=object(), client=SimpleNamespace(timestamp_eof=START), device_camera=object(),
+                         model_renderer=SimpleNamespace(_car_space_transform=np.array(((1080., 1000., 0), (1000., 0, 1000.), (1., 0, 0)))))
+  ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
+  rect, size = rl.Rectangle(0, 0, 2160, 1080), rl.Vector2(120, 32)
+  costs, cpu_ns = [], 0
+  now = START
+  with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', lambda: now), \
+       patch.object(renderer, 'measure_text_cached', lambda *_: size), \
+       patch.object(rl, 'draw_rectangle_rec', lambda *_: None), patch.object(rl, 'draw_text_ex', lambda *_: None), \
+       patch.object(rl, 'draw_line_v', lambda *_: None):
+    for i in range(seconds * 60):
+      now = START + i * 1_000_000_000 // 60
+      sm.logMonoTime = dict.fromkeys(sm.logMonoTime, now)
+      view.client.timestamp_eof = now
+      observer_sm.updated[renderer.SERVICE] = i % 4 == 0
+      if i % 4 == 0:
+        message = messaging.new_message(renderer.SERVICE)
+        body = getattr(message, renderer.SERVICE)
+        body.schemaVersion, body.sessionId, body.sequence, body.active = 1, 'render-benchmark', i // 4 + 1, True
+        body.scope = dict.fromkeys(('alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive'), True)
+        body.observations = [dict(slot=s, positionSeq=i * 32 + 2 * s + 1, generation=s + 1,
+                                  positionMonoTime=now, dRel=54.12, yRel=0.0, positionValid=True)
+                             for s in range(slots) for _ in range(2)]
+        observer_sm.body, observer_sm.logMonoTime[renderer.SERVICE] = body.as_reader(), now
+      start_cpu, begin = time.thread_time_ns(), time.perf_counter_ns()
+      overlay._render(view, rect)  # exceptions must fail this benchmark
+      costs.append(time.perf_counter_ns() - begin)
+      cpu_ns += time.thread_time_ns() - start_cpu
+  assert len(overlay.state.points(now, now)) == slots
+  return dict(slots=slots, simulated_seconds=seconds, frames=len(costs), viewport=[2160, 1080],
+              host_logic_one_core_percent_at_60fps=cpu_ns / (seconds * 1e9) * 100,
+              **percentiles(costs), mean_us=statistics.mean(costs) / 1000)
+
+
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--seconds', type=int, default=30)
@@ -88,8 +160,10 @@ def main():
   cases = [(0, 0), (1, 1), (16, 0), (16, 1), (16, 16)]
   results = {'method': 'synthetic-15Hz-host-v2', 'zstd_level': level,
              'cases': [measure(total, args.seconds, level, valid) for total, valid in cases],
+             'render_logic_60fps': [measure_render_logic(slots, args.seconds) for slots in (1, 16)],
              'limitations': ['Synthetic fields; real compression depends on traffic.',
                              'Excludes CAN socket receive, loggerd queueing/fsync and actual GPU text drawing.',
+                             'Render loop uses fixed warmed text dimensions and no-op draw calls; not full UI frame cost.',
                              'Host measurements are not C3 CPU/load measurements.']}
   args.output.parent.mkdir(parents=True, exist_ok=True)
   args.output.write_text(json.dumps(results, indent=2) + '\n')
