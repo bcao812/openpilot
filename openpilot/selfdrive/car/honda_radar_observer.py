@@ -54,6 +54,7 @@ class HondaRadarObserver:
       return None
     self.sequence += 1
     msg = messaging.new_message(SERVICE)
+    msg.valid = True  # telemetry validity; sensor/scope validity is carried inside
     msg.logMonoTime = now_ns
     body = getattr(msg, SERVICE)
     body.schemaVersion = 1

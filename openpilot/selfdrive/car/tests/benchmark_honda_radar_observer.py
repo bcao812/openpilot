@@ -6,12 +6,14 @@ sensor time; measured CPU cost is normalized per simulated second, not sleep tim
 import argparse
 import json
 from pathlib import Path
+import re
 import statistics
 import time
 
 import zstandard
 
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
+from openpilot.common.basedir import BASEDIR
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import SETTINGS, START, can_message, configuration, scan_frames, state
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarOverlayState, project_radar_point
 
@@ -22,10 +24,10 @@ def percentiles(values):
           for k, p in (('p50_us', .5), ('p95_us', .95), ('p99_us', .99))}
 
 
-def measure(slots, seconds):
+def measure(slots, seconds, level):
   observer = HondaRadarObserver(*configuration(), session_id='benchmark')
   overlay = RadarOverlayState()
-  compressor = zstandard.ZstdCompressor(level=3).compressobj()
+  compressor = zstandard.ZstdCompressor(level=level).compressobj()
   totals = {'raw_bytes': 0, 'compressed_bytes': 0, 'messages': 0, 'observations': 0}
   costs = {name: [] for name in ('update', 'serialize', 'compress', 'overlay_select_project')}
   started_cpu = time.process_time_ns()
@@ -78,7 +80,9 @@ def main():
   args = parser.parse_args()
   if not 1 <= args.seconds <= 60:
     parser.error('Use 1..60 simulated seconds for this bounded fixture.')
-  results = {'method': 'synthetic-15Hz-host-v1', 'zstd_level': 3, 'cases': [measure(n, args.seconds) for n in (0, 1, 16)],
+  header = (Path(BASEDIR) / 'openpilot/system/loggerd/logger.h').read_text()
+  level = int(re.search(r'LOG_COMPRESSION_LEVEL\s*=\s*(\d+)', header).group(1))
+  results = {'method': 'synthetic-15Hz-host-v1', 'zstd_level': level, 'cases': [measure(n, args.seconds, level) for n in (0, 1, 16)],
              'limitations': ['Synthetic fields; real compression depends on traffic.',
                              'Excludes CAN socket receive, loggerd queueing/fsync and actual GPU text drawing.',
                              'Host measurements are not C3 CPU/load measurements.']}

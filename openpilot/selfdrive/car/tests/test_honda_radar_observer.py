@@ -43,6 +43,7 @@ def state(now_ns, mode='acc'):
 
 def can_message(t, frames):
   msg = messaging.new_message('can', len(frames))
+  msg.valid = True
   msg.logMonoTime = t
   msg.can = [{'address': a, 'dat': d, 'src': s} for a, d, s in frames]
   return msg.as_reader()
@@ -77,6 +78,7 @@ class TestHondaRadarObserver(unittest.TestCase):
       original = {k: v.to_dict() for k, v in sm.items()}
       msg = observer.update([can_message(START, scan_frames())], sm, SETTINGS, START + 1)
       self.assertEqual(msg.which(), SERVICE)
+      self.assertTrue(msg.valid)
       wire = msg.to_bytes()
       decoded = messaging.log_from_bytes(wire).hondaRadarObservations
       self.assertTrue(decoded.active)
@@ -170,13 +172,14 @@ class TestHondaRadarObserver(unittest.TestCase):
           sm = state(now)
           for service in ('selfdriveState', 'longitudinalPlanSP', 'carControl'):
             message = messaging.new_message(service)
+            message.valid = True
             message.logMonoTime = now
             setattr(message, service, sm[service])
             pm.send(service, message)
           pm.send('can', can_message(now, scan_frames(index=index % 16, life=1 + 2 * index)).as_builder())
           index += 1
           candidate = messaging.recv_one(subscriber)
-          if candidate is not None and candidate.hondaRadarObservations.active and candidate.hondaRadarObservations.observations:
+          if candidate is not None and candidate.valid and candidate.hondaRadarObservations.active and candidate.hondaRadarObservations.observations:
             received = candidate
             break
       finally:
