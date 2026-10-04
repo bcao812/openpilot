@@ -75,13 +75,15 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     from openpilot.selfdrive.ui.sunnypilot.onroad import honda_radar_overlay as renderer
     data = sample()
     sm = state(START)
+    wire = messaging.new_message(renderer.SERVICE)
+    setattr(wire, renderer.SERVICE, data)
     calib = messaging.new_message('extrinsicsCalibration').extrinsicsCalibration
     calib.calStatus = log.ExtrinsicsCalibration.Status.calibrated
     calib.height = [1.2]
     sm['extrinsicsCalibration'] = calib
     sm.valid['extrinsicsCalibration'] = True
     observer_sm = Mock(updated={renderer.SERVICE: True}, valid={renderer.SERVICE: True}, logMonoTime={renderer.SERVICE: START + 1})
-    observer_sm.__getitem__ = Mock(return_value=SimpleNamespace(to_dict=lambda: data))
+    observer_sm.__getitem__ = Mock(return_value=getattr(wire, renderer.SERVICE).as_reader())
     overlay = renderer.HondaRadarOverlay()
     overlay.sm = observer_sm
     overlay.enabled = True

@@ -7,6 +7,12 @@ POSITION_MAX_AGE_NS = 200_000_000
 MESSAGE_MAX_AGE_NS = 500_000_000
 
 
+def _read(value, name, default=None):
+  # Keep the GUI off the much larger raw/quality/frame-reference subtrees.
+  # Dictionaries are also accepted for saved fixtures and offline viewers.
+  return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)
+
+
 @dataclass(frozen=True)
 class RadarLabelPoint:
   slot: int
@@ -36,48 +42,49 @@ class RadarOverlayState:
     self.active = False
 
   def ingest(self, body, message_ns, now_ns):
-    if not 0 < message_ns <= now_ns or now_ns - message_ns > MESSAGE_MAX_AGE_NS:
+    if _read(body, 'schemaVersion', 1) != 1 or not 0 < message_ns <= now_ns or now_ns - message_ns > MESSAGE_MAX_AGE_NS:
       self.clear()
       return
-    session, sequence = body['sessionId'], body['sequence']
+    session, sequence = _read(body, 'sessionId'), _read(body, 'sequence')
     if session == self.session and sequence <= self.sequence:
       return
-    dropped = body.get('counters', {}).get('dropped', 0)
+    dropped = _read(_read(body, 'counters', {}), 'dropped', 0)
     if session != self.session or sequence != self.sequence + 1 or dropped != self.dropped:
       self.clear()
     self.session, self.sequence, self.dropped = session, sequence, dropped
     self.message_ns = message_ns
-    scope = body.get('scope', {})
-    self.active = body['active'] and all(scope.get(k, False) for k in
+    scope = _read(body, 'scope', {})
+    self.active = _read(body, 'active', False) and all(_read(scope, k, False) for k in
                                       ('alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive'))
-    events = body.get('observations', [])
+    events = _read(body, 'observations', [])
     if not self.active or len(events) > 64:
       self.clear()
       return
     for event in events:
-      slot = event['slot']
+      slot = _read(event, 'slot')
       if not 0 <= slot < 16:
         continue
       history = self.history[slot]
-      if event.get('positionValid', False):
-        t = event['positionMonoTime']
-        d, y = event['dRel'], event['yRel']
+      if _read(event, 'positionValid', False):
+        sequence = _read(event, 'positionSeq')
+        if history and sequence == history[-1].sequence:
+          continue  # a velocity-only update needs no geometry decoding
+        t = _read(event, 'positionMonoTime')
+        d, y = _read(event, 'dRel'), _read(event, 'yRel')
         if not (0 < t <= message_ns and math.isfinite(d) and math.isfinite(y) and d > 0):
           continue
-        point = RadarLabelPoint(slot, d, y, t, event['positionSeq'], event['generation'])
+        point = RadarLabelPoint(slot, d, y, t, sequence, _read(event, 'generation'))
         if history and t < history[-1].time_ns:
           continue
-        if history and point.sequence == history[-1].sequence:
-          continue  # late AUX must not refresh or duplicate a position
         if history and point.generation != history[-1].generation:
           history.clear()
         history.append(point)
       elif history:
-        reason = event.get('reason')
-        if reason == 'expired' and event.get('generation') == history[-1].generation:
+        reason = _read(event, 'reason')
+        if reason == 'expired' and _read(event, 'generation') == history[-1].generation:
           history.clear()
         elif reason in ('invalidGeometry', 'conflictingFrame'):
-          t = max((f['monoTime'] for f in event.get('frames', [])), default=0)
+          t = max((_read(f, 'monoTime') for f in _read(event, 'frames', [])), default=0)
           if t >= history[-1].time_ns:
             history.clear()
 

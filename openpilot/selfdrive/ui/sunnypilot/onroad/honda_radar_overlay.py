@@ -46,7 +46,8 @@ class HondaRadarOverlay:
     if (not self.enabled or cp is None or cp.carFingerprint != 'HONDA_ACCORD' or not cp.openpilotLongitudinalControl
         or not ui_state.started or not sm['selfdriveState'].experimentalMode
         or not sm['longitudinalPlanSP'].dec.enabled or not sm['longitudinalPlanSP'].dec.active):
-      self.state.clear()
+      if self.state.active:
+        self.state.clear()
       return
     if any(not sm.valid[name] or not 0 <= now - sm.logMonoTime[name] <= 500_000_000
            for name in ('selfdriveState', 'longitudinalPlanSP')):
@@ -57,7 +58,7 @@ class HondaRadarOverlay:
     self.sm.update(0)
     if self.sm.updated[SERVICE]:
       if self.sm.valid[SERVICE]:
-        self.state.ingest(self.sm[SERVICE].to_dict(), self.sm.logMonoTime[SERVICE], now)
+        self.state.ingest(self.sm[SERVICE], self.sm.logMonoTime[SERVICE], now)
       else:
         self.state.clear()
     if self.font is None:

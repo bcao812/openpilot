@@ -56,7 +56,7 @@ def measure(slots, seconds, level):
     totals['messages'] += 1
     totals['observations'] += len(msg.hondaRadarObservations.observations)
     begin = time.perf_counter_ns()
-    overlay.ingest(msg.hondaRadarObservations.to_dict(), t + 1, t + 1)
+    overlay.ingest(msg.hondaRadarObservations, t + 1, t + 1)
     for point in overlay.points(t, t + 1):
       project_radar_point(point, ((640., 1000., 0), (360., 0, 1000.), (1., 0, 0)), 1.2)
       _ = point.text
