@@ -8,6 +8,7 @@ from openpilot.selfdrive.ui.onroad.alert_renderer import AlertRenderer
 from openpilot.selfdrive.ui.onroad.driver_state import DriverStateRenderer
 from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
+from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_overlay import HondaRadarOverlay
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.fastmath import clamp
@@ -54,6 +55,7 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     self._content_rect = rl.Rectangle()
 
     self.model_renderer = ModelRenderer()
+    self.honda_radar_overlay = HondaRadarOverlay()
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
@@ -99,6 +101,8 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     # ModelRenderer marks its own seven sub-phases from inside; this catches what they miss --
     # Widget.render's preamble, and the early return when the model has no path yet.
     gui_app.mark_phase('model_rest')
+    self.honda_radar_overlay.render(self, self._content_rect)
+    gui_app.mark_phase('honda_radar')
     # The SP fade-out overlay is charged to 'hud' rather than given a phase of its own: it is a
     # single draw call, well under the ~4.8 us the instrument can resolve on this device.
     AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, self._content_rect)

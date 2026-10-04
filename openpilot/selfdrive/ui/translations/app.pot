@@ -2269,3 +2269,22 @@ msgstr ""
 #: openpilot/selfdrive/selfdrived/events.py
 msgid "Reverse"
 msgstr ""
+
+msgid "Accord Radar Recording"
+msgstr ""
+
+
+msgid "Record radar targets with Alpha Longitudinal, Experimental Mode and DEC enabled. Observation only."
+msgstr ""
+
+
+msgid "Radar Target Labels"
+msgstr ""
+
+
+msgid "Show slot number and longitudinal distance in meters, for example: 3 24.7."
+msgstr ""
+
+
+msgid "Radar: slot distance (m), uncalibrated"
+msgstr ""

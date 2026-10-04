@@ -500,3 +500,94 @@ struct CustomReserved18 @0xc86a3d38d13eb3ef {
 
 struct CustomReserved19 @0xa4f1eb3323f5f582 {
 }
+
+# Independent, receive-only Accord telemetry. Never a control input.
+# Events are updates, not a complete object snapshot: absence is not deletion.
+struct HondaRadarObservations {
+  schemaVersion @0 :UInt16 = 1;
+  decoderVersion @1 :Text;
+  sessionId @2 :Text;
+  sequence @3 :UInt64;
+  active @4 :Bool;
+  reason @5 :Text;
+  radarBus @6 :UInt8;
+  lastRadarFrameMonoTime @7 :UInt64;
+  lastPositionMonoTime @8 :UInt64;
+  observations @9 :List(Observation);
+  counters @10 :Counters;
+  scope @11 :Scope;
+  calibrated @12 :Bool;  # false until an independent calibration is qualified
+  processingTimeNs @13 :UInt64;
+  rejectedEnvelopes @14 :UInt64;
+  backlogCount @15 :UInt64;
+
+  struct Scope {
+    alphaLong @0 :Bool;
+    experimentalSetting @1 :Bool;
+    decSetting @2 :Bool;
+    experimentalActive @3 :Bool;
+    decEnabled @4 :Bool;
+    decActive @5 :Bool;
+    decMode @6 :UInt8;  # LongitudinalPlanSP.dec.state: acc=0, blended=1
+    selfdriveMonoTime @7 :UInt64;
+    planMonoTime @8 :UInt64;
+    longActive @9 :Bool;
+  }
+
+  struct Counters {
+    frames @0 :UInt64;
+    badLength @1 :UInt64;
+    duplicate @2 :UInt64;
+    late @3 :UInt64;
+    conflict @4 :UInt64;
+    incomplete @5 :UInt64;
+    expired @6 :UInt64;
+    dropped @7 :UInt64;
+  }
+
+  struct FrameReference {
+    part @0 :UInt8;  # MAIN F0..F3 = 0..3, AUX = 4
+    address @1 :UInt32;
+    monoTime @2 :UInt64;  # CAN envelope time, NOT a sensor sample timestamp
+    frameInEnvelope @3 :UInt32;
+  }
+
+  struct RawFields {
+    statusRaw @0 :UInt16;
+    rangeRaw @1 :UInt16;
+    azimuthRaw @2 :UInt16;
+    rangeSigmaRaw @3 :UInt16;
+    existenceRaw @4 :UInt16;
+    angularWidthRaw @5 :UInt16;
+    lifecycleRaw @6 :UInt16;
+    normalizedClosingRaw @7 :UInt16;
+    closingSigmaRaw @8 :UInt16;
+    oemTrackId @9 :UInt16;
+    edgeARaw @10 :UInt16;
+    edgeBRaw @11 :UInt16;
+    edgeSigmaARaw @12 :UInt16;
+    u11Raw @13 :UInt16;
+    u10Raw @14 :UInt16;
+    edgeSigmaBRaw @15 :UInt16;
+    ratioRaw @16 :UInt16;
+  }
+
+  struct Observation {
+    slot @0 :UInt8;
+    frameIndex @1 :UInt8;
+    frameMask @2 :UInt8;  # Also defines presence of RawFields; zero is a real value
+    generation @3 :UInt64;  # Slot occupancy generation, scoped by sessionId
+    positionSeq @4 :UInt64;
+    velocitySeq @5 :UInt64;
+    positionMonoTime @6 :UInt64;
+    velocityMonoTime @7 :UInt64;
+    dRel @8 :Float64;  # provisional forward-axis distance, not calibrated
+    yRel @9 :Float64;  # provisional left-positive position
+    vRel @10 :Float64;  # direct U11 candidate only; never ratio-derived
+    positionValid @11 :Bool;  # syntactically valid candidate, NOT control permission
+    velocityValid @12 :Bool;
+    reason @13 :Text;
+    raw @14 :RawFields;
+    frames @15 :List(FrameReference);
+  }
+}

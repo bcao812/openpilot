@@ -230,7 +230,9 @@ class SelfdriveD(CruiseHelper):
     if self.prof is not None:
       cloudlog.warning("selfdrived: phase timing ENABLED by %s", PHASE_TIMER_MARKER)
 
-    self.ignored_processes: set[str] = set()
+    # This optional telemetry process has no control publisher; losing it must
+    # not affect engagement. Revisit this classification before adding control.
+    self.ignored_processes: set[str] = {'hondaRadarObserver'}
 
     # Determine startup event
     is_remote = build_metadata.openpilot.comma_remote or build_metadata.openpilot.sunnypilot_remote

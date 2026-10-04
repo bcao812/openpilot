@@ -8,6 +8,7 @@ from openpilot.common.params import Params
 from openpilot.common.hardware import PC, COMMA_HARDWARE
 from openpilot.system.manager.process import PythonProcess, NativeProcess, DaemonProcess
 from openpilot.common.hardware.hw import Paths
+from openpilot.selfdrive.car.honda_radar_observer_config import observer_requested
 
 from openpilot.sunnypilot.models.helpers import get_active_model_runner
 
@@ -131,6 +132,7 @@ procs = [
   PythonProcess("selfdrived", "openpilot.selfdrive.selfdrived.selfdrived", only_onroad),
   PythonProcess("beep", "openpilot.selfdrive.selfdrived.beep", always_run),
   PythonProcess("card", "openpilot.selfdrive.car.card", only_onroad),
+  PythonProcess("hondaRadarObserver", "openpilot.selfdrive.car.honda_radar_observer", observer_requested),
   PythonProcess("deleter", "openpilot.system.loggerd.deleter", always_run),
   PythonProcess("dmonitoringd", "openpilot.selfdrive.monitoring.dmonitoringd", driverview, enabled=(WEBCAM or not PC) and not DM_DISABLED),
   PythonProcess("qcomgpsd", "openpilot.system.qcomgpsd.qcomgpsd", qcomgps, enabled=COMMA_HARDWARE),
