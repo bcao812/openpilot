@@ -204,7 +204,7 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertEqual(out['tracks'], [])
 
   def test_missing_future_and_stale_dependencies_clear_candidates(self):
-    for kind in ('modelStale', 'egoStale', 'futureCamera', 'inputsInvalid', 'scopeInactive', 'schemaUnknown'):
+    for kind in ('modelStale', 'egoStale', 'futureCamera', 'inputsInvalid', 'scopeInactive', 'schemaUnknown', 'badEgo', 'badYaw'):
       with self.subTest(kind=kind):
         fusion = HondaRadarFusion()
         for frame in range(5):
@@ -222,6 +222,10 @@ class TestHondaRadarFusion(unittest.TestCase):
           sm.valid['modelV2'] = False
         elif kind == 'scopeInactive':
           packet['scope']['decActive'] = False
+        elif kind == 'badEgo':
+          sm['carState'].vEgo = float('nan')
+        elif kind == 'badYaw':
+          sm['modelV2'].orientationRate.z = [float('nan')]
         else:
           packet['schemaVersion'] = 2
         out = fusion.update(packet, sm, t + 2)
@@ -252,6 +256,28 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertAlmostEqual(mean[0], 20 * np.cos(.1), places=7)
     self.assertAlmostEqual(mean[1], -20 * np.sin(.1), places=7)
     self.assertGreaterEqual(np.linalg.eigvalsh(covariance).min(), 0)
+
+  def test_acceleration_uses_velocity_updates_and_survives_ego_frame_rotation(self):
+    fusion = HondaRadarFusion()
+    for frame in range(40):
+      t = frame * STEP / 1e9
+      distance, relative = 20 + t * t, 2 * t
+      out = advance(fusion, frame, [observation(frame, distance=distance, relative=relative)],
+                    distance=distance, relative=relative)
+    track = next(iter(fusion.tracks.values()))
+    self.assertGreater(track.acceleration, 1.4)
+    self.assertLess(track.acceleration, 2.4)
+    self.assertGreater(out['leads'][0]['aLead'], .8)
+    # No actual world acceleration: rotating coordinates must not manufacture it.
+    track.acceleration = 0
+    track.acceleration_ns = START
+    track.acceleration_velocity = (10, 5)
+    fusion.history.samples.clear()
+    fusion.history.add(Ego(START, 10, .5))
+    angle = -.05
+    track.mean[2:] = [np.cos(angle) * 10 - np.sin(angle) * 5, np.sin(angle) * 10 + np.cos(angle) * 5]
+    track.measure_acceleration(START + 100_000_000, fusion.history)
+    self.assertAlmostEqual(track.acceleration, 0)
 
   def test_capacity_bounds_and_future_position_are_fail_closed(self):
     fusion = HondaRadarFusion()

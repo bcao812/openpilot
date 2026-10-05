@@ -85,6 +85,9 @@ class Track:
   velocity_good: bool = False
   active: bool = True
   acceleration: float = 0.0
+  acceleration_good: bool = False
+  acceleration_ns: int = 0
+  acceleration_velocity: tuple[float, float] = (0.0, 0.0)
   path: str = 'unknown'
   innovation: float = 0.0
   # Six distinct position samples; AUX updates never add a sample.
@@ -133,6 +136,26 @@ class Track:
     identity[:, index] -= gain
     # Joseph form keeps roundoff from producing a negative uncertainty.
     self.covariance = identity @ self.covariance @ identity.T + np.outer(gain, gain) * variance
+
+  def measure_acceleration(self, timestamp, history):
+    """Differentiate accepted velocity posteriors once per velocity sample.
+
+    Positions and AUX arrive separately. Differentiating only the position
+    correction would miss the velocity change already accepted from AUX.
+    Rotate the previous velocity into the current body frame first.
+    """
+    dt = (timestamp - self.acceleration_ns) / 1e9
+    ego = history.at(self.acceleration_ns)
+    self.acceleration_good = ego is not None and 0 < dt <= .2
+    if self.acceleration_good:
+      angle = -ego.yaw * dt
+      previous_x = math.cos(angle) * self.acceleration_velocity[0] - math.sin(angle) * self.acceleration_velocity[1]
+      value = max(-10.0, min(5.0, (float(self.mean[2]) - previous_x) / dt))
+      self.acceleration += dt / (.5 + dt) * (value - self.acceleration)
+    else:
+      self.acceleration = 0.0
+    self.acceleration_ns = timestamp
+    self.acceleration_velocity = float(self.mean[2]), float(self.mean[3])
 
 
 def path_relation(x, y, vx, vy, path_x, path_y, previous='unknown'):
@@ -251,6 +274,7 @@ class HondaRadarFusion:
       self.counts['rejectedVelocity'] += 1
       return
     track.measure(2, value + ego.speed, variance)
+    track.measure_acceleration(stamp, self.history)
     track.velocity_ns, track.u10, track.velocity_good = stamp, u10, True
 
   def ingest(self, observations, now_ns):
@@ -314,13 +338,9 @@ class HondaRadarFusion:
         if abs(dx) > x_gate or abs(dy) > y_gate:
           self.counts['rejectedPosition'] += 1
           continue
-        previous_v = float(track.mean[2])
-        dt = (stamp - track.position_ns) / 1e9
         track.mean, track.covariance, track.epoch_ns = mean, covariance, stamp
         track.measure(0, x, POSITION_NOISE**2)
         track.measure(1, y, (.3 + .01 * x)**2)
-        acceleration = max(-10.0, min(5.0, (float(track.mean[2]) - previous_v) / dt))
-        track.acceleration += dt / (.5 + dt) * (acceleration - track.acceleration)
         track.innovation = math.hypot(dx, dy)
         track.count += 1
         track.position_ns, track.position_seq = stamp, seq
@@ -442,7 +462,8 @@ class HondaRadarFusion:
         # erase the object. A confidently opposing track was excluded above.
         if -.5 <= lead['vLead'] < 0 and abs(velocity) < 1:
           lead['vLead'], lead['vRel'] = 0.0, -ego.speed
-        lead['aLead'] += wv * (track.acceleration - lead['aLead'])
+        if track.acceleration_good:
+          lead['aLead'] += wv * (track.acceleration - lead['aLead'])
         lead.update(distanceWeight=wd, velocityWeight=wv, state='coasting' if coasting else 'fused' if wv > 0 else 'radarDistance',
                     reason='prediction' if coasting else 'matched' if wv > 0 else 'velocityUnqualified')
       result.append(lead)
@@ -477,7 +498,11 @@ class HondaRadarFusion:
       output.update(modelMonoTime=model_ns, modelTimestampEof=int(model.timestampEof), egoMonoTime=ego_ns)
       self.record_inputs(sm, now_ns)
       ego = self.history.at(now_ns)
-      if (not fresh(model_ns, now_ns, MODEL_MAX_AGE_NS) or not fresh(int(model.timestampEof), now_ns, MODEL_MAX_AGE_NS)
+      speed, yaw = float(sm['carState'].vEgo), first(model.orientationRate, 'z')
+      if not finite(speed, yaw) or not -.5 <= speed <= 70 or abs(yaw) > 2:
+        self.reset()
+        output['reason'] = 'inputsInvalid'
+      elif (not fresh(model_ns, now_ns, MODEL_MAX_AGE_NS) or not fresh(int(model.timestampEof), now_ns, MODEL_MAX_AGE_NS)
           or int(model.timestampEof) > model_ns):
         self.reset()
         output['reason'] = 'modelStale'
