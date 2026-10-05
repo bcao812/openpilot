@@ -4,7 +4,7 @@ import subprocess
 import sys
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from openpilot.cereal import messaging
 from openpilot.common.params import Params
@@ -42,6 +42,35 @@ def fusion_state(t):
 
 
 class TestHondaRadarShadow(unittest.TestCase):
+  def test_entrypoint_takes_validation_clock_after_receiving_new_model(self):
+    from openpilot.selfdrive.car import honda_radar_observer as runtime
+    cp, cp_sp = configuration()
+    params = Mock()
+    values = {'CarParams': cp.to_bytes(), 'CarParamsSP': cp_sp.to_bytes(), 'HondaBoschARadarMode': 2}
+    params.get.side_effect = lambda key, **_: values[key]
+    params.get_bool.return_value = True
+    clock = [START]
+    scope, inputs = state(START), fusion_state(START + 10_000_000)
+    scope.update = lambda _: None
+    inputs.update = lambda _: clock.__setitem__(0, START + 10_000_000)
+    sock = Mock()
+    sock.receive.side_effect = [can_message(START, scan_frames()).as_builder().to_bytes(), None]
+    publisher = Mock()
+
+    class StopFixture(Exception):
+      pass
+
+    publisher.send.side_effect = StopFixture
+    with patch.object(runtime, 'configure_observer_process'), patch('openpilot.common.params.Params', return_value=params), \
+         patch.object(runtime.messaging, 'SubMaster', side_effect=[scope, inputs]), \
+         patch.object(runtime.messaging, 'PubMaster', return_value=publisher), \
+         patch.object(runtime.messaging, 'sub_sock', return_value=sock), \
+         patch.object(runtime.time, 'monotonic_ns', side_effect=lambda: clock[0]), self.assertRaises(StopFixture):
+      runtime.main()
+    message = publisher.send.call_args.args[1]
+    self.assertEqual(message.logMonoTime, START + 10_000_000)
+    self.assertTrue(message.hondaRadarObservations.fusion.active)
+
   def test_unmatched_visual_values_follow_existing_radard_conversion(self):
     from openpilot.selfdrive.controls.radard import get_RadarState_from_vision
     for x in (1.0, 1.52, 25.0):

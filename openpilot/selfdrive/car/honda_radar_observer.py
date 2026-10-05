@@ -168,6 +168,9 @@ def main():
         fusion_sm.update(0)
       else:
         fusion_sm = None
+      # Model/carState may have arrived during the settings/subscriber reads.
+      # Validate their source times against a clock taken after those reads.
+      now_ns = time.monotonic_ns()
       msg = observer.update(envelopes, sm, settings, now_ns, fusion_sm)
       if msg is not None:
         pm.send(SERVICE, msg)
