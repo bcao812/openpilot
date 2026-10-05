@@ -137,16 +137,40 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     view = SimpleNamespace(frame=object(), client=SimpleNamespace(timestamp_eof=START), device_camera=object(),
                            model_renderer=SimpleNamespace(_car_space_transform=np.array(((640., 1000., 0), (360., 0, 1000.), (1., 0, 0)))))
     ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
-    with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
+    with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2) as clock, \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
          patch.object(renderer, 'measure_text_cached', return_value=SimpleNamespace(x=120, y=32)), \
+         patch.object(renderer, 'project_radar_point', wraps=project_radar_point) as project, \
          patch.object(rl, 'draw_line_v'), patch.object(rl, 'draw_rectangle_rec'), patch.object(rl, 'draw_text_ex') as draw:
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       self.assertEqual(draw.call_args_list[0].args[1], '0 54.1')
       self.assertEqual(draw.call_count, 2)
-      draw.reset_mock()
-      view.client.timestamp_eof = START - 1
+      original_x = draw.call_args_list[0].args[2].x
       observer_sm.updated[renderer.SERVICE] = False
+      draw.reset_mock()
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      self.assertEqual(project.call_count, 1)  # same observation and camera transform
+      self.assertEqual(draw.call_args_list[0].args[2].x, original_x)
+      view.model_renderer._car_space_transform[0, 0] += 25
+      draw.reset_mock()
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      self.assertEqual(project.call_count, 2)
+      self.assertAlmostEqual(draw.call_args_list[0].args[2].x, original_x + 25, places=3)
+      # Fading and expiry must remain live even when geometry is cached.
+      clock.return_value = START + 120_000_000
+      view.client.timestamp_eof = START + 100_000_000
+      draw.reset_mock()
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      self.assertEqual(project.call_count, 2)
+      self.assertEqual(draw.call_args_list[0].args[-1].a, 140)
+      clock.return_value = START + 210_000_000
+      view.client.timestamp_eof = START + 200_000_000
+      draw.reset_mock()
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      self.assertEqual(draw.call_count, 1)  # only the legend remains after expiry
+      draw.reset_mock()
+      clock.return_value = START + 2
+      view.client.timestamp_eof = START - 1
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       self.assertEqual(draw.call_count, 1)  # legend only; future position not drawn
 

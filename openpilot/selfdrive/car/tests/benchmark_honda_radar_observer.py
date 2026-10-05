@@ -17,6 +17,7 @@ import zstandard
 
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
 from openpilot.common.basedir import BASEDIR
+from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import SETTINGS, START, can_message, configuration, scan_frames, state
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarOverlayState, project_radar_point
 
@@ -134,8 +135,8 @@ def measure_render_logic(slots, seconds):
         body = getattr(message, renderer.SERVICE)
         body.schemaVersion, body.sessionId, body.sequence, body.active = 1, 'render-benchmark', i // 4 + 1, True
         body.scope = dict.fromkeys(('alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive'), True)
-        body.observations = [dict(slot=s, positionSeq=i * 32 + 2 * s + 1, generation=s + 1,
-                                  positionMonoTime=now, dRel=54.12, yRel=0.0, positionValid=True)
+        body.observations = [{'slot': s, 'positionSeq': i * 32 + 2 * s + 1, 'generation': s + 1,
+                              'positionMonoTime': now, 'dRel': 54.12, 'yRel': 0.0, 'positionValid': True}
                              for s in range(slots) for _ in range(2)]
         observer_sm.body, observer_sm.logMonoTime[renderer.SERVICE] = body.as_reader(), now
       start_cpu, begin = time.thread_time_ns(), time.perf_counter_ns()
@@ -158,9 +159,12 @@ def main():
   header = (Path(BASEDIR) / 'openpilot/system/loggerd/logger.h').read_text()
   level = int(re.search(r'LOG_COMPRESSION_LEVEL\s*=\s*(\d+)', header).group(1))
   cases = [(0, 0), (1, 1), (16, 0), (16, 1), (16, 16)]
+  measurements = [measure(total, args.seconds, level, valid) for total, valid in cases]
+  with OpenpilotPrefix():  # UI module initialization must use a private host namespace
+    render_costs = [measure_render_logic(slots, args.seconds) for slots in (1, 16)]
   results = {'method': 'synthetic-15Hz-host-v2', 'zstd_level': level,
-             'cases': [measure(total, args.seconds, level, valid) for total, valid in cases],
-             'render_logic_60fps': [measure_render_logic(slots, args.seconds) for slots in (1, 16)],
+             'cases': measurements,
+             'render_logic_60fps': render_costs,
              'limitations': ['Synthetic fields; real compression depends on traffic.',
                              'Excludes CAN socket receive, loggerd queueing/fsync and actual GPU text drawing.',
                              'Render loop uses fixed warmed text dimensions and no-op draw calls; not full UI frame cost.',

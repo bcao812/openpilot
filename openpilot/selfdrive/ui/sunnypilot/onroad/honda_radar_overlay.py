@@ -22,6 +22,8 @@ class HondaRadarOverlay:
     self.camera_offset = 0.0
     self.last_error_ns = 0
     self.font = None
+    self.layout_key = None
+    self.labels = []
 
   def render(self, view, rect):
     try:
@@ -41,6 +43,7 @@ class HondaRadarOverlay:
                       and ui_state.params.get_bool('HondaBoschARadarOverlay'))
       self.camera_offset = ui_state.params.get('CameraOffset', return_default=True) if ui_state.active_bundle else 0.0
       self.next_params_ns = now + 1_000_000_000
+      self.layout_key = None  # also refresh font/language measurements
     sm = ui_state.sm
     cp = ui_state.CP
     if (not self.enabled or cp is None or cp.carFingerprint != 'HONDA_ACCORD' or not cp.openpilotLongitudinalControl
@@ -71,37 +74,57 @@ class HondaRadarOverlay:
     points = self.state.points(frame_ns, now)
     if not self.state.active:
       return
-    transform = view.model_renderer._car_space_transform.tolist()
-    boxes = []
+    transform = view.model_renderer._car_space_transform
+    height = float(calib.height[0])
+    key = (tuple(points), transform.tobytes(), height, self.camera_offset, rect.x, rect.y, rect.width, rect.height, id(self.font))
+    if key != self.layout_key:
+      self.labels = self._layout_labels(points, transform.tolist(), height, rect)
+      self.layout_key = key
+    # Scope, source freshness and camera time are checked on every frame above.
+    # Cached layout never caches validity or opacity.
+    for point, text, box, line in self.labels:
+      color = rl.Color(255, 215, 90, 255 if frame_ns - point.time_ns <= 80_000_000 else 140)
+      if line is not None:
+        rl.draw_line_v(*line, color)
+      rl.draw_rectangle_rec(box, rl.Color(0, 0, 0, 130))
+      rl.draw_text_ex(self.font, text, rl.Vector2(box.x + 6, box.y), 32, 0, color)
+    rl.draw_text_ex(self.font, tr('Radar: slot distance (m), uncalibrated'),
+                    rl.Vector2(rect.x + 16, rect.y + 100), 24, 0, rl.Color(255, 215, 90, 230))
+
+  def _layout_labels(self, points, transform, camera_height, rect):
+    boxes, labels = [], []
     for point in points:
-      position = project_radar_point(point, transform, float(calib.height[0]), self.camera_offset)
+      position = project_radar_point(point, transform, camera_height, self.camera_offset)
       if position is None:
         continue
       x, y = position
       if not (rect.x <= x <= rect.x + rect.width and rect.y <= y <= rect.y + rect.height):
         continue
-      size = measure_text_cached(self.font, point.text, 32)
+      text = point.text
+      size = measure_text_cached(self.font, text, 32)
       width, height = size.x + 12, 38
       x = max(rect.x, min(x - width / 2, rect.x + rect.width - width))
       base_y = max(rect.y, min(y - height, rect.y + rect.height - height))
-      box = rl.Rectangle(x, base_y, width, height)
+      box_y = base_y
       # Bounded, deterministic label separation. Slot coordinates stay unchanged.
       # At an edge, clamping collapses half of the alternating candidates. Search
       # far enough in either direction to place all 16 labels on a C3 viewport.
       for row in range(32):
         shift = ((row + 1) // 2) * (height + 2) * (-1 if row % 2 else 1)
-        candidate = rl.Rectangle(x, max(rect.y, min(base_y + shift, rect.y + rect.height - height)), width, height)
-        if not any(rl.check_collision_recs(candidate, old) for old in boxes):
-          box = candidate
+        candidate_y = max(rect.y, min(base_y + shift, rect.y + rect.height - height))
+        # Plain bounds avoid allocating CFFI rectangles and crossing into raylib
+        # for every candidate/pair in the dense 16-label case.
+        if not any(x < right and x + width > left and candidate_y < bottom and candidate_y + height > top
+                   for left, top, right, bottom in boxes):
+          box_y = candidate_y
           break
-      boxes.append(box)
-      color = rl.Color(255, 215, 90, 255 if frame_ns - point.time_ns <= 80_000_000 else 140)
-      if abs(box.y - base_y) > 1:
+      boxes.append((x, box_y, x + width, box_y + height))
+      box = rl.Rectangle(x, box_y, width, height)
+      line = None
+      if abs(box_y - base_y) > 1:
         # Preserve the actual projected location when text is moved for spacing.
         endpoint = rl.Vector2(max(box.x, min(position[0], box.x + box.width)),
                               max(box.y, min(position[1], box.y + box.height)))
-        rl.draw_line_v(rl.Vector2(*position), endpoint, color)
-      rl.draw_rectangle_rec(box, rl.Color(0, 0, 0, 130))
-      rl.draw_text_ex(self.font, point.text, rl.Vector2(box.x + 6, box.y), 32, 0, color)
-    rl.draw_text_ex(self.font, tr('Radar: slot distance (m), uncalibrated'),
-                    rl.Vector2(rect.x + 16, rect.y + 100), 24, 0, rl.Color(255, 215, 90, 230))
+        line = (rl.Vector2(*position), endpoint)
+      labels.append((point, text, box, line))
+    return labels
