@@ -88,6 +88,49 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertEqual(len(out['tracks']), 1)
     self.assertEqual(out['counters']['duplicate'], 1)
 
+  def test_conflict_in_accepted_measurement_retracts_only_that_posterior(self):
+    for accepted_conflict in (True, False):
+      fusion = HondaRadarFusion()
+      for frame in range(6):
+        advance(fusion, frame)
+      raw = observation(5 if accepted_conflict else 6)
+      conflict = {'slot': 0, 'positionValid': False, 'positionMonoTime': raw['positionMonoTime'],
+                  'positionSeq': raw['positionSeq'] if accepted_conflict else 0, 'reason': 'conflictingFrame'}
+      out = advance(fusion, 6, [conflict])
+      self.assertTrue(out['leads'][0]['present'])
+      if accepted_conflict:
+        self.assertEqual(out['tracks'], [])
+        self.assertEqual(out['leads'][0]['state'], 'visionOnly')
+      else:
+        self.assertEqual(len(out['tracks']), 1)
+        self.assertFalse(out['tracks'][0]['coasting'])
+
+  def test_admission_and_coasting_weights_have_no_boundary_step(self):
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      out = advance(fusion, frame, distance=22)
+      if frame == 2:
+        self.assertLess(out['leads'][0]['distanceWeight'], .2)
+    last = START + 11 * STEP
+    weights = []
+    for seq, age in enumerate((99_000_000, 101_000_000), 12):
+      t = last + age
+      out = fusion.update(body(seq, []), Inputs(t, distance=22), t + 1)
+      weights.append(out['leads'][0]['distanceWeight'])
+    self.assertGreater(weights[0], .5)
+    self.assertGreater(weights[1], .9 * weights[0])
+
+  def test_dropped_observations_clear_previous_confirmation(self):
+    fusion = HondaRadarFusion()
+    for frame in range(8):
+      out = advance(fusion, frame)
+    self.assertGreater(out['leads'][0]['distanceWeight'], 0)
+    t = START + 8 * STEP
+    out = fusion.update(body(8, [], counters={'dropped': 32}), Inputs(t), t + 1)
+    self.assertEqual(out['tracks'], [])
+    self.assertTrue(out['leads'][0]['present'])
+    self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+
   def test_lifecycle_restart_changes_internal_identity(self):
     fusion = HondaRadarFusion()
     for frame in range(4):

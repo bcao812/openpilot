@@ -289,7 +289,16 @@ class HondaRadarFusion:
         continue
       stamp = int(read(observation, 'positionMonoTime', 0))
       if not read(observation, 'positionValid', False):
-        if read(observation, 'reason', '') in ('expired', 'invalidGeometry', 'conflictingFrame'):
+        reason = read(observation, 'reason', '')
+        if reason == 'conflictingFrame':
+          for key, track in list(self.tracks.items()):
+            # A conflict in an accepted measurement invalidates its posterior.
+            # An unfinished or older scan cannot retract a different sample.
+            if (track.slot == slot and track.position_ns == stamp and
+                track.position_seq == int(read(observation, 'positionSeq', 0))):
+              del self.tracks[key]
+              self.counts['rejectedPosition'] += 1
+        elif reason in ('expired', 'invalidGeometry'):
           for track in self.tracks.values():
             # An old slot invalidation must not kill the identity's new slot.
             if track.slot == slot and track.position_ns <= stamp <= now_ns:
@@ -449,10 +458,12 @@ class HondaRadarFusion:
                   positionMonoTime=track.position_ns, velocityMonoTime=track.velocity_ns,
                   sourceAge=(now_ns - track.position_ns) / 1e9)
       if track.mature and span >= .1:
-        blend = min(1.0, span / .3)
+        blend = min(1.0, (span - .1) / .2)
+        # Start decay continuously at 100 ms; do not halve the weight in one
+        # step when the first coasting publication crosses that boundary.
+        coast_weight = min(1.0, max(0.0, (.2 - lead['sourceAge']) / .1)) if coasting else 1.0
         wd = blend * min(.9, sx * sx / (sx * sx + max(.1, float(covariance[0, 0]))))
-        if coasting:
-          wd *= max(0.0, 1 - lead['sourceAge'] / .2)
+        wd *= coast_weight
         radar_relative_speed = float(mean[2]) - ego.speed
         velocity_difference = radar_relative_speed - lead['vRel']
         velocity_gate = min(4.0, max(2.0, 3 * sv))
@@ -460,8 +471,7 @@ class HondaRadarFusion:
         if velocity_good and abs(velocity_difference) <= velocity_gate:
           quality = 1.0 / (1 + (track.u10 / 64.0)**2)
           wv = blend * quality * min(.85, sv * sv / (sv * sv + max(.1, float(covariance[2, 2]))))
-          if coasting:
-            wv *= max(0.0, 1 - lead['sourceAge'] / .2)
+          wv *= coast_weight
         lead['dRel'] += wd * (float(mean[0]) - lead['dRel'])
         lead['vRel'] += wv * velocity_difference
         lead['vLead'] = ego.speed + lead['vRel']
