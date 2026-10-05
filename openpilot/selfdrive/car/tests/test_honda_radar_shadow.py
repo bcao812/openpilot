@@ -42,6 +42,21 @@ def fusion_state(t):
 
 
 class TestHondaRadarShadow(unittest.TestCase):
+  def test_unmatched_visual_values_follow_existing_radard_conversion(self):
+    from openpilot.selfdrive.controls.radard import get_RadarState_from_vision
+    for x in (1.0, 1.52, 25.0):
+      observer = HondaRadarObserver(*configuration())
+      sm = fusion_state(START)
+      sm['modelV2'].leadsV3[0].x = [x] * 6
+      msg = observer.update([], sm, SHADOW_SETTINGS, START + 1, sm)
+      candidate = msg.hondaRadarObservations.fusion.leads[0]
+      original = get_RadarState_from_vision(sm['modelV2'].leadsV3[0], sm['carState'].vEgo,
+                                           sm['modelV2'].velocity.x[0], sm['modelV2'].leadsV3[0].prob)
+      for key in ('present', 'dRel', 'yRel', 'vRel', 'vLead'):
+        self.assertEqual(getattr(candidate, key), original[key])
+      self.assertEqual(candidate.aLead, original['aLeadK'])
+      self.assertEqual(candidate.distanceWeight, 0)
+
   def test_shadow_wire_roundtrip_and_both_dec_modes(self):
     for dec in ('acc', 'blended'):
       observer = HondaRadarObserver(*configuration(), session_id='shadow-test')

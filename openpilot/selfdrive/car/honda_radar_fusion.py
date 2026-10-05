@@ -391,7 +391,7 @@ class HondaRadarFusion:
       x, y, velocity, acceleration = (first(vision, k) for k in ('x', 'y', 'v', 'a'))
       model_speed = first(model.velocity, 'x')
       probability = float(vision.prob)
-      values_ok = finite(x, y, velocity, acceleration, model_speed, probability) and x > RADAR_TO_CAMERA and 0 <= probability <= 1
+      values_ok = finite(x, y, velocity, acceleration, model_speed, probability) and 0 <= probability <= 1
       lead = {'modelIndex': index, 'present': values_ok and probability > .5, 'probability': probability if finite(probability) else 0.0,
                   'trackId': 0, 'state': 'visionOnly', 'reason': 'noVision' if not values_ok or probability <= .5 else 'noMatch',
                   'dRel': x - RADAR_TO_CAMERA if values_ok else 0.0, 'yRel': -y if values_ok else 0.0,
@@ -400,6 +400,13 @@ class HondaRadarFusion:
                   'pathState': 'unknown', 'positionMonoTime': 0, 'velocityMonoTime': 0, 'sourceAge': 0.0}
       if not lead['present'] or probability < .8:
         self.bindings.pop(index, None)
+        result.append(lead)
+        continue
+      if lead['dRel'] <= 0:
+        # Preserve the existing visual coordinate conversion even inside the
+        # radar/camera offset; a proximity check must not erase a visual lead.
+        self.bindings.pop(index, None)
+        lead['reason'] = 'nearVision'
         result.append(lead)
         continue
       sx, sy, sv = (first(vision, k) for k in ('xStd', 'yStd', 'vStd'))
