@@ -6,7 +6,7 @@ from opendbc.car.honda.bosch_a_radar import BoschARadarObserver, MAX_AGE_NS
 from opendbc.car.honda.hondacan import CanBus
 from openpilot.cereal import messaging
 from openpilot.common.realtime import drop_realtime, set_core_affinity
-from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, ObserverSettings, scope_state
+from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, SHADOW, ObserverSettings, scope_state
 
 PUBLISH_PERIOD_NS = 50_000_000
 HEARTBEAT_NS = 1_000_000_000
@@ -38,13 +38,41 @@ class HondaRadarObserver:
     self.rejected_envelopes = 0
     self.backlog_count = 0
     self.processing_ns = 0
+    self.fusion = None
+    self.last_fusion_error_ns = 0
+    self.fusion_input_error = False
 
-  def update(self, envelopes, sm, settings, now_ns):
+  def _fusion_failed(self, now_ns):
+    if self.fusion is not None:
+      self.fusion.reset(clear_ego=True)
+    if now_ns - self.last_fusion_error_ns >= 5_000_000_000:
+      from openpilot.common.swaglog import cloudlog
+      cloudlog.exception('Honda radar shadow fusion unavailable')
+      self.last_fusion_error_ns = now_ns
+
+  def update(self, envelopes, sm, settings, now_ns, fusion_sm=None):
     started_ns = time.monotonic_ns()
     active, reason, scope = scope_state(self.cp, self.cp_sp, settings, sm, now_ns)
     if active != self.active:
       self.decoder.reset()
     self.active = active
+    if settings.mode != SHADOW:
+      self.fusion = None
+      self.fusion_input_error = False
+    elif self.fusion is None:
+      # The observation-only path has no extra model subscription or filter.
+      try:
+        from openpilot.selfdrive.car.honda_radar_fusion import HondaRadarFusion
+        self.fusion = HondaRadarFusion()
+      except Exception:
+        self._fusion_failed(now_ns)
+        self.fusion_input_error = True
+    if self.fusion is not None:
+      try:
+        self.fusion.record_inputs(fusion_sm, now_ns)
+      except Exception:
+        self._fusion_failed(now_ns)
+        self.fusion_input_error = True
     if active:
       for envelope in envelopes:
         if not envelope.valid or not 0 < envelope.logMonoTime <= now_ns or len(envelope.can) > MAX_FRAMES_PER_ENVELOPE:
@@ -59,7 +87,7 @@ class HondaRadarObserver:
     self.processing_ns += time.monotonic_ns() - started_ns
     if now_ns - self.last_publish_ns < PUBLISH_PERIOD_NS:
       return None
-    if not self.decoder.events and reason == self.last_reason and now_ns - self.last_publish_ns < HEARTBEAT_NS:
+    if settings.mode != SHADOW and not self.decoder.events and reason == self.last_reason and now_ns - self.last_publish_ns < HEARTBEAT_NS:
       return None
     self.sequence += 1
     msg = messaging.new_message(SERVICE)
@@ -82,6 +110,18 @@ class HondaRadarObserver:
     body.processingTimeNs = self.processing_ns
     body.rejectedEnvelopes = self.rejected_envelopes
     body.backlogCount = self.backlog_count
+    if settings.mode == SHADOW:
+      try:
+        if self.fusion_input_error or self.fusion is None:
+          raise ValueError('Invalid shadow input since the previous publication')
+        body.fusion = self.fusion.update(body, fusion_sm, now_ns)
+      except Exception:
+        # A shadow calculation failure must not interrupt raw observation or
+        # leave a previously computed candidate apparently current.
+        self._fusion_failed(now_ns)
+        body.fusion = {'version': 1, 'enabled': True, 'active': False, 'calibrated': False, 'controlAllowed': False,
+                           'reason': 'fusionError', 'tracks': [], 'leads': []}
+      self.fusion_input_error = False
     self.processing_ns = 0
     self.last_publish_ns, self.last_reason = now_ns, reason
     return msg
@@ -103,6 +143,7 @@ def main():
     can_sock = messaging.sub_sock('can', timeout=20)
     settings = ObserverSettings.read(params)
     next_settings_ns = 0
+    fusion_sm = None
     while True:
       # Bound each drain: a busy CAN producer cannot starve scope checks or expiry.
       envelopes = []
@@ -121,7 +162,13 @@ def main():
       if now_ns >= next_settings_ns:
         settings = ObserverSettings.read(params)
         next_settings_ns = now_ns + HEARTBEAT_NS
-      msg = observer.update(envelopes, sm, settings, now_ns)
+      if settings.mode == SHADOW:
+        if fusion_sm is None:
+          fusion_sm = messaging.SubMaster(['carState', 'modelV2'])
+        fusion_sm.update(0)
+      else:
+        fusion_sm = None
+      msg = observer.update(envelopes, sm, settings, now_ns, fusion_sm)
       if msg is not None:
         pm.send(SERVICE, msg)
 

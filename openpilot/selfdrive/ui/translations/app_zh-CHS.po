@@ -2362,3 +2362,9 @@ msgstr "显示槽位号和以米为单位的纵向距离，例如：3 24.7。"
 
 msgid "Radar: slot distance (m), uncalibrated"
 msgstr "雷达：槽位 距离（米），未标定"
+
+msgid "Radar Fusion Shadow"
+msgstr "雷达融合影子计算"
+
+msgid "Calculate and record radar and vision fusion. Does not control the vehicle."
+msgstr "计算并记录雷达与视觉融合结果，不参与车辆控制。"

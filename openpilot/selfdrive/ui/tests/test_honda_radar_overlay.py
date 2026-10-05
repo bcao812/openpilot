@@ -227,5 +227,29 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       params.put_bool.assert_not_called()
 
 
+  def test_shadow_switch_preserves_observation_and_is_offroad_only(self):
+    from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands import honda
+    from openpilot.common.params import Params
+    params = Params()
+    fake_ui = SimpleNamespace(started=False, params=params)
+    with patch.object(honda, 'ui_state', fake_ui):
+      settings = honda.HondaSettings()
+      settings._set_shadow(True)
+      self.assertNotEqual(params.get('HondaBoschARadarMode', return_default=True), 2)
+      settings._set_observer(True)
+      settings._set_shadow(True)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 2)
+      settings._set_observer(True)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 2)
+      fake_ui.started = True
+      settings._set_shadow(False)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 2)
+      fake_ui.started = False
+      settings._set_shadow(False)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 1)
+      settings._set_observer(False)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 0)
+
+
 if __name__ == '__main__':
   unittest.main()

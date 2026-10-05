@@ -2288,3 +2288,9 @@ msgstr ""
 
 msgid "Radar: slot distance (m), uncalibrated"
 msgstr ""
+
+msgid "Radar Fusion Shadow"
+msgstr ""
+
+msgid "Calculate and record radar and vision fusion. Does not control the vehicle."
+msgstr ""

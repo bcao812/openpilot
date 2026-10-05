@@ -10,6 +10,7 @@ from opendbc.car.honda.values import CAR, DBC
 from opendbc.car import Bus
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import SETTINGS, can_message, scan_frames, state as observer_state
+from openpilot.selfdrive.car.tests.test_honda_radar_shadow import SHADOW_SETTINGS, fusion_state
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state, consume
 
@@ -19,16 +20,22 @@ class TestHondaRadarControlIsolation(OpenpilotTestCase):
     for key in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
       Params().put_bool(key, True, block=True)
 
-    def run(with_observer):
+    def run(settings=None):
       planner, extension = make_planner()
       controller = LongControl(planner.CP, extension)
       sm = make_state(experimental=True)
       sm.seen = dict.fromkeys(sm, True)
-      observer = HondaRadarObserver(planner.CP, extension) if with_observer else None
+      sm['modelV2'].position.y = [-x * 2.644682 / 55.64 for x in sm['modelV2'].position.x]
+      sm['modelV2'].leadsV3 = fusion_state(1_000_000_000)['modelV2'].leadsV3
+      for lead in sm['modelV2'].leadsV3:
+        lead.v = [20.0] * 6
+      observer = HondaRadarObserver(planner.CP, extension) if settings is not None else None
       packer = CANPacker(DBC[CAR.HONDA_ACCORD][Bus.pt])
       bus = hondacan.CanBus(planner.CP)
       outputs = []
+      contributed = False
       for frame in range(20):
+        sm['modelV2'].timestampEof = 1_000_000_000 + frame * 50_000_000
         if frame == 8:
           sm['modelV2'].position.x = [0.0] * 33
           sm['modelV2'].action.desiredAcceleration = -2.0
@@ -47,14 +54,25 @@ class TestHondaRadarControlIsolation(OpenpilotTestCase):
           telemetry_sm['longitudinalPlanSP'] = message
           telemetry_sm['selfdriveState'] = sm['selfdriveState']
           telemetry_sm['carControl'] = sm['carControl']
+          # The actual planner model remains present as well: shadow processing
+          # cannot mutate its input, output, DEC branch or packed actuator bytes.
           before = {k: v.to_dict() for k, v in sm.items()}
-          observer.update([can_message(t, scan_frames(index=frame % 16, life=1 + 2 * frame))], telemetry_sm, SETTINGS, t + 2_000_000)
+          msg = observer.update([can_message(t, scan_frames(index=frame % 16, life=1 + 2 * frame, velocity=864))],
+                                telemetry_sm, settings, t + 2_000_000, sm)
+          if settings.mode == 2:
+            self.assertTrue(msg.hondaRadarObservations.fusion.active)
+            self.assertFalse(msg.hondaRadarObservations.fusion.controlAllowed)
+            contributed |= any(lead.distanceWeight > 0 for lead in msg.hondaRadarObservations.fusion.leads)
           self.assertEqual({k: v.to_dict() for k, v in sm.items()}, before)
+      if settings is not None and settings.mode == 2:
+        self.assertTrue(contributed)
       return outputs
 
     # Both arms have identical deterministic clocks and independent controller state.
     with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=1_000_000_000):
-      baseline = run(False)
-      observed = run(True)
+      baseline = run()
+      observed = run(SETTINGS)
+      shadow = run(SHADOW_SETTINGS)
     self.assertEqual(baseline, observed)
+    self.assertEqual(baseline, shadow)
     self.assertEqual({entry[2][2] for entry in baseline}, {'acc', 'blended'})

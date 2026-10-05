@@ -520,6 +520,102 @@ struct HondaRadarObservations {
   processingTimeNs @13 :UInt64;
   rejectedEnvelopes @14 :UInt64;
   backlogCount @15 :UInt64;
+  fusion @16 :ShadowFusion;  # absent in observation-only mode; NEVER a control input
+
+  struct ShadowFusion {
+    version @0 :UInt16;
+    algorithmVersion @1 :Text;
+    enabled @2 :Bool;
+    active @3 :Bool;
+    calibrated @4 :Bool;
+    controlAllowed @5 :Bool;  # always false in this implementation
+    reason @6 :Text;
+    modelMonoTime @7 :UInt64;
+    modelTimestampEof @8 :UInt64;
+    egoMonoTime @9 :UInt64;
+    processingTimeNs @10 :UInt64;
+    tracks @11 :List(FusionTrack);
+    leads @12 :List(FusionLead);  # model hypotheses, not independent vehicles
+    counters @13 :FusionCounters;
+  }
+
+  enum PathState {
+    unknown @0;
+    inPath @1;
+    outOfPath @2;
+    entering @3;
+  }
+
+  enum Motion {
+    unknown @0;
+    stationary @1;
+    moving @2;
+    oncoming @3;
+  }
+
+  enum FusionState {
+    visionOnly @0;
+    associating @1;
+    fused @2;
+    radarDistance @3;
+    coasting @4;
+  }
+
+  struct FusionCounters {
+    positions @0 :UInt64;
+    duplicate @1 :UInt64;
+    old @2 :UInt64;
+    resets @3 :UInt64;
+    rejectedPosition @4 :UInt64;
+    rejectedVelocity @5 :UInt64;
+    ambiguous @6 :UInt64;
+    expired @7 :UInt64;
+    capacity @8 :UInt64;
+  }
+
+  struct FusionTrack {
+    trackId @0 :UInt64;
+    oemTrackId @1 :UInt16;
+    slot @2 :UInt8;
+    positionSeq @3 :UInt64;
+    positionMonoTime @4 :UInt64;
+    velocityMonoTime @5 :UInt64;
+    dRel @6 :Float64;
+    yRel @7 :Float64;
+    groundSpeed @8 :Float64;
+    lateralSpeed @9 :Float64;
+    positionVariance @10 :Float64;  # engineering filter value, not calibrated sigma
+    velocityVariance @11 :Float64;
+    observations @12 :UInt32;
+    mature @13 :Bool;
+    velocityGood @14 :Bool;
+    coasting @15 :Bool;
+    pathState @16 :PathState;
+    pathOffset @17 :Float64;  # meaningful only when pathState != unknown
+    entryTime @18 :Float64;  # meaningful only when pathState == entering
+    motion @19 :Motion;
+    u10Raw @20 :UInt16;
+  }
+
+  struct FusionLead {
+    modelIndex @0 :UInt8;
+    present @1 :Bool;
+    probability @2 :Float64;
+    trackId @3 :UInt64;
+    state @4 :FusionState;
+    reason @5 :Text;
+    dRel @6 :Float64;
+    yRel @7 :Float64;
+    vRel @8 :Float64;
+    vLead @9 :Float64;
+    aLead @10 :Float64;
+    distanceWeight @11 :Float64;
+    velocityWeight @12 :Float64;
+    pathState @13 :PathState;
+    positionMonoTime @14 :UInt64;
+    velocityMonoTime @15 :UInt64;
+    sourceAge @16 :Float64;
+  }
 
   struct Scope {
     alphaLong @0 :Bool;

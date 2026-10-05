@@ -14,7 +14,8 @@ from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
 from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE
-from openpilot.selfdrive.car.tests.test_honda_radar_observer import SETTINGS, can_message, configuration, scan_frames, state
+from openpilot.selfdrive.car.tests.test_honda_radar_observer import can_message, configuration, scan_frames
+from openpilot.selfdrive.car.tests.test_honda_radar_shadow import SHADOW_SETTINGS, fusion_state
 from openpilot.tools.lib.logreader import LogReader
 
 
@@ -34,10 +35,14 @@ class TestHondaRadarLogger(unittest.TestCase):
           self.assertTrue(pm.wait_for_readers_to_update(service, timeout=5), f'loggerd did not subscribe to {service}')
         now = time.monotonic_ns()
         frames = [frame for slot in range(16) for frame in scan_frames(slot=slot)]
+        sm = fusion_state(now)
         observation = HondaRadarObserver(*configuration(), session_id='native-logger').update(
-          [can_message(now, frames)], state(now), SETTINGS, now + 1)
+          [can_message(now, frames)], sm, SHADOW_SETTINGS, now + 1, sm)
+        self.assertTrue(observation.hondaRadarObservations.fusion.active)
+        self.assertEqual(len(observation.hondaRadarObservations.fusion.tracks), 16)
         expected = observation.hondaRadarObservations.to_dict()
         model = messaging.new_message('modelV2', valid=True)
+        model.modelV2 = sm['modelV2']
         model.modelV2.frameId = 712
         pm.send(SERVICE, observation)
         pm.send('modelV2', model)

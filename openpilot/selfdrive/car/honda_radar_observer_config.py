@@ -4,6 +4,7 @@ from dataclasses import dataclass
 PROCESS_NAME = 'hondaRadarObserver'
 SERVICE = 'hondaRadarObservations'
 OBSERVE = 1
+SHADOW = 2
 SCOPE_MAX_AGE_NS = 500_000_000
 
 
@@ -25,7 +26,7 @@ class ObserverSettings:
       return cls()
 
   def requested(self, cp):
-    return (self.mode == OBSERVE and self.alpha and self.experimental and self.dec
+    return (self.mode in (OBSERVE, SHADOW) and self.alpha and self.experimental and self.dec
             and cp.carFingerprint == 'HONDA_ACCORD' and cp.openpilotLongitudinalControl and not cp.notCar)
 
 
