@@ -233,7 +233,10 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     params = Params()
     fake_ui = SimpleNamespace(started=False, params=params)
     with patch.object(honda, 'ui_state', fake_ui):
-      settings = honda.HondaSettings()
+      # Exercise the real settings callbacks/state refresh without allocating
+      # GPU fonts in this headless fixture.
+      settings = honda.HondaSettings.__new__(honda.HondaSettings)
+      settings.observer, settings.shadow, settings.overlay = Mock(), Mock(), Mock()
       settings._set_shadow(True)
       self.assertNotEqual(params.get('HondaBoschARadarMode', return_default=True), 2)
       settings._set_observer(True)
