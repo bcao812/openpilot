@@ -84,6 +84,7 @@ static std::map<std::string, service> services = {
   { "livestreamNarrowRoadEncodeData", {"livestreamNarrowRoadEncodeData", false, 20.000000, -1, 2097152}},
   { "livestreamCabinEncodeData", {"livestreamCabinEncodeData", false, 20.000000, -1, 2097152}},
   { "customReservedRawData0", {"customReservedRawData0", true, 0.000000, -1, 256000}},
+  { "hondaRadarObservations", {"hondaRadarObservations", true, 0.000000, -1, 256000}},
 };
 #endif
 

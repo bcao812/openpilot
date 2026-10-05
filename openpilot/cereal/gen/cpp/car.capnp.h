@@ -237,6 +237,16 @@ enum class AudibleAlert_f5a5e26c954e339e: uint16_t {
 CAPNP_DECLARE_ENUM(AudibleAlert, f5a5e26c954e339e);
 CAPNP_DECLARE_SCHEMA(fff5202c1266dadb);
 CAPNP_DECLARE_SCHEMA(d817d6655115ca85);
+CAPNP_DECLARE_SCHEMA(f8ea06304ceb6a88);
+CAPNP_DECLARE_SCHEMA(f6c241cbf8ffe6b7);
+CAPNP_DECLARE_SCHEMA(db31a70271e72097);
+enum class Kind_db31a70271e72097: uint16_t {
+  UNKNOWN,
+  CONSUMER_SNAPSHOT,
+  LOCAL_PUBLISHED,
+};
+CAPNP_DECLARE_ENUM(Kind, db31a70271e72097);
+CAPNP_DECLARE_SCHEMA(b8015c0bf4133e40);
 CAPNP_DECLARE_SCHEMA(8c69372490aaa9da);
 CAPNP_DECLARE_SCHEMA(e836349c6056b0c9);
 CAPNP_DECLARE_SCHEMA(8a1008dd43eb317b);
@@ -663,7 +673,54 @@ struct CarOutput {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(d817d6655115ca85, 0, 1)
+    CAPNP_DECLARE_STRUCT_HEADER(d817d6655115ca85, 0, 2)
+    #if !CAPNP_LITE
+    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
+    #endif  // !CAPNP_LITE
+  };
+};
+
+struct LongitudinalLoggingContext {
+  LongitudinalLoggingContext() = delete;
+
+  class Reader;
+  class Builder;
+  class Pipeline;
+
+  struct _capnpPrivate {
+    CAPNP_DECLARE_STRUCT_HEADER(f8ea06304ceb6a88, 6, 3)
+    #if !CAPNP_LITE
+    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
+    #endif  // !CAPNP_LITE
+  };
+};
+
+struct LongitudinalLogInput {
+  LongitudinalLogInput() = delete;
+
+  class Reader;
+  class Builder;
+  class Pipeline;
+  typedef ::capnp::schemas::Kind_db31a70271e72097 Kind;
+
+
+  struct _capnpPrivate {
+    CAPNP_DECLARE_STRUCT_HEADER(f6c241cbf8ffe6b7, 2, 1)
+    #if !CAPNP_LITE
+    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
+    #endif  // !CAPNP_LITE
+  };
+};
+
+struct LongitudinalApplyDiagnostics {
+  LongitudinalApplyDiagnostics() = delete;
+
+  class Reader;
+  class Builder;
+  class Pipeline;
+
+  struct _capnpPrivate {
+    CAPNP_DECLARE_STRUCT_HEADER(b8015c0bf4133e40, 14, 5)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -3081,6 +3138,9 @@ public:
   inline bool hasActuatorsOutput() const;
   inline  ::cereal::CarControl::Actuators::Reader getActuatorsOutput() const;
 
+  inline bool hasLongitudinalDiagnostics() const;
+  inline  ::cereal::LongitudinalApplyDiagnostics::Reader getLongitudinalDiagnostics() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -3116,6 +3176,13 @@ public:
   inline void adoptActuatorsOutput(::capnp::Orphan< ::cereal::CarControl::Actuators>&& value);
   inline ::capnp::Orphan< ::cereal::CarControl::Actuators> disownActuatorsOutput();
 
+  inline bool hasLongitudinalDiagnostics();
+  inline  ::cereal::LongitudinalApplyDiagnostics::Builder getLongitudinalDiagnostics();
+  inline void setLongitudinalDiagnostics( ::cereal::LongitudinalApplyDiagnostics::Reader value);
+  inline  ::cereal::LongitudinalApplyDiagnostics::Builder initLongitudinalDiagnostics();
+  inline void adoptLongitudinalDiagnostics(::capnp::Orphan< ::cereal::LongitudinalApplyDiagnostics>&& value);
+  inline ::capnp::Orphan< ::cereal::LongitudinalApplyDiagnostics> disownLongitudinalDiagnostics();
+
 private:
   ::capnp::_::StructBuilder _builder;
   template <typename, ::capnp::Kind>
@@ -3135,6 +3202,496 @@ public:
       : _typeless(kj::mv(typeless)) {}
 
   inline  ::cereal::CarControl::Actuators::Pipeline getActuatorsOutput();
+  inline  ::cereal::LongitudinalApplyDiagnostics::Pipeline getLongitudinalDiagnostics();
+private:
+  ::capnp::AnyPointer::Pipeline _typeless;
+  friend class ::capnp::PipelineHook;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+};
+#endif  // !CAPNP_LITE
+
+class LongitudinalLoggingContext::Reader {
+public:
+  typedef LongitudinalLoggingContext Reads;
+
+  Reader() = default;
+  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
+
+  inline ::capnp::MessageSize totalSize() const {
+    return _reader.totalSize().asPublic();
+  }
+
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const {
+    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
+  }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint16_t getVersion() const;
+
+  inline bool hasProducer() const;
+  inline  ::capnp::Text::Reader getProducer() const;
+
+  inline  ::uint64_t getSession() const;
+
+  inline  ::uint64_t getSequence() const;
+
+  inline  ::uint64_t getFrame() const;
+
+  inline bool getFrameKnown() const;
+
+  inline  ::uint64_t getStartMonoTime() const;
+
+  inline  ::uint64_t getEndMonoTime() const;
+
+  inline  ::uint32_t getErrors() const;
+
+  inline bool hasIdentity() const;
+  inline  ::capnp::Text::Reader getIdentity() const;
+
+  inline bool hasManifest() const;
+  inline  ::capnp::Text::Reader getManifest() const;
+
+private:
+  ::capnp::_::StructReader _reader;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::List;
+  friend class ::capnp::MessageBuilder;
+  friend class ::capnp::Orphanage;
+};
+
+class LongitudinalLoggingContext::Builder {
+public:
+  typedef LongitudinalLoggingContext Builds;
+
+  Builder() = delete;  // Deleted to discourage incorrect usage.
+                       // You can explicitly initialize to nullptr instead.
+  inline Builder(decltype(nullptr)) {}
+  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
+  inline operator Reader() const { return Reader(_builder.asReader()); }
+  inline Reader asReader() const { return *this; }
+
+  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const { return asReader().toString(); }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint16_t getVersion();
+  inline void setVersion( ::uint16_t value);
+
+  inline bool hasProducer();
+  inline  ::capnp::Text::Builder getProducer();
+  inline void setProducer( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initProducer(unsigned int size);
+  inline void adoptProducer(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownProducer();
+
+  inline  ::uint64_t getSession();
+  inline void setSession( ::uint64_t value);
+
+  inline  ::uint64_t getSequence();
+  inline void setSequence( ::uint64_t value);
+
+  inline  ::uint64_t getFrame();
+  inline void setFrame( ::uint64_t value);
+
+  inline bool getFrameKnown();
+  inline void setFrameKnown(bool value);
+
+  inline  ::uint64_t getStartMonoTime();
+  inline void setStartMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getEndMonoTime();
+  inline void setEndMonoTime( ::uint64_t value);
+
+  inline  ::uint32_t getErrors();
+  inline void setErrors( ::uint32_t value);
+
+  inline bool hasIdentity();
+  inline  ::capnp::Text::Builder getIdentity();
+  inline void setIdentity( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initIdentity(unsigned int size);
+  inline void adoptIdentity(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownIdentity();
+
+  inline bool hasManifest();
+  inline  ::capnp::Text::Builder getManifest();
+  inline void setManifest( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initManifest(unsigned int size);
+  inline void adoptManifest(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownManifest();
+
+private:
+  ::capnp::_::StructBuilder _builder;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  friend class ::capnp::Orphanage;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+};
+
+#if !CAPNP_LITE
+class LongitudinalLoggingContext::Pipeline {
+public:
+  typedef LongitudinalLoggingContext Pipelines;
+
+  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
+  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
+      : _typeless(kj::mv(typeless)) {}
+
+private:
+  ::capnp::AnyPointer::Pipeline _typeless;
+  friend class ::capnp::PipelineHook;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+};
+#endif  // !CAPNP_LITE
+
+class LongitudinalLogInput::Reader {
+public:
+  typedef LongitudinalLogInput Reads;
+
+  Reader() = default;
+  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
+
+  inline ::capnp::MessageSize totalSize() const {
+    return _reader.totalSize().asPublic();
+  }
+
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const {
+    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
+  }
+#endif  // !CAPNP_LITE
+
+  inline bool hasService() const;
+  inline  ::capnp::Text::Reader getService() const;
+
+  inline  ::uint64_t getMonoTime() const;
+
+  inline bool getIdKnown() const;
+
+  inline  ::uint16_t getKnownFlags() const;
+
+  inline  ::uint16_t getFlags() const;
+
+  inline  ::cereal::LongitudinalLogInput::Kind getKind() const;
+
+private:
+  ::capnp::_::StructReader _reader;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::List;
+  friend class ::capnp::MessageBuilder;
+  friend class ::capnp::Orphanage;
+};
+
+class LongitudinalLogInput::Builder {
+public:
+  typedef LongitudinalLogInput Builds;
+
+  Builder() = delete;  // Deleted to discourage incorrect usage.
+                       // You can explicitly initialize to nullptr instead.
+  inline Builder(decltype(nullptr)) {}
+  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
+  inline operator Reader() const { return Reader(_builder.asReader()); }
+  inline Reader asReader() const { return *this; }
+
+  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const { return asReader().toString(); }
+#endif  // !CAPNP_LITE
+
+  inline bool hasService();
+  inline  ::capnp::Text::Builder getService();
+  inline void setService( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initService(unsigned int size);
+  inline void adoptService(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownService();
+
+  inline  ::uint64_t getMonoTime();
+  inline void setMonoTime( ::uint64_t value);
+
+  inline bool getIdKnown();
+  inline void setIdKnown(bool value);
+
+  inline  ::uint16_t getKnownFlags();
+  inline void setKnownFlags( ::uint16_t value);
+
+  inline  ::uint16_t getFlags();
+  inline void setFlags( ::uint16_t value);
+
+  inline  ::cereal::LongitudinalLogInput::Kind getKind();
+  inline void setKind( ::cereal::LongitudinalLogInput::Kind value);
+
+private:
+  ::capnp::_::StructBuilder _builder;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  friend class ::capnp::Orphanage;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+};
+
+#if !CAPNP_LITE
+class LongitudinalLogInput::Pipeline {
+public:
+  typedef LongitudinalLogInput Pipelines;
+
+  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
+  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
+      : _typeless(kj::mv(typeless)) {}
+
+private:
+  ::capnp::AnyPointer::Pipeline _typeless;
+  friend class ::capnp::PipelineHook;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+};
+#endif  // !CAPNP_LITE
+
+class LongitudinalApplyDiagnostics::Reader {
+public:
+  typedef LongitudinalApplyDiagnostics Reads;
+
+  Reader() = default;
+  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
+
+  inline ::capnp::MessageSize totalSize() const {
+    return _reader.totalSize().asPublic();
+  }
+
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const {
+    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
+  }
+#endif  // !CAPNP_LITE
+
+  inline bool hasContext() const;
+  inline  ::cereal::LongitudinalLoggingContext::Reader getContext() const;
+
+  inline bool getHasApply() const;
+
+  inline  ::uint64_t getApplySequence() const;
+
+  inline  ::uint64_t getApplyFrame() const;
+
+  inline  ::uint64_t getControllerFrame() const;
+
+  inline bool getControllerFrameKnown() const;
+
+  inline  ::uint64_t getCarControlMonoTime() const;
+
+  inline  ::uint64_t getCarControlSPMonoTime() const;
+
+  inline  ::uint64_t getCarStateMonoTime() const;
+
+  inline  ::uint64_t getApplyStartMonoTime() const;
+
+  inline  ::uint64_t getApplyEndMonoTime() const;
+
+  inline  ::uint64_t getSendcanMonoTime() const;
+
+  inline  ::uint32_t getCanCount() const;
+
+  inline bool hasCanDigest() const;
+  inline  ::capnp::Text::Reader getCanDigest() const;
+
+  inline double getRequestedAccel() const;
+
+  inline double getAppliedAccel() const;
+
+  inline bool getRequestedLongActive() const;
+
+  inline bool getAppliedLongActive() const;
+
+  inline bool getRequestedResume() const;
+
+  inline bool getAppliedResume() const;
+
+  inline bool getAuthorityRestricted() const;
+
+  inline bool hasAuthorityReason() const;
+  inline  ::capnp::Text::Reader getAuthorityReason() const;
+
+  inline  ::cereal::CarControl::Actuators::LongControlState getAppliedLongControlState() const;
+
+  inline bool hasInputs() const;
+  inline  ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>::Reader getInputs() const;
+
+  inline bool hasLastDisposition() const;
+  inline  ::capnp::Text::Reader getLastDisposition() const;
+
+  inline  ::uint64_t getDispositionFrame() const;
+
+  inline  ::uint64_t getDispositionMonoTime() const;
+
+  inline bool getInitialized() const;
+
+  inline bool getPassive() const;
+
+private:
+  ::capnp::_::StructReader _reader;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::List;
+  friend class ::capnp::MessageBuilder;
+  friend class ::capnp::Orphanage;
+};
+
+class LongitudinalApplyDiagnostics::Builder {
+public:
+  typedef LongitudinalApplyDiagnostics Builds;
+
+  Builder() = delete;  // Deleted to discourage incorrect usage.
+                       // You can explicitly initialize to nullptr instead.
+  inline Builder(decltype(nullptr)) {}
+  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
+  inline operator Reader() const { return Reader(_builder.asReader()); }
+  inline Reader asReader() const { return *this; }
+
+  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const { return asReader().toString(); }
+#endif  // !CAPNP_LITE
+
+  inline bool hasContext();
+  inline  ::cereal::LongitudinalLoggingContext::Builder getContext();
+  inline void setContext( ::cereal::LongitudinalLoggingContext::Reader value);
+  inline  ::cereal::LongitudinalLoggingContext::Builder initContext();
+  inline void adoptContext(::capnp::Orphan< ::cereal::LongitudinalLoggingContext>&& value);
+  inline ::capnp::Orphan< ::cereal::LongitudinalLoggingContext> disownContext();
+
+  inline bool getHasApply();
+  inline void setHasApply(bool value);
+
+  inline  ::uint64_t getApplySequence();
+  inline void setApplySequence( ::uint64_t value);
+
+  inline  ::uint64_t getApplyFrame();
+  inline void setApplyFrame( ::uint64_t value);
+
+  inline  ::uint64_t getControllerFrame();
+  inline void setControllerFrame( ::uint64_t value);
+
+  inline bool getControllerFrameKnown();
+  inline void setControllerFrameKnown(bool value);
+
+  inline  ::uint64_t getCarControlMonoTime();
+  inline void setCarControlMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getCarControlSPMonoTime();
+  inline void setCarControlSPMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getCarStateMonoTime();
+  inline void setCarStateMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getApplyStartMonoTime();
+  inline void setApplyStartMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getApplyEndMonoTime();
+  inline void setApplyEndMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getSendcanMonoTime();
+  inline void setSendcanMonoTime( ::uint64_t value);
+
+  inline  ::uint32_t getCanCount();
+  inline void setCanCount( ::uint32_t value);
+
+  inline bool hasCanDigest();
+  inline  ::capnp::Text::Builder getCanDigest();
+  inline void setCanDigest( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initCanDigest(unsigned int size);
+  inline void adoptCanDigest(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownCanDigest();
+
+  inline double getRequestedAccel();
+  inline void setRequestedAccel(double value);
+
+  inline double getAppliedAccel();
+  inline void setAppliedAccel(double value);
+
+  inline bool getRequestedLongActive();
+  inline void setRequestedLongActive(bool value);
+
+  inline bool getAppliedLongActive();
+  inline void setAppliedLongActive(bool value);
+
+  inline bool getRequestedResume();
+  inline void setRequestedResume(bool value);
+
+  inline bool getAppliedResume();
+  inline void setAppliedResume(bool value);
+
+  inline bool getAuthorityRestricted();
+  inline void setAuthorityRestricted(bool value);
+
+  inline bool hasAuthorityReason();
+  inline  ::capnp::Text::Builder getAuthorityReason();
+  inline void setAuthorityReason( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initAuthorityReason(unsigned int size);
+  inline void adoptAuthorityReason(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownAuthorityReason();
+
+  inline  ::cereal::CarControl::Actuators::LongControlState getAppliedLongControlState();
+  inline void setAppliedLongControlState( ::cereal::CarControl::Actuators::LongControlState value);
+
+  inline bool hasInputs();
+  inline  ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>::Builder getInputs();
+  inline void setInputs( ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>::Reader value);
+  inline  ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>::Builder initInputs(unsigned int size);
+  inline void adoptInputs(::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>>&& value);
+  inline ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>> disownInputs();
+
+  inline bool hasLastDisposition();
+  inline  ::capnp::Text::Builder getLastDisposition();
+  inline void setLastDisposition( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initLastDisposition(unsigned int size);
+  inline void adoptLastDisposition(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownLastDisposition();
+
+  inline  ::uint64_t getDispositionFrame();
+  inline void setDispositionFrame( ::uint64_t value);
+
+  inline  ::uint64_t getDispositionMonoTime();
+  inline void setDispositionMonoTime( ::uint64_t value);
+
+  inline bool getInitialized();
+  inline void setInitialized(bool value);
+
+  inline bool getPassive();
+  inline void setPassive(bool value);
+
+private:
+  ::capnp::_::StructBuilder _builder;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  friend class ::capnp::Orphanage;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+};
+
+#if !CAPNP_LITE
+class LongitudinalApplyDiagnostics::Pipeline {
+public:
+  typedef LongitudinalApplyDiagnostics Pipelines;
+
+  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
+  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
+      : _typeless(kj::mv(typeless)) {}
+
+  inline  ::cereal::LongitudinalLoggingContext::Pipeline getContext();
 private:
   ::capnp::AnyPointer::Pipeline _typeless;
   friend class ::capnp::PipelineHook;
@@ -7745,6 +8302,874 @@ inline void CarOutput::Builder::adoptActuatorsOutput(
 inline ::capnp::Orphan< ::cereal::CarControl::Actuators> CarOutput::Builder::disownActuatorsOutput() {
   return ::capnp::_::PointerHelpers< ::cereal::CarControl::Actuators>::disown(_builder.getPointerField(
       ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline bool CarOutput::Reader::hasLongitudinalDiagnostics() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline bool CarOutput::Builder::hasLongitudinalDiagnostics() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::LongitudinalApplyDiagnostics::Reader CarOutput::Reader::getLongitudinalDiagnostics() const {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalApplyDiagnostics>::get(_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline  ::cereal::LongitudinalApplyDiagnostics::Builder CarOutput::Builder::getLongitudinalDiagnostics() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalApplyDiagnostics>::get(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::LongitudinalApplyDiagnostics::Pipeline CarOutput::Pipeline::getLongitudinalDiagnostics() {
+  return  ::cereal::LongitudinalApplyDiagnostics::Pipeline(_typeless.getPointerField(1));
+}
+#endif  // !CAPNP_LITE
+inline void CarOutput::Builder::setLongitudinalDiagnostics( ::cereal::LongitudinalApplyDiagnostics::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::LongitudinalApplyDiagnostics>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::LongitudinalApplyDiagnostics::Builder CarOutput::Builder::initLongitudinalDiagnostics() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalApplyDiagnostics>::init(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline void CarOutput::Builder::adoptLongitudinalDiagnostics(
+    ::capnp::Orphan< ::cereal::LongitudinalApplyDiagnostics>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::LongitudinalApplyDiagnostics>::adopt(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::LongitudinalApplyDiagnostics> CarOutput::Builder::disownLongitudinalDiagnostics() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalApplyDiagnostics>::disown(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+
+inline  ::uint16_t LongitudinalLoggingContext::Reader::getVersion() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t LongitudinalLoggingContext::Builder::getVersion() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLoggingContext::Builder::setVersion( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalLoggingContext::Reader::hasProducer() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalLoggingContext::Builder::hasProducer() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader LongitudinalLoggingContext::Reader::getProducer() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder LongitudinalLoggingContext::Builder::getProducer() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void LongitudinalLoggingContext::Builder::setProducer( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder LongitudinalLoggingContext::Builder::initProducer(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalLoggingContext::Builder::adoptProducer(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> LongitudinalLoggingContext::Builder::disownProducer() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t LongitudinalLoggingContext::Reader::getSession() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalLoggingContext::Builder::getSession() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLoggingContext::Builder::setSession( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalLoggingContext::Reader::getSequence() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalLoggingContext::Builder::getSequence() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLoggingContext::Builder::setSequence( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalLoggingContext::Reader::getFrame() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalLoggingContext::Builder::getFrame() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLoggingContext::Builder::setFrame( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalLoggingContext::Reader::getFrameKnown() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalLoggingContext::Builder::getFrameKnown() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLoggingContext::Builder::setFrameKnown(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalLoggingContext::Reader::getStartMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalLoggingContext::Builder::getStartMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLoggingContext::Builder::setStartMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalLoggingContext::Reader::getEndMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalLoggingContext::Builder::getEndMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLoggingContext::Builder::setEndMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint32_t LongitudinalLoggingContext::Reader::getErrors() const {
+  return _reader.getDataField< ::uint32_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint32_t LongitudinalLoggingContext::Builder::getErrors() {
+  return _builder.getDataField< ::uint32_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLoggingContext::Builder::setErrors( ::uint32_t value) {
+  _builder.setDataField< ::uint32_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalLoggingContext::Reader::hasIdentity() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalLoggingContext::Builder::hasIdentity() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader LongitudinalLoggingContext::Reader::getIdentity() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder LongitudinalLoggingContext::Builder::getIdentity() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline void LongitudinalLoggingContext::Builder::setIdentity( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder LongitudinalLoggingContext::Builder::initIdentity(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalLoggingContext::Builder::adoptIdentity(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> LongitudinalLoggingContext::Builder::disownIdentity() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+
+inline bool LongitudinalLoggingContext::Reader::hasManifest() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalLoggingContext::Builder::hasManifest() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader LongitudinalLoggingContext::Reader::getManifest() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder LongitudinalLoggingContext::Builder::getManifest() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline void LongitudinalLoggingContext::Builder::setManifest( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder LongitudinalLoggingContext::Builder::initManifest(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalLoggingContext::Builder::adoptManifest(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> LongitudinalLoggingContext::Builder::disownManifest() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+
+inline bool LongitudinalLogInput::Reader::hasService() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalLogInput::Builder::hasService() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader LongitudinalLogInput::Reader::getService() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder LongitudinalLogInput::Builder::getService() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void LongitudinalLogInput::Builder::setService( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder LongitudinalLogInput::Builder::initService(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalLogInput::Builder::adoptService(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> LongitudinalLogInput::Builder::disownService() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t LongitudinalLogInput::Reader::getMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalLogInput::Builder::getMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLogInput::Builder::setMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalLogInput::Reader::getIdKnown() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalLogInput::Builder::getIdKnown() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLogInput::Builder::setIdKnown(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t LongitudinalLogInput::Reader::getKnownFlags() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t LongitudinalLogInput::Builder::getKnownFlags() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLogInput::Builder::setKnownFlags( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t LongitudinalLogInput::Reader::getFlags() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t LongitudinalLogInput::Builder::getFlags() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLogInput::Builder::setFlags( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::cereal::LongitudinalLogInput::Kind LongitudinalLogInput::Reader::getKind() const {
+  return _reader.getDataField< ::cereal::LongitudinalLogInput::Kind>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+
+inline  ::cereal::LongitudinalLogInput::Kind LongitudinalLogInput::Builder::getKind() {
+  return _builder.getDataField< ::cereal::LongitudinalLogInput::Kind>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalLogInput::Builder::setKind( ::cereal::LongitudinalLogInput::Kind value) {
+  _builder.setDataField< ::cereal::LongitudinalLogInput::Kind>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::hasContext() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalApplyDiagnostics::Builder::hasContext() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::LongitudinalLoggingContext::Reader LongitudinalApplyDiagnostics::Reader::getContext() const {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalLoggingContext>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::cereal::LongitudinalLoggingContext::Builder LongitudinalApplyDiagnostics::Builder::getContext() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalLoggingContext>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::LongitudinalLoggingContext::Pipeline LongitudinalApplyDiagnostics::Pipeline::getContext() {
+  return  ::cereal::LongitudinalLoggingContext::Pipeline(_typeless.getPointerField(0));
+}
+#endif  // !CAPNP_LITE
+inline void LongitudinalApplyDiagnostics::Builder::setContext( ::cereal::LongitudinalLoggingContext::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::LongitudinalLoggingContext>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::LongitudinalLoggingContext::Builder LongitudinalApplyDiagnostics::Builder::initContext() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalLoggingContext>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void LongitudinalApplyDiagnostics::Builder::adoptContext(
+    ::capnp::Orphan< ::cereal::LongitudinalLoggingContext>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::LongitudinalLoggingContext>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::LongitudinalLoggingContext> LongitudinalApplyDiagnostics::Builder::disownContext() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalLoggingContext>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::getHasApply() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalApplyDiagnostics::Builder::getHasApply() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setHasApply(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getApplySequence() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getApplySequence() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setApplySequence( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getApplyFrame() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getApplyFrame() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setApplyFrame( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getControllerFrame() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getControllerFrame() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setControllerFrame( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::getControllerFrameKnown() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalApplyDiagnostics::Builder::getControllerFrameKnown() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setControllerFrameKnown(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getCarControlMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getCarControlMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setCarControlMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getCarControlSPMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getCarControlSPMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setCarControlSPMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getCarStateMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getCarStateMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setCarStateMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getApplyStartMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getApplyStartMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setApplyStartMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getApplyEndMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getApplyEndMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setApplyEndMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getSendcanMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getSendcanMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setSendcanMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint32_t LongitudinalApplyDiagnostics::Reader::getCanCount() const {
+  return _reader.getDataField< ::uint32_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint32_t LongitudinalApplyDiagnostics::Builder::getCanCount() {
+  return _builder.getDataField< ::uint32_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setCanCount( ::uint32_t value) {
+  _builder.setDataField< ::uint32_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::hasCanDigest() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalApplyDiagnostics::Builder::hasCanDigest() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader LongitudinalApplyDiagnostics::Reader::getCanDigest() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder LongitudinalApplyDiagnostics::Builder::getCanDigest() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline void LongitudinalApplyDiagnostics::Builder::setCanDigest( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder LongitudinalApplyDiagnostics::Builder::initCanDigest(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalApplyDiagnostics::Builder::adoptCanDigest(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> LongitudinalApplyDiagnostics::Builder::disownCanDigest() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+
+inline double LongitudinalApplyDiagnostics::Reader::getRequestedAccel() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+
+inline double LongitudinalApplyDiagnostics::Builder::getRequestedAccel() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setRequestedAccel(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS, value);
+}
+
+inline double LongitudinalApplyDiagnostics::Reader::getAppliedAccel() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
+}
+
+inline double LongitudinalApplyDiagnostics::Builder::getAppliedAccel() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setAppliedAccel(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::getRequestedLongActive() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalApplyDiagnostics::Builder::getRequestedLongActive() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setRequestedLongActive(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::getAppliedLongActive() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalApplyDiagnostics::Builder::getAppliedLongActive() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setAppliedLongActive(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::getRequestedResume() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalApplyDiagnostics::Builder::getRequestedResume() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setRequestedResume(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::getAppliedResume() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalApplyDiagnostics::Builder::getAppliedResume() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setAppliedResume(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::getAuthorityRestricted() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalApplyDiagnostics::Builder::getAuthorityRestricted() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setAuthorityRestricted(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::hasAuthorityReason() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalApplyDiagnostics::Builder::hasAuthorityReason() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader LongitudinalApplyDiagnostics::Reader::getAuthorityReason() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder LongitudinalApplyDiagnostics::Builder::getAuthorityReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline void LongitudinalApplyDiagnostics::Builder::setAuthorityReason( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder LongitudinalApplyDiagnostics::Builder::initAuthorityReason(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalApplyDiagnostics::Builder::adoptAuthorityReason(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> LongitudinalApplyDiagnostics::Builder::disownAuthorityReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+
+inline  ::cereal::CarControl::Actuators::LongControlState LongitudinalApplyDiagnostics::Reader::getAppliedLongControlState() const {
+  return _reader.getDataField< ::cereal::CarControl::Actuators::LongControlState>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::cereal::CarControl::Actuators::LongControlState LongitudinalApplyDiagnostics::Builder::getAppliedLongControlState() {
+  return _builder.getDataField< ::cereal::CarControl::Actuators::LongControlState>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setAppliedLongControlState( ::cereal::CarControl::Actuators::LongControlState value) {
+  _builder.setDataField< ::cereal::CarControl::Actuators::LongControlState>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::hasInputs() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalApplyDiagnostics::Builder::hasInputs() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>::Reader LongitudinalApplyDiagnostics::Reader::getInputs() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>>::get(_reader.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>::Builder LongitudinalApplyDiagnostics::Builder::getInputs() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>>::get(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+inline void LongitudinalApplyDiagnostics::Builder::setInputs( ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>>::set(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>::Builder LongitudinalApplyDiagnostics::Builder::initInputs(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>>::init(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalApplyDiagnostics::Builder::adoptInputs(
+    ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>> LongitudinalApplyDiagnostics::Builder::disownInputs() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalLogInput,  ::capnp::Kind::STRUCT>>::disown(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::hasLastDisposition() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalApplyDiagnostics::Builder::hasLastDisposition() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader LongitudinalApplyDiagnostics::Reader::getLastDisposition() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder LongitudinalApplyDiagnostics::Builder::getLastDisposition() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS));
+}
+inline void LongitudinalApplyDiagnostics::Builder::setLastDisposition( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder LongitudinalApplyDiagnostics::Builder::initLastDisposition(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalApplyDiagnostics::Builder::adoptLastDisposition(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> LongitudinalApplyDiagnostics::Builder::disownLastDisposition() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getDispositionFrame() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getDispositionFrame() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setDispositionFrame( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Reader::getDispositionMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalApplyDiagnostics::Builder::getDispositionMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setDispositionMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::getInitialized() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalApplyDiagnostics::Builder::getInitialized() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setInitialized(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalApplyDiagnostics::Reader::getPassive() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalApplyDiagnostics::Builder::getPassive() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalApplyDiagnostics::Builder::setPassive(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS, value);
 }
 
 inline bool CarParams::Reader::hasBrand() const {
