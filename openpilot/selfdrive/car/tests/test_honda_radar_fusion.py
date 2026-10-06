@@ -10,7 +10,7 @@ import numpy as np
 
 from opendbc.car.honda.bosch_a_radar import BoschARadarObserver
 from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
-from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, _finite_median, finite, path_relation
+from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, Track, _finite_median, finite, path_relation
 
 START = 10_000_000_000
 STEP = 66_000_000
@@ -53,6 +53,18 @@ def advance(fusion, frame, observations=None, **kwargs):
   sm = Inputs(t, **kwargs)
   packet = body(frame, observations if observations is not None else [observation(frame)])
   return fusion.update(packet, sm, t + 1)
+
+
+def projection_fixture():
+  track = Track(identifier=1, oem_id=7, slot=0, frame_index=0, lifecycle=1, position_seq=1,
+                position_ns=START, first_ns=START, epoch_ns=START,
+                mean=np.array([20.0, 1.0, 12.0, -.3]),
+                covariance=np.array([[2.0, .1, .3, 0.0], [.1, 1.0, 0.0, .2],
+                                     [.3, 0.0, 4.0, .1], [0.0, .2, .1, 2.0]]))
+  history = EgoHistory()
+  history.add(Ego(START - 100_000_000, 8.0, -.1))
+  history.add(Ego(START, 10.0, .2))
+  return track, history
 
 
 class TestHondaRadarFusion(unittest.TestCase):
@@ -1105,6 +1117,97 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertAlmostEqual(mean[0], 20 * np.cos(.1), places=7)
     self.assertAlmostEqual(mean[1], -20 * np.sin(.1), places=7)
     self.assertGreaterEqual(np.linalg.eigvalsh(covariance).min(), 0)
+
+  def test_projection_operators_keep_current_state_and_prediction_time(self):
+    track, history = projection_fixture()
+    cache = {}
+    for offset in (0, -50_000_000, 40_000_000, 80_000_000, 40_000_000):
+      stamp = START + offset
+      cached, fresh = track.project(stamp, history, cache), track.project(stamp, history)
+      self.assertEqual(tuple(value.tobytes() for value in cached), tuple(value.tobytes() for value in fresh))
+    stamp = START + 40_000_000
+    self.assertTrue(track.advance(stamp, history, cache))
+    previous = track.project(stamp, history, cache)
+    for index, value, variance in ((0, 23.0, .25), (2, 9.0, .1)):
+      # Same target/epoch and operators, but position and AUX change the posterior.
+      track.measure(index, value, variance)
+      cached, fresh = track.project(stamp, history, cache), track.project(stamp, history)
+      self.assertEqual(tuple(value.tobytes() for value in cached), tuple(value.tobytes() for value in fresh))
+      self.assertNotEqual(cached[0].tobytes(), previous[0].tobytes())
+      self.assertNotEqual(cached[1].tobytes(), previous[1].tobytes())
+      previous = cached
+    other = copy.deepcopy(track)
+    other.identifier = 2
+    other.mean += np.array([3.0, 2.0, -1.0, .5])
+    other.covariance *= .8
+    cached, fresh = other.project(stamp, history, cache), other.project(stamp, history)
+    self.assertEqual(tuple(value.tobytes() for value in cached), tuple(value.tobytes() for value in fresh))
+    self.assertNotEqual(cached[0].tobytes(), previous[0].tobytes())
+    self.assertEqual(track.epoch_ns, stamp)
+    self.assertEqual(track.position_ns, START)
+
+  def test_projection_cache_has_no_posterior_alias_and_checks_ego_again(self):
+    track, history = projection_fixture()
+    cache, stamp = {}, START + 80_000_000
+    state = track.mean.tobytes(), track.covariance.tobytes()
+    first_prediction = track.project(stamp, history, cache)
+    first_prediction[0][:] = 999.0
+    first_prediction[1][:] = -999.0
+    second, fresh = track.project(stamp, history, cache), track.project(stamp, history)
+    self.assertEqual(tuple(value.tobytes() for value in second), tuple(value.tobytes() for value in fresh))
+    self.assertEqual((track.mean.tobytes(), track.covariance.tobytes()), state)
+    for predicted in second:
+      self.assertFalse(np.shares_memory(predicted, track.mean))
+      self.assertFalse(np.shares_memory(predicted, track.covariance))
+      self.assertTrue(all(not np.shares_memory(predicted, operand) for operators in cache.values() for operand in operators[1:]))
+    for speed, yaw in ((10.0, 0.0), (10.0, -0.0), (7.0, -.25)):
+      replacement = EgoHistory()
+      replacement.add(Ego(START, speed, yaw))
+      cached, fresh = track.project(stamp, replacement, cache), track.project(stamp, replacement)
+      self.assertEqual(tuple(value.tobytes() for value in cached), tuple(value.tobytes() for value in fresh))
+    self.assertNotEqual(cached[0].tobytes(), second[0].tobytes())
+    history.samples.clear()
+    self.assertIsNone(track.project(stamp, history, cache))
+    self.assertIsNone(track.project(START + 500_000_001, replacement, cache))
+
+  def test_projection_operators_are_shared_only_within_one_publication(self):
+    fusion = HondaRadarFusion()
+    def publish(frame, model_offset, can_offset, speed, yaw):
+      stamp = START + model_offset
+      observations = []
+      if can_offset is not None:
+        observations = [observation(frame, slot=slot, oem=slot + 1, distance=20.0 + slot * .2) for slot in range(16)]
+        for value in observations:
+          value['positionMonoTime'] = value['velocityMonoTime'] = START + can_offset
+      return fusion.update(body(frame, observations), Inputs(stamp, probability=0, speed=speed, yaw=yaw), stamp + 1)
+    publish(0, 0, 0, 10.0, 0.0)
+    calls, publication_caches = [], []
+    original = Track.project
+    def project(track, target_ns, history, projection_cache=None):
+      calls.append(projection_cache)
+      return original(track, target_ns, history, projection_cache)
+    cases = ((100_000_000, 66_666_666, 10.0, 0.0, 3, 48),
+             (150_000_000, 133_333_333, 10.2, .02, 3, 48),
+             (200_000_000, 200_000_000, 10.4, -.01, 2, 48),
+             (250_000_000, None, 10.6, .03, 1, 16))
+    last_position = START
+    with patch.object(Track, 'project', project):
+      for frame, (model_offset, can_offset, speed, yaw, constructions, predictions) in enumerate(cases, 1):
+        calls.clear()
+        with patch.object(np, 'diag', wraps=np.diag) as diagonal:
+          out = publish(frame, model_offset, can_offset, speed, yaw)
+        self.assertEqual(diagonal.call_count, constructions)
+        self.assertEqual(len(calls), predictions)
+        cache = calls[0]
+        self.assertIsNotNone(cache)
+        self.assertTrue(all(value is cache for value in calls))
+        self.assertTrue(all(cache is not prior for prior in publication_caches))
+        publication_caches.append(cache)
+        last_position = START + can_offset if can_offset is not None else last_position
+        self.assertTrue(all(track.epoch_ns == last_position and track.position_ns == last_position for track in fusion.tracks.values()))
+        self.assertEqual(len(out['tracks']), 16)
+        self.assertFalse(out['controlAllowed'])
+        self.assertFalse(out['calibrated'])
 
   def test_acceleration_uses_velocity_updates_and_survives_ego_frame_rotation(self):
     fusion = HondaRadarFusion()

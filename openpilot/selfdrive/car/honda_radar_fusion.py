@@ -286,30 +286,42 @@ class Track:
   def mature(self):
     return self.count >= MIN_OBSERVATIONS and self.position_ns - self.first_ns >= MIN_SPAN_NS
 
-  def project(self, target_ns, history):
+  def project(self, target_ns, history, projection_cache=None):
     dt = (target_ns - self.epoch_ns) / 1e9
     if abs(dt) > .5:
       return None
     ego = history.at(min(target_ns, self.epoch_ns))
     if ego is None:
       return None
-    angle = -ego.yaw * dt
-    c, s = math.cos(angle), math.sin(angle)
-    rotation = np.array([[c, -s], [s, c]])
-    transition = np.zeros((4, 4))
-    transition[:2, :2] = rotation
-    transition[:2, 2:] = rotation * dt
-    transition[2:, 2:] = rotation
+    key = self.epoch_ns, target_ns
+    operators = projection_cache.get(key) if projection_cache is not None else None
+    if operators is None or operators[0] is not ego:
+      angle = -ego.yaw * dt
+      c, s = math.cos(angle), math.sin(angle)
+      rotation = np.array([[c, -s], [s, c]])
+      transition = np.zeros((4, 4))
+      transition[:2, :2] = rotation
+      transition[:2, 2:] = rotation * dt
+      transition[2:, 2:] = rotation
+      displacement = rotation @ np.array([ego.speed * dt, 0.0])
+      # Deliberately conservative engineering process noise, not qualified sigma.
+      tau = abs(dt)
+      noise = np.diag([.01 * tau + tau**3, .02 * tau + tau**3, 4 * tau, 3 * tau])
+      for value in (transition, displacement, noise):
+        value.setflags(write=False)
+      operators = ego, transition, displacement, noise
+      if projection_cache is not None:
+        projection_cache[key] = operators
+    _, transition, displacement, noise = operators
+    # Only immutable operators are shared. Each call uses the current posterior
+    # and returns new arrays, including after same-time position/AUX corrections.
     mean = transition @ self.mean
-    mean[:2] -= rotation @ np.array([ego.speed * dt, 0.0])
-    # Deliberately conservative engineering process noise, not qualified sigma.
-    tau = abs(dt)
-    noise = np.diag([.01 * tau + tau**3, .02 * tau + tau**3, 4 * tau, 3 * tau])
+    mean[:2] -= displacement
     covariance = transition @ self.covariance @ transition.T + noise
     return mean, covariance
 
-  def advance(self, target_ns, history):
-    prediction = self.project(target_ns, history)
+  def advance(self, target_ns, history, projection_cache=None):
+    prediction = self.project(target_ns, history, projection_cache)
     if prediction is None:
       return False
     self.mean, self.covariance = prediction
@@ -475,7 +487,7 @@ class HondaRadarFusion:
       if model_index == index and identifier != except_track:
         binding.reject(reason, timestamp)
 
-  def _velocity(self, track, observation, now_ns):
+  def _velocity(self, track, observation, now_ns, projection_cache=None):
     if not track.active:
       return
     raw = read(observation, 'raw', {})
@@ -490,7 +502,7 @@ class HondaRadarFusion:
     ego = self.history.at(stamp)
     if (not read(observation, 'velocityValid', False) or not 0 < u11 < 1728 or not 0 <= u10 < 256 or not finite(value)
         or not fresh(stamp, now_ns, MAX_AGE_NS) or abs(stamp - track.position_ns) > 50_000_000 or ego is None
-        or stamp < track.epoch_ns or not track.advance(stamp, self.history)):
+        or stamp < track.epoch_ns or not track.advance(stamp, self.history, projection_cache)):
       self.counts['rejectedVelocity'] += 1
       return
     variance = (.35 + u10 / 100.0)**2
@@ -503,7 +515,7 @@ class HondaRadarFusion:
     track.measure_acceleration(stamp, self.history)
     track.velocity_ns, track.u10, track.velocity_good = stamp, u10, True
 
-  def ingest(self, observations, now_ns):
+  def ingest(self, observations, now_ns, projection_cache=None):
     if len(observations) > MAX_EVENTS:
       self.reset()
       return
@@ -556,7 +568,7 @@ class HondaRadarFusion:
           self._invalidate(track, 'conflictingPosition', stamp, now_ns)
           self.counts['ambiguous'] += 1
         else:
-          self._velocity(track, observation, now_ns)
+          self._velocity(track, observation, now_ns, projection_cache)
         continue
       # Distinct slots in one CAN envelope have the same source timestamp.
       # They can still make contradictory claims to the same OEM/frame. Check
@@ -597,7 +609,7 @@ class HondaRadarFusion:
       if track is None:
         track = self._birth(observation, ego, birth_reason, old_track)
       else:
-        prediction = track.project(stamp, self.history)
+        prediction = track.project(stamp, self.history, projection_cache)
         if prediction is None:
           self.counts['rejectedPosition'] += 1
           continue
@@ -623,7 +635,7 @@ class HondaRadarFusion:
       track.active = True
       track.positions.append((stamp, x, y))
       self.counts['positions'] += 1
-      self._velocity(track, observation, now_ns)
+      self._velocity(track, observation, now_ns, projection_cache)
     expired = [key for key, track in self.tracks.items() if now_ns - track.position_ns > HISTORY_NS]
     for key in expired:
       del self.tracks[key]
@@ -631,7 +643,7 @@ class HondaRadarFusion:
     live_identifiers = {track.identifier for track in self.tracks.values()}
     self.bindings = {key: binding for key, binding in self.bindings.items() if key[1] in live_identifiers}
 
-  def _candidates(self, model, model_ns, ego, now_ns):
+  def _candidates(self, model, model_ns, ego, now_ns, projection_cache=None):
     path_x, path_y = list(model.position.x), list(model.position.y)
     if len(path_x) > 33 or len(path_y) > 33:
       path_x, path_y = [], []
@@ -640,7 +652,7 @@ class HondaRadarFusion:
     for track in self.tracks.values():
       if not fresh(track.position_ns, now_ns, MAX_AGE_NS):
         continue
-      prediction = track.project(int(model.timestampEof), self.history)
+      prediction = track.project(int(model.timestampEof), self.history, projection_cache)
       if prediction is None:
         continue
       mean, covariance = prediction
@@ -854,8 +866,10 @@ class HondaRadarFusion:
         self.reset()
         output['reason'] = 'modelShape'
       else:
-        self.ingest(read(body, 'observations', []), now_ns)
-        tracks, leads = self._candidates(model, model_ns, ego, now_ns)
+        # These time/ego-dependent operators live only for this publication.
+        projection_cache = {}
+        self.ingest(read(body, 'observations', []), now_ns, projection_cache)
+        tracks, leads = self._candidates(model, model_ns, ego, now_ns, projection_cache)
         output.update(active=True, reason='shadowUncalibrated', tracks=tracks, leads=leads)
     output['processingTimeNs'] = time.monotonic_ns() - started
     output['counters'] = self.counts.copy()
