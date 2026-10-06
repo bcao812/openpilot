@@ -491,6 +491,16 @@ class HondaRadarFusion:
         else:
           self._velocity(track, observation, now_ns)
         continue
+      # Distinct slots in one CAN envelope have the same source timestamp.
+      # They can still make contradictory claims to the same OEM/frame. Check
+      # that before rejecting equal-time samples; a genuinely older slot scan
+      # must not retract an already-migrated, newer posterior.
+      if (track is not None and slot != track.slot and index == track.frame_index and seq > track.position_seq
+          and 0 <= stamp - track.position_ns <= MAX_AGE_NS):
+        self.counts['duplicate'] += 1
+        self.counts['ambiguous'] += 1
+        self._invalidate(track, 'slotConflict', stamp, now_ns)
+        continue
       if track is not None and (stamp <= track.position_ns or seq < track.position_seq):
         self.counts['old'] += 1
         continue
@@ -502,7 +512,7 @@ class HondaRadarFusion:
       if track is not None:
         delta = (index - track.frame_index) & 15
         life_delta = (life - track.lifecycle) & 4095
-        if delta == 0 and (life_delta == 0 or slot != track.slot):
+        if delta == 0 and life_delta == 0:
           self.counts['duplicate'] += 1
           last = track.positions[-1]
           if slot != track.slot or abs(x - last[1]) > 1e-4 or abs(y - last[2]) > 1e-4:
@@ -672,13 +682,13 @@ class HondaRadarFusion:
       lead.update(candidateTrackId=track.identifier, residualX=dx, residualY=dy, residualV=velocity_difference,
                   gateX=gate_x, gateY=gate_y)
       binding = self.bindings.get((index, track.identifier))
+      self._suspend_bindings(index, 'candidateChanged', model_ns, except_track=track.identifier)
       # An extrapolated posterior can maintain a compatible existing pair, but
       # it is not new evidence for a different visual identity.
       if binding is None and coasting:
         lead.update(reason='coastingUnbound', identityReason='coastingUnbound')
         result.append(lead)
         continue
-      self._suspend_bindings(index, 'candidateChanged', model_ns, except_track=track.identifier)
       if binding is None:
         binding = self.bindings[(index, track.identifier)] = Binding(track.identifier, source_ns)
       lead.update(binding.observe(model_ns, source_ns, track.position_seq, lead['dRel'], lead['vRel'], dx, dy, self.history))

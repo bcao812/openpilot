@@ -78,7 +78,9 @@ class TestHondaRadarLogger(unittest.TestCase):
       self.assertIn(prefix.prefix, Params().get_param_path())
       pm = messaging.PubMaster([SERVICE, 'modelV2'])
       logger_dir = Path(BASEDIR) / 'openpilot/system/loggerd'
-      process = subprocess.Popen([str(logger_dir / 'loggerd')], cwd=logger_dir,
+      # Test-only dependency selection keeps host tools separate from tracked ARM binaries.
+      logger_executable = os.environ.get('HONDA_RADAR_TEST_LOGGER', str(logger_dir / 'loggerd'))
+      process = subprocess.Popen([logger_executable], cwd=logger_dir,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ.copy())
       try:
         for service in (SERVICE, 'modelV2'):

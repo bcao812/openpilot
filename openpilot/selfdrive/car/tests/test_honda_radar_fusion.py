@@ -5,6 +5,8 @@ import unittest
 
 import numpy as np
 
+from opendbc.car.honda.bosch_a_radar import BoschARadarObserver
+from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
 from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, path_relation
 
 START = 10_000_000_000
@@ -202,13 +204,69 @@ class TestHondaRadarFusion(unittest.TestCase):
     original = observation(8)
     conflicting = observation(8, slot=1)
     original['raw']['lifecycleRaw'] = conflicting['raw']['lifecycleRaw'] = 4094
-    conflicting['positionMonoTime'] += 1
     out = advance(fusion, 8, [original, conflicting])
     self.assertEqual(out['counters']['positions'], 9)
     self.assertFalse(out['tracks'][0]['active'])
     self.assertEqual(out['tracks'][0]['lastInvalidReason'], 'slotConflict')
     self.assertEqual(out['leads'][0]['distanceWeight'], 0)
     self.assertEqual(out['leads'][0]['velocityWeight'], 0)
+
+  def test_decoder_same_envelope_two_slot_claims_revoke_the_accepted_posterior(self):
+    for plateau in (False, True):
+      for slots in ((0, 1), (1, 0)):
+        with self.subTest(plateau=plateau, slots=slots):
+          decoder, fusion = BoschARadarObserver(2), HondaRadarFusion()
+          for frame in range(12):
+            decoder.feed(START + frame * STEP, scan_frames(slot=0, index=frame % 16,
+                         life=4094 if plateau else 1 + 2 * frame, distance=403, azimuth=1024, velocity=864, oem_id=7))
+            out = advance(fusion, frame, decoder.drain())
+          identifier = out['tracks'][0]['trackId']
+          self.assertGreater(out['leads'][0]['distanceWeight'], .5)
+          # Real decoder events: one envelope, equal F0 times, distinct global
+          # positionSeq values, and separate position/AUX publications per slot.
+          frames = [can for slot in slots for can in scan_frames(slot=slot, index=12,
+                    life=4094 if plateau else 25, distance=403, azimuth=1024, velocity=864, oem_id=7)]
+          decoder.feed(START + 12 * STEP, frames)
+          events = decoder.drain()
+          valid = [event for event in events if event['positionValid']]
+          self.assertEqual({event['slot'] for event in valid}, {0, 1})
+          self.assertEqual(len({event['positionMonoTime'] for event in valid}), 1)
+          self.assertEqual(len({event['positionSeq'] for event in valid}), 2)
+          out = advance(fusion, 12, events)
+          self.assertEqual(len(out['tracks']), 1)
+          self.assertEqual(out['tracks'][0]['trackId'], identifier)
+          self.assertEqual(out['counters']['positions'], 13)
+          self.assertFalse(out['tracks'][0]['active'])
+          self.assertEqual(out['tracks'][0]['lastInvalidReason'], 'slotConflict')
+          self.assertTrue(out['leads'][0]['present'])
+          self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+          self.assertEqual(out['leads'][0]['velocityWeight'], 0)
+
+  def test_decoder_late_old_slot_completion_does_not_retract_newer_migration(self):
+    decoder, fusion = BoschARadarObserver(2), HondaRadarFusion()
+    for frame in range(8):
+      decoder.feed(START + frame * STEP, scan_frames(slot=0, index=frame, life=4094,
+                   distance=403, azimuth=1024, velocity=864, oem_id=7))
+      out = advance(fusion, frame, decoder.drain())
+    identifier = out['tracks'][0]['trackId']
+    late_scan = scan_frames(slot=0, index=8, life=4094, distance=403, azimuth=1024, velocity=864, oem_id=7)
+    decoder.feed(START + 7 * STEP + STEP // 2, late_scan[:1])
+    decoder.feed(START + 8 * STEP, scan_frames(slot=1, index=8, life=4094,
+                 distance=403, azimuth=1024, velocity=864, oem_id=7))
+    out = advance(fusion, 8, decoder.drain())
+    self.assertEqual(out['tracks'][0]['trackId'], identifier)
+    self.assertTrue(out['tracks'][0]['active'])
+    self.assertEqual(out['tracks'][0]['slot'], 1)
+    accepted_time = out['tracks'][0]['positionMonoTime']
+    decoder.feed(START + 9 * STEP, late_scan[1:])
+    events = decoder.drain()
+    self.assertTrue(any(event['positionValid'] and event['positionMonoTime'] < accepted_time for event in events))
+    out = advance(fusion, 9, events)
+    self.assertEqual(out['tracks'][0]['trackId'], identifier)
+    self.assertEqual(out['tracks'][0]['positionMonoTime'], accepted_time)
+    self.assertTrue(out['tracks'][0]['active'])
+    self.assertEqual(out['tracks'][0]['lastInvalidReason'], '')
+    self.assertGreater(out['leads'][0]['distanceWeight'], .5)
 
   def test_stopped_path_is_unknown_and_does_not_delete_confirmed_lead(self):
     fusion = HondaRadarFusion()
@@ -353,6 +411,29 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertEqual(out['leads'][0]['reason'], 'coastingUnbound')
     self.assertEqual(out['leads'][0]['distanceWeight'], 0)
     self.assertEqual(unbound.bindings, {})
+
+  def test_switch_to_unbound_coasting_candidate_suspends_the_old_pair(self):
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      samples = [observation(frame)]
+      if frame < 11:
+        samples.append(observation(frame, distance=35.0, slot=1, oem=8))
+      out = advance(fusion, frame, samples)
+    self.assertGreater(out['leads'][0]['distanceWeight'], .5)
+    # A remains freshly measured, while B's last position is 132 ms old.
+    # The visual hypothesis briefly moves to B, then back to A one tick later.
+    out = advance(fusion, 12, distance=35.0)
+    self.assertEqual(out['leads'][0]['reason'], 'coastingUnbound')
+    self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+    for frame in (13, 14):
+      out = advance(fusion, frame)
+      self.assertEqual(out['leads'][0]['reason'], 'identityRejected')
+      self.assertEqual(out['leads'][0]['identityReason'], 'candidateChanged')
+      self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+      self.assertEqual(out['leads'][0]['velocityWeight'], 0)
+    out = advance(fusion, 15)
+    self.assertEqual(out['leads'][0]['identityState'], 'same')
+    self.assertGreater(out['leads'][0]['distanceWeight'], 0)
 
   def test_common_turn_and_deceleration_do_not_look_like_a_new_identity(self):
     for turning in (False, True):
