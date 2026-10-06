@@ -33,6 +33,7 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VE
                                                                consumed_forward_reference)
 from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
 from openpilot.selfdrive.controls.lib.parking_approach import ParkingApproach
+from openpilot.selfdrive.controls.lib.turn_lead_guard import TurnLeadGuard
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource as LongitudinalPlanSourceSP
 
@@ -153,6 +154,8 @@ class UnifiedLongitudinalPlanner:
     self.reference_initialized = False
     self.reference_source_epoch_ns = None
     self._forward_execution_instance_ns = 0
+    self.turn_lead_guard = TurnLeadGuard()
+    self.turn_accel_limited = False
     self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
     self.model_reference_adapter = ModelReferenceAdapter()
     self.stop_distance_policy = LowSpeedStopDistance()
@@ -172,6 +175,8 @@ class UnifiedLongitudinalPlanner:
   def invalidate(self, speed, reason):
     planner = self.planner
     self.cruise_response.clear()
+    self.turn_lead_guard.clear()
+    self.turn_accel_limited = False
     self.stop_distance_policy.clear()
     self.parking_approach.clear()
     self.parking_policy_distances = None
@@ -401,6 +406,20 @@ class UnifiedLongitudinalPlanner:
     cruise_speed = max(0.0, cruise_speed)
     steering = car_state.steeringAngleDeg - state['vehicleParameters'].angleOffsetDeg
     maximum_accel = cruise_accel_limit(planner.CP, speed, steering, self.e2e_allowed, coast_accel, planner.allow_throttle)
+    turn_ceiling = self.turn_lead_guard.update(
+      now_ns=now_ns, model_ns=state.logMonoTime.get('modelV2'), radar_ns=state.logMonoTime.get('radarState'),
+      enabled=healthy and active and not reset and not forced_decel and planner.unified,
+      speed=speed, standstill=bool(car_state.standstill), steering_angle=steering,
+      steer_ratio=planner.CP.steerRatio, wheelbase=planner.CP.wheelbase,
+      model_curvature=model.action.desiredCurvature,
+      lead_one=state['radarState'].leadOne, lead_two=state['radarState'].leadTwo, ceiling_max=ACCEL_MAX,
+    )
+    self.turn_accel_limited = turn_ceiling is not None and turn_ceiling < maximum_accel
+    if turn_ceiling is not None:
+      # A disappearing lead in a following turn is not evidence of clear road.
+      # Keep this ceiling in both the native reference and the existing single
+      # arbitration. It does not invent a lead, a stop goal or radar authority.
+      maximum_accel = min(maximum_accel, turn_ceiling)
     if healthy:
       cruise_ceiling = self.cruise_response.update(
         cruise_speed, speed, maximum_accel, measured_accel=measured_accel, reset=reset)
@@ -724,7 +743,17 @@ class UnifiedLongitudinalPlanner:
                             or ordinary_model_motion and raw_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
                             and cruise_command < model.action.desiredAcceleration))
     coast_selected = coast_applicable and cruise_selected
-    if coast_selected:
+    turn_response = (self.turn_accel_limited and active and healthy and not reset and not forced_decel and not reasons
+                     and output >= 0.0 and raw_kind in (MotionReferenceKind.UNKNOWN, MotionReferenceKind.MOVING,
+                                                        MotionReferenceKind.FORWARD))
+    if turn_response:
+      # The bounded acceleration target cannot carry MODEL's positive-I
+      # permission, including the zero target and gradual recovery. Stronger
+      # braking and raw stop semantics keep their original contracts below.
+      response_kind = MotionResponseKind.ABSOLUTE_ACC
+      if maximum_accel <= 0.0:
+        moving_lead = release_allowed = False
+    elif coast_selected:
       response_kind = MotionResponseKind.CRUISE_COAST
       # A negative coast request is execution shaping, never a departure
       # certificate inherited from the unconstrained native trajectory.
