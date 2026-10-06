@@ -641,6 +641,52 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertEqual(recovered['identityState'], 'same')
     self.assertEqual(binding.rejection_ns, 0)
 
+  def test_recorded_recovery_uses_identity_bounds_without_learning_the_bias(self):
+    # R593/model0, trace-d5ab6837: the first three independent pairs cover
+    # only 100 ms. The fourth is inside the original .75/.5 identity bounds
+    # and reaches 150 ms, but D cleared the three votes because it was outside
+    # the narrower .35/.25 bias-learning region. These are recorded residual
+    # deltas/source times/position IDs, not a claim of sensor accuracy.
+    samples = (
+      (1492833066637, 86644, .08631451803365138, .00657912068678997),
+      (1492883066897, 86646, .10508108847867013, -.0030497208225145566),
+      (1492933067574, 86648, .3465165134483009, -.01505616096365104),
+      (1492983068303, 86650, -.727664360335393, .00597069772411854),
+    )
+    start = samples[0][0] - 5 * STEP
+    binding, history = Binding(1, start), EgoHistory()
+    for frame in range(4):
+      stamp = start + frame * STEP
+      history.add(Ego(stamp, 10.0, 0.0))
+      binding.observe(stamp, stamp, frame + 1, 20.0, 0.0, 0.0, 0.0, history)
+    stamp = start + 4 * STEP
+    history.add(Ego(stamp, 10.0, 0.0))
+    binding.observe(stamp, stamp, 5, 18.0, 0.0, 2.0, 0.0, history)
+    self.assertTrue(binding.separation_latched)
+    original_anchor = binding.anchor_x, binding.anchor_y
+    for index, (stamp, seq, rx, ry) in enumerate(samples):
+      history.add(Ego(stamp, 10.0, 0.0))
+      result = binding.observe(stamp, stamp, seq, 20.0 - rx, 0.0, rx, ry, history)
+      self.assertEqual((binding.anchor_x, binding.anchor_y), original_anchor)
+      if index < 3:
+        self.assertTrue(binding.separation_latched)
+        self.assertEqual(result['identityState'], 'different')
+        # Re-publication cannot provide the missing elapsed time or position.
+        repeated = binding.observe(stamp + 1, stamp, seq, 20.0 - rx, 0.0, rx, ry, history)
+        self.assertEqual(repeated['recoverySamples'], index + 1)
+        self.assertFalse(repeated['independentPair'])
+    self.assertEqual(result['identityState'], 'same')
+    self.assertFalse(binding.separation_latched)
+    self.assertEqual(result['rejectionMonoTime'], 0)
+    self.assertGreaterEqual(samples[-1][0] - binding.start_ns, 120_000_000)
+    # Continued eligible residuals outside the learning region cannot walk
+    # the reference toward a previously rejected, farther target.
+    for step in range(1, 5):
+      stamp = samples[-1][0] + step * STEP
+      history.add(Ego(stamp, 10.0, 0.0))
+      binding.observe(stamp, stamp, 86650 + step, 19.4, 0.0, .6, 0.0, history)
+      self.assertEqual((binding.anchor_x, binding.anchor_y), original_anchor)
+
   def test_short_missing_measurements_preserve_only_existing_compatible_pair(self):
     fusion = HondaRadarFusion()
     for frame in range(12):
@@ -713,6 +759,47 @@ class TestHondaRadarFusion(unittest.TestCase):
           if frame > 8:
             self.assertEqual(out['leads'][0]['identityState'], 'same')
             self.assertGreater(out['leads'][0]['distanceWeight'], .5)
+
+  def test_nonzero_measurement_bias_with_shared_turn_preserves_only_compatible_identity(self):
+    # Both vehicles turn at the same angular rate with a fixed separation
+    # angle on a 50 m radius. Radar and vision refer to points 4 m apart along
+    # the lead's heading, giving a constant nonzero ego-frame measurement bias.
+    # Treating that bias as a world-fixed vector would manufacture separation.
+    speed, yaw, radius, separation_angle = 5.0, .1, 50.0, .25
+    radar_x = radius * float(np.sin(separation_angle))
+    radar_y = radius * (1.0 - float(np.cos(separation_angle)))
+    bias_x, bias_y = 4.0 * float(np.cos(separation_angle)), 4.0 * float(np.sin(separation_angle))
+    radar_relative = -yaw * radar_y
+    vision_relative = -yaw * (radar_y + bias_y)
+    for change in ('gradual', 'singleStep'):
+      with self.subTest(change=change):
+        fusion = HondaRadarFusion()
+        def sample(frame, closer=0.0):
+          stamp = START + frame * STEP
+          sm = Inputs(stamp, distance=radar_x + bias_x - closer, lateral=radar_y + bias_y,
+                      relative=vision_relative, speed=speed, yaw=yaw, x_std=2.0, y_std=.6)
+          sm['modelV2'].position.x = list(np.linspace(0.0, 40.0, 33))
+          sm['modelV2'].position.y = [-(radius - float(np.sqrt(radius * radius - x * x)))
+                                    for x in sm['modelV2'].position.x]
+          raw = observation(frame, distance=radar_x, lateral=radar_y, relative=radar_relative)
+          return fusion.update(body(frame, [raw]), sm, stamp + 1)
+        for frame in range(72):
+          out = sample(frame)
+          if frame > 8:
+            self.assertEqual(out['leads'][0]['identityState'], 'same')
+            self.assertGreater(out['leads'][0]['distanceWeight'], .5)
+        self.assertLess(out['leads'][0]['bindingAnchorX'], -3.5)
+        self.assertLess(out['leads'][0]['bindingAnchorY'], -.7)
+        # The coordinate choice cannot pardon a real change in the residual,
+        # either as a series of small steps or as one abrupt visual switch.
+        shifts = (.2, .4, .6, .8, 1.0, 1.2) if change == 'gradual' else (3.0,)
+        for frame, shift in enumerate(shifts, 72):
+          out = sample(frame, shift)
+          if shift >= 1.0:
+            self.assertIn(out['leads'][0]['identityState'], ('unresolved', 'different'))
+            self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+            self.assertEqual(out['leads'][0]['velocityWeight'], 0)
+            self.assertTrue(out['leads'][0]['present'])
 
   def test_zero_near_negative_ground_speed_preserves_static_lead(self):
     fusion = HondaRadarFusion()

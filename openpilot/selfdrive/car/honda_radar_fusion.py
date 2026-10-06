@@ -90,9 +90,11 @@ class PairResidual:
 class Binding:
   """Causal, hypothesis-specific identity evidence; never a model object ID.
 
-  Residuals use a common rotating reference so a shared ego turn does not itself
-  appear to change identity. A residual-separation rejection survives option,
-  gate and probability gaps; a soft suspension requires a new confirmation.
+  Radar and vision are already projected to the same current ego frame. Their
+  residual reference is a slowly varying measurement-frame bias, not a fixed
+  world vector: two reference points on a jointly turning vehicle can retain
+  a nonzero bias in these coordinates. A residual-separation rejection survives
+  option, gate and probability gaps; a soft suspension needs a new confirmation.
   Only new position AND camera-source samples can confirm or recover a pair.
   'different' denotes algorithmic incompatibility, not physical ground truth.
   """
@@ -104,7 +106,7 @@ class Binding:
   last_position_seq: int = 0
   last_vision_distance: float = 0.0
   last_vision_velocity: float = 0.0
-  rotation: float = 0.0
+  rotation: float = 0.0  # Compatibility diagnostic; bias has no world-heading state.
   anchor_x: float = 0.0
   anchor_y: float = 0.0
   anchor_ready: bool = False
@@ -154,8 +156,6 @@ class Binding:
       ego = history.at(self.last_source_ns)
       if dt > MODEL_MAX_AGE_NS / 1e9 or ego is None:
         timing_reason = 'sourceGap'
-      elif not self.reference_invalid_reason:
-        self.rotation += ego.yaw * dt
     if timing_reason:
       self.reject(timing_reason, model_ns)
       if self.separation_latched:
@@ -170,14 +170,11 @@ class Binding:
       self.last_pair_ns = max(self.last_pair_ns, source_ns)
       self.last_position_seq = max(self.last_position_seq, position_seq)
       return self.diagnostics()
-    c, s = math.cos(self.rotation), math.sin(self.rotation)
-    rx, ry = c * residual_x - s * residual_y, s * residual_x + c * residual_y
+    rx, ry = residual_x, residual_y
     if not self.samples:
       self.anchor_x, self.anchor_y = rx, ry
-    dx_ref, dy_ref = rx - self.anchor_x, ry - self.anchor_y
-    dx, dy = c * dx_ref + s * dy_ref, -s * dx_ref + c * dy_ref
-    diagnostic_anchor_x = c * self.anchor_x + s * self.anchor_y
-    diagnostic_anchor_y = -s * self.anchor_x + c * self.anchor_y
+    dx, dy = rx - self.anchor_x, ry - self.anchor_y
+    diagnostic_anchor_x, diagnostic_anchor_y = self.anchor_x, self.anchor_y
     separated = abs(dx) > RESIDUAL_X_LIMIT or abs(dy) > RESIDUAL_Y_LIMIT
     trusted = abs(dx) <= RESIDUAL_X_TRUST and abs(dy) <= RESIDUAL_Y_TRUST
     if separated and self.anchor_ready:
@@ -185,9 +182,10 @@ class Binding:
                   abs(dx) > RESIDUAL_X_DIFFERENT or abs(dy) > RESIDUAL_Y_DIFFERENT, separation=True)
       self.recovery.clear()
     elif allow_confirmation and self.rejection_ns and self.anchor_ready:
-      if not trusted:
-        self.recovery.clear()
-      elif independent:
+      # The unchanged separation bounds above qualify recovery. The narrower
+      # trusted region is only for learning bias, never an extra identity gate.
+      # Rejected pairs cannot teach their new residual into the frozen anchor.
+      if independent:
         if self.recovery and source_ns - self.recovery[-1].source_ns > MODEL_MAX_AGE_NS:
           self.recovery.clear()
         self.recovery.append(PairResidual(source_ns, position_seq, rx, ry))
