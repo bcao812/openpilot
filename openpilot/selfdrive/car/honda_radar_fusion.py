@@ -47,6 +47,16 @@ def finite(*values):
   return all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
 
 
+def _finite_median(values):
+  """Median of a nonempty, at-most-16 finite float history; no optional imports."""
+  ordered = sorted(values)
+  middle = len(ordered) // 2
+  # Match NumPy's one/two-value mean, including signed zero and underflow.
+  if len(ordered) % 2:
+    return 0.0 + ordered[middle]
+  return (0.0 + ordered[middle - 1] + ordered[middle]) / 2.0
+
+
 def first(obj, name):
   values = read(obj, name, [])
   return float(values[0]) if len(values) else math.nan
@@ -215,8 +225,8 @@ class Binding:
         self.samples.popleft()
       if len(self.samples) >= MIN_OBSERVATIONS and source_ns - self.start_ns >= MIN_SPAN_NS:
         self.state, self.reason = 'same', 'historyConsistent'
-        target_x = float(np.median([sample.x for sample in self.samples]))
-        target_y = float(np.median([sample.y for sample in self.samples]))
+        target_x = _finite_median(sample.x for sample in self.samples)
+        target_y = _finite_median(sample.y for sample in self.samples)
         if not self.anchor_ready:
           self.anchor_x, self.anchor_y = target_x, target_y
           self.anchor_ready = True

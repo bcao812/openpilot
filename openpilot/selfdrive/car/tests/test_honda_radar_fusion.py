@@ -1,13 +1,16 @@
 """Shadow fusion contracts, including the 2026-10-05 road-log counterexamples."""
 import copy
+import math
+import sys
 from types import SimpleNamespace as NS
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from opendbc.car.honda.bosch_a_radar import BoschARadarObserver
 from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
-from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, path_relation
+from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, _finite_median, path_relation
 
 START = 10_000_000_000
 STEP = 66_000_000
@@ -53,6 +56,45 @@ def advance(fusion, frame, observations=None, **kwargs):
 
 
 class TestHondaRadarFusion(unittest.TestCase):
+  def test_finite_history_median_matches_numpy(self):
+    smallest = float.fromhex('0x1p-1074')
+    largest = sys.float_info.max
+    cases = [[-0.0], [-0.0, -0.0], [0.0, -0.0], [-smallest, -0.0], [0.0, smallest],
+             [-smallest, smallest], [largest], [-largest], [-largest, largest], [largest, largest], [-largest, -largest],
+             [largest / 2.0, largest / 2.0], [-sys.float_info.min, -smallest, 0.0]]
+    for size in range(1, 17):
+      cases.extend(([-0.0] * size, [0.125] * size,
+                    [(-1.0)**index * .01 * (index % 5) for index in range(size)],
+                    [(-8.0, -.3, -.3, .1, 0.0, .4, 1.5, 8.0)[index % 8] for index in range(size)]))
+    for values in cases:
+      with self.subTest(values=values):
+        self.assertTrue(all(math.isfinite(value) for value in values))
+        with np.errstate(over='ignore', under='ignore'):
+          expected = float(np.median(values))
+        # Hex equality checks signed zero as well as all finite mantissa bits.
+        self.assertEqual(_finite_median(iter(values)).hex(), expected.hex())
+        self.assertEqual(_finite_median(reversed(values)).hex(), expected.hex())
+
+  def test_first_confirmation_and_even_history_do_not_call_numpy_median(self):
+    fusion = HondaRadarFusion()
+    # The former first-confirmation path calls this six times and can lazily
+    # import numpy.ma. Fail that dependency, even if another test warmed it.
+    with patch.object(np, 'median', side_effect=AssertionError('optional median path called')) as median:
+      for frame in range(4):
+        out = advance(fusion, frame, distance=20.2, lateral=.1)
+        self.assertEqual(len(out['leads']), 3)
+        for lead in out['leads']:
+          self.assertEqual(lead['bindingSamples'], frame + 1)
+          self.assertEqual(lead['identityState'], 'unresolved' if frame < 2 else 'same')
+          self.assertEqual(lead['state'], 'associating' if frame < 2 else 'fused')
+        self.assertFalse(out['controlAllowed'])
+        self.assertFalse(out['calibrated'])
+      median.assert_not_called()
+    for binding in fusion.bindings.values():
+      self.assertTrue(binding.anchor_ready)
+      self.assertAlmostEqual(binding.anchor_x, -.2)
+      self.assertAlmostEqual(binding.anchor_y, -.1)
+
   def test_slot_migration_keeps_identity_and_does_not_consume_aux_twice(self):
     fusion = HondaRadarFusion()
     identifiers = []
