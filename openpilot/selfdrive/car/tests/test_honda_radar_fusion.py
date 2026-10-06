@@ -332,6 +332,74 @@ class TestHondaRadarFusion(unittest.TestCase):
       self.assertEqual(out['leads'][0]['velocityWeight'], 0)
       self.assertTrue(out['leads'][0]['present'])
 
+  def test_unconfirmed_anchor_restarts_from_recorded_normal_control_residuals(self):
+    # Extracted from a317f4c6's case-rows.jsonl.gz, modelIndex 0, 2026-10-06.
+    # All three rejected controls retained bindingSamples=1. The initial pair
+    # here represents the frozen bad anchor seen in each scoring window, not
+    # the original birth coordinates (R261's anchor had already been rotated).
+    # Subsequent residuals and model-message intervals are recorded values;
+    # using those intervals as camera-source times isolates this state-machine
+    # regression. This fixture is not raw-CAN replay or measurement truth.
+    controls = {
+      'R593': ((-5.7920886676197005, .02005371777141185), (
+        (1493728633907, -3.924990357109465, .08904118491824085),
+        (1493778743855, -4.5826750714371585, .0944010486147473),
+        (1493879832657, -4.634486883059154, .060832681239691905))),
+      'R261_V116': ((-4.729434305607998, -4.005135438324269), (
+        (1328323633085, -6.071545733728303, .9131668062119549),
+        (1328422421210, -6.064989164941629, .8581950641518272),
+        (1328472049908, -5.974625120937443, .9042223332804173))),
+      'normal_support_8a': ((2.9234684482028266, .9629951636801168), (
+        (216954748978, -1.9295942370739212, .04203073164606558),
+        (217005046687, -1.7848578559885961, .03191549312926778),
+        (217105023249, -1.4408101636266153, .00021697739462706034))),
+    }
+    for name, (anchor, rows) in controls.items():
+      with self.subTest(control=name):
+        seed_ns = rows[0][0] - STEP
+        binding, history = Binding(1, seed_ns), EgoHistory()
+        history.add(Ego(seed_ns, 10.0, 0.0))
+        binding.observe(seed_ns, seed_ns, 1, 20.0 - anchor[0], 0.0, *anchor, history)
+        self.assertFalse(binding.anchor_ready)
+        for sequence, (stamp, rx, ry) in enumerate(rows, 2):
+          history.add(Ego(stamp, 10.0, 0.0))
+          result = binding.observe(stamp, stamp, sequence, 20.0 - rx, 0.0, rx, ry, history)
+          self.assertEqual(result['rejectionMonoTime'], 0)
+          if sequence < 4:
+            self.assertEqual(result['identityState'], 'unresolved')
+            self.assertFalse(binding.anchor_ready)
+        self.assertEqual(result['bindingSamples'], 3)
+        self.assertEqual(result['identityState'], 'same')
+        self.assertTrue(binding.anchor_ready)
+        self.assertEqual(binding.start_ns, rows[0][0])
+
+  def test_unconfirmed_instability_does_not_earn_or_permanently_veto_identity(self):
+    binding, history = Binding(1, START), EgoHistory()
+    for frame in range(12):
+      stamp, residual = START + frame * STEP, 2.0 * (frame % 2)
+      history.add(Ego(stamp, 10.0, 0.0))
+      result = binding.observe(stamp, stamp, frame + 1, 20.0 - residual, 0.0, residual, 0.0, history)
+      self.assertEqual(result['identityState'], 'unresolved')
+      self.assertEqual(result['bindingSamples'], 1)
+      self.assertFalse(binding.anchor_ready)
+      self.assertEqual(result['rejectionMonoTime'], 0)
+
+  def test_unconfirmed_pair_gap_restarts_three_sample_confirmation(self):
+    binding, history = Binding(1, START), EgoHistory()
+    for frame in range(2):
+      stamp = START + frame * STEP
+      history.add(Ego(stamp, 10.0, 0.0))
+      binding.observe(stamp, stamp, frame + 1, 20.0, 0.0, 0.0, 0.0, history)
+    binding.reject('noMatch', START + 2 * STEP)
+    for frame in range(3, 6):
+      stamp = START + frame * STEP
+      history.add(Ego(stamp, 10.0, 0.0))
+      result = binding.observe(stamp, stamp, frame + 1, 18.0, 0.0, 2.0, 0.0, history)
+      self.assertEqual(result['rejectionMonoTime'], 0)
+      self.assertEqual(result['identityState'], 'same' if frame == 5 else 'unresolved')
+      self.assertEqual(result['bindingSamples'], frame - 2)
+    self.assertEqual(binding.start_ns, START + 3 * STEP)
+
   def test_large_constant_same_vehicle_bias_and_slow_drift_remain_eligible(self):
     fusion = HondaRadarFusion()
     for frame in range(300):

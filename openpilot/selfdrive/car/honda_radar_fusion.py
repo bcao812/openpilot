@@ -148,11 +148,11 @@ class Binding:
     diagnostic_anchor_y = -s * self.anchor_x + c * self.anchor_y
     separated = abs(dx) > RESIDUAL_X_LIMIT or abs(dy) > RESIDUAL_Y_LIMIT
     trusted = abs(dx) <= RESIDUAL_X_TRUST and abs(dy) <= RESIDUAL_Y_TRUST
-    if separated:
+    if separated and self.anchor_ready:
       self.reject('visionJump' if vision_jump else 'residualSeparation', model_ns,
                   abs(dx) > RESIDUAL_X_DIFFERENT or abs(dy) > RESIDUAL_Y_DIFFERENT)
       self.recovery.clear()
-    elif self.rejection_ns:
+    elif self.rejection_ns and self.anchor_ready:
       if not trusted:
         self.recovery.clear()
       elif independent:
@@ -166,6 +166,17 @@ class Binding:
           self.rejection_ns = 0
           self.state, self.reason = 'same', 'reconfirmed'
     elif independent:
+      if not self.anchor_ready and (separated or self.rejection_ns):
+        # One unconfirmed pair can contain a startup transient or a changing
+        # visual hypothesis. It is not an established identity whose residual
+        # can permanently veto the target. Rebuild the confirmation window
+        # from new independent evidence; confirmed-pair rejection stays latched.
+        self.samples.clear()
+        self.recovery.clear()
+        self.rejection_ns = 0
+        self.start_ns = source_ns
+        self.anchor_x, self.anchor_y = rx, ry
+        self.state, self.reason = 'unresolved', 'confirmationRestart'
       was_same = self.state == 'same'
       pair_dt = (source_ns - self.last_pair_ns) / 1e9 if self.last_pair_ns else 0.0
       self.samples.append(PairResidual(source_ns, position_seq, rx, ry))
