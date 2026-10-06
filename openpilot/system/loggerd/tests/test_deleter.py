@@ -1,6 +1,7 @@
 from collections import namedtuple
 from pathlib import Path
 from collections.abc import Sequence
+from unittest.mock import patch
 
 import openpilot.system.loggerd.deleter as deleter
 from openpilot.system.loggerd.tests.loggerd_tests_common import UploaderTestCase
@@ -21,7 +22,7 @@ class TestDeleter(UploaderTestCase):
     self.f_type = "fcamera.hevc"
     super().openpilot_setup_method()
     self.fake_stats = Stats(f_bavail=0, f_blocks=10, f_frsize=4096)
-    deleter.os.statvfs = self.fake_statvfs  # ty: ignore[invalid-assignment]  # test double
+    self.enterContext(patch.object(deleter.os, 'statvfs', self.fake_statvfs))
 
   def test_delete(self):
     f_path = self.make_file_with_data(self.seg_dir, self.f_type)
@@ -78,3 +79,46 @@ class TestDeleter(UploaderTestCase):
 
     assert deleter.deleter_step() == (True, None)
     assert f_path.exists(), "File deleted when locked"
+
+  def test_retains_logs_below_the_previous_five_gib_floor(self):
+    f_path = self.make_file_with_data(self.seg_dir, self.f_type)
+    self.fake_stats = Stats(f_bavail=3 * 1024**3, f_blocks=30 * 1024**3, f_frsize=1)
+    assert deleter.deleter_step() == (False, None)
+    assert f_path.exists()
+
+  def test_deletes_before_the_seven_percent_no_entry_threshold(self):
+    f_path = self.make_file_with_data(self.seg_dir, self.f_type)
+    self.fake_stats = Stats(f_bavail=int(2.3 * 1024**3), f_blocks=30 * 1024**3, f_frsize=1)
+    assert 100 * self.fake_stats.f_bavail / self.fake_stats.f_blocks > 7
+    assert deleter.deleter_step() == (True, str(f_path.parent))
+
+  def test_absolute_floor_still_protects_a_small_volume(self):
+    f_path = self.make_file_with_data(self.seg_dir, self.f_type)
+    self.fake_stats = Stats(f_bavail=512 * 1024**2, f_blocks=4 * 1024**3, f_frsize=1)
+    assert deleter.deleter_step() == (True, str(f_path.parent))
+
+  def test_faster_idle_check_and_reclaim_do_not_touch_an_open_segment(self):
+    locked = self.make_file_with_data(self.seg_format.format(0), self.f_type, lock=True)
+    closed = self.make_file_with_data(self.seg_format.format(1), self.f_type)
+    self.fake_stats = Stats(f_bavail=3 * 1024**3, f_blocks=30 * 1024**3, f_frsize=1)
+    test = self
+
+    class Exit:
+      stopped = False
+      waits = []
+
+      def is_set(self):
+        return self.stopped
+
+      def wait(self, seconds):
+        self.waits.append(seconds)
+        if len(self.waits) == 1:
+          test.fake_stats = Stats(f_bavail=int(2.3 * 1024**3), f_blocks=30 * 1024**3, f_frsize=1)
+        else:
+          self.stopped = True
+
+    event = Exit()
+    with patch.object(deleter.Path, 'is_mount', return_value=False):
+      deleter.deleter_thread(event)
+    assert event.waits == [1, .1]
+    assert locked.exists() and not closed.exists()

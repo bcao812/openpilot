@@ -9,12 +9,14 @@
 #include "common/params.h"
 #include "system/loggerd/encoder/encoder.h"
 #include "system/loggerd/loggerd.h"
+#include "system/loggerd/road_recording.h"
 #include "system/loggerd/video_writer.h"
 
 ExitHandler do_exit;
 
 struct LoggerdState {
   LoggerState logger;
+  RoadRecordingGate road_recording;
   std::atomic<double> last_camera_seen_tms{0.0};
   std::atomic<int> ready_to_rotate{0};  // count of encoders ready to rotate
   int max_waiting = 0;
@@ -63,12 +65,29 @@ struct RemoteEncoder {
   bool marked_ready_to_rotate = false;
   bool seen_first_packet = false;
   bool audio_initialized = false;
+  bool video_header_written = false;
+  uint32_t saved_frames = 0;
+  uint64_t recording_generation = 0;
 };
 
 size_t write_encode_data(LoggerdState *s, cereal::Event::Reader event, RemoteEncoder &re, const EncoderInfo &encoder_info) {
   auto edata = (event.*(encoder_info.get_encode_data_func))();
   auto idx = edata.getIdx();
   auto flags = idx.getFlags();
+  const bool road_video = event.isNarrowRoadEncodeData() || event.isWideRoadEncodeData();
+
+  if (road_video) {
+    // Python carControl publishers timestamp CLOCK_MONOTONIC, not BOOTTIME.
+    if (!encoder_info.record || !s->road_recording.should_record(nanos_monotonic())) {
+      re.recording = false;
+      return 0;
+    }
+    // Also restart at a keyframe when no video packets arrived during a gap.
+    if (re.recording_generation != s->road_recording.generation()) {
+      re.recording = false;
+      re.recording_generation = s->road_recording.generation();
+    }
+  }
 
   // if we aren't recording yet, try to start, since we are in the correct segment
   if (!re.recording) {
@@ -80,9 +99,18 @@ size_t write_encode_data(LoggerdState *s, cereal::Event::Reader event, RemoteEnc
         re.dropped_frames = 0;
       }
       if (encoder_info.record) {
-        // write the header
-        auto header = edata.getHeader();
-        re.writer->write((uint8_t *)header.begin(), header.size(), idx.getTimestampEof() / 1000, true, false);
+        // Create a road file only when a frame will actually be saved. Keep the
+        // writer open across pauses in this segment: reopening it truncates it.
+        if (!re.writer) {
+          re.writer = std::make_unique<VideoWriter>(s->logger.segmentPath().c_str(),
+            encoder_info.filename, idx.getType() != cereal::EncodeIndex::Type::FULL_H_E_V_C,
+            edata.getWidth(), edata.getHeight(), encoder_info.fps, idx.getType());
+        }
+        if (!re.video_header_written) {
+          auto header = edata.getHeader();
+          re.writer->write((uint8_t *)header.begin(), header.size(), idx.getTimestampEof() / 1000, true, false);
+          re.video_header_written = true;
+        }
       }
       re.recording = true;
     } else {
@@ -107,6 +135,14 @@ size_t write_encode_data(LoggerdState *s, cereal::Event::Reader event, RemoteEnc
   auto evt = bmsg.initEvent(event.getValid());
   evt.setLogMonoTime(event.getLogMonoTime());
   (evt.*(encoder_info.set_encode_idx_func))(idx);
+  if (road_video) {
+    auto saved_idx = event.isNarrowRoadEncodeData() ? evt.getNarrowRoadEncodeIdx() : evt.getWideRoadEncodeIdx();
+    // These indices address the saved file, which now has gaps in source time.
+    // Preserve frameId, encodeId and camera timestamps for log/video alignment.
+    saved_idx.setSegmentNum(s->logger.segment());
+    saved_idx.setSegmentId(re.saved_frames);
+    saved_idx.setSegmentIdEncode(re.saved_frames++);  // road encoders have no B frames
+  }
   auto new_msg = bmsg.toBytes();
   s->logger.write((uint8_t *)new_msg.begin(), new_msg.size(), true);  // always in qlog?
   return new_msg.size();
@@ -136,13 +172,19 @@ int handle_encoder_msg(LoggerdState *s, Message *msg, std::string &name, struct 
     // if this is a new segment, we close any possible old segments, move to the new, and process any queued packets
     if (re.current_segment != s->logger.segment()) {
       // if we aren't actually recording, don't create the writer
-      if (encoder_info.record) {
+      const bool road_video = event.isNarrowRoadEncodeData() || event.isWideRoadEncodeData();
+      if (encoder_info.record || road_video) {
         assert(encoder_info.filename != NULL);
-        re.writer.reset(new VideoWriter(s->logger.segmentPath().c_str(),
-                                        encoder_info.filename, idx.getType() != cereal::EncodeIndex::Type::FULL_H_E_V_C,
-                                        edata.getWidth(), edata.getHeight(), encoder_info.fps, idx.getType()));
+        re.writer.reset();
+        if (!road_video) {
+          re.writer.reset(new VideoWriter(s->logger.segmentPath().c_str(),
+                                          encoder_info.filename, idx.getType() != cereal::EncodeIndex::Type::FULL_H_E_V_C,
+                                          edata.getWidth(), edata.getHeight(), encoder_info.fps, idx.getType()));
+        }
         re.recording = false;
         re.audio_initialized = false;
+        re.video_header_written = false;
+        re.saved_frames = 0;
       }
       re.current_segment = s->logger.segment();
       re.marked_ready_to_rotate = false;
@@ -290,6 +332,13 @@ void loggerd_thread() {
       Message *msg = nullptr;
       while (!do_exit && (msg = sock->receive(true))) {
         const bool in_qlog = service.freq != -1 && (service.counter++ % service.freq == 0);
+
+        if (service.name == "carControl") {
+          capnp::FlatArrayMessageReader reader({(capnp::word *)msg->getData(), msg->getSize() / sizeof(capnp::word)});
+          auto event = reader.getRoot<cereal::Event>();
+          s.road_recording.update(event.getCarControl().getLongActive(), event.getValid(),
+                                  event.getLogMonoTime(), nanos_monotonic());
+        }
 
         if (service.record_audio) {
           capnp::FlatArrayMessageReader cmsg(kj::ArrayPtr<capnp::word>((capnp::word *)msg->getData(), msg->getSize() / sizeof(capnp::word)));

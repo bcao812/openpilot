@@ -118,7 +118,7 @@ class TestLoggerd(OpenpilotTestCase):
     ]
 
     sm = messaging.SubMaster(["narrowRoadEncodeData"])
-    pm = messaging.PubMaster([s for _, _, s in streams] + ["rawAudioData"])
+    pm = messaging.PubMaster([s for _, _, s in streams] + ["rawAudioData", "carControl"])
     vipc_server = VisionIpcServer("camerad")
     for stream_type, frame_spec, _ in streams:
       vipc_server.create_buffers_with_sizes(stream_type, 40, *(frame_spec))
@@ -132,6 +132,10 @@ class TestLoggerd(OpenpilotTestCase):
 
     fps = 20
     for n in range(1, int(num_segs * segment_length * fps) + 1):
+      control = messaging.new_message('carControl', valid=True)
+      control.carControl.longActive = True
+      pm.send('carControl', control)
+      assert pm.wait_for_readers_to_update('carControl', timeout=5)
       # send video
       for stream_type, frame_spec, state in streams:
         dat = np.empty(frame_spec[2], dtype=np.uint8)

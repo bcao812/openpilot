@@ -95,11 +95,10 @@ public:
   std::vector<EncoderInfo> encoder_infos;
 };
 
-// Recording the road and wide-road cameras costs ~20 Mbps of the device's storage budget, against
-// ~0.256 Mbps for qcamera.ts. Analysis on this fork reads rlog; the full-resolution hevc files are
-// only ever wanted for occasional visual confirmation, which qcamera covers. So unlike upstream
-// they are opt-in here: set the RecordRoadCameras param to restore upstream behaviour.
-// Note this only stops loggerd writing the files — encoderd still encodes and publishes the frames.
+// High-resolution road video is enabled by default in Params and can be changed
+// offroad in Device settings. loggerd saves it during longitudinal control and
+// for ten seconds afterwards. Encoders and the continuous qcamera are unchanged.
+// This startup setting is applied on the next drive.
 inline bool record_road_cameras() { return Params().getBool("RecordRoadCameras"); }
 
 const EncoderInfo main_road_encoder_info = {

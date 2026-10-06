@@ -10,8 +10,11 @@ from openpilot.system.loggerd.config import get_available_bytes, get_available_p
 from openpilot.system.loggerd.uploader import listdir_by_creation
 from openpilot.system.loggerd.xattr_cache import getxattr
 
-MIN_BYTES = 5 * 1024 * 1024 * 1024
-MIN_PERCENT = 10
+# Keep headroom above selfdrived's 7% outOfSpace/no-entry threshold. A smaller
+# absolute floor alone cannot lower the effective threshold on a large volume.
+MIN_BYTES = 1024 * 1024 * 1024
+MIN_PERCENT = 8
+IDLE_CHECK_SECONDS = 1
 
 DELETE_LAST = ['boot', 'crash']
 
@@ -132,7 +135,7 @@ def deleter_thread(exit_event: threading.Event):
           cloudlog.exception(f"issue deleting {delete_path}")
       exit_event.wait(.1)
     else:
-      exit_event.wait(30)
+      exit_event.wait(IDLE_CHECK_SECONDS)
 
 
 def main():

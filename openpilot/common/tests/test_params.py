@@ -126,6 +126,18 @@ class TestParams(OpenpilotTestCase):
     assert self.params.get("LiveParametersV2") is None
     assert self.params.get("LiveParametersV2", return_default=True) is None
 
+  def test_road_recording_default_and_explicit_opt_out(self):
+    self.params.remove("RecordRoadCameras")
+    assert self.params.get("RecordRoadCameras") is None
+    assert self.params.get_default_value("RecordRoadCameras") is True
+    assert self.params.get("RecordRoadCameras", return_default=True) is True
+    self.params.put_bool("RecordRoadCameras", False, block=True)
+    # Manager's default initialization must leave an explicit user choice alone.
+    default = self.params.get_default_value("RecordRoadCameras")
+    if self.params.get("RecordRoadCameras") is None:
+      self.params.put("RecordRoadCameras", default, block=True)
+    assert self.params.get("RecordRoadCameras", return_default=True) is False
+
   def test_params_get_type(self):
     # json
     self.params.put("LiveParameters", {"a": 0}, block=True)
