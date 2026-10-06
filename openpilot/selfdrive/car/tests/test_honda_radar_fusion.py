@@ -10,7 +10,7 @@ import numpy as np
 
 from opendbc.car.honda.bosch_a_radar import BoschARadarObserver
 from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
-from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, Track, _finite_median, finite, path_relation
+from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, Track, _finite_median, finite, path_relation, read
 
 START = 10_000_000_000
 STEP = 66_000_000
@@ -68,6 +68,88 @@ def projection_fixture():
 
 
 class TestHondaRadarFusion(unittest.TestCase):
+  def test_native_reads_preserve_scalars_defaults_properties_and_errors(self):
+    from openpilot.cereal import custom
+    native = custom.HondaRadarObservations.new_message()
+    native.observations = [observation(0)]
+    native.observations[0].yRel = -0.0
+    marker = object()
+    for root in (native, native.as_reader()):
+      target = root.observations[0]
+      groups = ((root, ('schemaVersion', 'sessionId', 'sequence', 'active', 'calibrated')),
+                (target, ('slot', 'positionMonoTime', 'velocitySeq', 'dRel', 'yRel', 'positionValid', 'reason')),
+                (target.raw, ('oemTrackId', 'lifecycleRaw', 'u10Raw', 'u11Raw')))
+      for value, fields in groups:
+        for name in fields:
+          with self.subTest(reader=type(value).__name__, field=name):
+            actual, expected = read(value, name, marker), getattr(value, name, marker)
+            self.assertIs(type(actual), type(expected))
+            self.assertEqual(actual.hex() if isinstance(actual, float) else str(actual),
+                             expected.hex() if isinstance(expected, float) else str(expected))
+        self.assertIs(read(value, 'notAnObservationField', marker), marker)
+        self.assertEqual(read(value, 'schema'), value.schema)
+        self.assertTrue(callable(read(value, 'to_dict')))
+        for name in (None, 1, []):
+          with self.assertRaises(TypeError) as actual_error:
+            read(value, name, marker)
+          with self.assertRaises(TypeError) as expected_error:
+            getattr(value, name, marker)
+          self.assertEqual(str(actual_error.exception), str(expected_error.exception))
+    class Ordinary:
+      value = 4
+      def __getattr__(self, name):
+        if name == 'dynamic':
+          return 7
+        if name == 'broken':
+          raise RuntimeError('ordinary accessor failed')
+        raise AttributeError(name)
+    self.assertEqual(read({'value': 3}, 'value'), 3)
+    self.assertIs(read({}, 'value', marker), marker)
+    self.assertEqual(read(Ordinary(), 'value'), 4)
+    self.assertEqual(read(Ordinary(), 'dynamic'), 7)
+    self.assertIs(read(Ordinary(), 'missing', marker), marker)
+    with self.assertRaisesRegex(RuntimeError, 'ordinary accessor failed'):
+      read(Ordinary(), 'broken', marker)
+
+  def test_native_fields_bypass_generic_lookup_without_caching_values(self):
+    from openpilot.cereal import custom
+    native = custom.HondaRadarObservations.new_message()
+    native.observations = [observation(0)]
+    builder, reader = native.observations[0], native.as_reader().observations[0]
+    with patch('openpilot.selfdrive.car.honda_radar_fusion.getattr', create=True,
+               side_effect=AssertionError('generic dynamic attribute lookup')):
+      for target in (builder, reader):
+        self.assertEqual(read(target, 'positionMonoTime'), START)
+        self.assertEqual(read(read(target, 'raw'), 'oemTrackId'), 7)
+        self.assertEqual(read(read(target, 'raw'), 'u11Raw'), 864)
+        self.assertEqual(str(read(target, 'reason')), 'uncalibrated')
+      builder.dRel = 23.0
+      self.assertEqual(read(builder, 'dRel'), 23.0)
+      self.assertEqual(read(reader, 'dRel'), 23.0)
+
+  def test_measure_preserves_joseph_updates_without_generic_array_constructors(self):
+    track, _ = projection_fixture()
+    track.mean[:] = 0.0
+    track.covariance = np.diag([1.0] * 4)
+    expected, mean, variances = [], np.zeros(4), np.ones(4)
+    values = (4.0, -2.0, 6.0, 8.0)
+    for index, value in enumerate(values):
+      mean[index], variances[index] = value / 2, .5
+      expected.append((mean.copy(), np.diag(variances)))
+    with patch.object(np, 'eye', side_effect=AssertionError('generic identity construction')), \
+         patch.object(np, 'outer', side_effect=AssertionError('generic outer construction')):
+      for index, value in enumerate(values):
+        track.measure(index, value, 1.0)
+        self.assertEqual(track.mean.tobytes(), expected[index][0].tobytes())
+        self.assertEqual(track.covariance.tobytes(), expected[index][1].tobytes())
+    # The shared identity template must survive all four independent corrections.
+    other, _ = projection_fixture()
+    other.mean[:] = 0.0
+    other.covariance = np.diag([1.0] * 4)
+    other.measure(0, 4.0, 1.0)
+    self.assertEqual(other.mean.tobytes(), expected[0][0].tobytes())
+    self.assertEqual(other.covariance.tobytes(), expected[0][1].tobytes())
+
   def test_finite_history_median_matches_numpy(self):
     smallest = float.fromhex('0x1p-1074')
     largest = sys.float_info.max

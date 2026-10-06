@@ -11,6 +11,7 @@ import math
 import time
 
 import numpy as np
+from capnp.lib.capnp import _DynamicStructBuilder, _DynamicStructReader
 
 from opendbc.car.honda.bosch_a_radar import radar_scan_continuous
 
@@ -37,10 +38,23 @@ RESIDUAL_Y_TRUST = .25
 BIAS_TIME_CONSTANT = 3.0
 BIAS_X_RATE = .1
 BIAS_Y_RATE = .05
+_IDENTITY4 = np.eye(4)
+_IDENTITY4.setflags(write=False)
+# Native dynamic fields normally incur a failed ordinary attribute lookup
+# before this same handler runs. Static attributes retain normal lookup order.
+_CEREAL_READERS = {cls: (cls.__getattr__, frozenset(dir(cls))) for cls in (_DynamicStructBuilder, _DynamicStructReader)}
 
 
 def read(obj, name, default=None):
-  return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
+  if isinstance(obj, dict):
+    return obj.get(name, default)
+  native = _CEREAL_READERS.get(type(obj))
+  if native is not None and type(name) is str and name not in native[1]:
+    try:
+      return native[0](obj, name)
+    except AttributeError:
+      pass
+  return getattr(obj, name, default)
 
 
 def finite(*values):
@@ -333,10 +347,10 @@ class Track:
     denom = self.covariance[index, index] + variance
     gain = self.covariance[:, index] / denom
     self.mean += gain * innovation
-    identity = np.eye(4)
+    identity = _IDENTITY4.copy()
     identity[:, index] -= gain
     # Joseph form keeps roundoff from producing a negative uncertainty.
-    self.covariance = identity @ self.covariance @ identity.T + np.outer(gain, gain) * variance
+    self.covariance = identity @ self.covariance @ identity.T + (gain[:, None] * gain[None, :]) * variance
 
   def measure_acceleration(self, timestamp, history):
     """Differentiate accepted velocity posteriors once per velocity sample.
