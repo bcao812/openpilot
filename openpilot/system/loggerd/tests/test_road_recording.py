@@ -33,7 +33,8 @@ ENCODERS = (*ROAD, QCAM)
 
 def decoded_hashes(path):
   command = [str(Path(ffmpeg.BIN_DIR) / 'ffmpeg'), '-nostdin', '-hide_banner', '-loglevel', 'error', '-threads', '1',
-             '-i', str(path), '-pix_fmt', 'yuv420p', '-fps_mode', 'passthrough', '-f', 'rawvideo', '-']
+             '-i', str(path), '-pix_fmt', 'yuv420p', '-fps_mode', 'passthrough', '-enc_time_base', '1:1000000',
+             '-f', 'rawvideo', '-']
   result = subprocess.run(command, capture_output=True, check=True)
   assert not result.stderr, result.stderr.decode(errors='replace')
   stride = 96 * 64 * 3 // 2
