@@ -91,7 +91,8 @@ class Binding:
   """Causal, hypothesis-specific identity evidence; never a model object ID.
 
   Residuals use a common rotating reference so a shared ego turn does not itself
-  appear to change identity. A rejection survives option/gate/probability gaps.
+  appear to change identity. A residual-separation rejection survives option,
+  gate and probability gaps; a soft suspension requires a new confirmation.
   Only new position AND camera-source samples can confirm or recover a pair.
   'different' denotes algorithmic incompatibility, not physical ground truth.
   """
@@ -110,34 +111,65 @@ class Binding:
   state: str = 'unresolved'
   reason: str = 'confirmation'
   rejection_ns: int = 0
+  separation_latched: bool = False
+  reference_invalid_reason: str = ''
   samples: deque = field(default_factory=lambda: deque(maxlen=16))
   recovery: deque = field(default_factory=lambda: deque(maxlen=16))
 
-  def reject(self, reason, timestamp, different=False):
+  def reject(self, reason, timestamp, different=False, *, separation=False):
     self.recovery.clear()
-    if not self.rejection_ns:
-      self.rejection_ns = timestamp
-      self.reason = reason
-    if different or self.state != 'different':
-      self.state = 'different' if different else 'unresolved'
-    if different:
-      self.reason = reason
+    if separation:
+      if not self.separation_latched:
+        self.rejection_ns, self.reason = timestamp, reason
+      self.separation_latched = True
+      if different or self.state != 'different':
+        self.state = 'different' if different else 'unresolved'
+      if different:
+        self.reason = reason
+    elif not self.separation_latched:
+      # A missing eligible association is not evidence of another identity.
+      # Its former reference cannot qualify a new episode without confirmation.
+      if not self.rejection_ns:
+        self.rejection_ns, self.reason = timestamp, reason
+      self.state, self.anchor_ready, self.start_ns = 'unresolved', False, 0
+      self.samples.clear()
 
-  def observe(self, model_ns, source_ns, position_seq, distance, velocity, residual_x, residual_y, history):
+  def diagnostics(self, independent=False, dx=0.0, dy=0.0, anchor_x=0.0, anchor_y=0.0):
+    reason = 'referenceInvalid:' + self.reference_invalid_reason if self.reference_invalid_reason else self.reason
+    return {'identityState': self.state, 'identityReason': reason, 'bindingStartMonoTime': self.start_ns,
+            'bindingSamples': len(self.samples), 'recoverySamples': len(self.recovery), 'independentPair': independent,
+            'residualDeltaX': dx, 'residualDeltaY': dy, 'bindingAnchorX': anchor_x, 'bindingAnchorY': anchor_y,
+            'rejectionMonoTime': self.rejection_ns}
+
+  def observe(self, model_ns, source_ns, position_seq, distance, velocity, residual_x, residual_y, history,
+              *, allow_confirmation=True):
     independent = source_ns > self.last_pair_ns and position_seq > self.last_position_seq
     dt = (source_ns - self.last_source_ns) / 1e9 if self.last_source_ns else 0.0
     vision_jump = (self.last_source_ns and dt > 0 and
                    abs(distance - self.last_vision_distance - self.last_vision_velocity * dt) > 3.0)
+    timing_reason = ''
     if model_ns < self.last_model_ns or source_ns < self.last_source_ns:
-      independent = False
-      self.reject('sourceOrder', model_ns)
+      timing_reason = 'sourceOrder'
     elif self.last_source_ns and dt > 0:
       ego = history.at(self.last_source_ns)
       if dt > MODEL_MAX_AGE_NS / 1e9 or ego is None:
-        independent = False
-        self.reject('sourceGap', model_ns)
-      else:
+        timing_reason = 'sourceGap'
+      elif not self.reference_invalid_reason:
         self.rotation += ego.yaw * dt
+    if timing_reason:
+      self.reject(timing_reason, model_ns)
+      if self.separation_latched:
+        self.reference_invalid_reason = timing_reason
+    if timing_reason or self.reference_invalid_reason:
+      # No aligned reference means no new identity claim and no recovery from
+      # that reference. An existing separation remains blocked until a new
+      # track/session; a soft suspension can build a fresh confirmed episode.
+      self.recovery.clear()
+      self.last_source_ns = max(self.last_source_ns, source_ns)
+      self.last_model_ns = max(self.last_model_ns, model_ns)
+      self.last_pair_ns = max(self.last_pair_ns, source_ns)
+      self.last_position_seq = max(self.last_position_seq, position_seq)
+      return self.diagnostics()
     c, s = math.cos(self.rotation), math.sin(self.rotation)
     rx, ry = c * residual_x - s * residual_y, s * residual_x + c * residual_y
     if not self.samples:
@@ -150,9 +182,9 @@ class Binding:
     trusted = abs(dx) <= RESIDUAL_X_TRUST and abs(dy) <= RESIDUAL_Y_TRUST
     if separated and self.anchor_ready:
       self.reject('visionJump' if vision_jump else 'residualSeparation', model_ns,
-                  abs(dx) > RESIDUAL_X_DIFFERENT or abs(dy) > RESIDUAL_Y_DIFFERENT)
+                  abs(dx) > RESIDUAL_X_DIFFERENT or abs(dy) > RESIDUAL_Y_DIFFERENT, separation=True)
       self.recovery.clear()
-    elif self.rejection_ns and self.anchor_ready:
+    elif allow_confirmation and self.rejection_ns and self.anchor_ready:
       if not trusted:
         self.recovery.clear()
       elif independent:
@@ -164,8 +196,9 @@ class Binding:
           self.samples = deque(self.recovery, maxlen=16)
           self.recovery.clear()
           self.rejection_ns = 0
+          self.separation_latched = False
           self.state, self.reason = 'same', 'reconfirmed'
-    elif independent:
+    elif allow_confirmation and independent:
       if not self.anchor_ready and (separated or self.rejection_ns):
         # One unconfirmed pair can contain a startup transient or a changing
         # visual hypothesis. It is not an established identity whose residual
@@ -201,10 +234,7 @@ class Binding:
       self.last_vision_distance, self.last_vision_velocity = distance, velocity
     self.last_source_ns = max(self.last_source_ns, source_ns)
     self.last_model_ns = max(self.last_model_ns, model_ns)
-    return {'identityState': self.state, 'identityReason': self.reason, 'bindingStartMonoTime': self.start_ns,
-            'bindingSamples': len(self.samples), 'recoverySamples': len(self.recovery), 'independentPair': independent,
-            'residualDeltaX': dx, 'residualDeltaY': dy, 'bindingAnchorX': diagnostic_anchor_x,
-            'bindingAnchorY': diagnostic_anchor_y, 'rejectionMonoTime': self.rejection_ns}
+    return self.diagnostics(independent and allow_confirmation, dx, dy, diagnostic_anchor_x, diagnostic_anchor_y)
 
 
 @dataclass
@@ -675,14 +705,28 @@ class HondaRadarFusion:
         lead['reason'] = 'ambiguous' if options else 'noMatch'
         lead['identityReason'] = lead['reason']
         self.counts['ambiguous'] += bool(options)
+        rejected_checks = {}
+        for _, candidate, dx, dy, gate_x, gate_y in considered:
+          track, mean, *_ = candidate
+          binding = self.bindings.get((index, track.identifier))
+          if binding is not None and binding.anchor_ready:
+            # A gate miss can still expose a real cut-in. Check only for
+            # contradiction before suspension: no learning or confirmation
+            # from a candidate that failed the association gates.
+            diagnostics = binding.observe(model_ns, source_ns, track.position_seq, lead['dRel'], lead['vRel'],
+                                          dx, dy, self.history, allow_confirmation=False)
+            rejected_checks[track.identifier] = (diagnostics, dx, dy, float(mean[2]) - ego.speed - lead['vRel'], gate_x, gate_y)
         self._suspend_bindings(index, lead['reason'], model_ns)
         previous = [(track, self.bindings[(index, track.identifier)]) for track in self.tracks.values()
                     if (index, track.identifier) in self.bindings]
         if previous:
           old, binding = max(previous, key=lambda value: value[1].last_model_ns)
-          lead.update(identityState=binding.state, identityReason=binding.reason,
-                      rejectionMonoTime=binding.rejection_ns, bindingStartMonoTime=binding.start_ns,
-                      bindingSamples=len(binding.samples))
+          lead.update(binding.diagnostics())
+          if old.identifier in rejected_checks:
+            diagnostics, dx, dy, dv, gate_x, gate_y = rejected_checks[old.identifier]
+            lead.update(candidateTrackId=old.identifier, residualX=dx, residualY=dy, residualV=dv, gateX=gate_x, gateY=gate_y)
+            for name in ('residualDeltaX', 'residualDeltaY', 'bindingAnchorX', 'bindingAnchorY'):
+              lead[name] = diagnostics[name]
           if not old.active:
             lead.update(candidateTrackId=old.identifier, reason='radarInvalid', identityReason=old.last_invalid_reason)
         result.append(lead)

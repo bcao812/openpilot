@@ -400,6 +400,191 @@ class TestHondaRadarFusion(unittest.TestCase):
       self.assertEqual(result['bindingSamples'], frame - 2)
     self.assertEqual(binding.start_ns, START + 3 * STEP)
 
+  def test_confirmed_gate_boundary_gap_reconfirms_recorded_controls(self):
+    # First qualified losses in trace-7be99836: R593 |rx|=5.17799
+    # exceeds gx=5.10759; R261 |ry|=1.59242 exceeds gy=1.5. Neither
+    # departure contradicted its prior residual reference by .75/.5.
+    # Fixed radar positions and zero yaw isolate that gate/state transition;
+    # the residual numbers come from the trace, not measurement ground truth.
+    controls = (
+      ('R593', 42.5, (-4.931, -.097), (-5.177987768681298, -.11142307043087668),
+       ((-4.158813367868902, -.13718354342055566), (-3.917114585820144, -.14760380910066095),
+        (-3.762161462945656, -.13876966110687344)), 1.69, .6),
+      ('R261', 35.0, (-5.045, -1.149), (-5.6776976448845105, -1.5924203804285284),
+       ((-6.437005571497117, -1.4863352667095562), (-6.37742125499679, -1.4921873133359584),
+        (-6.304464963696802, -1.42373376084993)), 2.6, .6),
+    )
+    for name, radar_x, initial, missed, resumed, sx, sy in controls:
+      with self.subTest(control=name):
+        fusion = HondaRadarFusion()
+        for frame in range(12):
+          out = advance(fusion, frame, [observation(frame, distance=radar_x)],
+                        distance=radar_x - initial[0], lateral=-initial[1], x_std=sx, y_std=sy)
+        self.assertGreater(out['leads'][0]['distanceWeight'], .5)
+        out = advance(fusion, 12, [observation(12, distance=radar_x)],
+                      distance=radar_x - missed[0], lateral=-missed[1], x_std=sx, y_std=sy)
+        lead = out['leads'][0]
+        self.assertEqual(lead['reason'], 'noMatch')
+        self.assertLess(abs(lead['residualDeltaX']), .75)
+        self.assertLess(abs(lead['residualDeltaY']), .5)
+        self.assertEqual(lead['distanceWeight'], 0)
+        for frame, (rx, ry) in enumerate(resumed, 13):
+          out = advance(fusion, frame, [observation(frame, distance=radar_x)],
+                        distance=radar_x - rx, lateral=-ry, x_std=sx, y_std=sy)
+          lead = out['leads'][0]
+          if frame < 15:
+            self.assertEqual(lead['state'], 'associating')
+            self.assertEqual(lead['distanceWeight'], 0)
+            self.assertEqual(lead['velocityWeight'], 0)
+          else:
+            self.assertEqual(lead['identityState'], 'same')
+            self.assertGreater(lead['distanceWeight'], 0)
+          binding = fusion.bindings[(0, out['tracks'][0]['trackId'])]
+          self.assertFalse(binding.separation_latched)
+          self.assertEqual(lead['bindingSamples'], frame - 12)
+
+  def test_out_of_gate_cut_in_keeps_old_pair_rejected(self):
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      out = advance(fusion, frame, x_std=2.5)
+    identifier = out['tracks'][0]['trackId']
+    sample_count = out['leads'][0]['bindingSamples']
+    # This jump skips the entire absolute association gate. Missing that gate
+    # must not hide its explicit contradiction of the confirmed old pair.
+    out = advance(fusion, 12, distance=6.0, x_std=2.5)
+    self.assertEqual(out['leads'][0]['reason'], 'noMatch')
+    self.assertEqual(out['leads'][0]['identityState'], 'different')
+    self.assertEqual(out['leads'][0]['bindingSamples'], sample_count)
+    self.assertTrue(fusion.bindings[(0, identifier)].separation_latched)
+    for frame in range(13, 25):
+      out = advance(fusion, frame, distance=16.0, x_std=2.5)
+      self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+      self.assertEqual(out['leads'][0]['velocityWeight'], 0)
+      self.assertEqual(out['leads'][0]['dRel'], 16.0)
+
+  def test_ambiguous_match_checks_rejection_without_confirming_old_pair(self):
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      advance(fusion, frame)
+    old_binding = next(binding for (index, _), binding in fusion.bindings.items() if index == 0)
+    count = len(old_binding.samples)
+    samples = [observation(12), observation(12, distance=24.0, slot=1, oem=8),
+               observation(12, distance=26.0, slot=2, oem=9)]
+    out = advance(fusion, 12, samples, distance=25.0, x_std=2.5)
+    self.assertEqual(out['leads'][0]['reason'], 'ambiguous')
+    self.assertTrue(old_binding.separation_latched)
+    self.assertEqual(len(old_binding.samples), count)
+    self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+
+  def test_hard_rejection_survives_every_soft_gap(self):
+    for reason in ('visionUnqualified', 'visionUncertainty', 'nearVision', 'noMatch', 'ambiguous',
+                   'candidateChanged', 'sourceGap', 'sourceOrder'):
+      with self.subTest(reason=reason):
+        binding, history = Binding(1, START), EgoHistory()
+        for frame in range(4):
+          stamp = START + frame * STEP
+          history.add(Ego(stamp, 10.0, 0.0))
+          binding.observe(stamp, stamp, frame + 1, 20.0, 0.0, 0.0, 0.0, history)
+        stamp = START + 4 * STEP
+        history.add(Ego(stamp, 10.0, 0.0))
+        binding.observe(stamp, stamp, 5, 19.0, 0.0, 1.0, 0.0, history)
+        rejection = binding.rejection_ns
+        self.assertEqual(binding.state, 'unresolved')
+        self.assertTrue(binding.separation_latched)
+        binding.reject(reason, stamp + 1)
+        self.assertEqual(binding.rejection_ns, rejection)
+        self.assertTrue(binding.anchor_ready)
+        self.assertTrue(binding.separation_latched)
+        for frame in range(5, 10):
+          stamp = START + frame * STEP
+          history.add(Ego(stamp, 10.0, 0.0))
+          result = binding.observe(stamp, stamp, frame + 1, 18.0, 0.0, 2.0, 0.0, history)
+          self.assertEqual(result['identityState'], 'different')
+          self.assertEqual(result['rejectionMonoTime'], rejection)
+
+  def test_source_time_discontinuity_never_creates_or_escalates_different(self):
+    for reason in ('sourceGap', 'sourceOrder'):
+      for already_rejected in (False, True):
+        with self.subTest(reason=reason, already_rejected=already_rejected):
+          binding, history = Binding(1, START), EgoHistory()
+          for frame in range(5):
+            stamp = START + frame * STEP
+            residual = 1.0 if already_rejected and frame == 4 else 0.0
+            history.add(Ego(stamp, 10.0, 0.0))
+            binding.observe(stamp, stamp, frame + 1, 20.0 - residual, 0.0, residual, 0.0, history)
+          last = stamp
+          # R261's real gap was 200,006,979 ns: just beyond valid reference
+          # continuity, yet the previous implementation created 'different'.
+          source = last + 200_006_979 if reason == 'sourceGap' else last - 1
+          now = max(source, last + 1)
+          history.add(Ego(now, 10.0, 0.0))
+          result = binding.observe(now, source, 6, 16.0, 0.0, 4.0, 0.0, history)
+          self.assertEqual(result['identityState'], 'unresolved')
+          self.assertFalse(result['independentPair'])
+          self.assertEqual(result['recoverySamples'], 0)
+          if already_rejected:
+            self.assertEqual(result['identityReason'], 'referenceInvalid:' + reason)
+          # Re-publication of that same invalid source cannot become fresh
+          # confirmation merely because the validation clock moved forward.
+          repeated = binding.observe(now + 1, source, 6, 16.0, 0.0, 4.0, 0.0, history)
+          self.assertFalse(repeated['independentPair'])
+          self.assertEqual(repeated['bindingSamples'], result['bindingSamples'])
+          for step in range(1, 5):
+            stamp = now + step * STEP
+            history.add(Ego(stamp, 10.0, 0.0))
+            result = binding.observe(stamp, stamp, 6 + step, 20.0, 0.0, 0.0, 0.0, history)
+            if already_rejected:
+              self.assertEqual(result['identityState'], 'unresolved')
+              self.assertGreater(result['rejectionMonoTime'], 0)
+              self.assertEqual(result['recoverySamples'], 0)
+          if not already_rejected:
+            self.assertEqual(result['identityState'], 'same')
+            self.assertEqual(result['rejectionMonoTime'], 0)
+
+  def test_rejection_only_checks_do_not_learn_confirm_or_recover(self):
+    binding, history = Binding(1, START), EgoHistory()
+    for frame in range(4):
+      stamp = START + frame * STEP
+      history.add(Ego(stamp, 10.0, 0.0))
+      binding.observe(stamp, stamp, frame + 1, 20.0, 0.0, 0.0, 0.0, history)
+    samples, anchor = tuple(binding.samples), (binding.anchor_x, binding.anchor_y)
+    stamp = START + 4 * STEP
+    history.add(Ego(stamp, 10.0, 0.0))
+    result = binding.observe(stamp, stamp, 5, 19.8, 0.0, .2, 0.0, history, allow_confirmation=False)
+    self.assertEqual(tuple(binding.samples), samples)
+    self.assertEqual((binding.anchor_x, binding.anchor_y), anchor)
+    self.assertFalse(result['independentPair'])
+    # Refused inputs have still been seen: another publication cannot turn
+    # them into a new confirmation or an extra recovery vote.
+    repeated = binding.observe(stamp + 1, stamp, 5, 19.8, 0.0, .2, 0.0, history)
+    self.assertFalse(repeated['independentPair'])
+    self.assertEqual(tuple(binding.samples), samples)
+    stamp += STEP
+    history.add(Ego(stamp, 10.0, 0.0))
+    binding.observe(stamp, stamp, 6, 18.0, 0.0, 2.0, 0.0, history)
+    self.assertTrue(binding.separation_latched)
+    for sequence in range(7, 11):
+      stamp += STEP
+      history.add(Ego(stamp, 10.0, 0.0))
+      result = binding.observe(stamp, stamp, sequence, 20.0, 0.0, 0.0, 0.0, history, allow_confirmation=False)
+      self.assertEqual(result['recoverySamples'], 0)
+      self.assertGreater(result['rejectionMonoTime'], 0)
+
+  def test_hard_rejection_survives_probability_and_candidate_changes(self):
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      out = advance(fusion, frame)
+    identifier = out['tracks'][0]['trackId']
+    advance(fusion, 12, distance=18.0)
+    advance(fusion, 13, [observation(13), observation(13, distance=30.0, slot=1, oem=8)], probability=0)
+    out = advance(fusion, 14, distance=18.0)
+    self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+    advance(fusion, 15, [observation(15), observation(15, distance=30.0, slot=1, oem=8)], distance=30.0)
+    out = advance(fusion, 16, distance=18.0)
+    self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+    self.assertEqual(out['leads'][0]['velocityWeight'], 0)
+    self.assertTrue(fusion.bindings[(0, identifier)].separation_latched)
+
   def test_large_constant_same_vehicle_bias_and_slow_drift_remain_eligible(self):
     fusion = HondaRadarFusion()
     for frame in range(300):
@@ -495,8 +680,9 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertEqual(out['leads'][0]['distanceWeight'], 0)
     for frame in (13, 14):
       out = advance(fusion, frame)
-      self.assertEqual(out['leads'][0]['reason'], 'identityRejected')
-      self.assertEqual(out['leads'][0]['identityReason'], 'candidateChanged')
+      self.assertEqual(out['leads'][0]['state'], 'associating')
+      self.assertEqual(out['leads'][0]['identityState'], 'unresolved')
+      self.assertEqual(out['leads'][0]['bindingSamples'], frame - 12)
       self.assertEqual(out['leads'][0]['distanceWeight'], 0)
       self.assertEqual(out['leads'][0]['velocityWeight'], 0)
     out = advance(fusion, 15)
