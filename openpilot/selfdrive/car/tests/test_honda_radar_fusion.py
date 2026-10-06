@@ -1,5 +1,6 @@
 """Shadow fusion contracts, including the 2026-10-05 road-log counterexamples."""
 import copy
+from collections import Counter
 import math
 import sys
 from types import SimpleNamespace as NS
@@ -126,6 +127,95 @@ class TestHondaRadarFusion(unittest.TestCase):
       builder.dRel = 23.0
       self.assertEqual(read(builder, 'dRel'), 23.0)
       self.assertEqual(read(reader, 'dRel'), 23.0)
+
+  def test_native_ingest_reuses_sort_keys_without_reordering_events(self):
+    from openpilot.cereal import custom
+    t = START + STEP
+    keys = ('positionMonoTime', 'positionValid', 'positionSeq')
+    events = [observation(1, slot=1, oem=8, velocity=False), observation(1, velocity=False), observation(1),
+              observation(1, distance=21.0, velocity=False),
+              {**observation(1, slot=1, oem=8, velocity=False), 'positionValid': False, 'reason': 'conflictingFrame'}]
+    accesses = Counter()
+    def counted_read(obj, name, default=None):
+      if name in keys:
+        accesses[name] += 1
+      return read(obj, name, default)
+    for reader in (False, True):
+      with self.subTest(reader=reader):
+        packet = custom.HondaRadarObservations.new_message()
+        packet.observations = events
+        before = packet.to_dict()
+        native = packet.as_reader() if reader else packet
+        fusion, reference = HondaRadarFusion(), HondaRadarFusion()
+        for engine in (fusion, reference):
+          advance(engine, 0, [observation(0), observation(0, slot=1, oem=8)])
+          engine.record_inputs(Inputs(t), t + 1)
+        accesses.clear()
+        with patch('openpilot.selfdrive.car.honda_radar_fusion.read', side_effect=counted_read):
+          fusion.ingest(native.observations, t + 1)
+        self.assertEqual(accesses, dict.fromkeys(keys, len(events)))
+        reference.ingest(before['observations'], t + 1)
+        self.assertEqual(packet.to_dict(), before)
+        self.assertEqual(fusion.counts, reference.counts)
+        self.assertEqual(fusion.bindings, reference.bindings)
+        self.assertEqual(fusion.tracks.keys(), reference.tracks.keys())
+        for identifier, track in fusion.tracks.items():
+          actual, expected = vars(track).copy(), vars(reference.tracks[identifier]).copy()
+          for name in ('mean', 'covariance'):
+            left, right = actual.pop(name), expected.pop(name)
+            self.assertEqual((left.dtype, left.shape, left.tobytes()), (right.dtype, right.shape, right.tobytes()))
+          self.assertEqual(actual, expected)
+        # Three equal sorting keys must retain position, AUX, then conflict.
+        self.assertEqual(fusion.tracks[7].positions[-1][1], 20.0)
+        self.assertEqual(fusion.tracks[7].last_invalid_reason, 'conflictingPosition')
+        self.assertEqual(fusion.tracks[8].last_invalid_reason, 'conflictingFrame')
+
+  def test_ordinary_ingest_rechecks_dynamic_sort_keys(self):
+    values = observation(1, velocity=False)
+    accesses, counts = [], Counter()
+    first_values = {'positionMonoTime': START, 'positionValid': False, 'positionSeq': 1}
+    class Changing:
+      def __getattr__(self, name):
+        accesses.append(name)
+        counts[name] += 1
+        if counts[name] == 1 and name in first_values:
+          return first_values[name]
+        if name in values:
+          return values[name]
+        raise AttributeError(name)
+    fusion = HondaRadarFusion()
+    advance(fusion, 0)
+    fusion.record_inputs(Inputs(START + STEP), START + STEP + 1)
+    fusion.ingest([Changing()], START + STEP + 1)
+    self.assertEqual(accesses[:7], ['positionMonoTime', 'positionValid', 'positionSeq', 'slot',
+                                   'positionMonoTime', 'positionValid', 'positionSeq'])
+    self.assertEqual(fusion.tracks[7].position_ns, values['positionMonoTime'])
+    self.assertEqual(fusion.tracks[7].position_seq, values['positionSeq'])
+    self.assertEqual(fusion.tracks[7].count, 2)
+
+  def test_ordinary_ingest_preserves_sort_and_processing_accessor_errors(self):
+    values = observation(1, velocity=False)
+    class Failing:
+      def __init__(self, name, occurrence):
+        self.name, self.occurrence, self.counts = name, occurrence, Counter()
+
+      def __getattr__(self, field):
+        self.counts[field] += 1
+        if field == self.name and self.counts[field] == self.occurrence:
+          raise RuntimeError(f'failed {field}')
+        if field in values:
+          return values[field]
+        raise AttributeError(field)
+    for name in ('positionMonoTime', 'positionValid', 'positionSeq'):
+      for occurrence in (1, 2):
+        with self.subTest(field=name, occurrence=occurrence):
+          fusion = HondaRadarFusion()
+          advance(fusion, 0)
+          fusion.record_inputs(Inputs(START + STEP), START + STEP + 1)
+          with self.assertRaisesRegex(RuntimeError, f'failed {name}'):
+            fusion.ingest([Failing(name, occurrence)], START + STEP + 1)
+          self.assertEqual(fusion.tracks[7].count, 1)
+          self.assertEqual(fusion.counts['positions'], 1)
 
   def test_measure_preserves_joseph_updates_without_generic_array_constructors(self):
     track, _ = projection_fixture()

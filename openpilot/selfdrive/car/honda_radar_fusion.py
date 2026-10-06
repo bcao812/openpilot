@@ -11,7 +11,7 @@ import math
 import time
 
 import numpy as np
-from capnp.lib.capnp import _DynamicStructBuilder, _DynamicStructReader
+from capnp.lib.capnp import _DynamicListBuilder, _DynamicListReader, _DynamicStructBuilder, _DynamicStructReader
 
 from opendbc.car.honda.bosch_a_radar import radar_scan_continuous
 
@@ -533,22 +533,30 @@ class HondaRadarFusion:
     if len(observations) > MAX_EVENTS:
       self.reset()
       return
-    # Only the bounded batch is sorted, never future route data.
-    ordered = sorted(observations, key=lambda o: (int(read(o, 'positionMonoTime', 0)),
-                                                 not read(o, 'positionValid', False), int(read(o, 'positionSeq', 0))))
-    for observation in ordered:
+    # Only the bounded batch is sorted, never future route data. Native input
+    # is unchanged during ingestion, so reuse the three scalar sorting keys.
+    # Ordinary objects retain their original accessor order and exceptions.
+    if type(observations) is _DynamicListBuilder or type(observations) is _DynamicListReader:
+      ordered = [((int(read(o, 'positionMonoTime', 0)), not read(o, 'positionValid', False),
+                   int(read(o, 'positionSeq', 0))), o) for o in observations]
+      ordered.sort(key=lambda item: item[0])
+    else:
+      ordered = ((None, o) for o in sorted(
+        observations, key=lambda o: (int(read(o, 'positionMonoTime', 0)), not read(o, 'positionValid', False), int(read(o, 'positionSeq', 0)))))
+    for metadata, observation in ordered:
       slot = int(read(observation, 'slot', -1))
       if not 0 <= slot < 16:
         continue
-      stamp = int(read(observation, 'positionMonoTime', 0))
-      if not read(observation, 'positionValid', False):
+      stamp = metadata[0] if metadata is not None else int(read(observation, 'positionMonoTime', 0))
+      invalid = metadata[1] if metadata is not None else not read(observation, 'positionValid', False)
+      if invalid:
         reason = read(observation, 'reason', '')
         if reason == 'conflictingFrame':
           for track in self.tracks.values():
             # A conflict in an accepted measurement invalidates its posterior.
             # An unfinished or older scan cannot retract a different sample.
             if (0 < stamp <= now_ns and track.slot == slot and track.position_ns == stamp and
-                track.position_seq == int(read(observation, 'positionSeq', 0))):
+                track.position_seq == (metadata[2] if metadata is not None else int(read(observation, 'positionSeq', 0)))):
               self._invalidate(track, reason, stamp, now_ns)
               self.counts['rejectedPosition'] += 1
         elif reason in ('expired', 'invalidGeometry', 'withdrawn'):
@@ -559,7 +567,7 @@ class HondaRadarFusion:
                 and (not generation or generation == track.generation)):
               self._invalidate(track, reason, stamp, now_ns)
         continue
-      seq = int(read(observation, 'positionSeq', 0))
+      seq = metadata[2] if metadata is not None else int(read(observation, 'positionSeq', 0))
       raw = read(observation, 'raw', {})
       identifier = int(read(raw, 'oemTrackId', 0))
       index, life = int(read(observation, 'frameIndex', -1)), int(read(raw, 'lifecycleRaw', -1))
