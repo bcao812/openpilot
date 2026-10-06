@@ -1,8 +1,14 @@
 import unittest
+from dataclasses import replace
 from itertools import permutations
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from opendbc.can.dbc import DBC
 from opendbc.can.packer import CANPacker
-from opendbc.car.honda.bosch_a_radar import AUX_IDS, MAIN_IDS, MAX_AGE_NS, MAX_EVENTS, BoschARadarObserver, radar_scan_continuous
+from opendbc.can.parser import get_raw_value
+from opendbc.car.honda.bosch_a_radar import (ADDRESS_MAP, AUX_IDS, DBC_NAME, MAIN_IDS, MAX_AGE_NS, MAX_EVENTS, RAW_SIGNALS,
+                                          BoschARadarObserver, radar_scan_continuous)
 
 START = 10_000_000_000
 
@@ -14,6 +20,95 @@ def scan_frames(slot=0, index=0, life=1, distance=1000, oem_id=None, velocity=73
             dict(TRACK_ID=slot + 1 if oem_id is None else oem_id),
             dict(REL_VELOCITY_RAW=velocity, REL_VELOCITY_UNCERTAINTY_RAW=0, RANGE_RATIO_RAW=ratio)]
   return [packer.make_can_msg(addr, bus, dict(v, FRAME_IDX=index)) for addr, v in zip((*MAIN_IDS[slot], AUX_IDS[slot]), values, strict=True)]
+
+
+class TestBoschADecodeFields(unittest.TestCase):
+  def test_all_dbc_fields_match_raw_getter_on_bit_basis(self):
+    # All 352 used fields (including FRAME_IDX): zero, all ones and every
+    # individual payload bit. The reference getter remains independent of the
+    # compiled shifts, and both accepted byte container types exercise feed.
+    dbc = DBC(DBC_NAME)
+    decoder = BoschARadarObserver(2)
+    payloads = (bytes(8), b'\xff' * 8, *((1 << bit).to_bytes(8, 'big') for bit in range(64)))
+    for address, (slot, part) in ADDRESS_MAP.items():
+      signals = dbc.msgs[address].sigs
+      for payload in payloads:
+        index = get_raw_value(payload, signals['FRAME_IDX'])
+        expected = {key: get_raw_value(payload, signals[name]) for key, name in RAW_SIGNALS[part].items()}
+        for data_type in (bytes, bytearray):
+          with self.subTest(address=hex(address), payload=payload.hex(), data_type=data_type.__name__):
+            decoder.reset()
+            decoder.feed(START, [(address, data_type(payload), 2)])
+            self.assertEqual(list(decoder.slots[slot].scans), [index])
+            frame = decoder.slots[slot].scans[index].frames[part]
+            self.assertEqual(frame.values, expected)
+            self.assertEqual(frame.data, payload)
+            self.assertIsInstance(frame.data, bytes)
+
+  def test_every_frame_index_in_every_slot(self):
+    decoder = BoschARadarObserver(2)
+    for slot in range(16):
+      for index in range(16):
+        with self.subTest(slot=slot, index=index):
+          decoder.reset()
+          frames = scan_frames(slot=slot, index=index)
+          decoder.feed(START, [(a, bytearray(d) if index & 1 else d, b) for a, d, b in frames])
+          events = decoder.drain()
+          self.assertEqual([e['frameIndex'] for e in events], [index, index])
+          self.assertEqual(set(decoder.slots[slot].scans[index].frames), set(range(5)))
+          self.assertTrue(events[-1]['positionValid'] and events[-1]['velocityValid'])
+
+  def test_unexpected_dbc_layouts_preserve_original_raw_semantics(self):
+    dbc = DBC(DBC_NAME)
+    address = MAIN_IDS[0][0]
+    original = dbc.msgs[address]
+    cases = {'message_size': replace(original, size=7)}
+    for name in ('FRAME_IDX', 'RANGE_RAW'):
+      signal = original.sigs[name]
+      signed = replace(signal, is_signed=True)
+      little_endian = replace(signal, start_bit=0, msb=signal.size - 1, lsb=0, is_little_endian=True)
+      for label, changed in (('signed', signed), ('little_endian', little_endian)):
+        cases[f'{label}_{name}'] = replace(original, sigs=original.sigs | {name: changed})
+    for label, message in cases.items():
+      with self.subTest(layout=label):
+        # Do not mutate the cached DBC shared by other tests/observers.
+        with patch('opendbc.car.honda.bosch_a_radar.DBC', return_value=SimpleNamespace(msgs=dbc.msgs | {address: message})):
+          decoder = BoschARadarObserver(2)
+        for payload in (b'\xff' * 8, bytes.fromhex('a7c13d59f06b824e')):
+          decoder.reset()
+          with patch('opendbc.car.honda.bosch_a_radar.get_raw_value', wraps=get_raw_value) as getter:
+            decoder.feed(START, [(address, bytearray(payload), 2)])
+          self.assertEqual(getter.call_count, 1 + len(RAW_SIGNALS[0]))
+          index = get_raw_value(payload, message.sigs['FRAME_IDX'])
+          frame = decoder.slots[0].scans[index].frames[0]
+          self.assertEqual(frame.values, {key: get_raw_value(payload, message.sigs[name]) for key, name in RAW_SIGNALS[0].items()})
+
+  def test_wrong_lengths_are_filtered_before_decoding(self):
+    decoder = BoschARadarObserver(2)
+    lengths = (*range(8), 9, 64)
+    frames = [(MAIN_IDS[0][0], bytearray(size), 2) for size in lengths]
+    decoder.feed(START, [(MAIN_IDS[0][0], bytes(7), 0), (0x100, bytes(7), 2), *frames])
+    self.assertEqual(decoder.counts['frames'], len(lengths))
+    self.assertEqual(decoder.counts['badLength'], len(lengths))
+    self.assertEqual(decoder.last_frame_ns, 0)
+    self.assertFalse(any(slot.scans for slot in decoder.slots))
+    self.assertFalse(decoder.drain())
+
+  def test_event_preserves_part_order_alias_precedence_and_snapshot(self):
+    decoder = BoschARadarObserver(2)
+    frames = scan_frames()
+    decoder.feed(START, list(reversed(frames)))
+    decoder.drain()
+    scan = decoder.slots[0].scans[0]
+    for part, frame in scan.frames.items():
+      frame.values['sharedRaw'] = part
+    event = decoder._event(0, scan, 'fixture')
+    self.assertEqual(event['raw']['sharedRaw'], 4)
+    self.assertEqual(event['frames'], [dict(part=part, address=frames[part][0], monoTime=START, frameInEnvelope=4 - part)
+                                       for part in range(5)])
+    self.assertEqual(event['frameMask'], 31)
+    scan.frames[4].values['u11Raw'] = 0
+    self.assertEqual(event['raw']['u11Raw'], 736)
 
 
 class TestBoschAObserver(unittest.TestCase):

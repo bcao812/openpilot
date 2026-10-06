@@ -99,6 +99,22 @@ class BoschARadarObserver:
     self.signals = {addr: (dbc.msgs[addr].sigs['FRAME_IDX'],
                           [(key, dbc.msgs[addr].sigs[name]) for key, name in RAW_SIGNALS[part].items()])
                     for addr, (_, part) in ADDRESS_MAP.items()}
+    # Compile the current eight-byte Motorola fields once. Keep the original
+    # getter for any future message layout outside this fast path; raw signed
+    # fields must still follow get_raw_value's unsigned-bit semantics.
+    self._bit_layouts = {}
+    for address, (idx_sig, signals) in self.signals.items():
+      if dbc.msgs[address].size != 8:
+        continue
+      layouts = []
+      for sig in (idx_sig, *(s for _, s in signals)):
+        start = 8 * (sig.msb // 8) + 7 - sig.msb % 8
+        shift = 64 - start - sig.size
+        if sig.is_signed or sig.is_little_endian or sig.size <= 0 or start < 0 or shift < 0:
+          break
+        layouts.append((shift, (1 << sig.size) - 1))
+      else:
+        self._bit_layouts[address] = (layouts[0], tuple((key, *layout) for (key, _), layout in zip(signals, layouts[1:], strict=True)))
     self.events: deque[dict] = deque()
     self.sequence = 0
     self.generation = 0
@@ -120,9 +136,10 @@ class BoschARadarObserver:
 
   def _event(self, slot, scan, reason):
     raw = {}
-    for part in sorted(scan.frames):
-      raw.update(scan.frames[part].values)
-    frames = [dict(part=p, address=f.address, monoTime=f.time_ns, frameInEnvelope=f.index) for p, f in sorted(scan.frames.items())]
+    frames = []
+    for part, frame in sorted(scan.frames.items()):
+      raw.update(frame.values)
+      frames.append(dict(part=part, address=frame.address, monoTime=frame.time_ns, frameInEnvelope=frame.index))
     scan.reported_frames = len(scan.frames)
     # Keep the original position time even if a conflicting F0 replaces its raw
     # bytes. A late conflict invalidates that observation, not a newer scan.
@@ -143,7 +160,9 @@ class BoschARadarObserver:
       # They stay invalid; only the raw snapshot and frame references are filled.
       self._emit(self._event(slot_num, scan, scan.rejection))
       return
-    raw = {k: v for p in range(4) for k, v in scan.frames[p].values.items()}
+    geometry = scan.frames[0].values
+    life = scan.frames[2].values['lifecycleRaw']
+    identity = scan.frames[3].values['oemTrackId']
     t_pos = scan.frames[0].time_ns
     if not scan.position_seq:
       signature = tuple(scan.frames[p].data for p in range(4))
@@ -159,31 +178,31 @@ class BoschARadarObserver:
           scan.rejection = 'oldScan'
           self._emit(self._event(slot_num, scan, 'oldScan'))
           return
-      distance = raw['rangeRaw'] * 0.05712 - 3.0
-      valid = (raw['statusRaw'] != 15 and raw['rangeRaw'] != 4095 and raw['azimuthRaw'] != 2047
-               and raw['lifecycleRaw'] != 4095 and 1 <= raw['oemTrackId'] <= 63 and distance > 0)
+      distance = geometry['rangeRaw'] * 0.05712 - 3.0
+      valid = (geometry['statusRaw'] != 15 and geometry['rangeRaw'] != 4095 and geometry['azimuthRaw'] != 2047
+               and life != 4095 and 1 <= identity <= 63 and distance > 0)
       if not valid:
         scan.rejection = 'invalidGeometry'
         slot.expired = True
         self._emit(self._event(slot_num, scan, 'invalidGeometry'))
         return
-      lateral = distance * math.tan((raw['azimuthRaw'] - 1024) / 2048.0)
+      lateral = distance * math.tan((geometry['azimuthRaw'] - 1024) / 2048.0)
       # Preserve both raw observations. Two live slots with this OEM ID in the
       # same frame cannot establish identity continuity. The preceding frame
       # in another slot alone is a normal migration, not a simultaneous claim.
       identity_conflict = False
       for other in self.slots:
-        if (other is not slot and not other.expired and other.last_id == raw['oemTrackId']
+        if (other is not slot and not other.expired and other.last_id == identity
             and other.last_index == scan.index and abs(t_pos - other.last_position_ns) <= MAX_AGE_NS):
           identity_conflict = other.identity_conflict = True
-      plateau = slot.last_life == raw['lifecycleRaw'] == 4094
+      plateau = slot.last_life == life == 4094
       geometry_continuous = (not plateau or (slot.last_position is not None
                              and abs(distance - slot.last_position[0]) <= CONTINUITY_MAX_DREL
                              and abs(lateral - slot.last_position[1]) <= CONTINUITY_MAX_YREL))
       continuous = (not slot.expired and not slot.identity_conflict and not identity_conflict
-                    and slot.last_id == raw['oemTrackId'] and slot.last_index is not None and slot.last_life is not None
+                    and slot.last_id == identity and slot.last_index is not None and slot.last_life is not None
                     and geometry_continuous and radar_scan_continuous(slot.last_index, slot.last_life, slot.last_position_ns,
-                                                                     scan.index, raw['lifecycleRaw'], t_pos))
+                                                                     scan.index, life, t_pos))
       if not continuous:
         self.generation += 1
         slot.generation = self.generation
@@ -191,7 +210,7 @@ class BoschARadarObserver:
       scan.position_seq = self.sequence
       scan.position_ns = t_pos
       scan.generation = slot.generation
-      slot.last_index, slot.last_life, slot.last_id = scan.index, raw['lifecycleRaw'], raw['oemTrackId']
+      slot.last_index, slot.last_life, slot.last_id = scan.index, life, identity
       slot.last_position_ns = t_pos
       slot.last_signature = signature
       slot.last_position = distance, lateral
@@ -201,8 +220,8 @@ class BoschARadarObserver:
     event = self._event(slot_num, scan, 'positionOnly')
     event['positionMonoTime'] = t_pos
     event['positionValid'] = True
-    event['dRel'] = raw['rangeRaw'] * 0.05712 - 3.0
-    event['yRel'] = event['dRel'] * math.tan((raw['azimuthRaw'] - 1024) / 2048.0)
+    event['dRel'] = geometry['rangeRaw'] * 0.05712 - 3.0
+    event['yRel'] = event['dRel'] * math.tan((geometry['azimuthRaw'] - 1024) / 2048.0)
     if 4 in scan.frames:
       aux = scan.frames[4]
       event['velocityMonoTime'] = aux.time_ns
@@ -234,8 +253,16 @@ class BoschARadarObserver:
       self.last_frame_ns = time_ns
       slot_num, part = ADDRESS_MAP[address]
       slot = self.slots[slot_num]
-      idx_sig, signals = self.signals[address]
-      idx = get_raw_value(data, idx_sig)
+      layout = self._bit_layouts.get(address)
+      if layout is not None:
+        (shift, mask), signals = layout
+        word = int.from_bytes(data, 'big')
+        idx = (word >> shift) & mask
+        values = {key: (word >> shift) & mask for key, shift, mask in signals}
+      else:
+        idx_sig, signals = self.signals[address]
+        idx = get_raw_value(data, idx_sig)
+        values = {key: get_raw_value(data, sig) for key, sig in signals}
       scan = slot.scans.get(idx)
       if scan is not None and time_ns - scan.first_ns > MAX_AGE_NS:
         self._retire(slot_num, idx)
@@ -245,7 +272,7 @@ class BoschARadarObserver:
           self._retire(slot_num, min(slot.scans, key=lambda i: slot.scans[i].first_ns))
         scan = slot.scans[idx] = Scan(idx, time_ns)
       previous = scan.frames.get(part)
-      incoming = RadarFrame(time_ns, index, address, bytes(data), {k: get_raw_value(data, s) for k, s in signals})
+      incoming = RadarFrame(time_ns, index, address, bytes(data), values)
       if previous is not None:
         if previous.data == data:
           self.counts['duplicate'] += 1
