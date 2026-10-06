@@ -347,26 +347,35 @@ class Track:
     self.acceleration_velocity = float(self.mean[2]), float(self.mean[3])
 
 
-def path_relation(x, y, vx, vy, path_x, path_y, previous='unknown'):
-  """Finite spatial support is required for OUT; a stopped path gives UNKNOWN.
-
-  Candidate state is in the radar/left-positive frame. Model position is in the
-  device/right-positive frame. Incoming objects are retained outside the path.
-  """
+def _prepare_path(path_x, path_y):
+  """Validate one publication's path and retain its original segment order."""
   if len(path_x) != len(path_y) or not 2 <= len(path_x) <= 33:
-    return 'unknown', 0.0, 0.0
+    return None
   if not all(finite(a, b) for a, b in zip(path_x, path_y, strict=True)):
-    return 'unknown', 0.0, 0.0
-  point = (x + RADAR_TO_CAMERA, y)
+    return None
+  maximum = max(path_x)
   # A longitudinal stop trajectory is not a geometric free-space boundary.
-  if max(path_x) - min(path_x) < 1 or point[0] > max(path_x):
-    return 'unknown', 0.0, 0.0
-  best = None
+  if maximum - min(path_x) < 1:
+    return None
+  segments = []
   for a, b, u, v in zip(path_x[:-1], path_x[1:], path_y[:-1], path_y[1:], strict=True):
     dx, dy = b - a, u - v
     length_sq = dx * dx + dy * dy
     if length_sq < .01:
       continue
+    segments.append((a, u, dx, dy, length_sq))
+  return maximum, tuple(segments)
+
+
+def _prepared_path_relation(x, y, vx, vy, path, previous='unknown'):
+  if path is None:
+    return 'unknown', 0.0, 0.0
+  maximum, segments = path
+  point = (x + RADAR_TO_CAMERA, y)
+  if point[0] > maximum:
+    return 'unknown', 0.0, 0.0
+  best = None
+  for a, u, dx, dy, length_sq in segments:
     along = ((point[0] - a) * dx + (point[1] + u) * dy) / length_sq
     if not 0 <= along <= 1:
       continue
@@ -386,6 +395,15 @@ def path_relation(x, y, vx, vy, path_x, path_y, previous='unknown'):
     if 0 < entry_time <= 2:
       return 'entering', lateral, entry_time
   return 'outOfPath', lateral, 0.0
+
+
+def path_relation(x, y, vx, vy, path_x, path_y, previous='unknown'):
+  """Finite spatial support is required for OUT; a stopped path gives UNKNOWN.
+
+  Candidate state is in the radar/left-positive frame. Model position is in the
+  device/right-positive frame. Incoming objects are retained outside the path.
+  """
+  return _prepared_path_relation(x, y, vx, vy, _prepare_path(path_x, path_y), previous)
 
 
 class HondaRadarFusion:
@@ -618,6 +636,7 @@ class HondaRadarFusion:
     if len(path_x) > 33 or len(path_y) > 33:
       path_x, path_y = [], []
     candidates, snapshots = [], []
+    prepared_path, path_ready = None, False
     for track in self.tracks.values():
       if not fresh(track.position_ns, now_ns, MAX_AGE_NS):
         continue
@@ -627,7 +646,10 @@ class HondaRadarFusion:
       mean, covariance = prediction
       if not np.isfinite(mean).all() or not np.isfinite(covariance).all():
         continue
-      relation, offset, entry = path_relation(*[float(v) for v in mean], path_x, path_y, track.path)
+      if not path_ready:
+        prepared_path = _prepare_path(path_x, path_y)
+        path_ready = True
+      relation, offset, entry = _prepared_path_relation(*[float(v) for v in mean], prepared_path, track.path)
       track.path = relation
       vx, vy = float(mean[2]), float(mean[3])
       motion = 'unknown'

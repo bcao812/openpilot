@@ -10,7 +10,7 @@ import numpy as np
 
 from opendbc.car.honda.bosch_a_radar import BoschARadarObserver
 from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
-from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, _finite_median, path_relation
+from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, _finite_median, finite, path_relation
 
 START = 10_000_000_000
 STEP = 66_000_000
@@ -325,6 +325,82 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertAlmostEqual(entry, 1.1)
     self.assertEqual(path_relation(80, 0, 10, 0, [0, 5, 10], [0, 0, 0])[0], 'unknown')
     self.assertEqual(path_relation(10, 0, 10, 0, [0, float('nan')], [0, 0])[0], 'unknown')
+
+  def test_path_geometry_preserves_boundaries_order_and_unknowns(self):
+    straight = ([0.0, 10.0, 20.0, 30.0], [0.0] * 4)
+    cases = ((1.8, 0.0, 'unknown', 'inPath'), (math.nextafter(1.8, math.inf), 0.0, 'unknown', 'outOfPath'),
+             (2.3, 0.0, 'inPath', 'inPath'), (math.nextafter(2.3, math.inf), 0.0, 'inPath', 'outOfPath'),
+             (2.0, -.5, 'unknown', 'entering'), (2.0, -.5, 'inPath', 'inPath'),
+             (1.9, -.2, 'unknown', 'outOfPath'), (1.9, math.nextafter(-.2, -math.inf), 'unknown', 'entering'),
+             (2.8, -.5, 'unknown', 'entering'), (math.nextafter(2.8, math.inf), -.5, 'unknown', 'outOfPath'),
+             (-4.0, 2.0, 'unknown', 'entering'))
+    for lateral, lateral_speed, previous, expected in cases:
+      with self.subTest(lateral=lateral, lateral_speed=lateral_speed, previous=previous):
+        self.assertEqual(path_relation(18.48, lateral, 10.0, lateral_speed, *straight, previous)[0], expected)
+    for path_x, expected_offset in (([0, 20, 10, 30], 2.0), ([30, 10, 20, 0], -2.0)):
+      with self.subTest(path_x=path_x):
+        # Equal-distance overlapping segments keep the first segment's sign.
+        self.assertEqual(path_relation(18.48, 2.0, 10.0, 0.0, path_x, [0.0] * 4), ('outOfPath', expected_offset, 0.0))
+    self.assertEqual(path_relation(18.48, 0.0, 10.0, 0.0, [0, 10, 10, 20], [0.0] * 4), ('inPath', 0.0, 0.0))
+    for first_step, expected in ((.099, 'unknown'), (.1, 'inPath')):
+      self.assertEqual(path_relation(.05 - 1.52, 0.0, 10.0, 0.0, [0.0, first_step, 2.0], [0.0] * 3)[0], expected)
+    unknown_paths = (([], []), ([0.0], [0.0]), ([0.0, 10.0], [0.0]), (list(range(34)), [0.0] * 34),
+                     ([0.0, math.nan], [0.0] * 2), ([0.0, 10.0], [0.0, math.inf]),
+                     ([0.0, 10.0], [0.0, 'bad']), ([0.0] * 33, [0.0] * 33),
+                     ([0.0, math.nextafter(1.0, 0.0)], [0.0] * 2),
+                     ([index / 32 for index in range(33)], [0.0] * 33))
+    for path_x, path_y in unknown_paths:
+      for previous in ('unknown', 'inPath'):
+        with self.subTest(path_x=path_x, path_y=path_y, previous=previous):
+          self.assertEqual(path_relation(.5 - 1.52, 0.0, 10.0, 0.0, path_x, path_y, previous), ('unknown', 0.0, 0.0))
+    self.assertEqual(path_relation(.5 - 1.52, 0.0, 10.0, 0.0, [0.0, 1.0], [0.0] * 2), ('inPath', 0.0, 0.0))
+    self.assertEqual(path_relation(28.48, 0.0, 10.0, 0.0, *straight), ('inPath', 0.0, 0.0))
+    self.assertEqual(path_relation(30.0, 0.0, 10.0, 0.0, *straight), ('unknown', 0.0, 0.0))
+
+  def test_path_is_prepared_once_per_publication_and_replaced_next_time(self):
+    class PathCoordinate(float):
+      pass
+    checked = []
+    def checked_finite(*values):
+      if len(values) == 2 and all(isinstance(value, PathCoordinate) for value in values):
+        checked.append(values)
+      return finite(*values)
+    fusion, sm = HondaRadarFusion(), Inputs(START, probability=0)
+    straight = list(np.linspace(0.0, 160.0, 33))
+    changes = ((straight, [0.0] * 33, 'inPath'), (straight, [5.0] * 33, 'outOfPath'),
+               ([0.0] * 33, [0.0] * 33, 'unknown'), (straight, [0.0] * 33, 'inPath'))
+    with patch('openpilot.selfdrive.car.honda_radar_fusion.finite', side_effect=checked_finite):
+      sm['modelV2'].position.x[:] = [PathCoordinate(value) for value in straight]
+      sm['modelV2'].position.y[:] = [PathCoordinate(0.0)] * 33
+      fusion.update(body(0, []), sm, START + 1)
+      self.assertEqual(checked, [])  # No eligible track needs no preparation.
+      for frame, (path_x, path_y, expected) in enumerate(changes, 1):
+        stamp = START + frame * STEP
+        sm.logMonoTime.update(dict.fromkeys(sm, stamp))
+        sm['modelV2'].timestampEof = stamp
+        # Mutate the same model/path objects; object identity cannot justify reuse.
+        sm['modelV2'].position.x[:] = [PathCoordinate(value) for value in path_x]
+        sm['modelV2'].position.y[:] = [PathCoordinate(value) for value in path_y]
+        observations = [observation(frame, slot=slot, oem=slot + 1, distance=20.0 + slot * .2) for slot in range(16)]
+        before = len(checked)
+        out = fusion.update(body(frame, observations), sm, stamp + 1)
+        self.assertEqual(len(out['tracks']), 16)
+        self.assertEqual(len(checked) - before, 33)
+        self.assertTrue(all(track['pathState'] == expected for track in out['tracks']))
+
+  def test_prepared_path_keeps_each_tracks_hysteresis(self):
+    fusion = HondaRadarFusion()
+    def targets(frame):
+      return [observation(frame, slot=slot, oem=slot + 1, lateral=2.0, distance=20.0 + slot) for slot in range(2)]
+    advance(fusion, 0, targets(0), probability=0)
+    for track in fusion.tracks.values():
+      track.path = 'inPath' if track.oem_id == 1 else 'unknown'
+    out = advance(fusion, 1, targets(1), probability=0)
+    states = {track['oemTrackId']: track['pathState'] for track in out['tracks']}
+    self.assertEqual(states, {1: 'inPath', 2: 'outOfPath'})
+    self.assertTrue(all(track['pathOffset'] == 2.0 for track in out['tracks']))
+    self.assertFalse(out['controlAllowed'])
+    self.assertFalse(out['calibrated'])
 
   def test_side_targets_are_tracked_without_creating_new_leads(self):
     fusion = HondaRadarFusion()
