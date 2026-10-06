@@ -712,6 +712,11 @@ class UnifiedLongitudinalPlanner:
     observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
             trajectory_departure, lead_departure, qualified, no_model_risk)
     release_allowed = bool(trajectory_departure or lead_departure)
+    if turn_ceiling is not None and turn_ceiling <= 0.0:
+      # A zero execution ceiling cannot certify departure, even when another
+      # candidate wins with a negative target. Keep the source's raw motion
+      # description while withdrawing only movement permission.
+      moving_lead = release_allowed = False
     response_kind = MotionResponseKind.NONE
     # An ACC cruise cap still describes an absolute acceleration target. Track
     # that final target with nonpositive correction instead of erasing braking
@@ -751,8 +756,6 @@ class UnifiedLongitudinalPlanner:
       # permission, including the zero target and gradual recovery. Stronger
       # braking and raw stop semantics keep their original contracts below.
       response_kind = MotionResponseKind.ABSOLUTE_ACC
-      if maximum_accel <= 0.0:
-        moving_lead = release_allowed = False
     elif coast_selected:
       response_kind = MotionResponseKind.CRUISE_COAST
       # A negative coast request is execution shaping, never a departure

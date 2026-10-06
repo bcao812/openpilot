@@ -31,10 +31,10 @@ def set_lead(state, present, *, probability=0.99):
 
 
 @contextmanager
-def pipeline(*, experimental=True, measured_accel=0.4):
+def pipeline(*, experimental=True, measured_accel=0.4, speed=3.0):
   with OpenpilotPrefix():
-    planner, control = make_planner_owner(speed=3.0, initial_accel=measured_accel)
-    state = make_state(speed=3.0, target=12.0, experimental=experimental)
+    planner, control = make_planner_owner(speed=speed, initial_accel=measured_accel)
+    state = make_state(speed=speed, target=12.0, experimental=experimental)
     state['carState'].aEgo = measured_accel
     state['carState'].steeringAngleDeg = 250.0
     state['modelV2'].action.desiredAcceleration = 1.1
@@ -133,3 +133,21 @@ def test_manual_takeover_revokes_guard_history():
     consume(planner, control, state, 9)
     assert not planner.reference_planner.turn_lead_guard.armed
     assert planner.reference_planner.turn_lead_guard.accel_ceiling is None
+
+
+@pytest.mark.parametrize('speed', [0.8, 1.1])
+@pytest.mark.parametrize('measured_accel', [0.0, 0.4])
+def test_turn_ceiling_does_not_create_creep_stop(speed, measured_accel):
+  with pipeline(speed=speed, measured_accel=measured_accel) as (planner, control, state):
+    set_lead(state, True)
+    for frame in range(8):
+      step(planner, control, state, frame)
+    set_lead(state, False)
+    for frame in range(8, 40):
+      plan, outputs = step(planner, control, state, frame)
+      assert planner.reference_planner.turn_lead_guard.lost
+      assert plan.aTarget == 0.0
+      assert plan.motionIntent.reasons == 0
+      assert not plan.motionIntent.releaseAllowed
+      assert not plan.motionIntent.movingLead
+      assert max(outputs) <= 1e-7
