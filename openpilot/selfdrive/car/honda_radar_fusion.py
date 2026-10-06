@@ -12,7 +12,9 @@ import time
 
 import numpy as np
 
-VERSION = 'bosch-a-shadow-1'
+from opendbc.car.honda.bosch_a_radar import radar_scan_continuous
+
+VERSION = 'bosch-a-shadow-2'
 MAX_TRACKS = 32
 MAX_EVENTS = 64
 MAX_AGE_NS = 200_000_000
@@ -24,6 +26,17 @@ MIN_OBSERVATIONS = 3
 MIN_SPAN_NS = 120_000_000
 CORRIDOR_HALF_WIDTH = 1.8
 POSITION_NOISE = .5
+# Shadow engineering hypotheses, not calibrated identity or noise limits. These
+# qualify changes in an established pair's residual, not its absolute bias.
+RESIDUAL_X_LIMIT = .75
+RESIDUAL_Y_LIMIT = .5
+RESIDUAL_X_DIFFERENT = 1.5
+RESIDUAL_Y_DIFFERENT = .8
+RESIDUAL_X_TRUST = .35
+RESIDUAL_Y_TRUST = .25
+BIAS_TIME_CONSTANT = 3.0
+BIAS_X_RATE = .1
+BIAS_Y_RATE = .05
 
 
 def read(obj, name, default=None):
@@ -65,6 +78,124 @@ class EgoHistory:
     return None
 
 
+@dataclass(frozen=True)
+class PairResidual:
+  source_ns: int
+  position_seq: int
+  x: float
+  y: float
+
+
+@dataclass
+class Binding:
+  """Causal, hypothesis-specific identity evidence; never a model object ID.
+
+  Residuals use a common rotating reference so a shared ego turn does not itself
+  appear to change identity. A rejection survives option/gate/probability gaps.
+  Only new position AND camera-source samples can confirm or recover a pair.
+  'different' denotes algorithmic incompatibility, not physical ground truth.
+  """
+  track_id: int
+  start_ns: int
+  last_model_ns: int = 0
+  last_source_ns: int = 0
+  last_pair_ns: int = 0
+  last_position_seq: int = 0
+  last_vision_distance: float = 0.0
+  last_vision_velocity: float = 0.0
+  rotation: float = 0.0
+  anchor_x: float = 0.0
+  anchor_y: float = 0.0
+  anchor_ready: bool = False
+  state: str = 'unresolved'
+  reason: str = 'confirmation'
+  rejection_ns: int = 0
+  samples: deque = field(default_factory=lambda: deque(maxlen=16))
+  recovery: deque = field(default_factory=lambda: deque(maxlen=16))
+
+  def reject(self, reason, timestamp, different=False):
+    self.recovery.clear()
+    if not self.rejection_ns:
+      self.rejection_ns = timestamp
+      self.reason = reason
+    if different or self.state != 'different':
+      self.state = 'different' if different else 'unresolved'
+    if different:
+      self.reason = reason
+
+  def observe(self, model_ns, source_ns, position_seq, distance, velocity, residual_x, residual_y, history):
+    independent = source_ns > self.last_pair_ns and position_seq > self.last_position_seq
+    dt = (source_ns - self.last_source_ns) / 1e9 if self.last_source_ns else 0.0
+    vision_jump = (self.last_source_ns and dt > 0 and
+                   abs(distance - self.last_vision_distance - self.last_vision_velocity * dt) > 3.0)
+    if model_ns < self.last_model_ns or source_ns < self.last_source_ns:
+      independent = False
+      self.reject('sourceOrder', model_ns)
+    elif self.last_source_ns and dt > 0:
+      ego = history.at(self.last_source_ns)
+      if dt > MODEL_MAX_AGE_NS / 1e9 or ego is None:
+        independent = False
+        self.reject('sourceGap', model_ns)
+      else:
+        self.rotation += ego.yaw * dt
+    c, s = math.cos(self.rotation), math.sin(self.rotation)
+    rx, ry = c * residual_x - s * residual_y, s * residual_x + c * residual_y
+    if not self.samples:
+      self.anchor_x, self.anchor_y = rx, ry
+    dx_ref, dy_ref = rx - self.anchor_x, ry - self.anchor_y
+    dx, dy = c * dx_ref + s * dy_ref, -s * dx_ref + c * dy_ref
+    diagnostic_anchor_x = c * self.anchor_x + s * self.anchor_y
+    diagnostic_anchor_y = -s * self.anchor_x + c * self.anchor_y
+    separated = abs(dx) > RESIDUAL_X_LIMIT or abs(dy) > RESIDUAL_Y_LIMIT
+    trusted = abs(dx) <= RESIDUAL_X_TRUST and abs(dy) <= RESIDUAL_Y_TRUST
+    if separated:
+      self.reject('visionJump' if vision_jump else 'residualSeparation', model_ns,
+                  abs(dx) > RESIDUAL_X_DIFFERENT or abs(dy) > RESIDUAL_Y_DIFFERENT)
+      self.recovery.clear()
+    elif self.rejection_ns:
+      if not trusted:
+        self.recovery.clear()
+      elif independent:
+        if self.recovery and source_ns - self.recovery[-1].source_ns > MODEL_MAX_AGE_NS:
+          self.recovery.clear()
+        self.recovery.append(PairResidual(source_ns, position_seq, rx, ry))
+        if len(self.recovery) >= MIN_OBSERVATIONS and source_ns - self.recovery[0].source_ns >= MIN_SPAN_NS:
+          self.start_ns = self.recovery[0].source_ns
+          self.samples = deque(self.recovery, maxlen=16)
+          self.recovery.clear()
+          self.rejection_ns = 0
+          self.state, self.reason = 'same', 'reconfirmed'
+    elif independent:
+      was_same = self.state == 'same'
+      pair_dt = (source_ns - self.last_pair_ns) / 1e9 if self.last_pair_ns else 0.0
+      self.samples.append(PairResidual(source_ns, position_seq, rx, ry))
+      while len(self.samples) > 1 and source_ns - self.samples[0].source_ns > HISTORY_NS:
+        self.samples.popleft()
+      if len(self.samples) >= MIN_OBSERVATIONS and source_ns - self.start_ns >= MIN_SPAN_NS:
+        self.state, self.reason = 'same', 'historyConsistent'
+        target_x = float(np.median([sample.x for sample in self.samples]))
+        target_y = float(np.median([sample.y for sample in self.samples]))
+        if not self.anchor_ready:
+          self.anchor_x, self.anchor_y = target_x, target_y
+          self.anchor_ready = True
+        elif was_same and trusted:
+          # Only already-compatible pairs move the baseline, slowly and with
+          # bounded rates. Rejected/new identities cannot teach it a new bias.
+          alpha = pair_dt / (BIAS_TIME_CONSTANT + pair_dt)
+          self.anchor_x += max(-BIAS_X_RATE * pair_dt, min(BIAS_X_RATE * pair_dt, alpha * (target_x - self.anchor_x)))
+          self.anchor_y += max(-BIAS_Y_RATE * pair_dt, min(BIAS_Y_RATE * pair_dt, alpha * (target_y - self.anchor_y)))
+    if independent:
+      self.last_pair_ns, self.last_position_seq = source_ns, position_seq
+    if source_ns > self.last_source_ns:
+      self.last_vision_distance, self.last_vision_velocity = distance, velocity
+    self.last_source_ns = max(self.last_source_ns, source_ns)
+    self.last_model_ns = max(self.last_model_ns, model_ns)
+    return {'identityState': self.state, 'identityReason': self.reason, 'bindingStartMonoTime': self.start_ns,
+            'bindingSamples': len(self.samples), 'recoverySamples': len(self.recovery), 'independentPair': independent,
+            'residualDeltaX': dx, 'residualDeltaY': dy, 'bindingAnchorX': diagnostic_anchor_x,
+            'bindingAnchorY': diagnostic_anchor_y, 'rejectionMonoTime': self.rejection_ns}
+
+
 @dataclass
 class Track:
   identifier: int
@@ -78,6 +209,8 @@ class Track:
   epoch_ns: int
   mean: np.ndarray  # x, left-positive y, ground velocity x/y in current body frame
   covariance: np.ndarray
+  generation: int = 0
+  birth_reason: str = 'newObject'
   count: int = 1
   velocity_seq: int = 0
   velocity_ns: int = 0
@@ -90,6 +223,13 @@ class Track:
   acceleration_velocity: tuple[float, float] = (0.0, 0.0)
   path: str = 'unknown'
   innovation: float = 0.0
+  last_invalid_reason: str = ''
+  last_invalid_ns: int = 0
+  invalid_position_ns: int = 0
+  previous_position_seq: int = 0
+  previous_position_ns: int = 0
+  previous_x: float = 0.0
+  previous_y: float = 0.0
   # Six distinct position samples; AUX updates never add a sample.
   positions: deque = field(default_factory=lambda: deque(maxlen=6))
 
@@ -209,7 +349,7 @@ class HondaRadarFusion:
     self.dropped = 0
     self.last_now_ns = 0
     self.model_ns = 0
-    self.bindings = {}
+    self.bindings: dict[tuple[int, int], Binding] = {}
     self.counts = {'positions': 0, 'duplicate': 0, 'old': 0, 'resets': 0, 'rejectedPosition': 0, 'rejectedVelocity': 0,
                        'ambiguous': 0, 'expired': 0, 'capacity': 0}
 
@@ -235,23 +375,42 @@ class HondaRadarFusion:
         and -.5 <= speed <= 70 and abs(yaw) <= 2):
       self.history.add(Ego(timestamp, max(0.0, speed), yaw))
 
-  def _birth(self, observation, ego):
-    if len(self.tracks) >= MAX_TRACKS:
+  def _birth(self, observation, ego, reason='newObject', previous=None):
+    raw = read(observation, 'raw')
+    identifier = int(read(raw, 'oemTrackId'))
+    if identifier not in self.tracks and len(self.tracks) >= MAX_TRACKS:
       oldest = min(self.tracks, key=lambda key: self.tracks[key].position_ns)
       del self.tracks[oldest]
       self.counts['capacity'] += 1
-    raw = read(observation, 'raw')
     timestamp = int(read(observation, 'positionMonoTime'))
     track = Track(self.next_identifier, int(read(raw, 'oemTrackId')), int(read(observation, 'slot')),
                   int(read(observation, 'frameIndex')), int(read(raw, 'lifecycleRaw')), int(read(observation, 'positionSeq')),
                   timestamp, timestamp, timestamp,
                   np.array([float(read(observation, 'dRel')), float(read(observation, 'yRel')), ego.speed, 0.0]),
-                  np.diag([POSITION_NOISE**2, .8**2, 25.0, 9.0]))
+                  np.diag([POSITION_NOISE**2, .8**2, 25.0, 9.0]),
+                  generation=int(read(observation, 'generation', 0)), birth_reason=reason)
+    if previous is not None:
+      track.last_invalid_reason, track.last_invalid_ns = previous.last_invalid_reason, previous.last_invalid_ns
     self.next_identifier += 1
     self.tracks[track.oem_id] = track
     return track
 
+  def _invalidate(self, track, reason, position_ns, now_ns):
+    track.active = track.velocity_good = track.acceleration_good = False
+    track.last_invalid_reason, track.last_invalid_ns = reason, now_ns
+    track.invalid_position_ns = max(track.invalid_position_ns, position_ns)
+    for (_, identifier), binding in self.bindings.items():
+      if identifier == track.identifier:
+        binding.reject(reason, now_ns)
+
+  def _suspend_bindings(self, index, reason, timestamp, except_track=0):
+    for (model_index, identifier), binding in self.bindings.items():
+      if model_index == index and identifier != except_track:
+        binding.reject(reason, timestamp)
+
   def _velocity(self, track, observation, now_ns):
+    if not track.active:
+      return
     raw = read(observation, 'raw', {})
     seq = int(read(observation, 'velocitySeq', 0))
     if not seq or seq <= track.velocity_seq:
@@ -282,7 +441,8 @@ class HondaRadarFusion:
       self.reset()
       return
     # Only the bounded batch is sorted, never future route data.
-    ordered = sorted(observations, key=lambda o: (int(read(o, 'positionMonoTime', 0)), int(read(o, 'positionSeq', 0))))
+    ordered = sorted(observations, key=lambda o: (int(read(o, 'positionMonoTime', 0)),
+                                                 not read(o, 'positionValid', False), int(read(o, 'positionSeq', 0))))
     for observation in ordered:
       slot = int(read(observation, 'slot', -1))
       if not 0 <= slot < 16:
@@ -291,18 +451,20 @@ class HondaRadarFusion:
       if not read(observation, 'positionValid', False):
         reason = read(observation, 'reason', '')
         if reason == 'conflictingFrame':
-          for key, track in list(self.tracks.items()):
+          for track in self.tracks.values():
             # A conflict in an accepted measurement invalidates its posterior.
             # An unfinished or older scan cannot retract a different sample.
-            if (track.slot == slot and track.position_ns == stamp and
+            if (0 < stamp <= now_ns and track.slot == slot and track.position_ns == stamp and
                 track.position_seq == int(read(observation, 'positionSeq', 0))):
-              del self.tracks[key]
+              self._invalidate(track, reason, stamp, now_ns)
               self.counts['rejectedPosition'] += 1
-        elif reason in ('expired', 'invalidGeometry'):
+        elif reason in ('expired', 'invalidGeometry', 'withdrawn'):
           for track in self.tracks.values():
             # An old slot invalidation must not kill the identity's new slot.
-            if track.slot == slot and track.position_ns <= stamp <= now_ns:
-              track.active = False
+            generation = int(read(observation, 'generation', 0))
+            if (track.slot == slot and track.position_ns <= stamp <= now_ns
+                and (not generation or generation == track.generation)):
+              self._invalidate(track, reason, stamp, now_ns)
         continue
       seq = int(read(observation, 'positionSeq', 0))
       raw = read(observation, 'raw', {})
@@ -310,31 +472,53 @@ class HondaRadarFusion:
       index, life = int(read(observation, 'frameIndex', -1)), int(read(raw, 'lifecycleRaw', -1))
       x, y = float(read(observation, 'dRel', math.nan)), float(read(observation, 'yRel', math.nan))
       ego = self.history.at(stamp)
-      if (not fresh(stamp, now_ns, MAX_AGE_NS) or not seq or not 1 <= identifier <= 63 or not 0 <= index < 16
-          or not 0 <= life < 4095 or not finite(x, y) or not 0 < x < 250 or abs(y) > 150 or ego is None):
+      geometry_ok = 1 <= identifier <= 63 and 0 <= life < 4095 and finite(x, y) and 0 < x < 250 and abs(y) <= 150
+      if (not fresh(stamp, now_ns, MAX_AGE_NS) or not seq or not 0 <= index < 16 or not geometry_ok or ego is None):
+        if not geometry_ok:
+          for previous in self.tracks.values():
+            if previous.slot == slot and previous.position_ns <= stamp <= now_ns:
+              self._invalidate(previous, 'invalidGeometry', stamp, now_ns)
         self.counts['rejectedPosition'] += 1
         continue
       track = self.tracks.get(identifier)
       if track is not None and seq == track.position_seq:
         # Position/AUX are separately identified. AUX cannot refresh position age.
-        self._velocity(track, observation, now_ns)
+        last = track.positions[-1] if track.positions else (track.position_ns, math.nan, math.nan)
+        if (slot != track.slot or stamp != track.position_ns or index != track.frame_index or life != track.lifecycle
+            or abs(x - last[1]) > 1e-4 or abs(y - last[2]) > 1e-4):
+          self._invalidate(track, 'conflictingPosition', stamp, now_ns)
+          self.counts['ambiguous'] += 1
+        else:
+          self._velocity(track, observation, now_ns)
         continue
       if track is not None and (stamp <= track.position_ns or seq < track.position_seq):
         self.counts['old'] += 1
         continue
+      for previous in self.tracks.values():
+        if previous is not track and previous.slot == slot and previous.active and previous.position_ns <= stamp:
+          self._invalidate(previous, 'slotReassigned', stamp, now_ns)
+      birth_reason = 'newObject'
+      old_track = track
       if track is not None:
         delta = (index - track.frame_index) & 15
         life_delta = (life - track.lifecycle) & 4095
-        if delta == 0 and life_delta == 0:
+        if delta == 0 and (life_delta == 0 or slot != track.slot):
           self.counts['duplicate'] += 1
-          if abs(x - track.mean[0]) > 2 or abs(y - track.mean[1]) > 1:
-            track.active = False
+          last = track.positions[-1]
+          if slot != track.slot or abs(x - last[1]) > 1e-4 or abs(y - last[2]) > 1e-4:
+            self._invalidate(track, 'slotConflict' if slot != track.slot else 'conflictingPosition', stamp, now_ns)
             self.counts['ambiguous'] += 1
           continue
-        if not (1 <= delta <= 8 and life_delta == 2 * delta and stamp - track.position_ns <= MAX_AGE_NS):
+        if not track.active:
+          if stamp <= track.invalid_position_ns:
+            self.counts['old'] += 1
+            continue
+          birth_reason, track = 'invalidRecovery', None
+        elif not radar_scan_continuous(track.frame_index, track.lifecycle, track.position_ns, index, life, stamp):
+          birth_reason = 'positionGap' if stamp - track.position_ns > MAX_AGE_NS else 'lifecycleReset'
           track = None
       if track is None:
-        track = self._birth(observation, ego)
+        track = self._birth(observation, ego, birth_reason, old_track)
       else:
         prediction = track.project(stamp, self.history)
         if prediction is None:
@@ -345,6 +529,7 @@ class HondaRadarFusion:
         x_gate = min(8.0, max(3.0, 3 * math.sqrt(float(covariance[0, 0]) + POSITION_NOISE**2)))
         y_gate = min(3.0, max(1.0, 3 * math.sqrt(float(covariance[1, 1]) + .8**2)))
         if abs(dx) > x_gate or abs(dy) > y_gate:
+          self._invalidate(track, 'positionInnovation', stamp, now_ns)
           self.counts['rejectedPosition'] += 1
           continue
         track.mean, track.covariance, track.epoch_ns = mean, covariance, stamp
@@ -352,8 +537,11 @@ class HondaRadarFusion:
         track.measure(1, y, (.3 + .01 * x)**2)
         track.innovation = math.hypot(dx, dy)
         track.count += 1
+        track.previous_position_ns, track.previous_position_seq = track.position_ns, track.position_seq
+        _, track.previous_x, track.previous_y = track.positions[-1]
         track.position_ns, track.position_seq = stamp, seq
         track.slot, track.frame_index, track.lifecycle = slot, index, life
+        track.generation = int(read(observation, 'generation', 0))
         track.velocity_good = False
       track.active = True
       track.positions.append((stamp, x, y))
@@ -363,6 +551,8 @@ class HondaRadarFusion:
     for key in expired:
       del self.tracks[key]
       self.counts['expired'] += 1
+    live_identifiers = {track.identifier for track in self.tracks.values()}
+    self.bindings = {key: binding for key, binding in self.bindings.items() if key[1] in live_identifiers}
 
   def _candidates(self, model, model_ns, ego, now_ns):
     path_x, path_y = list(model.position.x), list(model.position.y)
@@ -385,16 +575,22 @@ class HondaRadarFusion:
       if track.mature and covariance[2, 2] < 4:
         motion = 'oncoming' if vx < -2 else 'stationary' if abs(vx) < 1 else 'moving'
       coasting = not track.active or now_ns - track.position_ns > 100_000_000
-      velocity_good = track.velocity_good and fresh(track.velocity_ns, now_ns, MAX_AGE_NS)
+      velocity_good = track.active and track.velocity_good and fresh(track.velocity_ns, now_ns, MAX_AGE_NS)
       snapshots.append({'trackId': track.identifier, 'oemTrackId': track.oem_id, 'slot': track.slot, 'positionSeq': track.position_seq,
           'positionMonoTime': track.position_ns, 'velocityMonoTime': track.velocity_ns, 'dRel': float(mean[0]), 'yRel': float(mean[1]),
           'groundSpeed': vx, 'lateralSpeed': vy, 'positionVariance': float(covariance[0, 0]), 'velocityVariance': float(covariance[2, 2]),
           'observations': track.count, 'mature': track.mature, 'velocityGood': velocity_good, 'coasting': coasting,
-          'pathState': relation, 'pathOffset': offset, 'entryTime': entry, 'motion': motion, 'u10Raw': track.u10})
-      candidates.append((track, mean, covariance, relation, motion, coasting, velocity_good))
+          'pathState': relation, 'pathOffset': offset, 'entryTime': entry, 'motion': motion, 'u10Raw': track.u10,
+          'active': track.active, 'generation': track.generation, 'birthReason': track.birth_reason,
+          'lastInvalidReason': track.last_invalid_reason, 'lastInvalidMonoTime': track.last_invalid_ns,
+          'frameIndex': track.frame_index, 'lifecycleRaw': track.lifecycle,
+          'previousPositionSeq': track.previous_position_seq, 'previousPositionMonoTime': track.previous_position_ns,
+          'previousDRel': track.previous_x, 'previousYRel': track.previous_y})
+      if track.active:
+        candidates.append((track, mean, covariance, relation, motion, coasting, velocity_good))
     result = []
     hypothesis_count = min(len(model.leadsV3), 3)
-    new_model = model_ns != self.model_ns
+    source_ns = int(model.timestampEof)
     for index in range(hypothesis_count):
       vision = model.leadsV3[index]
       x, y, velocity, acceleration = (first(vision, k) for k in ('x', 'y', 'v', 'a'))
@@ -406,26 +602,37 @@ class HondaRadarFusion:
                   'dRel': x - RADAR_TO_CAMERA if values_ok else 0.0, 'yRel': -y if values_ok else 0.0,
                   'vRel': velocity - model_speed if values_ok else 0.0, 'vLead': ego.speed + velocity - model_speed if values_ok else 0.0,
                   'aLead': acceleration if values_ok else 0.0, 'distanceWeight': 0.0, 'velocityWeight': 0.0,
-                  'pathState': 'unknown', 'positionMonoTime': 0, 'velocityMonoTime': 0, 'sourceAge': 0.0}
+                  'pathState': 'unknown', 'positionMonoTime': 0, 'velocityMonoTime': 0, 'sourceAge': 0.0,
+                  'identityState': 'unresolved', 'identityReason': 'noCandidate', 'candidateTrackId': 0,
+                  'bindingStartMonoTime': 0, 'bindingSamples': 0, 'recoverySamples': 0, 'independentPair': False,
+                  'residualX': 0.0, 'residualY': 0.0, 'residualV': 0.0, 'residualDeltaX': 0.0, 'residualDeltaY': 0.0,
+                  'bindingAnchorX': 0.0, 'bindingAnchorY': 0.0, 'rejectionMonoTime': 0,
+                  'gateX': 0.0, 'gateY': 0.0, 'visionXStd': 0.0, 'visionYStd': 0.0, 'visionVStd': 0.0,
+                  'blend': 0.0, 'coastWeight': 0.0, 'velocityGate': 0.0}
       if not lead['present'] or probability < .8:
-        self.bindings.pop(index, None)
+        self._suspend_bindings(index, 'visionUnqualified', model_ns)
+        lead['identityReason'] = 'visionUnqualified'
         result.append(lead)
         continue
       if lead['dRel'] <= 0:
         # Preserve the existing visual coordinate conversion even inside the
         # radar/camera offset; a proximity check must not erase a visual lead.
-        self.bindings.pop(index, None)
+        self._suspend_bindings(index, 'nearVision', model_ns)
         lead['reason'] = 'nearVision'
+        lead['identityReason'] = 'nearVision'
         result.append(lead)
         continue
       sx, sy, sv = (first(vision, k) for k in ('xStd', 'yStd', 'vStd'))
       if not finite(sx, sy, sv) or min(sx, sy, sv) < 0:
-        self.bindings.pop(index, None)
+        self._suspend_bindings(index, 'visionUncertainty', model_ns)
         lead['reason'] = 'visionUncertainty'
+        lead['identityReason'] = 'visionUncertainty'
         result.append(lead)
         continue
       sx, sy, sv = max(.5, sx), max(.3, sy), max(.5, sv)
+      lead.update(visionXStd=sx, visionYStd=sy, visionVStd=sv, velocityGate=min(4.0, max(2.0, 3 * sv)))
       options = []
+      considered = []
       for candidate in candidates:
         track, mean, covariance, relation, motion, coasting, velocity_good = candidate
         if relation == 'outOfPath' or motion == 'oncoming':
@@ -433,40 +640,62 @@ class HondaRadarFusion:
         dx, dy = float(mean[0]) - lead['dRel'], float(mean[1]) - lead['yRel']
         gate_x = min(8.0, max(3.0, 3 * math.sqrt(sx * sx + float(covariance[0, 0]))))
         gate_y = min(1.5, max(.8, 3 * math.sqrt(sy * sy + float(covariance[1, 1]))))
+        score = (dx / gate_x)**2 + (dy / gate_y)**2
+        option = (score, candidate, dx, dy, gate_x, gate_y)
+        considered.append(option)
         if abs(dx) <= gate_x and abs(dy) <= gate_y:
-          score = (dx / gate_x)**2 + (dy / gate_y)**2
-          options.append((score, candidate))
+          options.append(option)
       options.sort(key=lambda value: value[0])
+      if considered:
+        _, diagnostic, dx, dy, gate_x, gate_y = min(considered, key=lambda value: value[0])
+        lead.update(candidateTrackId=diagnostic[0].identifier, residualX=dx, residualY=dy,
+                    residualV=float(diagnostic[1][2]) - ego.speed - lead['vRel'], gateX=gate_x, gateY=gate_y)
       if not options or (len(options) > 1 and options[1][0] - options[0][0] < .25):
         lead['reason'] = 'ambiguous' if options else 'noMatch'
+        lead['identityReason'] = lead['reason']
         self.counts['ambiguous'] += bool(options)
-        self.bindings.pop(index, None)
+        self._suspend_bindings(index, lead['reason'], model_ns)
+        previous = [(track, self.bindings[(index, track.identifier)]) for track in self.tracks.values()
+                    if (index, track.identifier) in self.bindings]
+        if previous:
+          old, binding = max(previous, key=lambda value: value[1].last_model_ns)
+          lead.update(identityState=binding.state, identityReason=binding.reason,
+                      rejectionMonoTime=binding.rejection_ns, bindingStartMonoTime=binding.start_ns,
+                      bindingSamples=len(binding.samples))
+          if not old.active:
+            lead.update(candidateTrackId=old.identifier, reason='radarInvalid', identityReason=old.last_invalid_reason)
         result.append(lead)
         continue
       track, mean, covariance, relation, motion, coasting, velocity_good = options[0][1]
-      previous = self.bindings.get(index)
-      # A changed visual lead/cut-in starts with the original visual values.
-      compatible = (previous is not None and previous[0] == track.identifier and 0 < model_ns - previous[2] <= MODEL_MAX_AGE_NS
-                    and abs(lead['dRel'] - previous[3] - previous[4] * ((model_ns - previous[2]) / 1e9)) <= 3)
-      if new_model:
-        start = previous[1] if compatible else model_ns
-        self.bindings[index] = (track.identifier, start, model_ns, lead['dRel'], lead['vRel'])
-      else:
-        start = previous[1] if previous and previous[0] == track.identifier else model_ns
-      span = max(0.0, (model_ns - start) / 1e9)
+      _, _, dx, dy, gate_x, gate_y = options[0]
+      velocity_difference = float(mean[2]) - ego.speed - lead['vRel']
+      lead.update(candidateTrackId=track.identifier, residualX=dx, residualY=dy, residualV=velocity_difference,
+                  gateX=gate_x, gateY=gate_y)
+      binding = self.bindings.get((index, track.identifier))
+      # An extrapolated posterior can maintain a compatible existing pair, but
+      # it is not new evidence for a different visual identity.
+      if binding is None and coasting:
+        lead.update(reason='coastingUnbound', identityReason='coastingUnbound')
+        result.append(lead)
+        continue
+      self._suspend_bindings(index, 'candidateChanged', model_ns, except_track=track.identifier)
+      if binding is None:
+        binding = self.bindings[(index, track.identifier)] = Binding(track.identifier, source_ns)
+      lead.update(binding.observe(model_ns, source_ns, track.position_seq, lead['dRel'], lead['vRel'], dx, dy, self.history))
+      span = max(0.0, (source_ns - binding.start_ns) / 1e9)
       lead.update(trackId=track.identifier, state='associating', reason='confirmation', pathState=relation,
                   positionMonoTime=track.position_ns, velocityMonoTime=track.velocity_ns,
                   sourceAge=(now_ns - track.position_ns) / 1e9)
-      if track.mature and span >= .1:
+      if binding.rejection_ns:
+        lead.update(state='visionOnly', reason='identityRejected')
+      elif track.mature and binding.state == 'same' and span >= .1:
         blend = min(1.0, (span - .1) / .2)
         # Start decay continuously at 100 ms; do not halve the weight in one
         # step when the first coasting publication crosses that boundary.
         coast_weight = min(1.0, max(0.0, (.2 - lead['sourceAge']) / .1)) if coasting else 1.0
         wd = blend * min(.9, sx * sx / (sx * sx + max(.1, float(covariance[0, 0]))))
         wd *= coast_weight
-        radar_relative_speed = float(mean[2]) - ego.speed
-        velocity_difference = radar_relative_speed - lead['vRel']
-        velocity_gate = min(4.0, max(2.0, 3 * sv))
+        velocity_gate = lead['velocityGate']
         wv = 0.0
         if velocity_good and abs(velocity_difference) <= velocity_gate:
           quality = 1.0 / (1 + (track.u10 / 64.0)**2)
@@ -481,11 +710,11 @@ class HondaRadarFusion:
           lead['vLead'], lead['vRel'] = 0.0, -ego.speed
         if track.acceleration_good:
           lead['aLead'] += wv * (track.acceleration - lead['aLead'])
-        lead.update(distanceWeight=wd, velocityWeight=wv, state='coasting' if coasting else 'fused' if wv > 0 else 'radarDistance',
+        lead.update(distanceWeight=wd, velocityWeight=wv, blend=blend, coastWeight=coast_weight,
+                    state='coasting' if coasting else 'fused' if wv > 0 else 'radarDistance',
                     reason='prediction' if coasting else 'matched' if wv > 0 else 'velocityUnqualified')
       result.append(lead)
-    if new_model:
-      self.model_ns = model_ns
+    self.model_ns = max(self.model_ns, model_ns)
     # Future hypotheses of the same vehicle share the track estimate. They do
     # not repeatedly update its filter or multiply independent confirmations.
     return snapshots, result

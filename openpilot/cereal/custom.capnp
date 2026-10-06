@@ -595,6 +595,17 @@ struct HondaRadarObservations {
     entryTime @18 :Float64;  # meaningful only when pathState == entering
     motion @19 :Motion;
     u10Raw @20 :UInt16;
+    active @21 :Bool;  # explicit position validity; separate from ordinary missing scans
+    generation @22 :UInt64;  # observer slot generation, not a physical-object identifier
+    birthReason @23 :Text;
+    lastInvalidReason @24 :Text;
+    lastInvalidMonoTime @25 :UInt64;
+    frameIndex @26 :UInt8;
+    lifecycleRaw @27 :UInt16;
+    previousPositionSeq @28 :UInt64;
+    previousPositionMonoTime @29 :UInt64;
+    previousDRel @30 :Float64;
+    previousYRel @31 :Float64;
   }
 
   struct FusionLead {
@@ -615,6 +626,29 @@ struct HondaRadarObservations {
     positionMonoTime @14 :UInt64;
     velocityMonoTime @15 :UInt64;
     sourceAge @16 :Float64;
+    identityState @17 :Text;  # same/different/unresolved are algorithm judgments, not identity truth
+    identityReason @18 :Text;
+    candidateTrackId @19 :UInt64;  # best geometric candidate, including a rejected association
+    bindingStartMonoTime @20 :UInt64;
+    bindingSamples @21 :UInt16;
+    recoverySamples @22 :UInt16;
+    independentPair @23 :Bool;  # both model source and position advanced this update
+    residualX @24 :Float64;
+    residualY @25 :Float64;
+    residualV @26 :Float64;  # actual velocity-gate operand
+    residualDeltaX @27 :Float64;
+    residualDeltaY @28 :Float64;
+    bindingAnchorX @29 :Float64;
+    bindingAnchorY @30 :Float64;
+    rejectionMonoTime @31 :UInt64;
+    gateX @32 :Float64;
+    gateY @33 :Float64;
+    visionXStd @34 :Float64;  # actual floored gate inputs, not calibrated sensor sigma
+    visionYStd @35 :Float64;
+    visionVStd @36 :Float64;
+    blend @37 :Float64;
+    coastWeight @38 :Float64;
+    velocityGate @39 :Float64;
   }
 
   struct Scope {

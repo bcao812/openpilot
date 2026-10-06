@@ -19,6 +19,11 @@ NUM_SLOTS = 16
 MAX_AGE_NS = 200_000_000
 MAX_PENDING_PER_SLOT = 3
 MAX_EVENTS = 64
+# Reuse the shadow tracker's existing position-innovation hard caps for the
+# additional raw-position check needed by the 4094 plateau exception. These
+# are coarse discontinuity bounds, not calibrated noise or sensor limits.
+CONTINUITY_MAX_DREL = 8.0
+CONTINUITY_MAX_YREL = 3.0
 MAIN_IDS = tuple(tuple((0x280 + 4 * s if s < 4 else 0x2D0 + 4 * (s - 4)) + f for f in range(4)) for s in range(NUM_SLOTS))
 AUX_IDS = tuple(0x2C8 + s if s < 8 else 0x290 + s - 8 for s in range(NUM_SLOTS))
 ADDRESS_MAP = {a: (s, f) for s in range(NUM_SLOTS) for f, a in enumerate((*MAIN_IDS[s], AUX_IDS[s]))}
@@ -31,6 +36,23 @@ RAW_SIGNALS = (
   {"oemTrackId": "TRACK_ID", "edgeARaw": "AZIMUTH_EDGE_A_RAW", "edgeBRaw": "AZIMUTH_EDGE_B_RAW", "edgeSigmaARaw": "AZIMUTH_EDGE_SIGMA_A_RAW"},
   {"u11Raw": "REL_VELOCITY_RAW", "u10Raw": "REL_VELOCITY_UNCERTAINTY_RAW", "edgeSigmaBRaw": "AZIMUTH_EDGE_SIGMA_B_RAW", "ratioRaw": "RANGE_RATIO_RAW"},
 )
+
+
+def radar_scan_continuous(previous_index: int, previous_life: int, previous_ns: int,
+                          index: int, life: int, stamp: int) -> bool:
+  """Necessary sequence/time condition; callers still qualify object identity.
+
+  Observed 4094 plateaus can continue across a progressing frame counter. This
+  is compatibility with the recorded field behavior, not an OEM lifecycle
+  definition. Same identity, active state, compatible geometry and absence of
+  simultaneous slot conflicts must be checked separately by each caller.
+  Repeated positions/AUX are never independent observations under this rule.
+  """
+  if not (0 <= previous_index < 16 and 0 <= index < 16 and 0 <= previous_life < 4095 and 0 <= life < 4095
+          and 0 < previous_ns < stamp and stamp - previous_ns <= MAX_AGE_NS):
+    return False
+  delta = (index - previous_index) & 15
+  return 1 <= delta <= 8 and (((life - previous_life) & 4095) == 2 * delta or previous_life == life == 4094)
 
 
 @dataclass(frozen=True)
@@ -65,6 +87,8 @@ class Slot:
   generation: int = 0
   expired: bool = True
   last_signature: tuple | None = None
+  last_position: tuple[float, float] | None = None
+  identity_conflict: bool = False
 
 
 class BoschARadarObserver:
@@ -135,16 +159,31 @@ class BoschARadarObserver:
           scan.rejection = 'oldScan'
           self._emit(self._event(slot_num, scan, 'oldScan'))
           return
+      distance = raw['rangeRaw'] * 0.05712 - 3.0
       valid = (raw['statusRaw'] != 15 and raw['rangeRaw'] != 4095 and raw['azimuthRaw'] != 2047
-               and raw['lifecycleRaw'] != 4095 and 1 <= raw['oemTrackId'] <= 63 and raw['rangeRaw'] * 0.05712 - 3.0 > 0)
+               and raw['lifecycleRaw'] != 4095 and 1 <= raw['oemTrackId'] <= 63 and distance > 0)
       if not valid:
         scan.rejection = 'invalidGeometry'
         slot.expired = True
         self._emit(self._event(slot_num, scan, 'invalidGeometry'))
         return
-      delta = (scan.index - slot.last_index) & 15 if slot.last_index is not None else 0
-      continuous = (not slot.expired and slot.last_id == raw['oemTrackId'] and slot.last_life is not None
-                    and ((raw['lifecycleRaw'] - slot.last_life) & 4095) == 2 * delta)
+      lateral = distance * math.tan((raw['azimuthRaw'] - 1024) / 2048.0)
+      # Preserve both raw observations. Two live slots with this OEM ID in the
+      # same frame cannot establish identity continuity. The preceding frame
+      # in another slot alone is a normal migration, not a simultaneous claim.
+      identity_conflict = False
+      for other in self.slots:
+        if (other is not slot and not other.expired and other.last_id == raw['oemTrackId']
+            and other.last_index == scan.index and abs(t_pos - other.last_position_ns) <= MAX_AGE_NS):
+          identity_conflict = other.identity_conflict = True
+      plateau = slot.last_life == raw['lifecycleRaw'] == 4094
+      geometry_continuous = (not plateau or (slot.last_position is not None
+                             and abs(distance - slot.last_position[0]) <= CONTINUITY_MAX_DREL
+                             and abs(lateral - slot.last_position[1]) <= CONTINUITY_MAX_YREL))
+      continuous = (not slot.expired and not slot.identity_conflict and not identity_conflict
+                    and slot.last_id == raw['oemTrackId'] and slot.last_index is not None and slot.last_life is not None
+                    and geometry_continuous and radar_scan_continuous(slot.last_index, slot.last_life, slot.last_position_ns,
+                                                                     scan.index, raw['lifecycleRaw'], t_pos))
       if not continuous:
         self.generation += 1
         slot.generation = self.generation
@@ -155,6 +194,8 @@ class BoschARadarObserver:
       slot.last_index, slot.last_life, slot.last_id = scan.index, raw['lifecycleRaw'], raw['oemTrackId']
       slot.last_position_ns = t_pos
       slot.last_signature = signature
+      slot.last_position = distance, lateral
+      slot.identity_conflict = identity_conflict
       slot.expired = False
       self.last_position_ns = max(self.last_position_ns, t_pos)
     event = self._event(slot_num, scan, 'positionOnly')

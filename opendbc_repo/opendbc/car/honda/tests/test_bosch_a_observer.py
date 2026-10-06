@@ -2,14 +2,14 @@ import unittest
 from itertools import permutations
 
 from opendbc.can.packer import CANPacker
-from opendbc.car.honda.bosch_a_radar import AUX_IDS, MAIN_IDS, MAX_AGE_NS, MAX_EVENTS, BoschARadarObserver
+from opendbc.car.honda.bosch_a_radar import AUX_IDS, MAIN_IDS, MAX_AGE_NS, MAX_EVENTS, BoschARadarObserver, radar_scan_continuous
 
 START = 10_000_000_000
 
 
-def scan_frames(slot=0, index=0, life=1, distance=1000, oem_id=None, velocity=736, ratio=500, bus=2):
+def scan_frames(slot=0, index=0, life=1, distance=1000, oem_id=None, velocity=736, ratio=500, bus=2, azimuth=1124):
   packer = CANPacker('honda_bosch_a_radar')
-  values = [dict(STATUS=7, RANGE_RAW=distance, AZIMUTH_RAW=1124, RANGE_SIGMA_RAW=1),
+  values = [dict(STATUS=7, RANGE_RAW=distance, AZIMUTH_RAW=azimuth, RANGE_SIGMA_RAW=1),
             dict(OBJECT_EXISTENCE_PROBABILITY_RAW=126), dict(LIFECYCLE_RAW=life),
             dict(TRACK_ID=slot + 1 if oem_id is None else oem_id),
             dict(REL_VELOCITY_RAW=velocity, REL_VELOCITY_UNCERTAINTY_RAW=0, RANGE_RATIO_RAW=ratio)]
@@ -109,6 +109,128 @@ class TestBoschAObserver(unittest.TestCase):
     decoder.feed(START + 120_000_000, scan_frames(index=1, life=50))
     self.assertGreater(decoder.drain()[-1]['generation'], generation)
 
+  def test_recorded_plateau_windows_preserve_generation_across_wrap(self):
+    # Three positions around the first 15->0 wrap in each frozen V092/V431
+    # tracking-probe.json window (2026-10-06, recording source 9983a048).
+    # Time/index are recorded; range/azimuth are reconstructed from decoded
+    # geometry on its original quantization grid. These are not raw CAN bytes.
+    windows = {
+      60: ((997102187326, 15, 644, 1047), (997172030399, 0, 643, 1047), (997231839201, 1, 643, 1046)),
+      38: ((1629995300105, 15, 843, 1033), (1630055255209, 0, 842, 1033), (1630135305053, 1, 841, 1033)),
+    }
+    for identity, rows in windows.items():
+      with self.subTest(identity=identity):
+        decoder = BoschARadarObserver(2)
+        events = []
+        for stamp, index, distance, azimuth in rows:
+          decoder.feed(stamp, scan_frames(slot=1, index=index, life=4094, distance=distance,
+                                          oem_id=identity, azimuth=azimuth))
+          events.extend(decoder.drain())
+        self.assertEqual(len({e['generation'] for e in events}), 1)
+        self.assertEqual(len({e['positionSeq'] for e in events}), 3)
+        self.assertTrue(all(e['positionValid'] for e in events))
+        self.assertGreater(rows[-1][0] - rows[0][0], 120_000_000)
+
+  def test_plateau_aux_and_repeats_do_not_create_position_samples(self):
+    decoder = BoschARadarObserver(2)
+    frames = scan_frames(index=15, life=4094)
+    decoder.feed(START, frames[:4])
+    position = decoder.drain()[-1]
+    decoder.feed(START + 1_000_000, frames[4:])
+    aux = decoder.drain()[-1]
+    self.assertEqual(aux['positionSeq'], position['positionSeq'])
+    self.assertEqual(aux['generation'], position['generation'])
+    self.assertEqual(aux['positionMonoTime'], START)
+    decoder.feed(START + 2_000_000, frames)
+    self.assertFalse(any(e.get('positionValid') for e in decoder.drain()))
+    decoder.feed(START + 70_000_000, scan_frames(index=0, life=4094))
+    next_position = decoder.drain()[-1]
+    self.assertEqual(next_position['generation'], position['generation'])
+    self.assertGreater(next_position['positionSeq'], position['positionSeq'])
+
+  def test_plateau_geometry_or_identity_discontinuity_starts_new_generation(self):
+    # Large raw-position changes are identity breaks even with the same OEM ID
+    # and plateau. Velocity agreement is not used to choose a presumed truth.
+    changes = ({'distance': 1300}, {'azimuth': 1400}, {'oem_id': 6}, {'life': 2})
+    for changed in changes:
+      with self.subTest(changed=changed):
+        decoder = BoschARadarObserver(2)
+        decoder.feed(START, scan_frames(index=0, life=4094, oem_id=5))
+        generation = decoder.drain()[-1]['generation']
+        values = dict(index=1, life=4094, oem_id=5)
+        values.update(changed)
+        decoder.feed(START + 70_000_000, scan_frames(**values))
+        event = decoder.drain()[-1]
+        self.assertTrue(event['positionValid'])
+        self.assertGreater(event['generation'], generation)
+
+  def test_invalid_plateau_position_and_late_aux_cannot_restore_generation(self):
+    decoder = BoschARadarObserver(2)
+    decoder.feed(START, scan_frames(index=0, life=4094))
+    first = decoder.drain()[-1]
+    invalid = scan_frames(index=1, life=4095)
+    decoder.feed(START + 70_000_000, invalid[:4])
+    self.assertFalse(decoder.drain()[-1]['positionValid'])
+    decoder.feed(START + 71_000_000, invalid[4:])
+    event = decoder.drain()[-1]
+    self.assertFalse(event['positionValid'] or event['velocityValid'])
+    self.assertEqual(decoder.last_position_ns, START)
+    decoder.feed(START + 140_000_000, scan_frames(index=2, life=4094))
+    self.assertGreater(decoder.drain()[-1]['generation'], first['generation'])
+
+  def test_conflicting_plateau_position_requires_new_generation(self):
+    decoder = BoschARadarObserver(2)
+    decoder.feed(START, scan_frames(index=0, life=4094))
+    generation = decoder.drain()[-1]['generation']
+    decoder.feed(START + 1_000_000, scan_frames(index=0, life=4094, distance=1100)[:1])
+    self.assertEqual(decoder.drain()[-1]['reason'], 'conflictingFrame')
+    decoder.feed(START + 70_000_000, scan_frames(index=1, life=4094))
+    self.assertGreater(decoder.drain()[-1]['generation'], generation)
+
+  def test_simultaneous_slot_claims_break_plateau_continuity(self):
+    decoder = BoschARadarObserver(2)
+    decoder.feed(START, scan_frames(slot=0, index=15, life=4094, oem_id=5))
+    first_generation = decoder.drain()[-1]['generation']
+    decoder.feed(START + 70_000_000, scan_frames(slot=0, index=0, life=4094, oem_id=5)
+                 + scan_frames(slot=1, index=0, life=4094, oem_id=5))
+    events = [e for e in decoder.drain() if e['velocityValid']]
+    self.assertEqual({e['slot'] for e in events}, {0, 1})
+    self.assertNotEqual(events[0]['generation'], events[1]['generation'])
+    self.assertTrue(decoder.slots[0].identity_conflict and decoder.slots[1].identity_conflict)
+    second_generation = events[1]['generation']
+    decoder.feed(START + 140_000_000, scan_frames(slot=0, index=1, life=4094, oem_id=5)
+                 + scan_frames(slot=1, index=1, life=4094, oem_id=5))
+    events = [e for e in decoder.drain() if e['velocityValid']]
+    self.assertGreater(events[0]['generation'], first_generation)
+    self.assertGreater(events[1]['generation'], second_generation)
+
+  def test_next_frame_slot_migration_is_not_a_simultaneous_claim(self):
+    decoder = BoschARadarObserver(2)
+    decoder.feed(START, scan_frames(slot=0, index=15, life=4094, oem_id=5))
+    decoder.drain()
+    decoder.feed(START + 70_000_000, scan_frames(slot=1, index=0, life=4094, oem_id=5))
+    generation = decoder.drain()[-1]['generation']
+    self.assertFalse(decoder.slots[0].identity_conflict or decoder.slots[1].identity_conflict)
+    decoder.feed(START + 140_000_000, scan_frames(slot=1, index=1, life=4094, oem_id=5))
+    self.assertEqual(decoder.drain()[-1]['generation'], generation)
+
+  def test_slot_conflict_uses_position_time_with_interleaved_main_frames(self):
+    decoder = BoschARadarObserver(2)
+    delayed = scan_frames(slot=0, life=4094, oem_id=5)
+    decoder.feed(START, delayed[:1])
+    decoder.feed(START + 1_000_000, scan_frames(slot=1, life=4094, oem_id=5))
+    decoder.feed(START + 2_000_000, delayed[1:])
+    observations = [e for e in decoder.drain() if e['velocityValid']]
+    self.assertEqual({e['slot'] for e in observations}, {0, 1})
+    self.assertTrue(decoder.slots[0].identity_conflict and decoder.slots[1].identity_conflict)
+
+  def test_plateau_expiry_does_not_inherit_generation(self):
+    decoder = BoschARadarObserver(2)
+    decoder.feed(START, scan_frames(index=0, life=4094))
+    generation = decoder.drain()[-1]['generation']
+    decoder.feed(START + MAX_AGE_NS + 1, scan_frames(index=1, life=4094))
+    self.assertGreater(decoder.drain()[-1]['generation'], generation)
+
   def test_invalid_geometry_endpoints_dlc_and_incomplete(self):
     for distance, identity in ((0, 1), (4095, 1), (1000, 0), (1000, 64)):
       decoder = BoschARadarObserver(2)
@@ -175,6 +297,27 @@ class TestBoschAObserver(unittest.TestCase):
         self.assertEqual(events[-1]['raw']['u11Raw'], 1728)
         self.assertEqual(events[-1]['raw']['ratioRaw'], 1023)
         self.assertFalse(events[-1]['positionValid'] or events[-1]['velocityValid'])
+
+
+class TestRadarScanContinuity(unittest.TestCase):
+  def test_sequence_rule_keeps_normal_progression_and_qualified_plateau(self):
+    for previous_index, previous_life, index, life in ((0, 10, 1, 12), (15, 4094, 0, 0),
+                                                      (15, 4094, 0, 4094), (3, 4094, 5, 4094)):
+      with self.subTest(values=(previous_index, previous_life, index, life)):
+        self.assertTrue(radar_scan_continuous(previous_index, previous_life, START, index, life, START + 70_000_000))
+
+  def test_sequence_rule_rejects_reuse_duplicates_reverse_and_invalid_fields(self):
+    for previous_index, previous_life, index, life in ((0, 4094, 0, 4094), (0, 4094, 15, 4094),
+                                                      (0, 4094, 1, 2), (0, 4095, 1, 4094),
+                                                      (0, 4094, 1, 4095), (0, -1, 1, 1),
+                                                      (-1, 4094, 0, 4094), (15, 4094, 16, 4094)):
+      with self.subTest(values=(previous_index, previous_life, index, life)):
+        self.assertFalse(radar_scan_continuous(previous_index, previous_life, START, index, life, START + 70_000_000))
+
+  def test_sequence_rule_rejects_missing_reversed_or_expired_time(self):
+    for before, after in ((0, 70_000_000), (START, START), (START, START - 1), (START, START + MAX_AGE_NS + 1)):
+      with self.subTest(before=before, after=after):
+        self.assertFalse(radar_scan_continuous(15, 4094, before, 0, 4094, after))
 
 
 if __name__ == '__main__':

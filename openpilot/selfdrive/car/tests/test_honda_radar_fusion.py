@@ -5,16 +5,17 @@ import unittest
 
 import numpy as np
 
-from openpilot.selfdrive.car.honda_radar_fusion import Ego, HondaRadarFusion, MAX_TRACKS, path_relation
+from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, path_relation
 
 START = 10_000_000_000
 STEP = 66_000_000
 
 
 class Inputs(dict):
-  def __init__(self, t, distance=20.0, lateral=0.0, relative=0.0, speed=10.0, probability=.99, stopped_path=False, yaw=0.0):
+  def __init__(self, t, distance=20.0, lateral=0.0, relative=0.0, speed=10.0, probability=.99, stopped_path=False, yaw=0.0,
+               x_std=1.0, y_std=.4, v_std=1.0):
     lead = {'prob': probability, 'x': [distance + 1.52], 'y': [-lateral], 'v': [speed + relative], 'a': [0.0],
-                'xStd': [1.0], 'yStd': [.4], 'vStd': [1.0]}
+                'xStd': [x_std], 'yStd': [y_std], 'vStd': [v_std]}
     model = NS(timestampEof=t, leadsV3=[NS(**copy.deepcopy(lead)) for _ in range(3)],
                velocity=NS(x=[speed]), orientationRate=NS(z=[-yaw]),
                position=NS(x=[0.0] * 33 if stopped_path else list(np.linspace(0, 160, 33)), y=[0.0] * 33))
@@ -99,8 +100,12 @@ class TestHondaRadarFusion(unittest.TestCase):
       out = advance(fusion, 6, [conflict])
       self.assertTrue(out['leads'][0]['present'])
       if accepted_conflict:
-        self.assertEqual(out['tracks'], [])
+        # The invalid posterior remains diagnostic-only until its normal TTL.
+        self.assertFalse(out['tracks'][0]['active'])
+        self.assertEqual(out['tracks'][0]['lastInvalidReason'], 'conflictingFrame')
         self.assertEqual(out['leads'][0]['state'], 'visionOnly')
+        self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+        self.assertEqual(out['leads'][0]['velocityWeight'], 0)
       else:
         self.assertEqual(len(out['tracks']), 1)
         self.assertFalse(out['tracks'][0]['coasting'])
@@ -143,6 +148,68 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertEqual(out['tracks'][0]['observations'], 1)
     self.assertEqual(out['leads'][0]['state'], 'associating')
 
+  def test_4094_plateau_preserves_maturity_across_wrap_and_slot_migration(self):
+    fusion = HondaRadarFusion()
+    identifiers = set()
+    for frame in range(36):
+      sample = observation(frame, slot=frame % 3)
+      sample['raw']['lifecycleRaw'] = 4094
+      sample['generation'] = frame + 1  # Decoder slot generations are not object IDs.
+      out = advance(fusion, frame, [sample, sample])
+      track = out['tracks'][0]
+      identifiers.add(track['trackId'])
+      self.assertEqual(track['observations'], frame + 1)
+      self.assertEqual(track['mature'], frame >= 2)
+    self.assertEqual(len(identifiers), 1)
+    self.assertEqual(out['counters']['positions'], 36)
+    self.assertGreater(out['leads'][0]['distanceWeight'], .5)
+
+  def test_plateau_does_not_inherit_invalid_geometry_or_a_real_lifecycle_restart(self):
+    for failure in ('invalidLife', 'positionJump', 'lifecycleRestart'):
+      with self.subTest(failure=failure):
+        fusion = HondaRadarFusion()
+        for frame in range(8):
+          sample = observation(frame)
+          sample['raw']['lifecycleRaw'] = 4094
+          out = advance(fusion, frame, [sample])
+        old = out['tracks'][0]['trackId']
+        sample = observation(8)
+        sample['raw']['lifecycleRaw'] = 4095 if failure == 'invalidLife' else 1 if failure == 'lifecycleRestart' else 4094
+        if failure == 'positionJump':
+          sample['dRel'] = 90.0
+        out = advance(fusion, 8, [sample])
+        self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+        self.assertEqual(out['leads'][0]['velocityWeight'], 0)
+        if failure == 'lifecycleRestart':
+          self.assertNotEqual(out['tracks'][0]['trackId'], old)
+          self.assertEqual(out['tracks'][0]['observations'], 1)
+        else:
+          self.assertFalse(out['tracks'][0]['active'])
+          recovery = observation(9)
+          recovery['raw']['lifecycleRaw'] = 4094
+          out = advance(fusion, 9, [recovery])
+          self.assertNotEqual(out['tracks'][0]['trackId'], old)
+          self.assertEqual(out['tracks'][0]['observations'], 1)
+          self.assertEqual(out['tracks'][0]['birthReason'], 'invalidRecovery')
+          self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+
+  def test_plateau_same_scan_slot_conflict_revokes_existing_pair(self):
+    fusion = HondaRadarFusion()
+    for frame in range(8):
+      sample = observation(frame)
+      sample['raw']['lifecycleRaw'] = 4094
+      out = advance(fusion, frame, [sample])
+    original = observation(8)
+    conflicting = observation(8, slot=1)
+    original['raw']['lifecycleRaw'] = conflicting['raw']['lifecycleRaw'] = 4094
+    conflicting['positionMonoTime'] += 1
+    out = advance(fusion, 8, [original, conflicting])
+    self.assertEqual(out['counters']['positions'], 9)
+    self.assertFalse(out['tracks'][0]['active'])
+    self.assertEqual(out['tracks'][0]['lastInvalidReason'], 'slotConflict')
+    self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+    self.assertEqual(out['leads'][0]['velocityWeight'], 0)
+
   def test_stopped_path_is_unknown_and_does_not_delete_confirmed_lead(self):
     fusion = HondaRadarFusion()
     for frame in range(12):
@@ -178,6 +245,139 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertEqual(lead['state'], 'visionOnly')
     self.assertEqual(lead['dRel'], 6.0)
     self.assertEqual(lead['vRel'], -3.0)
+
+  def test_gradual_separation_is_rejected_before_blending_and_stays_latched(self):
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      out = advance(fusion, frame, distance=20 - .076, x_std=2.5)
+    self.assertGreater(out['leads'][0]['distanceWeight'], .5)
+    # Every visual step is below the old 3 m continuity gate. The absolute
+    # position gate still admits even the final, approximately 5.5 m bias.
+    residuals = (.25, .5, .921, 1.544, 2.317, 3.1, 3.9, 4.739, 5.539)
+    for frame, residual in enumerate(residuals, 12):
+      out = advance(fusion, frame, distance=20 - residual, x_std=2.5)
+      if residual >= .921:
+        lead = out['leads'][0]
+        self.assertIn(lead['identityState'], ('unresolved', 'different'))
+        self.assertEqual(lead['reason'], 'identityRejected')
+        self.assertGreater(lead['rejectionMonoTime'], 0)
+        self.assertEqual(lead['distanceWeight'], 0)
+        self.assertEqual(lead['velocityWeight'], 0)
+        self.assertAlmostEqual(lead['dRel'], 20 - residual)
+        self.assertEqual(lead['aLead'], 0)
+    # Leaving the geometric gate must not pop the rejection and let the same
+    # old, farther object earn a new confirmation timer on re-entry.
+    advance(fusion, 21, distance=2.0, x_std=2.5)
+    for frame in range(22, 42):
+      out = advance(fusion, frame, distance=20 - residuals[-1], x_std=2.5)
+      self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+      self.assertEqual(out['leads'][0]['velocityWeight'], 0)
+      self.assertTrue(out['leads'][0]['present'])
+
+  def test_large_constant_same_vehicle_bias_and_slow_drift_remain_eligible(self):
+    fusion = HondaRadarFusion()
+    for frame in range(300):
+      # A large but constant initial bias is allowed by the unchanged position
+      # gate. Slow drift can teach only a compatible, already-qualified pair.
+      bias = 4.0 + .025 * frame * STEP / 1e9
+      out = advance(fusion, frame, distance=20 - bias, x_std=2.5)
+      if frame > 8:
+        self.assertEqual(out['leads'][0]['identityState'], 'same')
+        self.assertGreater(out['leads'][0]['distanceWeight'], .5)
+    self.assertGreater(out['leads'][0]['bindingAnchorX'], 4.2)
+    self.assertLess(len(fusion.bindings), 4)
+    self.assertLessEqual(out['leads'][0]['bindingSamples'], 16)
+
+  def test_hypotheses_do_not_share_identity_confirmation_or_rejection(self):
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      advance(fusion, frame)
+    t = START + 12 * STEP
+    sm = Inputs(t)
+    sm['modelV2'].leadsV3[0].x = [18.0 + 1.52]
+    out = fusion.update(body(12, [observation(12)]), sm, t + 1)
+    self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+    self.assertEqual(out['leads'][0]['identityState'], 'different')
+    self.assertGreater(out['leads'][1]['distanceWeight'], .5)
+    self.assertEqual(out['leads'][1]['identityState'], 'same')
+
+  def test_recovery_needs_new_position_and_camera_samples_not_publications(self):
+    binding = Binding(1, START)
+    history = EgoHistory()
+    def pair(frame, seq, residual, source=None):
+      timestamp = START + frame * STEP
+      history.add(Ego(timestamp, 10.0, 0.0))
+      return binding.observe(timestamp, timestamp if source is None else source, seq,
+                             20 - residual, 0.0, residual, 0.0, history)
+    for frame in range(4):
+      pair(frame, frame + 1, 0.0)
+    self.assertEqual(binding.state, 'same')
+    pair(4, 5, 2.0)
+    self.assertEqual(binding.state, 'different')
+    first = pair(5, 6, 0.0)
+    self.assertEqual(first['recoverySamples'], 1)
+    # New publication/position IDs with the same camera source cannot confirm.
+    duplicate = pair(6, 7, 0.0, source=START + 5 * STEP)
+    self.assertFalse(duplicate['independentPair'])
+    self.assertEqual(duplicate['recoverySamples'], 1)
+    # A new camera frame reusing the same last paired radar sample also cannot.
+    duplicate = pair(7, 6, 0.0)
+    self.assertFalse(duplicate['independentPair'])
+    self.assertEqual(duplicate['recoverySamples'], 1)
+    pair(8, 8, 0.0)
+    self.assertGreater(binding.rejection_ns, 0)
+    recovered = pair(9, 9, 0.0)
+    self.assertEqual(recovered['identityState'], 'same')
+    self.assertEqual(binding.rejection_ns, 0)
+
+  def test_short_missing_measurements_preserve_only_existing_compatible_pair(self):
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      out = advance(fusion, frame)
+    identifier = out['tracks'][0]['trackId']
+    for frame in (12, 13):
+      out = advance(fusion, frame, [])
+      self.assertEqual(out['tracks'][0]['trackId'], identifier)
+      self.assertGreater(out['leads'][0]['distanceWeight'], 0)
+    self.assertEqual(out['leads'][0]['state'], 'coasting')
+    out = advance(fusion, 14)
+    self.assertEqual(out['tracks'][0]['trackId'], identifier)
+    self.assertEqual(out['leads'][0]['identityState'], 'same')
+    self.assertGreater(out['leads'][0]['distanceWeight'], .5)
+
+    unbound = HondaRadarFusion()
+    for frame in range(12):
+      advance(unbound, frame, probability=0)
+    advance(unbound, 12, [], probability=0)
+    out = advance(unbound, 13, [])
+    self.assertEqual(out['leads'][0]['reason'], 'coastingUnbound')
+    self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+    self.assertEqual(unbound.bindings, {})
+
+  def test_common_turn_and_deceleration_do_not_look_like_a_new_identity(self):
+    for turning in (False, True):
+      with self.subTest(turning=turning):
+        fusion = HondaRadarFusion()
+        position = np.array([20.0, 0.0])
+        target_velocity = np.array([10.0, 0.0])
+        dt, yaw = STEP / 1e9, .15 if turning else 0.0
+        angle = -yaw * dt
+        rotation = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+        for frame in range(28):
+          if frame:
+            position = rotation @ (position + (target_velocity - np.array([10.0, 0.0])) * dt)
+            target_velocity = rotation @ target_velocity
+            if not turning:
+              target_velocity[0] -= .5 * dt
+          x, y = map(float, position)
+          relative = float(target_velocity[0]) - 10.0
+          t = START + frame * STEP
+          sm = Inputs(t, distance=x, lateral=y, relative=relative, yaw=yaw)
+          sm['modelV2'].position.y = [-y / x * value for value in sm['modelV2'].position.x]
+          out = fusion.update(body(frame, [observation(frame, distance=x, lateral=y, relative=relative)]), sm, t + 1)
+          if frame > 8:
+            self.assertEqual(out['leads'][0]['identityState'], 'same')
+            self.assertGreater(out['leads'][0]['distanceWeight'], .5)
 
   def test_zero_near_negative_ground_speed_preserves_static_lead(self):
     fusion = HondaRadarFusion()
@@ -245,6 +445,72 @@ class TestHondaRadarFusion(unittest.TestCase):
       out = advance(fusion, frame, [invalid, old])
     self.assertEqual(out['counters']['positions'], 6)
     self.assertEqual(out['tracks'], [])
+
+  def test_explicit_withdrawal_revokes_all_components_before_age_decay_and_requires_new_confirmation(self):
+    for reason in ('invalidGeometry', 'conflictingFrame', 'expired', 'withdrawn'):
+      with self.subTest(reason=reason):
+        fusion = HondaRadarFusion()
+        for frame in range(12):
+          out = advance(fusion, frame)
+        old = observation(11)
+        old_identifier = out['tracks'][0]['trackId']
+        invalid = {'slot': 0, 'positionValid': False, 'positionMonoTime': old['positionMonoTime'],
+                   'positionSeq': old['positionSeq'], 'reason': reason}
+        out = advance(fusion, 12, [invalid])
+        track, lead = out['tracks'][0], out['leads'][0]
+        self.assertFalse(track['active'])
+        self.assertFalse(track['velocityGood'])
+        self.assertEqual(track['lastInvalidReason'], reason)
+        self.assertEqual(track['lastInvalidMonoTime'], START + 12 * STEP + 1)
+        self.assertEqual(track['positionMonoTime'], old['positionMonoTime'])
+        self.assertTrue(lead['present'])
+        self.assertEqual((lead['distanceWeight'], lead['velocityWeight'], lead['aLead']), (0, 0, 0))
+        # A later AUX is still tied to the explicitly invalid old position.
+        auxiliary = {**old, 'velocitySeq': old['velocitySeq'] + 1000,
+                     'velocityMonoTime': START + 12 * STEP}
+        out = advance(fusion, 13, [auxiliary])
+        self.assertFalse(out['tracks'][0]['active'])
+        self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+        out = advance(fusion, 14)
+        self.assertNotEqual(out['tracks'][0]['trackId'], old_identifier)
+        self.assertEqual(out['tracks'][0]['observations'], 1)
+        self.assertEqual(out['tracks'][0]['lastInvalidReason'], reason)
+        self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+        out = advance(fusion, 15)
+        self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+        out = advance(fusion, 16)
+        self.assertTrue(out['tracks'][0]['mature'])
+        self.assertGreater(out['leads'][0]['distanceWeight'], 0)
+
+  def test_conflicting_duplicate_position_immediately_revokes_the_posterior(self):
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      advance(fusion, frame)
+    duplicate = observation(11)
+    duplicate['dRel'] += .05712
+    out = advance(fusion, 12, [duplicate])
+    self.assertEqual(out['counters']['positions'], 12)
+    self.assertFalse(out['tracks'][0]['active'])
+    self.assertEqual(out['tracks'][0]['lastInvalidReason'], 'conflictingPosition')
+    self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+    self.assertEqual(out['leads'][0]['velocityWeight'], 0)
+
+  def test_source_diagnostics_describe_the_actual_identity_and_weight_operands(self):
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      out = advance(fusion, frame, distance=19.8)
+    lead = out['leads'][0]
+    self.assertEqual(lead['candidateTrackId'], lead['trackId'])
+    self.assertAlmostEqual(lead['residualDeltaX'], lead['residualX'] - lead['bindingAnchorX'])
+    self.assertAlmostEqual(lead['residualDeltaY'], lead['residualY'] - lead['bindingAnchorY'])
+    self.assertLess(abs(lead['residualX']), lead['gateX'])
+    self.assertLess(abs(lead['residualY']), lead['gateY'])
+    self.assertLess(abs(lead['residualV']), lead['velocityGate'])
+    self.assertEqual(lead['blend'], 1)
+    self.assertEqual(lead['coastWeight'], 1)
+    self.assertEqual(out['algorithmVersion'], 'bosch-a-shadow-2')
+    self.assertFalse(out['controlAllowed'])
+    self.assertFalse(out['calibrated'])
 
   def test_missing_future_and_stale_dependencies_clear_candidates(self):
     for kind in ('modelStale', 'egoStale', 'futureCamera', 'inputsInvalid', 'scopeInactive', 'schemaUnknown', 'badEgo', 'badYaw'):
