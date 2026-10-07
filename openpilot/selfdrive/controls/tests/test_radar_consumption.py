@@ -273,3 +273,80 @@ def test_native_message_bytes_and_all_source_timestamps_remain_unchanged():
   assert native.to_dict() == before and native.to_bytes() == serialized
   assert len(native.radarObjects) == 2 and native.leadOne.present
   assert view.fusionRiskUnresolved and view.to_dict()['fusionRiskUnresolved']
+
+
+def test_native_tick_snapshot_freezes_values_without_caching_qualification():
+  lead = formal_lead(now_ns=PUBLICATION, source='vision', vRel=1.0,
+                     evidence={'conflictEnd': .1})
+  native = native_frame(radar_frame(lead, display=(lead,)))
+  consumer = RadarConsumption()
+  view = consume_frame(consumer, native, now=PUBLICATION)
+  frozen = view.radarObjects[0]
+  assert qualified_lead(frozen, 'brake', .95, now_ns=PUBLICATION)
+  assert not qualified_lead(frozen, 'brake', 1.0, now_ns=PUBLICATION)
+  assert not qualified_lead(frozen, 'caution', 0.0, now_ns=PUBLICATION)
+  assert not qualified_lead(frozen, 'brake', .95, now_ns=PUBLICATION + 100_000_000)
+  assert qualified_lead(frozen, 'brake', .95, now_ns=PUBLICATION + 100_000_000, require_active_window=False)
+  assert not qualified_lead(frozen, 'brake', .95, now_ns=PUBLICATION + 200_000_001, require_active_window=False)
+  with pytest.raises(AttributeError):
+    frozen.dRel = 0.0
+  with pytest.raises(AttributeError):
+    frozen.evidence.modelMonoTime = PUBLICATION + 1
+
+  native.radarObjects[0].dRel = native.leadOne.dRel = 40.0
+  later = consume_frame(consumer, native, now=PUBLICATION)
+  assert later.radarObjects[0].dRel == 40.0
+  assert frozen.dRel == 20.0 and view.leadOne.dRel == 20.0
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused', 'vision', 'predicted'])
+def test_native_field_snapshot_preserves_each_source_and_purpose(source):
+  lead = formal_lead(now_ns=PUBLICATION, source=source, vRel=1.0)
+  native = native_frame(radar_frame(lead, display=(lead,)))
+  view = consume_frame(RadarConsumption(), native, now=PUBLICATION)
+  for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw', 'caution'):
+    for probability in (0.0, .95, 1.0):
+      assert qualified_lead(view.leadOne, purpose, probability, now_ns=PUBLICATION) == qualified_lead(
+        native.leadOne, purpose, probability, now_ns=PUBLICATION)
+
+
+@pytest.mark.parametrize('field', ['dRel', 'generation', 'positionMonoTime', 'physicalConflictValid'])
+def test_native_duplicate_identity_conflicts_survive_snapshotting(field):
+  predicted = coast()
+  native = native_frame(radar_frame(predicted, display=(predicted,)))
+  if field == 'dRel':
+    native.leadOne.dRel += 1.0
+  elif field == 'physicalConflictValid':
+    native.leadOne.evidence.physicalConflictValid = True
+  else:
+    evidence = native.leadOne.evidence
+    setattr(evidence, field, getattr(evidence, field) + 1)
+  before = native.to_dict()
+  consumer = RadarConsumption()
+  view = consume_frame(consumer, native)
+  assert consumer.expired_identities == () and not consumer.degraded
+  assert len(view.radarObjects) == 1 and view.leadOne.present
+  assert view.to_dict() == before and native.to_dict() == before
+
+
+def test_same_native_publication_rechecked_at_a_later_consumption_time():
+  predicted = coast()
+  native = native_frame(radar_frame(predicted, display=(predicted,)))
+  consumer = RadarConsumption()
+  boundary = predicted.evidence.positionMonoTime + MAX_PREDICTION_AGE_NS
+  first = consume_frame(consumer, native, now=boundary)
+  assert first.leadOne.present and qualified_lead(first.leadOne, 'brake', now_ns=boundary)
+  second = consume_frame(consumer, native, now=boundary + 1)
+  assert not second.leadOne.present and second.radarObjects == ()
+  assert first.leadOne.present and not qualified_lead(first.leadOne, 'brake', now_ns=boundary + 1)
+  assert native.leadOne.present and len(native.radarObjects) == 1
+
+
+def test_snapshotting_does_not_allocate_absent_builder_evidence():
+  native = native_frame(radar_frame())
+  assert not native.leadOne._has('evidence') and not native.leadTwo._has('evidence')
+  before, serialized = native.to_dict(), native.to_bytes()
+  native.clear_write_flag()
+  consume_frame(RadarConsumption(), native, now=PUBLICATION)
+  assert not native.leadOne._has('evidence') and not native.leadTwo._has('evidence')
+  assert native.to_dict() == before and native.to_bytes() == serialized

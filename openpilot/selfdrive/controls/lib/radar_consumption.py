@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from openpilot.selfdrive.car.honda_radar_relevance import HORIZON, loss_relevant, remaining_occupancy_window
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, _finite, _integer, _object_key, _read,
+  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, _StructSnapshot, _as_reader, _finite, _integer, _object_key, _read,
   coast_measurement_expired, control_leads, lead_identity, qualified_lead,
 )
 
@@ -41,14 +41,16 @@ class _AbsentLead:
 
 
 class RadarConsumptionView:
-  def __init__(self, radar, expired):
+  def __init__(self, radar, expired, *, snapshot=False):
     self._radar = radar
     # This producer claim belongs to the same publication as the object view.
     # Keep it fixed even when a mutable fixture/reader is reused later.
     self.fusionRiskUnresolved = bool(getattr(radar, 'fusionRiskUnresolved', False))
-    self.radarObjects = tuple(lead for lead in radar.radarObjects if _object_key(lead) not in expired)
-    self.leadOne = _AbsentLead(radar.leadOne) if _object_key(radar.leadOne) in expired else radar.leadOne
-    self.leadTwo = _AbsentLead(radar.leadTwo) if _object_key(radar.leadTwo) in expired else radar.leadTwo
+    def view(lead):
+      return _StructSnapshot(lead.to_dict()) if snapshot else lead
+    self.radarObjects = tuple(view(lead) for lead in radar.radarObjects if not expired or _object_key(lead) not in expired)
+    self.leadOne = _AbsentLead(radar.leadOne) if expired and _object_key(radar.leadOne) in expired else view(radar.leadOne)
+    self.leadTwo = _AbsentLead(radar.leadTwo) if expired and _object_key(radar.leadTwo) in expired else view(radar.leadTwo)
 
   def __getattr__(self, field):
     return getattr(self._radar, field)
@@ -135,14 +137,21 @@ class RadarConsumption:
 
   def update(self, radar, *, publication_ns, now_ns, speed, retain_losses=True):
     self.expired_identities = ()
-    if hasattr(radar, 'as_reader'):
-      radar = radar.as_reader()
+    radar = _as_reader(radar)
     if (getattr(radar, 'fusionActive', False) is not True or not _integer(publication_ns, 1)
         or not _integer(now_ns, 1) or publication_ns > now_ns or not _finite(speed) or speed < 0.0):
       return radar
+    publication = radar
+    if type(radar).__module__ == 'capnp.lib.capnp':
+      if len(radar.radarObjects) > MAX_CONTROL_OBJECTS:
+        return publication
+      # Each raw view is copied separately before conflict validation. Equal
+      # identities must not conceal differing slots. Only field values are
+      # shared by subsequent consumers; age/purpose gates still run each time.
+      radar = RadarConsumptionView(radar, (), snapshot=True)
     objects = _published_objects(radar, publication_ns)
     if objects is None:
-      return radar
+      return publication
 
     fresh_publication = (now_ns - publication_ns <= MAX_MEASUREMENT_AGE_NS
                          and _integer(getattr(radar, 'mdMonoTime', 0), 1)

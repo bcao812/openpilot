@@ -7,6 +7,7 @@ the history needed to release a stop or establish physical identity.
 """
 import math
 from numbers import Integral, Real
+from types import MappingProxyType
 
 
 MAX_CONTROL_OBJECTS = 34  # 32 independent radar tracks and two visual leads.
@@ -20,16 +21,54 @@ PURPOSES = ('follow', 'brake', 'stop', 'departure', 'fcw', 'caution')
 SOURCES = ('vision', 'radar', 'fused', 'predicted')
 
 
+class _StructSnapshot:
+  """Read-only scalar fields from one publication, never cached authority."""
+  __slots__ = ('_values',)
+
+  def __init__(self, values):
+    object.__setattr__(self, '_values', MappingProxyType({
+      key: _StructSnapshot(value) if isinstance(value, dict) else value for key, value in values.items()
+    }))
+
+  def __setattr__(self, field, value):
+    raise AttributeError('publication snapshots are read-only')
+
+  def __getattr__(self, field):
+    try:
+      return self._values[field]
+    except KeyError:
+      raise AttributeError(field) from None
+
+  def get(self, field, default=None):
+    return self._values.get(field, default)
+
+  def as_reader(self):
+    return self
+
+  def to_dict(self):
+    return {key: value.to_dict() if isinstance(value, _StructSnapshot) else value
+            for key, value in self._values.items()}
+
+
+def _as_reader(value):
+  # Missing-field lookup on a native reader goes through Cap'n Proto's
+  # dynamic schema machinery. Its class already tells us whether conversion
+  # exists; keep instance-defined adapters available for ordinary fixtures.
+  if type(value).__module__ == 'capnp.lib.capnp':
+    reader = getattr(type(value), 'as_reader', None)
+    return reader(value) if callable(reader) else value
+  reader = getattr(value, 'as_reader', None)
+  return reader() if callable(reader) else value
+
+
 def _read(value, field, default=None):
-  if isinstance(value, dict):
+  if isinstance(value, (dict, _StructSnapshot)):
     return value.get(field, default)
   if field == 'evidence':
     # Reading an absent struct through a Cap'n Proto builder allocates it.
     # Qualification is observational, including for legacy messages that
     # never set this pointer. A reader also keeps nested evidence reads pure.
-    as_reader = getattr(value, 'as_reader', None)
-    if callable(as_reader):
-      value = as_reader()
+    value = _as_reader(value)
   return getattr(value, field, default)
 
 
@@ -52,6 +91,10 @@ def lead_identity(lead):
   version = _read(evidence, 'version', 0)
   if (not _integer(version) or version != 1 or str(_read(evidence, 'source', 'legacy')) not in ('radar', 'fused', 'predicted')):
     return None
+  return _physical_identity(evidence)
+
+
+def _physical_identity(evidence):
   session = _read(evidence, 'sessionId')
   track = _read(evidence, 'trackId')
   generation = _read(evidence, 'generation')
@@ -99,7 +142,7 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
     vision_index = _read(evidence, 'visionIndex')
     if probability < min_model_prob or not _integer(vision_index) or vision_index not in (0, 1):
       return False
-  elif lead_identity(lead) is None:
+  elif _physical_identity(evidence) is None:
     return False
 
   coasting = _read(evidence, 'coasting', False)
@@ -165,11 +208,12 @@ def coast_measurement_expired(lead, *, publication_ns, now_ns):
   producer that already published invalid evidence. All other freshness and
   evidence requirements remain unchanged; this grants no control authority.
   """
-  if (not _integer(publication_ns, 1) or not _integer(now_ns, 1) or publication_ns > now_ns
-      or not qualified_lead(lead, 'brake', 0.0, now_ns=publication_ns, require_active_window=False)):
+  if not _integer(publication_ns, 1) or not _integer(now_ns, 1) or publication_ns > now_ns:
     return False
   evidence = _read(lead, 'evidence')
   if str(_read(evidence, 'source')) != 'predicted' or _read(evidence, 'coasting') is not True:
+    return False
+  if not qualified_lead(lead, 'brake', 0.0, now_ns=publication_ns, require_active_window=False):
     return False
   if (not 0 <= now_ns - _read(evidence, 'estimateMonoTime') <= MAX_ESTIMATE_AGE_NS
       or not 0 <= now_ns - _read(evidence, 'modelMonoTime') <= MAX_PREDICTION_AGE_NS):
