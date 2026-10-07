@@ -1,14 +1,68 @@
 """Formal sensor evidence grants a purpose without inventing visual confidence."""
+from decimal import Decimal
+from fractions import Fraction
 from types import SimpleNamespace
 
 import pytest
 
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS, control_leads, lead_identity, qualified_lead,
+  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS, _finite, _integer,
+  control_leads, lead_identity, qualified_lead,
 )
 
 
 NOW = 10_000_000_000
+
+
+class _IntSubclass(int):
+  pass
+
+
+class _FloatSubclass(float):
+  pass
+
+
+@pytest.mark.parametrize('value,finite,nonnegative,positive', [
+  pytest.param(True, False, False, False, id='true'),
+  pytest.param(False, False, False, False, id='false'),
+  pytest.param(0, True, True, False, id='int_zero'),
+  pytest.param(1, True, True, True, id='int_one'),
+  pytest.param(-1, True, False, False, id='negative_int'),
+  pytest.param(2**64 - 1, True, True, True, id='uint64_max'),
+  pytest.param(10**400, False, True, True, id='overflowing_int'),
+  pytest.param(-(10**400), False, False, False, id='overflowing_negative_int'),
+  pytest.param(0.0, True, False, False, id='float_zero'),
+  pytest.param(1.0, True, False, False, id='integral_float'),
+  pytest.param(-.25, True, False, False, id='negative_float'),
+  pytest.param(float('nan'), False, False, False, id='nan'),
+  pytest.param(float('inf'), False, False, False, id='positive_inf'),
+  pytest.param(-float('inf'), False, False, False, id='negative_inf'),
+  pytest.param(Fraction(1, 3), True, False, False, id='fraction'),
+  pytest.param(Fraction(3, 1), True, False, False, id='integral_fraction'),
+  pytest.param(Fraction(10**400, 3), False, False, False, id='overflowing_fraction'),
+  pytest.param(Decimal('.25'), False, False, False, id='decimal'),
+  pytest.param(Decimal('NaN'), False, False, False, id='decimal_nan'),
+  pytest.param(Decimal('Infinity'), False, False, False, id='decimal_inf'),
+  pytest.param(_IntSubclass(1), True, True, True, id='int_subclass'),
+  pytest.param(_IntSubclass(-1), True, False, False, id='negative_int_subclass'),
+  pytest.param(_IntSubclass(10**400), False, True, True, id='overflowing_int_subclass'),
+  pytest.param(_FloatSubclass(.25), True, False, False, id='float_subclass'),
+  pytest.param(_FloatSubclass(float('nan')), False, False, False, id='nan_float_subclass'),
+  pytest.param(None, False, False, False, id='none'),
+  pytest.param('1', False, False, False, id='numeric_text'),
+])
+def test_numeric_validation_preserves_original_type_and_range_semantics(value, finite, nonnegative, positive):
+  assert _finite(value) is finite
+  assert _integer(value) is nonnegative
+  assert _integer(value, 1) is positive
+
+
+@pytest.mark.parametrize('integer', [int, _IntSubclass])
+def test_integer_lower_bound_remains_inclusive_for_builtin_and_subclass(integer):
+  assert _integer(integer(-1), -1)
+  assert not _integer(integer(-2), -1)
+  assert _integer(integer(2**64 - 1), 2**64 - 1)
+  assert not _integer(integer(2**64 - 2), 2**64 - 1)
 
 
 def formal_lead(*, now_ns=NOW, source='radar', evidence=None, **changes):

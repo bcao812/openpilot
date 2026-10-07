@@ -73,7 +73,8 @@ def _read(value, field, default=None):
 
 
 def _finite(value):
-  if not isinstance(value, Real) or isinstance(value, bool):
+  value_type = type(value)
+  if value_type is not float and value_type is not int and (not isinstance(value, Real) or isinstance(value, bool)):
     return False
   try:
     return math.isfinite(value)
@@ -82,6 +83,8 @@ def _finite(value):
 
 
 def _integer(value, minimum=0):
+  if type(value) is int:
+    return value >= minimum
   return isinstance(value, Integral) and not isinstance(value, bool) and value >= minimum
 
 
