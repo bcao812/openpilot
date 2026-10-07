@@ -376,23 +376,38 @@ def test_occupancy_bound_reuse_ends_with_the_current_problem(invalidation):
   assert planner._occupancy_limit_cache is not prior
 
 
-def test_tied_finite_objects_reuse_only_their_own_current_geometry_for_attribution():
+def test_tied_finite_objects_reuse_only_their_own_current_geometry_for_attribution(monkeypatch):
   planner = LongitudinalMpc()
   planner.set_cur_state(0.0, 0.0)
   planner.set_weights(prev_accel_constraint=False)
-  objects = [object_lead(track, distance=2.0, speed=0.0, ego_speed=0.0, persistent=False) for track in (1, 2)]
-  planner._fusion_projections = tuple(planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS) for lead in objects)
-  planner._occupancy_bounds = planner.finite_occupancy_bounds()
-  # A stopped trajectory exactly on the shared physical row isolates hard
-  # occupancy attribution from soft following costs and the cruise objective.
-  planner.x_sol[:, 0] = planner._occupancy_bounds[0].position_limit
-  planner._influence_problem = np.full((N+1, 1), np.inf), (None,), (None,), None
-  planner.previous_solution_valid = True
+  # Isolate the real hard occupancy rows with a valid native jerk objective.
+  # Neither soft lead cost may attribute a token after its raw row is moved.
+  cost_weights, constraint_weights = planner._cost_weights.copy(), planner._constraint_cost_weights.copy()
+  cost_weights[0], constraint_weights[-1] = 0.0, 0.0
+  planner.set_cost_weights(cost_weights, constraint_weights)
+  objects = [object_lead(track, distance=CRASH_DISTANCE+OCCUPANCY_POSITION_BUFFER,
+                         speed=0.0, ego_speed=0.0, persistent=False) for track in (1, 2)]
+  planner.update(fused_state(*objects), reference=MpcReference(0.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.solution_status == planner.last_solver_status == 0
+  assert planner.previous_solution_valid and planner.diagnostic_solve_calls == 1
+  assert all(bound is not None for bound in planner._occupancy_bounds)
+  assert np.all(planner.diagnostic_reference_weights[:, 0] == 0.0)
+  assert planner.occupancy_trajectory_error(planner.x_sol, planner.j_solution, tolerance=QP_FEASIBILITY_TOL) == ''
+  calls = []
+  original = planner.ego_progress_bound
+
+  def count_progress(*args):
+    calls.append(args)
+    return original(*args)
+
+  monkeypatch.setattr(planner, 'ego_progress_bound', count_progress)
   planner.record_object_influence()
   assert set(planner.object_influence_identities) == {('radar-test', 1), ('radar-test', 2)}
+  assert not calls
   planner._fusion_projections[1].raw_trajectory[:, 0] += 1.0
   planner.record_object_influence()
   assert planner.object_influence_identities == (('radar-test', 1),)
+  assert calls
 
 
 @pytest.mark.parametrize('horizon', [5.0, 10.0])
