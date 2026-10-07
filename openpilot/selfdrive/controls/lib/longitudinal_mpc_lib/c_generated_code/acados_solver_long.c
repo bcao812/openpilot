@@ -298,7 +298,7 @@ void long_acados_create_3_create_and_set_functions(long_solver_capsule* capsule)
         capsule->__CAPSULE_FNC__.casadi_sparsity_in = & __MODEL_BASE_FNC__ ## _sparsity_in; \
         capsule->__CAPSULE_FNC__.casadi_sparsity_out = & __MODEL_BASE_FNC__ ## _sparsity_out; \
         capsule->__CAPSULE_FNC__.casadi_work = & __MODEL_BASE_FNC__ ## _work; \
-        external_function_param_casadi_create(&capsule->__CAPSULE_FNC__ , 6); \
+        external_function_param_casadi_create(&capsule->__CAPSULE_FNC__ , 12); \
     }while(false)
 
 
@@ -369,6 +369,8 @@ void long_acados_create_4_set_default_parameters(long_solver_capsule* capsule) {
     p[1] = 1.2;
     p[4] = 1.45;
     p[5] = 0.75;
+    p[10] = 6.0;
+    p[11] = 6.0;
 
     for (int i = 0; i <= N; i++) {
         long_acados_update_params(capsule, i, p, NP);
@@ -545,8 +547,59 @@ void long_acados_create_5_set_nlp_in(long_solver_capsule* capsule, const int N, 
 
 
 
+    // x
+    int* idxbx = malloc(NBX * sizeof(int));
+    
+    idxbx[0] = 1;
+    idxbx[1] = 2;
+    double* lubx = calloc(2*NBX, sizeof(double));
+    double* lbx = lubx;
+    double* ubx = lubx + NBX;
+    
+    lbx[0] = -10000.0;
+    ubx[0] = 10000.0;
+    lbx[1] = -10000.0;
+    ubx[1] = 10000.0;
+
+    for (int i = 1; i < N; i++)
+    {
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, i, "idxbx", idxbx);
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, i, "lbx", lbx);
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, i, "ubx", ubx);
+    }
+    free(idxbx);
+    free(lubx);
 
 
+    // set up general constraints for stage 0 to N-1
+    double* D = calloc(NG*NU, sizeof(double));
+    double* C = calloc(NG*NX, sizeof(double));
+    double* lug = calloc(2*NG, sizeof(double));
+    double* lg = lug;
+    double* ug = lug + NG;
+
+    
+
+    
+
+    
+    lg[0] = -1.0;
+    lg[1] = -1.0;
+
+    
+    ug[0] = 1.0;
+    ug[1] = 1.0;
+
+    for (int i = 0; i < N; i++)
+    {
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, i, "D", D);
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, i, "C", C);
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, i, "lg", lg);
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, i, "ug", ug);
+    }
+    free(D);
+    free(C);
+    free(lug);
 
 
     // set up nonlinear constraints for stage 0 to N-1
@@ -579,6 +632,25 @@ void long_acados_create_5_set_nlp_in(long_solver_capsule* capsule, const int N, 
 
     /* terminal constraints */
 
+    // set up bounds for last stage
+    // x
+    int* idxbx_e = malloc(NBXN * sizeof(int));
+    
+    idxbx_e[0] = 1;
+    idxbx_e[1] = 2;
+    double* lubx_e = calloc(2*NBXN, sizeof(double));
+    double* lbx_e = lubx_e;
+    double* ubx_e = lubx_e + NBXN;
+    
+    lbx_e[0] = -10000.0;
+    ubx_e[0] = 10000.0;
+    lbx_e[1] = -10000.0;
+    ubx_e[1] = 10000.0;
+    ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, N, "idxbx", idxbx_e);
+    ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, N, "lbx", lbx_e);
+    ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, N, "ubx", ubx_e);
+    free(idxbx_e);
+    free(lubx_e);
 
 
 
@@ -660,7 +732,7 @@ void long_acados_create_6_set_opts(long_solver_capsule* capsule)
 
 
 
-    int qp_solver_iter_max = 10;
+    int qp_solver_iter_max = 24;
     ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "qp_iter_max", &qp_solver_iter_max);
 
 
@@ -673,10 +745,10 @@ void long_acados_create_6_set_opts(long_solver_capsule* capsule)
     double qp_solver_tol_comp = 0.001;
     ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "qp_tol_comp", &qp_solver_tol_comp);int print_level = 0;
     ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "print_level", &print_level);
-    int qp_solver_cond_ric_alg = 1;
+    int qp_solver_cond_ric_alg = 0;
     ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "qp_cond_ric_alg", &qp_solver_cond_ric_alg);
 
-    int qp_solver_ric_alg = 1;
+    int qp_solver_ric_alg = 0;
     ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "qp_ric_alg", &qp_solver_ric_alg);
 
 
@@ -862,7 +934,7 @@ int long_acados_update_params(long_solver_capsule* capsule, int stage, double *p
 {
     int solver_status = 0;
 
-    int casadi_np = 6;
+    int casadi_np = 12;
     if (casadi_np != np) {
         printf("acados_update_params: trying to set %i parameters for external functions."
             " External function has %i parameters. Exiting.\n", np, casadi_np);
@@ -915,7 +987,7 @@ int long_acados_update_params_sparse(long_solver_capsule * capsule, int stage, i
 {
     int solver_status = 0;
 
-    int casadi_np = 6;
+    int casadi_np = 12;
     if (casadi_np < n_update) {
         printf("long_acados_update_params_sparse: trying to set %d parameters for external functions."
             " External function has %d parameters. Exiting.\n", n_update, casadi_np);

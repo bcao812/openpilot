@@ -173,6 +173,8 @@ int long_acados_sim_create(sim_solver_capsule * capsule)
     p[1] = 1.2;
     p[4] = 1.45;
     p[5] = 0.75;
+    p[10] = 6.0;
+    p[11] = 6.0;
 
     long_acados_sim_update_params(capsule, p, np);
     free(p);

@@ -45,6 +45,26 @@ enum class SendButtonState_82442cdec2746b52: uint16_t {
   DECREASE,
 };
 CAPNP_DECLARE_ENUM(SendButtonState, 82442cdec2746b52);
+CAPNP_DECLARE_SCHEMA(8723944d29d8bcab);
+CAPNP_DECLARE_SCHEMA(b201f986906c40cb);
+enum class Source_b201f986906c40cb: uint16_t {
+  LEGACY,
+  VISION,
+  RADAR,
+  FUSED,
+  PREDICTED,
+};
+CAPNP_DECLARE_ENUM(Source, b201f986906c40cb);
+CAPNP_DECLARE_SCHEMA(bfb6744b56395033);
+CAPNP_DECLARE_SCHEMA(c11ecb4e6e9fb5f2);
+enum class Kind_c11ecb4e6e9fb5f2: uint16_t {
+  FOLLOW,
+  BRAKING,
+  HOLD,
+  RELEASE,
+  CAUTION,
+};
+CAPNP_DECLARE_ENUM(Kind, c11ecb4e6e9fb5f2);
 CAPNP_DECLARE_SCHEMA(f488e435979fe1ff);
 CAPNP_DECLARE_SCHEMA(81c2f05a394cf4af);
 CAPNP_DECLARE_SCHEMA(878e32a6bc486e3f);
@@ -266,6 +286,7 @@ enum class PathState_a8c35b990c3ed85a: uint16_t {
   IN_PATH,
   OUT_OF_PATH,
   ENTERING,
+  EDGE,
 };
 CAPNP_DECLARE_ENUM(PathState, a8c35b990c3ed85a);
 CAPNP_DECLARE_SCHEMA(e8ca4badd56f04fc);
@@ -335,6 +356,40 @@ struct IntelligentCruiseButtonManagement {
   };
 };
 
+struct RadarLeadEvidence {
+  RadarLeadEvidence() = delete;
+
+  class Reader;
+  class Builder;
+  class Pipeline;
+  typedef ::capnp::schemas::Source_b201f986906c40cb Source;
+
+
+  struct _capnpPrivate {
+    CAPNP_DECLARE_STRUCT_HEADER(8723944d29d8bcab, 13, 3)
+    #if !CAPNP_LITE
+    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
+    #endif  // !CAPNP_LITE
+  };
+};
+
+struct LongitudinalObjectInfluence {
+  LongitudinalObjectInfluence() = delete;
+
+  class Reader;
+  class Builder;
+  class Pipeline;
+  typedef ::capnp::schemas::Kind_c11ecb4e6e9fb5f2 Kind;
+
+
+  struct _capnpPrivate {
+    CAPNP_DECLARE_STRUCT_HEADER(bfb6744b56395033, 3, 1)
+    #if !CAPNP_LITE
+    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
+    #endif  // !CAPNP_LITE
+  };
+};
+
 struct LeadData {
   LeadData() = delete;
 
@@ -343,7 +398,7 @@ struct LeadData {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(f488e435979fe1ff, 7, 0)
+    CAPNP_DECLARE_STRUCT_HEADER(f488e435979fe1ff, 7, 1)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1098,7 +1153,7 @@ struct HondaRadarObservations::FusionTrack {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(bd1fb53607e5962e, 14, 0)
+    CAPNP_DECLARE_STRUCT_HEADER(bd1fb53607e5962e, 24, 2)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1113,7 +1168,7 @@ struct HondaRadarObservations::FusionLead {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(ea98382b85743821, 13, 1)
+    CAPNP_DECLARE_STRUCT_HEADER(ea98382b85743821, 32, 3)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1374,6 +1429,363 @@ private:
 };
 #endif  // !CAPNP_LITE
 
+class RadarLeadEvidence::Reader {
+public:
+  typedef RadarLeadEvidence Reads;
+
+  Reader() = default;
+  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
+
+  inline ::capnp::MessageSize totalSize() const {
+    return _reader.totalSize().asPublic();
+  }
+
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const {
+    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
+  }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint16_t getVersion() const;
+
+  inline  ::cereal::RadarLeadEvidence::Source getSource() const;
+
+  inline bool hasSessionId() const;
+  inline  ::capnp::Text::Reader getSessionId() const;
+
+  inline  ::uint64_t getTrackId() const;
+
+  inline  ::uint64_t getGeneration() const;
+
+  inline  ::uint64_t getPositionMonoTime() const;
+
+  inline  ::uint64_t getVelocityMonoTime() const;
+
+  inline  ::uint64_t getEstimateMonoTime() const;
+
+  inline float getPositionStd() const;
+
+  inline float getVelocityStd() const;
+
+  inline bool getPositionValid() const;
+
+  inline bool getVelocityValid() const;
+
+  inline bool getAccelerationValid() const;
+
+  inline bool getFollowQualified() const;
+
+  inline bool getBrakeQualified() const;
+
+  inline bool getStopQualified() const;
+
+  inline bool getDepartureQualified() const;
+
+  inline bool getFcwQualified() const;
+
+  inline bool getCoasting() const;
+
+  inline  ::cereal::HondaRadarObservations::PathState getPathState() const;
+
+  inline float getPathOffset() const;
+
+  inline float getConflictStart() const;
+
+  inline float getConflictEnd() const;
+
+  inline float getLateralSpeed() const;
+
+  inline bool hasPathSource() const;
+  inline  ::capnp::Text::Reader getPathSource() const;
+
+  inline  ::int16_t getVisionIndex() const;
+
+  inline bool hasReason() const;
+  inline  ::capnp::Text::Reader getReason() const;
+
+  inline  ::uint64_t getModelMonoTime() const;
+
+  inline bool getCautionQualified() const;
+
+  inline bool getPhysicalConflictValid() const;
+
+  inline double getPhysicalConflictStart() const;
+
+  inline double getPhysicalConflictEnd() const;
+
+private:
+  ::capnp::_::StructReader _reader;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::List;
+  friend class ::capnp::MessageBuilder;
+  friend class ::capnp::Orphanage;
+};
+
+class RadarLeadEvidence::Builder {
+public:
+  typedef RadarLeadEvidence Builds;
+
+  Builder() = delete;  // Deleted to discourage incorrect usage.
+                       // You can explicitly initialize to nullptr instead.
+  inline Builder(decltype(nullptr)) {}
+  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
+  inline operator Reader() const { return Reader(_builder.asReader()); }
+  inline Reader asReader() const { return *this; }
+
+  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const { return asReader().toString(); }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint16_t getVersion();
+  inline void setVersion( ::uint16_t value);
+
+  inline  ::cereal::RadarLeadEvidence::Source getSource();
+  inline void setSource( ::cereal::RadarLeadEvidence::Source value);
+
+  inline bool hasSessionId();
+  inline  ::capnp::Text::Builder getSessionId();
+  inline void setSessionId( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initSessionId(unsigned int size);
+  inline void adoptSessionId(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownSessionId();
+
+  inline  ::uint64_t getTrackId();
+  inline void setTrackId( ::uint64_t value);
+
+  inline  ::uint64_t getGeneration();
+  inline void setGeneration( ::uint64_t value);
+
+  inline  ::uint64_t getPositionMonoTime();
+  inline void setPositionMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getVelocityMonoTime();
+  inline void setVelocityMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getEstimateMonoTime();
+  inline void setEstimateMonoTime( ::uint64_t value);
+
+  inline float getPositionStd();
+  inline void setPositionStd(float value);
+
+  inline float getVelocityStd();
+  inline void setVelocityStd(float value);
+
+  inline bool getPositionValid();
+  inline void setPositionValid(bool value);
+
+  inline bool getVelocityValid();
+  inline void setVelocityValid(bool value);
+
+  inline bool getAccelerationValid();
+  inline void setAccelerationValid(bool value);
+
+  inline bool getFollowQualified();
+  inline void setFollowQualified(bool value);
+
+  inline bool getBrakeQualified();
+  inline void setBrakeQualified(bool value);
+
+  inline bool getStopQualified();
+  inline void setStopQualified(bool value);
+
+  inline bool getDepartureQualified();
+  inline void setDepartureQualified(bool value);
+
+  inline bool getFcwQualified();
+  inline void setFcwQualified(bool value);
+
+  inline bool getCoasting();
+  inline void setCoasting(bool value);
+
+  inline  ::cereal::HondaRadarObservations::PathState getPathState();
+  inline void setPathState( ::cereal::HondaRadarObservations::PathState value);
+
+  inline float getPathOffset();
+  inline void setPathOffset(float value);
+
+  inline float getConflictStart();
+  inline void setConflictStart(float value);
+
+  inline float getConflictEnd();
+  inline void setConflictEnd(float value);
+
+  inline float getLateralSpeed();
+  inline void setLateralSpeed(float value);
+
+  inline bool hasPathSource();
+  inline  ::capnp::Text::Builder getPathSource();
+  inline void setPathSource( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initPathSource(unsigned int size);
+  inline void adoptPathSource(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownPathSource();
+
+  inline  ::int16_t getVisionIndex();
+  inline void setVisionIndex( ::int16_t value);
+
+  inline bool hasReason();
+  inline  ::capnp::Text::Builder getReason();
+  inline void setReason( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initReason(unsigned int size);
+  inline void adoptReason(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownReason();
+
+  inline  ::uint64_t getModelMonoTime();
+  inline void setModelMonoTime( ::uint64_t value);
+
+  inline bool getCautionQualified();
+  inline void setCautionQualified(bool value);
+
+  inline bool getPhysicalConflictValid();
+  inline void setPhysicalConflictValid(bool value);
+
+  inline double getPhysicalConflictStart();
+  inline void setPhysicalConflictStart(double value);
+
+  inline double getPhysicalConflictEnd();
+  inline void setPhysicalConflictEnd(double value);
+
+private:
+  ::capnp::_::StructBuilder _builder;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  friend class ::capnp::Orphanage;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+};
+
+#if !CAPNP_LITE
+class RadarLeadEvidence::Pipeline {
+public:
+  typedef RadarLeadEvidence Pipelines;
+
+  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
+  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
+      : _typeless(kj::mv(typeless)) {}
+
+private:
+  ::capnp::AnyPointer::Pipeline _typeless;
+  friend class ::capnp::PipelineHook;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+};
+#endif  // !CAPNP_LITE
+
+class LongitudinalObjectInfluence::Reader {
+public:
+  typedef LongitudinalObjectInfluence Reads;
+
+  Reader() = default;
+  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
+
+  inline ::capnp::MessageSize totalSize() const {
+    return _reader.totalSize().asPublic();
+  }
+
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const {
+    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
+  }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint8_t getVersion() const;
+
+  inline bool hasSessionId() const;
+  inline  ::capnp::Text::Reader getSessionId() const;
+
+  inline  ::uint64_t getTrackId() const;
+
+  inline  ::uint64_t getModelMonoTime() const;
+
+  inline  ::int8_t getVisionIndex() const;
+
+  inline  ::cereal::LongitudinalObjectInfluence::Kind getKind() const;
+
+  inline float getStrength() const;
+
+private:
+  ::capnp::_::StructReader _reader;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::List;
+  friend class ::capnp::MessageBuilder;
+  friend class ::capnp::Orphanage;
+};
+
+class LongitudinalObjectInfluence::Builder {
+public:
+  typedef LongitudinalObjectInfluence Builds;
+
+  Builder() = delete;  // Deleted to discourage incorrect usage.
+                       // You can explicitly initialize to nullptr instead.
+  inline Builder(decltype(nullptr)) {}
+  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
+  inline operator Reader() const { return Reader(_builder.asReader()); }
+  inline Reader asReader() const { return *this; }
+
+  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const { return asReader().toString(); }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint8_t getVersion();
+  inline void setVersion( ::uint8_t value);
+
+  inline bool hasSessionId();
+  inline  ::capnp::Text::Builder getSessionId();
+  inline void setSessionId( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initSessionId(unsigned int size);
+  inline void adoptSessionId(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownSessionId();
+
+  inline  ::uint64_t getTrackId();
+  inline void setTrackId( ::uint64_t value);
+
+  inline  ::uint64_t getModelMonoTime();
+  inline void setModelMonoTime( ::uint64_t value);
+
+  inline  ::int8_t getVisionIndex();
+  inline void setVisionIndex( ::int8_t value);
+
+  inline  ::cereal::LongitudinalObjectInfluence::Kind getKind();
+  inline void setKind( ::cereal::LongitudinalObjectInfluence::Kind value);
+
+  inline float getStrength();
+  inline void setStrength(float value);
+
+private:
+  ::capnp::_::StructBuilder _builder;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  friend class ::capnp::Orphanage;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+};
+
+#if !CAPNP_LITE
+class LongitudinalObjectInfluence::Pipeline {
+public:
+  typedef LongitudinalObjectInfluence Pipelines;
+
+  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
+  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
+      : _typeless(kj::mv(typeless)) {}
+
+private:
+  ::capnp::AnyPointer::Pipeline _typeless;
+  friend class ::capnp::PipelineHook;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+};
+#endif  // !CAPNP_LITE
+
 class LeadData::Reader {
 public:
   typedef LeadData Reads;
@@ -1422,6 +1834,9 @@ public:
   inline bool getRadar() const;
 
   inline  ::int32_t getRadarTrackId() const;
+
+  inline bool hasEvidence() const;
+  inline  ::cereal::RadarLeadEvidence::Reader getEvidence() const;
 
 private:
   ::capnp::_::StructReader _reader;
@@ -1499,6 +1914,13 @@ public:
   inline  ::int32_t getRadarTrackId();
   inline void setRadarTrackId( ::int32_t value);
 
+  inline bool hasEvidence();
+  inline  ::cereal::RadarLeadEvidence::Builder getEvidence();
+  inline void setEvidence( ::cereal::RadarLeadEvidence::Reader value);
+  inline  ::cereal::RadarLeadEvidence::Builder initEvidence();
+  inline void adoptEvidence(::capnp::Orphan< ::cereal::RadarLeadEvidence>&& value);
+  inline ::capnp::Orphan< ::cereal::RadarLeadEvidence> disownEvidence();
+
 private:
   ::capnp::_::StructBuilder _builder;
   template <typename, ::capnp::Kind>
@@ -1517,6 +1939,7 @@ public:
   inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
       : _typeless(kj::mv(typeless)) {}
 
+  inline  ::cereal::RadarLeadEvidence::Pipeline getEvidence();
 private:
   ::capnp::AnyPointer::Pipeline _typeless;
   friend class ::capnp::PipelineHook;
@@ -5600,6 +6023,8 @@ public:
   inline bool hasFusion() const;
   inline  ::cereal::HondaRadarObservations::ShadowFusion::Reader getFusion() const;
 
+  inline  ::uint8_t getMode() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -5706,6 +6131,9 @@ public:
   inline  ::cereal::HondaRadarObservations::ShadowFusion::Builder initFusion();
   inline void adoptFusion(::capnp::Orphan< ::cereal::HondaRadarObservations::ShadowFusion>&& value);
   inline ::capnp::Orphan< ::cereal::HondaRadarObservations::ShadowFusion> disownFusion();
+
+  inline  ::uint8_t getMode();
+  inline void setMode( ::uint8_t value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -6078,6 +6506,40 @@ public:
 
   inline  ::uint16_t getU10Raw() const;
 
+  inline bool getActive() const;
+
+  inline  ::uint64_t getGeneration() const;
+
+  inline bool hasBirthReason() const;
+  inline  ::capnp::Text::Reader getBirthReason() const;
+
+  inline bool hasLastInvalidReason() const;
+  inline  ::capnp::Text::Reader getLastInvalidReason() const;
+
+  inline  ::uint64_t getLastInvalidMonoTime() const;
+
+  inline  ::uint8_t getFrameIndex() const;
+
+  inline  ::uint16_t getLifecycleRaw() const;
+
+  inline  ::uint64_t getPreviousPositionSeq() const;
+
+  inline  ::uint64_t getPreviousPositionMonoTime() const;
+
+  inline double getPreviousDRel() const;
+
+  inline double getPreviousYRel() const;
+
+  inline double getAcceleration() const;
+
+  inline bool getAccelerationGood() const;
+
+  inline double getLateralPositionVariance() const;
+
+  inline double getLateralVelocityVariance() const;
+
+  inline bool getLateralVelocityValid() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -6169,6 +6631,62 @@ public:
   inline  ::uint16_t getU10Raw();
   inline void setU10Raw( ::uint16_t value);
 
+  inline bool getActive();
+  inline void setActive(bool value);
+
+  inline  ::uint64_t getGeneration();
+  inline void setGeneration( ::uint64_t value);
+
+  inline bool hasBirthReason();
+  inline  ::capnp::Text::Builder getBirthReason();
+  inline void setBirthReason( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initBirthReason(unsigned int size);
+  inline void adoptBirthReason(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownBirthReason();
+
+  inline bool hasLastInvalidReason();
+  inline  ::capnp::Text::Builder getLastInvalidReason();
+  inline void setLastInvalidReason( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initLastInvalidReason(unsigned int size);
+  inline void adoptLastInvalidReason(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownLastInvalidReason();
+
+  inline  ::uint64_t getLastInvalidMonoTime();
+  inline void setLastInvalidMonoTime( ::uint64_t value);
+
+  inline  ::uint8_t getFrameIndex();
+  inline void setFrameIndex( ::uint8_t value);
+
+  inline  ::uint16_t getLifecycleRaw();
+  inline void setLifecycleRaw( ::uint16_t value);
+
+  inline  ::uint64_t getPreviousPositionSeq();
+  inline void setPreviousPositionSeq( ::uint64_t value);
+
+  inline  ::uint64_t getPreviousPositionMonoTime();
+  inline void setPreviousPositionMonoTime( ::uint64_t value);
+
+  inline double getPreviousDRel();
+  inline void setPreviousDRel(double value);
+
+  inline double getPreviousYRel();
+  inline void setPreviousYRel(double value);
+
+  inline double getAcceleration();
+  inline void setAcceleration(double value);
+
+  inline bool getAccelerationGood();
+  inline void setAccelerationGood(bool value);
+
+  inline double getLateralPositionVariance();
+  inline void setLateralPositionVariance(double value);
+
+  inline double getLateralVelocityVariance();
+  inline void setLateralVelocityVariance(double value);
+
+  inline bool getLateralVelocityValid();
+  inline void setLateralVelocityValid(bool value);
+
 private:
   ::capnp::_::StructBuilder _builder;
   template <typename, ::capnp::Kind>
@@ -6246,6 +6764,54 @@ public:
   inline  ::uint64_t getVelocityMonoTime() const;
 
   inline double getSourceAge() const;
+
+  inline bool hasIdentityState() const;
+  inline  ::capnp::Text::Reader getIdentityState() const;
+
+  inline bool hasIdentityReason() const;
+  inline  ::capnp::Text::Reader getIdentityReason() const;
+
+  inline  ::uint64_t getCandidateTrackId() const;
+
+  inline  ::uint64_t getBindingStartMonoTime() const;
+
+  inline  ::uint16_t getBindingSamples() const;
+
+  inline  ::uint16_t getRecoverySamples() const;
+
+  inline bool getIndependentPair() const;
+
+  inline double getResidualX() const;
+
+  inline double getResidualY() const;
+
+  inline double getResidualV() const;
+
+  inline double getResidualDeltaX() const;
+
+  inline double getResidualDeltaY() const;
+
+  inline double getBindingAnchorX() const;
+
+  inline double getBindingAnchorY() const;
+
+  inline  ::uint64_t getRejectionMonoTime() const;
+
+  inline double getGateX() const;
+
+  inline double getGateY() const;
+
+  inline double getVisionXStd() const;
+
+  inline double getVisionYStd() const;
+
+  inline double getVisionVStd() const;
+
+  inline double getBlend() const;
+
+  inline double getCoastWeight() const;
+
+  inline double getVelocityGate() const;
 
 private:
   ::capnp::_::StructReader _reader;
@@ -6329,6 +6895,83 @@ public:
 
   inline double getSourceAge();
   inline void setSourceAge(double value);
+
+  inline bool hasIdentityState();
+  inline  ::capnp::Text::Builder getIdentityState();
+  inline void setIdentityState( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initIdentityState(unsigned int size);
+  inline void adoptIdentityState(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownIdentityState();
+
+  inline bool hasIdentityReason();
+  inline  ::capnp::Text::Builder getIdentityReason();
+  inline void setIdentityReason( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initIdentityReason(unsigned int size);
+  inline void adoptIdentityReason(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownIdentityReason();
+
+  inline  ::uint64_t getCandidateTrackId();
+  inline void setCandidateTrackId( ::uint64_t value);
+
+  inline  ::uint64_t getBindingStartMonoTime();
+  inline void setBindingStartMonoTime( ::uint64_t value);
+
+  inline  ::uint16_t getBindingSamples();
+  inline void setBindingSamples( ::uint16_t value);
+
+  inline  ::uint16_t getRecoverySamples();
+  inline void setRecoverySamples( ::uint16_t value);
+
+  inline bool getIndependentPair();
+  inline void setIndependentPair(bool value);
+
+  inline double getResidualX();
+  inline void setResidualX(double value);
+
+  inline double getResidualY();
+  inline void setResidualY(double value);
+
+  inline double getResidualV();
+  inline void setResidualV(double value);
+
+  inline double getResidualDeltaX();
+  inline void setResidualDeltaX(double value);
+
+  inline double getResidualDeltaY();
+  inline void setResidualDeltaY(double value);
+
+  inline double getBindingAnchorX();
+  inline void setBindingAnchorX(double value);
+
+  inline double getBindingAnchorY();
+  inline void setBindingAnchorY(double value);
+
+  inline  ::uint64_t getRejectionMonoTime();
+  inline void setRejectionMonoTime( ::uint64_t value);
+
+  inline double getGateX();
+  inline void setGateX(double value);
+
+  inline double getGateY();
+  inline void setGateY(double value);
+
+  inline double getVisionXStd();
+  inline void setVisionXStd(double value);
+
+  inline double getVisionYStd();
+  inline void setVisionYStd(double value);
+
+  inline double getVisionVStd();
+  inline void setVisionVStd(double value);
+
+  inline double getBlend();
+  inline void setBlend(double value);
+
+  inline double getCoastWeight();
+  inline void setCoastWeight(double value);
+
+  inline double getVelocityGate();
+  inline void setVelocityGate(double value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -7102,6 +7745,632 @@ inline void IntelligentCruiseButtonManagement::Builder::setVTarget(float value) 
       ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
 }
 
+inline  ::uint16_t RadarLeadEvidence::Reader::getVersion() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t RadarLeadEvidence::Builder::getVersion() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setVersion( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::cereal::RadarLeadEvidence::Source RadarLeadEvidence::Reader::getSource() const {
+  return _reader.getDataField< ::cereal::RadarLeadEvidence::Source>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::cereal::RadarLeadEvidence::Source RadarLeadEvidence::Builder::getSource() {
+  return _builder.getDataField< ::cereal::RadarLeadEvidence::Source>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setSource( ::cereal::RadarLeadEvidence::Source value) {
+  _builder.setDataField< ::cereal::RadarLeadEvidence::Source>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::hasSessionId() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarLeadEvidence::Builder::hasSessionId() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader RadarLeadEvidence::Reader::getSessionId() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder RadarLeadEvidence::Builder::getSessionId() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void RadarLeadEvidence::Builder::setSessionId( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder RadarLeadEvidence::Builder::initSessionId(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), size);
+}
+inline void RadarLeadEvidence::Builder::adoptSessionId(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> RadarLeadEvidence::Builder::disownSessionId() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t RadarLeadEvidence::Reader::getTrackId() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Builder::getTrackId() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setTrackId( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Reader::getGeneration() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Builder::getGeneration() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setGeneration( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Reader::getPositionMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Builder::getPositionMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setPositionMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Reader::getVelocityMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Builder::getVelocityMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setVelocityMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Reader::getEstimateMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Builder::getEstimateMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setEstimateMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
+}
+
+inline float RadarLeadEvidence::Reader::getPositionStd() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline float RadarLeadEvidence::Builder::getPositionStd() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setPositionStd(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline float RadarLeadEvidence::Reader::getVelocityStd() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+
+inline float RadarLeadEvidence::Builder::getVelocityStd() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setVelocityStd(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getPositionValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<416>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getPositionValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<416>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setPositionValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<416>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getVelocityValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<417>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getVelocityValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<417>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setVelocityValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<417>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getAccelerationValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<418>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getAccelerationValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<418>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setAccelerationValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<418>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getFollowQualified() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<419>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getFollowQualified() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<419>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setFollowQualified(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<419>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getBrakeQualified() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<420>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getBrakeQualified() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<420>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setBrakeQualified(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<420>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getStopQualified() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<421>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getStopQualified() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<421>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setStopQualified(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<421>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getDepartureQualified() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<422>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getDepartureQualified() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<422>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setDepartureQualified(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<422>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getFcwQualified() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<423>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getFcwQualified() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<423>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setFcwQualified(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<423>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getCoasting() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<424>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getCoasting() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<424>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setCoasting(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<424>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::cereal::HondaRadarObservations::PathState RadarLeadEvidence::Reader::getPathState() const {
+  return _reader.getDataField< ::cereal::HondaRadarObservations::PathState>(
+      ::capnp::bounded<27>() * ::capnp::ELEMENTS);
+}
+
+inline  ::cereal::HondaRadarObservations::PathState RadarLeadEvidence::Builder::getPathState() {
+  return _builder.getDataField< ::cereal::HondaRadarObservations::PathState>(
+      ::capnp::bounded<27>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setPathState( ::cereal::HondaRadarObservations::PathState value) {
+  _builder.setDataField< ::cereal::HondaRadarObservations::PathState>(
+      ::capnp::bounded<27>() * ::capnp::ELEMENTS, value);
+}
+
+inline float RadarLeadEvidence::Reader::getPathOffset() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
+}
+
+inline float RadarLeadEvidence::Builder::getPathOffset() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setPathOffset(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS, value);
+}
+
+inline float RadarLeadEvidence::Reader::getConflictStart() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<15>() * ::capnp::ELEMENTS);
+}
+
+inline float RadarLeadEvidence::Builder::getConflictStart() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<15>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setConflictStart(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<15>() * ::capnp::ELEMENTS, value);
+}
+
+inline float RadarLeadEvidence::Reader::getConflictEnd() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS);
+}
+
+inline float RadarLeadEvidence::Builder::getConflictEnd() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setConflictEnd(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS, value);
+}
+
+inline float RadarLeadEvidence::Reader::getLateralSpeed() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS);
+}
+
+inline float RadarLeadEvidence::Builder::getLateralSpeed() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setLateralSpeed(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::hasPathSource() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarLeadEvidence::Builder::hasPathSource() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader RadarLeadEvidence::Reader::getPathSource() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder RadarLeadEvidence::Builder::getPathSource() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline void RadarLeadEvidence::Builder::setPathSource( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder RadarLeadEvidence::Builder::initPathSource(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), size);
+}
+inline void RadarLeadEvidence::Builder::adoptPathSource(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> RadarLeadEvidence::Builder::disownPathSource() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+
+inline  ::int16_t RadarLeadEvidence::Reader::getVisionIndex() const {
+  return _reader.getDataField< ::int16_t>(
+      ::capnp::bounded<36>() * ::capnp::ELEMENTS, -1);
+}
+
+inline  ::int16_t RadarLeadEvidence::Builder::getVisionIndex() {
+  return _builder.getDataField< ::int16_t>(
+      ::capnp::bounded<36>() * ::capnp::ELEMENTS, -1);
+}
+inline void RadarLeadEvidence::Builder::setVisionIndex( ::int16_t value) {
+  _builder.setDataField< ::int16_t>(
+      ::capnp::bounded<36>() * ::capnp::ELEMENTS, value, -1);
+}
+
+inline bool RadarLeadEvidence::Reader::hasReason() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarLeadEvidence::Builder::hasReason() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader RadarLeadEvidence::Reader::getReason() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder RadarLeadEvidence::Builder::getReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline void RadarLeadEvidence::Builder::setReason( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder RadarLeadEvidence::Builder::initReason(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), size);
+}
+inline void RadarLeadEvidence::Builder::adoptReason(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> RadarLeadEvidence::Builder::disownReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t RadarLeadEvidence::Reader::getModelMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Builder::getModelMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setModelMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getCautionQualified() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<425>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getCautionQualified() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<425>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setCautionQualified(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<425>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarLeadEvidence::Reader::getPhysicalConflictValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<426>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarLeadEvidence::Builder::getPhysicalConflictValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<426>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setPhysicalConflictValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<426>() * ::capnp::ELEMENTS, value);
+}
+
+inline double RadarLeadEvidence::Reader::getPhysicalConflictStart() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
+}
+
+inline double RadarLeadEvidence::Builder::getPhysicalConflictStart() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setPhysicalConflictStart(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS, value);
+}
+
+inline double RadarLeadEvidence::Reader::getPhysicalConflictEnd() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+
+inline double RadarLeadEvidence::Builder::getPhysicalConflictEnd() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setPhysicalConflictEnd(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint8_t LongitudinalObjectInfluence::Reader::getVersion() const {
+  return _reader.getDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint8_t LongitudinalObjectInfluence::Builder::getVersion() {
+  return _builder.getDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalObjectInfluence::Builder::setVersion( ::uint8_t value) {
+  _builder.setDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalObjectInfluence::Reader::hasSessionId() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalObjectInfluence::Builder::hasSessionId() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader LongitudinalObjectInfluence::Reader::getSessionId() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder LongitudinalObjectInfluence::Builder::getSessionId() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void LongitudinalObjectInfluence::Builder::setSessionId( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder LongitudinalObjectInfluence::Builder::initSessionId(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalObjectInfluence::Builder::adoptSessionId(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> LongitudinalObjectInfluence::Builder::disownSessionId() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t LongitudinalObjectInfluence::Reader::getTrackId() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalObjectInfluence::Builder::getTrackId() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalObjectInfluence::Builder::setTrackId( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalObjectInfluence::Reader::getModelMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalObjectInfluence::Builder::getModelMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalObjectInfluence::Builder::setModelMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::int8_t LongitudinalObjectInfluence::Reader::getVisionIndex() const {
+  return _reader.getDataField< ::int8_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, -1);
+}
+
+inline  ::int8_t LongitudinalObjectInfluence::Builder::getVisionIndex() {
+  return _builder.getDataField< ::int8_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, -1);
+}
+inline void LongitudinalObjectInfluence::Builder::setVisionIndex( ::int8_t value) {
+  _builder.setDataField< ::int8_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value, -1);
+}
+
+inline  ::cereal::LongitudinalObjectInfluence::Kind LongitudinalObjectInfluence::Reader::getKind() const {
+  return _reader.getDataField< ::cereal::LongitudinalObjectInfluence::Kind>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::cereal::LongitudinalObjectInfluence::Kind LongitudinalObjectInfluence::Builder::getKind() {
+  return _builder.getDataField< ::cereal::LongitudinalObjectInfluence::Kind>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalObjectInfluence::Builder::setKind( ::cereal::LongitudinalObjectInfluence::Kind value) {
+  _builder.setDataField< ::cereal::LongitudinalObjectInfluence::Kind>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline float LongitudinalObjectInfluence::Reader::getStrength() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline float LongitudinalObjectInfluence::Builder::getStrength() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalObjectInfluence::Builder::setStrength(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
 inline float LeadData::Reader::getDRel() const {
   return _reader.getDataField<float>(
       ::capnp::bounded<0>() * ::capnp::ELEMENTS);
@@ -7324,6 +8593,45 @@ inline  ::int32_t LeadData::Builder::getRadarTrackId() {
 inline void LeadData::Builder::setRadarTrackId( ::int32_t value) {
   _builder.setDataField< ::int32_t>(
       ::capnp::bounded<13>() * ::capnp::ELEMENTS, value, -1);
+}
+
+inline bool LeadData::Reader::hasEvidence() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool LeadData::Builder::hasEvidence() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::RadarLeadEvidence::Reader LeadData::Reader::getEvidence() const {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::cereal::RadarLeadEvidence::Builder LeadData::Builder::getEvidence() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::RadarLeadEvidence::Pipeline LeadData::Pipeline::getEvidence() {
+  return  ::cereal::RadarLeadEvidence::Pipeline(_typeless.getPointerField(0));
+}
+#endif  // !CAPNP_LITE
+inline void LeadData::Builder::setEvidence( ::cereal::RadarLeadEvidence::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::RadarLeadEvidence::Builder LeadData::Builder::initEvidence() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void LeadData::Builder::adoptEvidence(
+    ::capnp::Orphan< ::cereal::RadarLeadEvidence>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::RadarLeadEvidence> LeadData::Builder::disownEvidence() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
 }
 
 inline bool SelfdriveStateSP::Reader::hasMads() const {
@@ -11025,6 +12333,20 @@ inline ::capnp::Orphan< ::cereal::HondaRadarObservations::ShadowFusion> HondaRad
       ::capnp::bounded<6>() * ::capnp::POINTERS));
 }
 
+inline  ::uint8_t HondaRadarObservations::Reader::getMode() const {
+  return _reader.getDataField< ::uint8_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint8_t HondaRadarObservations::Builder::getMode() {
+  return _builder.getDataField< ::uint8_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::Builder::setMode( ::uint8_t value) {
+  _builder.setDataField< ::uint8_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
 inline  ::uint16_t HondaRadarObservations::ShadowFusion::Reader::getVersion() const {
   return _reader.getDataField< ::uint16_t>(
       ::capnp::bounded<0>() * ::capnp::ELEMENTS);
@@ -11746,6 +13068,270 @@ inline void HondaRadarObservations::FusionTrack::Builder::setU10Raw( ::uint16_t 
       ::capnp::bounded<46>() * ::capnp::ELEMENTS, value);
 }
 
+inline bool HondaRadarObservations::FusionTrack::Reader::getActive() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<91>() * ::capnp::ELEMENTS);
+}
+
+inline bool HondaRadarObservations::FusionTrack::Builder::getActive() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<91>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setActive(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<91>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Reader::getGeneration() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Builder::getGeneration() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setGeneration( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::FusionTrack::Reader::hasBirthReason() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool HondaRadarObservations::FusionTrack::Builder::hasBirthReason() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader HondaRadarObservations::FusionTrack::Reader::getBirthReason() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::FusionTrack::Builder::getBirthReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setBirthReason( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::FusionTrack::Builder::initBirthReason(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), size);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::adoptBirthReason(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> HondaRadarObservations::FusionTrack::Builder::disownBirthReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline bool HondaRadarObservations::FusionTrack::Reader::hasLastInvalidReason() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline bool HondaRadarObservations::FusionTrack::Builder::hasLastInvalidReason() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader HondaRadarObservations::FusionTrack::Reader::getLastInvalidReason() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::FusionTrack::Builder::getLastInvalidReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setLastInvalidReason( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::FusionTrack::Builder::initLastInvalidReason(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), size);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::adoptLastInvalidReason(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> HondaRadarObservations::FusionTrack::Builder::disownLastInvalidReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Reader::getLastInvalidMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<15>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Builder::getLastInvalidMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<15>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setLastInvalidMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<15>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint8_t HondaRadarObservations::FusionTrack::Reader::getFrameIndex() const {
+  return _reader.getDataField< ::uint8_t>(
+      ::capnp::bounded<94>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint8_t HondaRadarObservations::FusionTrack::Builder::getFrameIndex() {
+  return _builder.getDataField< ::uint8_t>(
+      ::capnp::bounded<94>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setFrameIndex( ::uint8_t value) {
+  _builder.setDataField< ::uint8_t>(
+      ::capnp::bounded<94>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t HondaRadarObservations::FusionTrack::Reader::getLifecycleRaw() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t HondaRadarObservations::FusionTrack::Builder::getLifecycleRaw() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setLifecycleRaw( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Reader::getPreviousPositionSeq() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Builder::getPreviousPositionSeq() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setPreviousPositionSeq( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Reader::getPreviousPositionMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Builder::getPreviousPositionMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setPreviousPositionMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionTrack::Reader::getPreviousDRel() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<19>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionTrack::Builder::getPreviousDRel() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<19>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setPreviousDRel(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<19>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionTrack::Reader::getPreviousYRel() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<20>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionTrack::Builder::getPreviousYRel() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<20>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setPreviousYRel(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<20>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionTrack::Reader::getAcceleration() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<21>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionTrack::Builder::getAcceleration() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<21>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setAcceleration(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<21>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::FusionTrack::Reader::getAccelerationGood() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<92>() * ::capnp::ELEMENTS);
+}
+
+inline bool HondaRadarObservations::FusionTrack::Builder::getAccelerationGood() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<92>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setAccelerationGood(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<92>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionTrack::Reader::getLateralPositionVariance() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<22>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionTrack::Builder::getLateralPositionVariance() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<22>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setLateralPositionVariance(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<22>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionTrack::Reader::getLateralVelocityVariance() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<23>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionTrack::Builder::getLateralVelocityVariance() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<23>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setLateralVelocityVariance(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<23>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::FusionTrack::Reader::getLateralVelocityValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<93>() * ::capnp::ELEMENTS);
+}
+
+inline bool HondaRadarObservations::FusionTrack::Builder::getLateralVelocityValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<93>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setLateralVelocityValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<93>() * ::capnp::ELEMENTS, value);
+}
+
 inline  ::uint8_t HondaRadarObservations::FusionLead::Reader::getModelIndex() const {
   return _reader.getDataField< ::uint8_t>(
       ::capnp::bounded<0>() * ::capnp::ELEMENTS);
@@ -12002,6 +13588,368 @@ inline double HondaRadarObservations::FusionLead::Builder::getSourceAge() {
 inline void HondaRadarObservations::FusionLead::Builder::setSourceAge(double value) {
   _builder.setDataField<double>(
       ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::FusionLead::Reader::hasIdentityState() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline bool HondaRadarObservations::FusionLead::Builder::hasIdentityState() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader HondaRadarObservations::FusionLead::Reader::getIdentityState() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::FusionLead::Builder::getIdentityState() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline void HondaRadarObservations::FusionLead::Builder::setIdentityState( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::FusionLead::Builder::initIdentityState(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), size);
+}
+inline void HondaRadarObservations::FusionLead::Builder::adoptIdentityState(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> HondaRadarObservations::FusionLead::Builder::disownIdentityState() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+
+inline bool HondaRadarObservations::FusionLead::Reader::hasIdentityReason() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline bool HondaRadarObservations::FusionLead::Builder::hasIdentityReason() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader HondaRadarObservations::FusionLead::Reader::getIdentityReason() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::FusionLead::Builder::getIdentityReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline void HondaRadarObservations::FusionLead::Builder::setIdentityReason( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::FusionLead::Builder::initIdentityReason(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), size);
+}
+inline void HondaRadarObservations::FusionLead::Builder::adoptIdentityReason(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> HondaRadarObservations::FusionLead::Builder::disownIdentityReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionLead::Reader::getCandidateTrackId() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionLead::Builder::getCandidateTrackId() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setCandidateTrackId( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionLead::Reader::getBindingStartMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionLead::Builder::getBindingStartMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setBindingStartMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t HondaRadarObservations::FusionLead::Reader::getBindingSamples() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t HondaRadarObservations::FusionLead::Builder::getBindingSamples() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setBindingSamples( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t HondaRadarObservations::FusionLead::Reader::getRecoverySamples() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<60>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t HondaRadarObservations::FusionLead::Builder::getRecoverySamples() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<60>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setRecoverySamples( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<60>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::FusionLead::Reader::getIndependentPair() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+
+inline bool HondaRadarObservations::FusionLead::Builder::getIndependentPair() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setIndependentPair(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getResidualX() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getResidualX() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setResidualX(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<16>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getResidualY() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getResidualY() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setResidualY(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<17>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getResidualV() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getResidualV() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setResidualV(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getResidualDeltaX() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<19>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getResidualDeltaX() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<19>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setResidualDeltaX(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<19>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getResidualDeltaY() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<20>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getResidualDeltaY() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<20>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setResidualDeltaY(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<20>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getBindingAnchorX() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<21>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getBindingAnchorX() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<21>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setBindingAnchorX(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<21>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getBindingAnchorY() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<22>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getBindingAnchorY() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<22>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setBindingAnchorY(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<22>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionLead::Reader::getRejectionMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<23>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionLead::Builder::getRejectionMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<23>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setRejectionMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<23>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getGateX() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<24>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getGateX() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<24>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setGateX(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<24>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getGateY() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<25>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getGateY() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<25>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setGateY(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<25>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getVisionXStd() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<26>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getVisionXStd() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<26>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setVisionXStd(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<26>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getVisionYStd() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<27>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getVisionYStd() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<27>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setVisionYStd(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<27>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getVisionVStd() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<28>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getVisionVStd() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<28>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setVisionVStd(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<28>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getBlend() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<29>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getBlend() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<29>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setBlend(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<29>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getCoastWeight() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<30>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getCoastWeight() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<30>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setCoastWeight(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<30>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionLead::Reader::getVelocityGate() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<31>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionLead::Builder::getVelocityGate() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<31>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionLead::Builder::setVelocityGate(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<31>() * ::capnp::ELEMENTS, value);
 }
 
 inline bool HondaRadarObservations::Scope::Reader::getAlphaLong() const {

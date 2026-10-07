@@ -1,21 +1,45 @@
 {
     "acados_include_path": "/usr/local/venv/lib/python3.12/site-packages/acados/install/include",
     "acados_lib_path": "/usr/local/venv/lib/python3.12/site-packages/acados/install/lib",
-    "code_export_directory": "/data/openpilot/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code",
+    "code_export_directory": "/data/honda-fusion-20261007-build-780dbd2/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code",
     "constraints": {
-        "C": [],
+        "C": [
+            [
+                0.0,
+                0.0,
+                0.0
+            ],
+            [
+                0.0,
+                0.0,
+                0.0
+            ]
+        ],
         "C_e": [],
-        "D": [],
+        "D": [
+            [
+                0.0
+            ],
+            [
+                0.0
+            ]
+        ],
         "constr_type": "BGH",
         "constr_type_e": "BGH",
         "idxbu": [],
-        "idxbx": [],
+        "idxbx": [
+            1,
+            2
+        ],
         "idxbx_0": [
             0,
             1,
             2
         ],
-        "idxbx_e": [],
+        "idxbx_e": [
+            1,
+            2
+        ],
         "idxbxe_0": [
             0,
             1,
@@ -36,14 +60,23 @@
         "idxsphi": [],
         "idxsphi_e": [],
         "lbu": [],
-        "lbx": [],
+        "lbx": [
+            -10000.0,
+            -10000.0
+        ],
         "lbx_0": [
             0.0,
             0.0,
             0.0
         ],
-        "lbx_e": [],
-        "lg": [],
+        "lbx_e": [
+            -10000.0,
+            -10000.0
+        ],
+        "lg": [
+            -1.0,
+            -1.0
+        ],
         "lg_e": [],
         "lh": [
             0.0,
@@ -69,14 +102,23 @@
         "lsphi": [],
         "lsphi_e": [],
         "ubu": [],
-        "ubx": [],
+        "ubx": [
+            10000.0,
+            10000.0
+        ],
         "ubx_0": [
             0.0,
             0.0,
             0.0
         ],
-        "ubx_e": [],
-        "ug": [],
+        "ubx_e": [
+            10000.0,
+            10000.0
+        ],
+        "ug": [
+            1.0,
+            1.0
+        ],
         "ug_e": [],
         "uh": [
             10000.0,
@@ -312,15 +354,15 @@
     "dims": {
         "N": 12,
         "nbu": 0,
-        "nbx": 0,
+        "nbx": 2,
         "nbx_0": 3,
-        "nbx_e": 0,
+        "nbx_e": 2,
         "nbxe_0": 3,
-        "ng": 0,
+        "ng": 2,
         "ng_e": 0,
         "nh": 4,
         "nh_e": 0,
-        "np": 6,
+        "np": 12,
         "nphi": 0,
         "nphi_e": 0,
         "nr": 0,
@@ -343,9 +385,9 @@
         "ny_e": 5,
         "nz": 0
     },
-    "json_file": "/data/openpilot/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/acados_ocp_long.json",
+    "json_file": "/data/honda-fusion-20261007-build-780dbd2/openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/acados_ocp_long.json",
     "model": {
-        "con_h_expr": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegiaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaaghpffghgpgegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpffghgpgegpcaaaaaaaaaaaaaafaaaaaaabgpfngjgogegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpfngbgihchcaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaakaaaaaaaihpfpgcgdhehbgdgmgfgegpcaaaaaaaaaaaaaafaaaaaaaihpffghgpgegdaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaacbaaaaaamgfgbgegpfegbgoghgfgchpfggbgdgehpgchegbaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaeglaaaaaaaaaaaaaaachbaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajgfaaaaaaaegdaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaanaaaaaaamgfgbgegpfehpfggpgmgmgpghhchbaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajggaaaaaaaegbaaaaaaaaaaaaaaachbaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajgkaaaaaaa",
+        "con_h_expr": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegiaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaaghpffghgpgegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpffghgpgegpcaaaaaaaaaaaaaafaaaaaaabgpfngjgogegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpfngbgihchcaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaakaaaaaaaihpfpgcgdhehbgdgmgfgegpcaaaaaaaaaaaaaafaaaaaaaihpffghgpgegdaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaacbaaaaaamgfgbgegpfegbgoghgfgchpfggbgdgehpgchegbaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaeglaaaaaaaaaaaaaaachbaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajgfaaaaaaaegdaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaanaaaaaaamgfgbgegpfehpfggpgmgmgpghhchbaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaacbaaaaaachjgdhlgpfdhehpgahpfegjgdhehbgogdgfgegbaaaaaaaaaaaaaaachbaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajgkaaaaaaa",
         "con_h_expr_e": null,
         "con_phi_expr": null,
         "con_phi_expr_e": null,
@@ -368,9 +410,9 @@
         "cost_r_in_psi_expr": null,
         "cost_r_in_psi_expr_0": null,
         "cost_r_in_psi_expr_e": null,
-        "cost_y_expr": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegkaaaaaaaaaaaaaaagaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaafaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaakaaaaaaaihpfpgcgdhehbgdgmgfgegpcaaaaaaaaaaaaaafaaaaaaaihpffghgpgegbaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaeglaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaaghpffghgpgegmcaaaaaaaaaaaaaajgfaaaaaaaegdaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaanaaaaaaamgfgbgegpfehpfggpgmgmgpghhcheaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajggaaaaaaaegbaaaaaaaaaaaaaaacheaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajgkaaaaaaachcaaaaaaaaaaaaaaacheaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpffghgpgegcaaaaaaaaaaaaaaachbbaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaagaaaaaaabgpfahchfgghegpcaaaaaaaaaaaaaafaaaaaaakgpffghgpg",
-        "cost_y_expr_0": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegkaaaaaaaaaaaaaaagaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaafaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaakaaaaaaaihpfpgcgdhehbgdgmgfgegpcaaaaaaaaaaaaaafaaaaaaaihpffghgpgegbaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaeglaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaaghpffghgpgegmcaaaaaaaaaaaaaajgfaaaaaaaegdaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaanaaaaaaamgfgbgegpfehpfggpgmgmgpghhcheaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajggaaaaaaaegbaaaaaaaaaaaaaaacheaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajgkaaaaaaachcaaaaaaaaaaaaaaacheaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpffghgpgegcaaaaaaaaaaaaaaachbbaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaagaaaaaaabgpfahchfgghegpcaaaaaaaaaaaaaafaaaaaaakgpffghgpg",
-        "cost_y_expr_e": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegjaaaaaaaaaaaaaaafaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaafaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaakaaaaaaaihpfpgcgdhehbgdgmgfgegpcaaaaaaaaaaaaaafaaaaaaaihpffghgpgegbaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaeglaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaaghpffghgpgegmcaaaaaaaaaaaaaajgfaaaaaaaegdaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaanaaaaaaamgfgbgegpfehpfggpgmgmgpghhcheaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajggaaaaaaaegbaaaaaaaaaaaaaaacheaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajgkaaaaaaachcaaaaaaaaaaaaaaacheaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpffghgpgegcaaaaaaaaaaaaaaachbbaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaagaaaaaaabgpfahchfggh",
+        "cost_y_expr": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegkaaaaaaaaaaaaaaagaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaafaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaegdbaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaachaaaaaaaaaaaaaopdegpcaaaaaaaaaaaaaaabaaaaaaehjhahfgegpfngpgegfgmgpfngpgegfgegccaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaakaaaaaaaihpfpgcgdhehbgdgmgfgegpcaaaaaaaaaaaaaafaaaaaaaihpffghgpgegbaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaeglaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaaghpffghgpgegmcaaaaaaaaaaaaaajgfaaaaaaaegdaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaanaaaaaaamgfgbgegpfehpfggpgmgmgpghhchhaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafbaaaaaadgpgngggpgchehpfdhehpgahpfegjgdhehbgogdgfgegbaaaaaaaaaaaaaaachhaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajgkaaaaaaaegmcaaaaaaaaaaaaaaadegacaaaaaaaaaaaaaaeghbaaaaaaaaaaaaaachdaaaaaaaaaaaaaaachdbaaaaaaaaaaaaaachfaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaegdbaaaaaaaaaaaaaachbaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaagbaaaaaangpgegfgmgpfcgchbglgjgoghgpfahchjgpgchjgehjhegdcaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaachhaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaalaaaaaaangpgegfgmgpfghpfchfgggchebaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaeghbaaaaaaaaaaaaaachlbaaaaaaaaaaaaaachnbaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaegdbaaaaaaaaaaaaaachbaaaaaaaaaaaaaaachkbaaaaaaaaaaaaaaegdcaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpffghgpgegpcaaaaaaaaaaaaaalaaaaaaangpgegfgmgpfbgpfchfgggchebaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaeghbaaaaaaaaaaaaaachdcaaaaaaaaaaaaaachgcaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaachecaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaagaaaaaaabgpfahchfgghegpcaaaaaaaaaaaaaafaaaaaaakgpffghgpg",
+        "cost_y_expr_0": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegkaaaaaaaaaaaaaaagaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaafaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaegdbaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaachaaaaaaaaaaaaaopdegpcaaaaaaaaaaaaaaabaaaaaaehjhahfgegpfngpgegfgmgpfngpgegfgegccaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaakaaaaaaaihpfpgcgdhehbgdgmgfgegpcaaaaaaaaaaaaaafaaaaaaaihpffghgpgegbaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaeglaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaaghpffghgpgegmcaaaaaaaaaaaaaajgfaaaaaaaegdaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaanaaaaaaamgfgbgegpfehpfggpgmgmgpghhchhaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafbaaaaaadgpgngggpgchehpfdhehpgahpfegjgdhehbgogdgfgegbaaaaaaaaaaaaaaachhaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajgkaaaaaaaegmcaaaaaaaaaaaaaaadegacaaaaaaaaaaaaaaeghbaaaaaaaaaaaaaachdaaaaaaaaaaaaaaachdbaaaaaaaaaaaaaachfaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaegdbaaaaaaaaaaaaaachbaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaagbaaaaaangpgegfgmgpfcgchbglgjgoghgpfahchjgpgchjgehjhegdcaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaachhaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaalaaaaaaangpgegfgmgpfghpfchfgggchebaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaeghbaaaaaaaaaaaaaachlbaaaaaaaaaaaaaachnbaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaegdbaaaaaaaaaaaaaachbaaaaaaaaaaaaaaachkbaaaaaaaaaaaaaaegdcaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpffghgpgegpcaaaaaaaaaaaaaalaaaaaaangpgegfgmgpfbgpfchfgggchebaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaeghbaaaaaaaaaaaaaachdcaaaaaaaaaaaaaachgcaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaachecaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaagaaaaaaabgpfahchfgghegpcaaaaaaaaaaaaaafaaaaaaakgpffghgpg",
+        "cost_y_expr_e": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegjaaaaaaaaaaaaaaafaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaafaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaegdbaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaachaaaaaaaaaaaaaopdegpcaaaaaaaaaaaaaaabaaaaaaehjhahfgegpfngpgegfgmgpfngpgegfgegccaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaakaaaaaaaihpfpgcgdhehbgdgmgfgegpcaaaaaaaaaaaaaafaaaaaaaihpffghgpgegbaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegeaaaaaaaaaaaaaaaeglaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaaghpffghgpgegmcaaaaaaaaaaaaaajgfaaaaaaaegdaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaanaaaaaaamgfgbgegpfehpfggpgmgmgpghhchhaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafbaaaaaadgpgngggpgchehpfdhehpgahpfegjgdhehbgogdgfgegbaaaaaaaaaaaaaaachhaaaaaaaaaaaaaaaegmcaaaaaaaaaaaaaajgkaaaaaaaegmcaaaaaaaaaaaaaaadegacaaaaaaaaaaaaaaeghbaaaaaaaaaaaaaachdaaaaaaaaaaaaaaachdbaaaaaaaaaaaaaachfaaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaegdbaaaaaaaaaaaaaachbaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaagbaaaaaangpgegfgmgpfcgchbglgjgoghgpfahchjgpgchjgehjhegdcaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaachhaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaalaaaaaaangpgegfgmgpfghpfchfgggchebaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaeghbaaaaaaaaaaaaaachlbaaaaaaaaaaaaaachnbaaaaaaaaaaaaaaegbaaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaegdbaaaaaaaaaaaaaachbaaaaaaaaaaaaaaachkbaaaaaaaaaaaaaaegdcaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpffghgpgegpcaaaaaaaaaaaaaalaaaaaaangpgegfgmgpfbgpfchfgggchebaaaaaaaaaaaaaaegacaaaaaaaaaaaaaaeghbaaaaaaaaaaaaaachdcaaaaaaaaaaaaaachgcaaaaaaaaaaaaaaegcaaaaaaaaaaaaaaachecaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaagaaaaaaabgpfahchfggh",
         "disc_dyn_expr": null,
         "dyn_disc_fun": null,
         "dyn_disc_fun_jac": null,
@@ -384,7 +426,7 @@
             "purely_linear": 0
         },
         "name": "long",
-        "p": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegkaaaaaaaaaaaaaaagaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaafaaaaaaaaaaaaaaagaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpfngjgogegpcaaaaaaaaaaaaaafaaaaaaabgpfngbgihegpcaaaaaaaaaaaaaakaaaaaaaihpfpgcgdhehbgdgmgfgegpcaaaaaaaaaaaaaagaaaaaaabgpfahchfgghegpcaaaaaaaaaaaaaanaaaaaaamgfgbgegpfehpfggpgmgmgpghhegpcaaaaaaaaaaaaaacbaaaaaamgfgbgegpfegbgoghgfgchpfggbgdgehpgch",
+        "p": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegabaaaaaaaaaaaaaamaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaamaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaeaaaaaaaaaaaaaaafaaaaaaaaaaaaaaagaaaaaaaaaaaaaaahaaaaaaaaaaaaaaaiaaaaaaaaaaaaaaajaaaaaaaaaaaaaaakaaaaaaaaaaaaaaalaaaaaaaaaaaaaaamaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaabgpfngjgogegpcaaaaaaaaaaaaaafaaaaaaabgpfngbgihegpcaaaaaaaaaaaaaakaaaaaaaihpfpgcgdhehbgdgmgfgegpcaaaaaaaaaaaaaagaaaaaaabgpfahchfgghegpcaaaaaaaaaaaaaanaaaaaaamgfgbgegpfehpfggpgmgmgpghhegpcaaaaaaaaaaaaaacbaaaaaamgfgbgegpfegbgoghgfgchpfggbgdgehpgchegpcaaaaaaaaaaaaaalaaaaaaangpgegfgmgpfghpfchfgggegpcaaaaaaaaaaaaaalaaaaaaangpgegfgmgpfbgpfchfgggegpcaaaaaaaaaaaaaagbaaaaaangpgegfgmgpfcgchbglgjgoghgpfahchjgpgchjgehjhegpcaaaaaaaaaaaaaaabaaaaaaehjhahfgegpfngpgegfgmgpfngpgegfgegpcaaaaaaaaaaaaaafbaaaaaadgpgngggpgchehpfdhehpgahpfegjgdhehbgogdgfgegpcaaaaaaaaaaaaaacbaaaaaachjgdhlgpfdhehpgahpfegjgdhehbgogdgfg",
         "u": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaegfaaaaaaaaaaaaaaabaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaakgpffghgpg",
         "x": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaeghaaaaaaaaaaaaaaadaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaafaaaaaaaihpffghgpgegpcaaaaaaaaaaaaaafaaaaaaaghpffghgpgegpcaaaaaaaaaaaaaafaaaaaaabgpffghgpg",
         "xdot": "jhpnnagiieahaaaadaaaaaaaaaaaaaaaaaeghaaaaaaaaaaaaaaadaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaacaaaaaaaaaaaaaaadaaaaaaaaaaaaaaaegpcaaaaaaaaaaaaaajaaaaaaaihpffghgpgpfegpgehegpcaaaaaaaaaaaaaajaaaaaaaghpffghgpgpfegpgehegpcaaaaaaaaaaaaaajaaaaaaabgpffghgpgpfegpgeh",
@@ -396,7 +438,13 @@
         0.0,
         0.0,
         1.45,
-        0.75
+        0.75,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        6.0,
+        6.0
     ],
     "problem_class": "OCP",
     "shared_lib_ext": ".so",
@@ -437,9 +485,9 @@
         "print_level": 0,
         "qp_solver": "PARTIAL_CONDENSING_HPIPM",
         "qp_solver_cond_N": 1,
-        "qp_solver_cond_ric_alg": 1,
-        "qp_solver_iter_max": 10,
-        "qp_solver_ric_alg": 1,
+        "qp_solver_cond_ric_alg": 0,
+        "qp_solver_iter_max": 24,
+        "qp_solver_ric_alg": 0,
         "qp_solver_tol_comp": 0.001,
         "qp_solver_tol_eq": 0.001,
         "qp_solver_tol_ineq": 0.001,

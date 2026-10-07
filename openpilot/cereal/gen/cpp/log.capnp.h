@@ -1256,7 +1256,7 @@ struct RadarState {
   struct Deprecated;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(9a185389d6fdd05f, 5, 6)
+    CAPNP_DECLARE_STRUCT_HEADER(9a185389d6fdd05f, 5, 12)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1272,7 +1272,7 @@ struct RadarState::LeadData {
   struct Deprecated;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(b96f3ad9170cf085, 7, 0)
+    CAPNP_DECLARE_STRUCT_HEADER(b96f3ad9170cf085, 7, 1)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1287,7 +1287,7 @@ struct RadarState::LeadData::Deprecated {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(93be0fa1969c62a2, 7, 0)
+    CAPNP_DECLARE_STRUCT_HEADER(93be0fa1969c62a2, 7, 1)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1302,7 +1302,7 @@ struct RadarState::Deprecated {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(d3d7444954de9a4d, 5, 6)
+    CAPNP_DECLARE_STRUCT_HEADER(d3d7444954de9a4d, 5, 12)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1993,7 +1993,7 @@ struct LongitudinalPlan {
   struct Deprecated;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(e00b5b3eba12876c, 11, 9)
+    CAPNP_DECLARE_STRUCT_HEADER(e00b5b3eba12876c, 11, 10)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -2008,7 +2008,7 @@ struct LongitudinalPlan::Deprecated {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(f241315ad87f2721, 11, 9)
+    CAPNP_DECLARE_STRUCT_HEADER(f241315ad87f2721, 11, 10)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -2053,7 +2053,7 @@ struct LongitudinalMotionState {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(d94d738a9e5b3361, 8, 2)
+    CAPNP_DECLARE_STRUCT_HEADER(d94d738a9e5b3361, 8, 3)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -7660,6 +7660,32 @@ public:
   inline bool hasRadarErrors() const;
   inline  ::cereal::RadarData::Error::Reader getRadarErrors() const;
 
+  inline bool hasRadarObjects() const;
+  inline  ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>::Reader getRadarObjects() const;
+
+  inline bool getFusionActive() const;
+
+  inline bool getFusionHealthy() const;
+
+  inline bool getFusionDegraded() const;
+
+  inline bool hasFusionReason() const;
+  inline  ::capnp::Text::Reader getFusionReason() const;
+
+  inline bool hasVisionLeadOne() const;
+  inline  ::cereal::RadarState::LeadData::Reader getVisionLeadOne() const;
+
+  inline bool hasVisionLeadTwo() const;
+  inline  ::cereal::RadarState::LeadData::Reader getVisionLeadTwo() const;
+
+  inline bool hasFusionClearedTracks() const;
+  inline  ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>::Reader getFusionClearedTracks() const;
+
+  inline bool hasFusionSessionId() const;
+  inline  ::capnp::Text::Reader getFusionSessionId() const;
+
+  inline bool getFusionRiskUnresolved() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -7715,6 +7741,61 @@ public:
   inline void adoptRadarErrors(::capnp::Orphan< ::cereal::RadarData::Error>&& value);
   inline ::capnp::Orphan< ::cereal::RadarData::Error> disownRadarErrors();
 
+  inline bool hasRadarObjects();
+  inline  ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>::Builder getRadarObjects();
+  inline void setRadarObjects( ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>::Reader value);
+  inline  ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>::Builder initRadarObjects(unsigned int size);
+  inline void adoptRadarObjects(::capnp::Orphan< ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>>&& value);
+  inline ::capnp::Orphan< ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>> disownRadarObjects();
+
+  inline bool getFusionActive();
+  inline void setFusionActive(bool value);
+
+  inline bool getFusionHealthy();
+  inline void setFusionHealthy(bool value);
+
+  inline bool getFusionDegraded();
+  inline void setFusionDegraded(bool value);
+
+  inline bool hasFusionReason();
+  inline  ::capnp::Text::Builder getFusionReason();
+  inline void setFusionReason( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initFusionReason(unsigned int size);
+  inline void adoptFusionReason(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownFusionReason();
+
+  inline bool hasVisionLeadOne();
+  inline  ::cereal::RadarState::LeadData::Builder getVisionLeadOne();
+  inline void setVisionLeadOne( ::cereal::RadarState::LeadData::Reader value);
+  inline  ::cereal::RadarState::LeadData::Builder initVisionLeadOne();
+  inline void adoptVisionLeadOne(::capnp::Orphan< ::cereal::RadarState::LeadData>&& value);
+  inline ::capnp::Orphan< ::cereal::RadarState::LeadData> disownVisionLeadOne();
+
+  inline bool hasVisionLeadTwo();
+  inline  ::cereal::RadarState::LeadData::Builder getVisionLeadTwo();
+  inline void setVisionLeadTwo( ::cereal::RadarState::LeadData::Reader value);
+  inline  ::cereal::RadarState::LeadData::Builder initVisionLeadTwo();
+  inline void adoptVisionLeadTwo(::capnp::Orphan< ::cereal::RadarState::LeadData>&& value);
+  inline ::capnp::Orphan< ::cereal::RadarState::LeadData> disownVisionLeadTwo();
+
+  inline bool hasFusionClearedTracks();
+  inline  ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>::Builder getFusionClearedTracks();
+  inline void setFusionClearedTracks( ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setFusionClearedTracks(::kj::ArrayPtr<const  ::uint64_t> value);
+  inline  ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>::Builder initFusionClearedTracks(unsigned int size);
+  inline void adoptFusionClearedTracks(::capnp::Orphan< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>> disownFusionClearedTracks();
+
+  inline bool hasFusionSessionId();
+  inline  ::capnp::Text::Builder getFusionSessionId();
+  inline void setFusionSessionId( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initFusionSessionId(unsigned int size);
+  inline void adoptFusionSessionId(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownFusionSessionId();
+
+  inline bool getFusionRiskUnresolved();
+  inline void setFusionRiskUnresolved(bool value);
+
 private:
   ::capnp::_::StructBuilder _builder;
   template <typename, ::capnp::Kind>
@@ -7737,6 +7818,8 @@ public:
   inline  ::cereal::RadarState::LeadData::Pipeline getLeadOne();
   inline  ::cereal::RadarState::LeadData::Pipeline getLeadTwo();
   inline  ::cereal::RadarData::Error::Pipeline getRadarErrors();
+  inline  ::cereal::RadarState::LeadData::Pipeline getVisionLeadOne();
+  inline  ::cereal::RadarState::LeadData::Pipeline getVisionLeadTwo();
 private:
   ::capnp::AnyPointer::Pipeline _typeless;
   friend class ::capnp::PipelineHook;
@@ -7785,6 +7868,9 @@ public:
   inline bool getRadar() const;
 
   inline  ::int32_t getRadarTrackId() const;
+
+  inline bool hasEvidence() const;
+  inline  ::cereal::RadarLeadEvidence::Reader getEvidence() const;
 
 private:
   ::capnp::_::StructReader _reader;
@@ -7850,6 +7936,13 @@ public:
   inline  ::int32_t getRadarTrackId();
   inline void setRadarTrackId( ::int32_t value);
 
+  inline bool hasEvidence();
+  inline  ::cereal::RadarLeadEvidence::Builder getEvidence();
+  inline void setEvidence( ::cereal::RadarLeadEvidence::Reader value);
+  inline  ::cereal::RadarLeadEvidence::Builder initEvidence();
+  inline void adoptEvidence(::capnp::Orphan< ::cereal::RadarLeadEvidence>&& value);
+  inline ::capnp::Orphan< ::cereal::RadarLeadEvidence> disownEvidence();
+
 private:
   ::capnp::_::StructBuilder _builder;
   template <typename, ::capnp::Kind>
@@ -7869,6 +7962,7 @@ public:
       : _typeless(kj::mv(typeless)) {}
 
   inline typename Deprecated::Pipeline getDeprecated();
+  inline  ::cereal::RadarLeadEvidence::Pipeline getEvidence();
 private:
   ::capnp::AnyPointer::Pipeline _typeless;
   friend class ::capnp::PipelineHook;
@@ -14148,6 +14242,11 @@ public:
   inline bool hasDiagnostics() const;
   inline  ::cereal::LongitudinalPlanDiagnostics::Reader getDiagnostics() const;
 
+  inline bool hasObjectInfluences() const;
+  inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Reader getObjectInfluences() const;
+
+  inline bool getRadarRiskUnresolved() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -14256,6 +14355,16 @@ public:
   inline  ::cereal::LongitudinalPlanDiagnostics::Builder initDiagnostics();
   inline void adoptDiagnostics(::capnp::Orphan< ::cereal::LongitudinalPlanDiagnostics>&& value);
   inline ::capnp::Orphan< ::cereal::LongitudinalPlanDiagnostics> disownDiagnostics();
+
+  inline bool hasObjectInfluences();
+  inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Builder getObjectInfluences();
+  inline void setObjectInfluences( ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Reader value);
+  inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Builder initObjectInfluences(unsigned int size);
+  inline void adoptObjectInfluences(::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>&& value);
+  inline ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>> disownObjectInfluences();
+
+  inline bool getRadarRiskUnresolved();
+  inline void setRadarRiskUnresolved(bool value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -14885,6 +14994,9 @@ public:
 
   inline bool getReferenceSourceAdvanced() const;
 
+  inline bool hasObjectInfluences() const;
+  inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Reader getObjectInfluences() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -14977,6 +15089,13 @@ public:
 
   inline bool getReferenceSourceAdvanced();
   inline void setReferenceSourceAdvanced(bool value);
+
+  inline bool hasObjectInfluences();
+  inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Builder getObjectInfluences();
+  inline void setObjectInfluences( ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Reader value);
+  inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Builder initObjectInfluences(unsigned int size);
+  inline void adoptObjectInfluences(::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>&& value);
+  inline ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>> disownObjectInfluences();
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -33450,6 +33569,280 @@ inline ::capnp::Orphan< ::cereal::RadarData::Error> RadarState::Builder::disownR
       ::capnp::bounded<5>() * ::capnp::POINTERS));
 }
 
+inline bool RadarState::Reader::hasRadarObjects() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarState::Builder::hasRadarObjects() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>::Reader RadarState::Reader::getRadarObjects() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>>::get(_reader.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>::Builder RadarState::Builder::getRadarObjects() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>>::get(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS));
+}
+inline void RadarState::Builder::setRadarObjects( ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>>::set(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>::Builder RadarState::Builder::initRadarObjects(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>>::init(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS), size);
+}
+inline void RadarState::Builder::adoptRadarObjects(
+    ::capnp::Orphan< ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>> RadarState::Builder::disownRadarObjects() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::RadarState::LeadData,  ::capnp::Kind::STRUCT>>::disown(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS));
+}
+
+inline bool RadarState::Reader::getFusionActive() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<48>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarState::Builder::getFusionActive() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<48>() * ::capnp::ELEMENTS);
+}
+inline void RadarState::Builder::setFusionActive(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<48>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarState::Reader::getFusionHealthy() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<49>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarState::Builder::getFusionHealthy() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<49>() * ::capnp::ELEMENTS);
+}
+inline void RadarState::Builder::setFusionHealthy(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<49>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarState::Reader::getFusionDegraded() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<50>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarState::Builder::getFusionDegraded() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<50>() * ::capnp::ELEMENTS);
+}
+inline void RadarState::Builder::setFusionDegraded(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<50>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarState::Reader::hasFusionReason() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarState::Builder::hasFusionReason() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader RadarState::Reader::getFusionReason() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder RadarState::Builder::getFusionReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS));
+}
+inline void RadarState::Builder::setFusionReason( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder RadarState::Builder::initFusionReason(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS), size);
+}
+inline void RadarState::Builder::adoptFusionReason(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> RadarState::Builder::disownFusionReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS));
+}
+
+inline bool RadarState::Reader::hasVisionLeadOne() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarState::Builder::hasVisionLeadOne() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::RadarState::LeadData::Reader RadarState::Reader::getVisionLeadOne() const {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::get(_reader.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS));
+}
+inline  ::cereal::RadarState::LeadData::Builder RadarState::Builder::getVisionLeadOne() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::get(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::RadarState::LeadData::Pipeline RadarState::Pipeline::getVisionLeadOne() {
+  return  ::cereal::RadarState::LeadData::Pipeline(_typeless.getPointerField(8));
+}
+#endif  // !CAPNP_LITE
+inline void RadarState::Builder::setVisionLeadOne( ::cereal::RadarState::LeadData::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::set(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::RadarState::LeadData::Builder RadarState::Builder::initVisionLeadOne() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::init(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS));
+}
+inline void RadarState::Builder::adoptVisionLeadOne(
+    ::capnp::Orphan< ::cereal::RadarState::LeadData>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::adopt(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::RadarState::LeadData> RadarState::Builder::disownVisionLeadOne() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::disown(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS));
+}
+
+inline bool RadarState::Reader::hasVisionLeadTwo() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarState::Builder::hasVisionLeadTwo() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::RadarState::LeadData::Reader RadarState::Reader::getVisionLeadTwo() const {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::get(_reader.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS));
+}
+inline  ::cereal::RadarState::LeadData::Builder RadarState::Builder::getVisionLeadTwo() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::get(_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::RadarState::LeadData::Pipeline RadarState::Pipeline::getVisionLeadTwo() {
+  return  ::cereal::RadarState::LeadData::Pipeline(_typeless.getPointerField(9));
+}
+#endif  // !CAPNP_LITE
+inline void RadarState::Builder::setVisionLeadTwo( ::cereal::RadarState::LeadData::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::set(_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::RadarState::LeadData::Builder RadarState::Builder::initVisionLeadTwo() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::init(_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS));
+}
+inline void RadarState::Builder::adoptVisionLeadTwo(
+    ::capnp::Orphan< ::cereal::RadarState::LeadData>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::adopt(_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::RadarState::LeadData> RadarState::Builder::disownVisionLeadTwo() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarState::LeadData>::disown(_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS));
+}
+
+inline bool RadarState::Reader::hasFusionClearedTracks() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarState::Builder::hasFusionClearedTracks() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>::Reader RadarState::Reader::getFusionClearedTracks() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>::Builder RadarState::Builder::getFusionClearedTracks() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS));
+}
+inline void RadarState::Builder::setFusionClearedTracks( ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS), value);
+}
+inline void RadarState::Builder::setFusionClearedTracks(::kj::ArrayPtr<const  ::uint64_t> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>::Builder RadarState::Builder::initFusionClearedTracks(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS), size);
+}
+inline void RadarState::Builder::adoptFusionClearedTracks(
+    ::capnp::Orphan< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>> RadarState::Builder::disownFusionClearedTracks() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint64_t,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS));
+}
+
+inline bool RadarState::Reader::hasFusionSessionId() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<11>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarState::Builder::hasFusionSessionId() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<11>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader RadarState::Reader::getFusionSessionId() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<11>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder RadarState::Builder::getFusionSessionId() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<11>() * ::capnp::POINTERS));
+}
+inline void RadarState::Builder::setFusionSessionId( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<11>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder RadarState::Builder::initFusionSessionId(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<11>() * ::capnp::POINTERS), size);
+}
+inline void RadarState::Builder::adoptFusionSessionId(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<11>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> RadarState::Builder::disownFusionSessionId() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<11>() * ::capnp::POINTERS));
+}
+
+inline bool RadarState::Reader::getFusionRiskUnresolved() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<51>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarState::Builder::getFusionRiskUnresolved() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<51>() * ::capnp::ELEMENTS);
+}
+inline void RadarState::Builder::setFusionRiskUnresolved(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<51>() * ::capnp::ELEMENTS, value);
+}
+
 inline float RadarState::LeadData::Reader::getDRel() const {
   return _reader.getDataField<float>(
       ::capnp::bounded<0>() * ::capnp::ELEMENTS);
@@ -33621,6 +34014,45 @@ inline  ::int32_t RadarState::LeadData::Builder::getRadarTrackId() {
 inline void RadarState::LeadData::Builder::setRadarTrackId( ::int32_t value) {
   _builder.setDataField< ::int32_t>(
       ::capnp::bounded<13>() * ::capnp::ELEMENTS, value, -1);
+}
+
+inline bool RadarState::LeadData::Reader::hasEvidence() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarState::LeadData::Builder::hasEvidence() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::RadarLeadEvidence::Reader RadarState::LeadData::Reader::getEvidence() const {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::cereal::RadarLeadEvidence::Builder RadarState::LeadData::Builder::getEvidence() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::RadarLeadEvidence::Pipeline RadarState::LeadData::Pipeline::getEvidence() {
+  return  ::cereal::RadarLeadEvidence::Pipeline(_typeless.getPointerField(0));
+}
+#endif  // !CAPNP_LITE
+inline void RadarState::LeadData::Builder::setEvidence( ::cereal::RadarLeadEvidence::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::RadarLeadEvidence::Builder RadarState::LeadData::Builder::initEvidence() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void RadarState::LeadData::Builder::adoptEvidence(
+    ::capnp::Orphan< ::cereal::RadarLeadEvidence>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::RadarLeadEvidence> RadarState::LeadData::Builder::disownEvidence() {
+  return ::capnp::_::PointerHelpers< ::cereal::RadarLeadEvidence>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
 }
 
 inline float RadarState::LeadData::Deprecated::Reader::getARel() const {
@@ -43716,6 +44148,54 @@ inline ::capnp::Orphan< ::cereal::LongitudinalPlanDiagnostics> LongitudinalPlan:
       ::capnp::bounded<8>() * ::capnp::POINTERS));
 }
 
+inline bool LongitudinalPlan::Reader::hasObjectInfluences() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalPlan::Builder::hasObjectInfluences() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Reader LongitudinalPlan::Reader::getObjectInfluences() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::get(_reader.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Builder LongitudinalPlan::Builder::getObjectInfluences() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::get(_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS));
+}
+inline void LongitudinalPlan::Builder::setObjectInfluences( ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::set(_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Builder LongitudinalPlan::Builder::initObjectInfluences(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::init(_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalPlan::Builder::adoptObjectInfluences(
+    ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>> LongitudinalPlan::Builder::disownObjectInfluences() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::disown(_builder.getPointerField(
+      ::capnp::bounded<9>() * ::capnp::POINTERS));
+}
+
+inline bool LongitudinalPlan::Reader::getRadarRiskUnresolved() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<15>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalPlan::Builder::getRadarRiskUnresolved() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<15>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalPlan::Builder::setRadarRiskUnresolved(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<15>() * ::capnp::ELEMENTS, value);
+}
+
 inline bool LongitudinalPlan::Deprecated::Reader::getLateralValid() const {
   return _reader.getDataField<bool>(
       ::capnp::bounded<0>() * ::capnp::ELEMENTS);
@@ -44967,6 +45447,40 @@ inline bool LongitudinalMotionState::Builder::getReferenceSourceAdvanced() {
 inline void LongitudinalMotionState::Builder::setReferenceSourceAdvanced(bool value) {
   _builder.setDataField<bool>(
       ::capnp::bounded<13>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalMotionState::Reader::hasObjectInfluences() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalMotionState::Builder::hasObjectInfluences() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Reader LongitudinalMotionState::Reader::getObjectInfluences() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::get(_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Builder LongitudinalMotionState::Builder::getObjectInfluences() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::get(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline void LongitudinalMotionState::Builder::setObjectInfluences( ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Builder LongitudinalMotionState::Builder::initObjectInfluences(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::init(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalMotionState::Builder::adoptObjectInfluences(
+    ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>> LongitudinalMotionState::Builder::disownObjectInfluences() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::disown(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
 }
 
 inline bool UiPlan::Reader::hasPosition() const {

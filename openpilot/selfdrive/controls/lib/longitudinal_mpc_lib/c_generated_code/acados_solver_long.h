@@ -39,8 +39,8 @@
 #define LONG_NX     3
 #define LONG_NZ     0
 #define LONG_NU     1
-#define LONG_NP     6
-#define LONG_NBX    0
+#define LONG_NP     12
+#define LONG_NBX    2
 #define LONG_NBX0   3
 #define LONG_NBU    0
 #define LONG_NSBX   0
@@ -54,8 +54,8 @@
 #define LONG_NSBXN  0
 #define LONG_NS     4
 #define LONG_NSN    0
-#define LONG_NG     0
-#define LONG_NBXN   0
+#define LONG_NG     2
+#define LONG_NBXN   2
 #define LONG_NGN    0
 #define LONG_NY0    6
 #define LONG_NY     6
