@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, SHADOW, ObserverSettings
+from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, SERVICE, SHADOW, ObserverSettings
+from openpilot.selfdrive.car.tests import honda_radar_control_test_support as pipeline_support
 from openpilot.selfdrive.car.tests.honda_radar_control_test_support import Target, control_pipeline
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
@@ -68,6 +69,79 @@ def test_same_car_uses_radar_motion_and_brakes_through_long_visual_gap(record_pr
     assert lead['evidence']['brakeQualified'] and row['target'] < 0.0
     assert row['solver'] == 0
     assert all(sample['accel'] <= 0.0 for sample in row['can'])
+
+
+@pytest.mark.parametrize('recovery', ['same_identity', 'missing_aux', 'different_oem'])
+def test_saturation_reacquisition_clears_only_the_proven_identity_loss(recovery, monkeypatch, record_property):
+  """A fresh CAN recovery must clear the old barrier without losing its lead."""
+  rows = []
+  with control_pipeline() as pipeline:
+    original_scan = pipeline_support.scan_frames
+
+    def recovery_scan(**fields):
+      # Only the sensor input changes. Decoder, fusion, RadarD, planner and
+      # Honda control all run normally, including their serialized messages.
+      frame = pipeline.frame
+      fields['life'] = 4047 + 2 * frame if frame <= 24 else 4094
+      fields['index'] = (frame - int(frame >= 26)) % 16
+      frames = original_scan(**fields)
+      if frame == 25:
+        return frames[:4]  # Position alone cannot prove the return.
+      if frame >= 26 and recovery == 'missing_aux':
+        return []
+      if frame == 26:
+        return frames[4:]  # Same scan's native velocity arrives 50 ms later.
+      return frames
+
+    monkeypatch.setattr(pipeline_support, 'scan_frames', recovery_scan)
+    for frame in range(43):
+      oem_id = 61 if recovery == 'different_oem' and frame >= 25 else 60
+      row = pipeline.step(speed=10.0, radar=[Target(36.0 - 6.0 * frame * .05, 4.0, slot=1, oem_id=oem_id)])
+      observation = pipeline.state[SERVICE]
+      row['fusion_tracks'] = [track.to_dict() for track in observation.fusion.tracks]
+      row['raw_observations'] = [sample.to_dict() for sample in observation.observations]
+      rows.append(row)
+  record(record_property, f'saturation_reacquisition_{recovery}', rows)
+
+  initial = rows[23]['radar']['leadOne']
+  identity = initial['evidence']['sessionId'], initial['evidence']['trackId']
+  assert initial['present'] and initial['evidence']['source'] == 'radar'
+  assert initial['evidence']['followQualified'] and initial['evidence']['brakeQualified']
+  assert not rows[23]['radar']['fusionRiskUnresolved']
+  assert rows[23]['fusion_tracks'][0]['lifecycleRaw'] == 4093
+  invalid = rows[24]
+  assert invalid['fusion_tracks'][0]['trackId'] == identity[1]
+  assert not invalid['fusion_tracks'][0]['active']
+  assert invalid['fusion_tracks'][0]['lastInvalidReason'] == 'invalidGeometry'
+  assert all(row['radar']['fusionRiskUnresolved'] for row in rows[24:26])
+  position = next(sample for sample in rows[25]['raw_observations'] if sample['positionValid'])
+  assert position['raw']['lifecycleRaw'] == 4094 and not position['velocityValid']
+  assert not any((obj['evidence']['sessionId'], obj['evidence']['trackId']) == identity for obj in objects(rows[25]))
+
+  if recovery == 'same_identity':
+    restored = rows[26]['fusion_tracks'][0]
+    assert restored['active'] and restored['velocityGood'] and restored['trackId'] == identity[1]
+    assert restored['positionSeq'] == position['positionSeq']
+    assert restored['positionMonoTime'] == position['positionMonoTime']
+    assert restored['velocityMonoTime'] == rows[26]['source_ns']
+    for row in rows[26:]:
+      assert not row['radar']['fusionRiskUnresolved']
+      lead = row['radar']['leadOne']
+      assert lead['present'] and lead['evidence']['source'] == 'radar'
+      assert (lead['evidence']['sessionId'], lead['evidence']['trackId']) == identity
+      assert lead['evidence']['followQualified'] and lead['evidence']['brakeQualified']
+      assert not lead['evidence']['coasting'] and row['solver'] == 0
+    assert rows[-1]['target'] < -.1
+    assert any(sample['active'] and sample['brake'] and sample['accel'] < -.1
+               for row in rows[-6:] for sample in row['can'])
+  else:
+    # Neither expiry nor a fully qualified replacement can erase the old
+    # physical identity's risk. This extends beyond fusion's 500 ms history.
+    assert all(row['radar']['fusionRiskUnresolved'] for row in rows[26:])
+    if recovery == 'different_oem':
+      replacement = rows[-1]['radar']['leadOne']
+      assert replacement['present'] and replacement['evidence']['brakeQualified']
+      assert (replacement['evidence']['sessionId'], replacement['evidence']['trackId']) != identity
 
 
 def test_near_visual_cut_in_is_not_diluted_by_a_different_far_radar_car(record_property):
