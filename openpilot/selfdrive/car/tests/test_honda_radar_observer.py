@@ -82,7 +82,9 @@ class TestHondaRadarObserver(unittest.TestCase):
         self.assertTrue(params.get_bool('HondaBoschARadarOverlay'))
       params.put('HondaBoschARadarMode', 2, block=True)
       self.assertTrue(observer_requested(True, params, cp))
-      for value in (0, 3, -1):
+      params.put('HondaBoschARadarMode', 3, block=True)
+      self.assertTrue(observer_requested(True, params, cp))
+      for value in (0, 4, -1):
         params.put('HondaBoschARadarMode', value, block=True)
         self.assertFalse(observer_requested(True, params, cp))
       Path(params.get_param_path('HondaBoschARadarMode')).write_bytes(b'bad')
@@ -144,7 +146,7 @@ class TestHondaRadarObserver(unittest.TestCase):
 
   def test_entry_boundary_does_not_expand_control_scope(self):
     for settings in (ObserverSettings(1, False, True, True), ObserverSettings(1, True, False, True),
-                     ObserverSettings(1, True, True, False), ObserverSettings(3, True, True, True)):
+                     ObserverSettings(1, True, True, False), ObserverSettings(4, True, True, True)):
       observer = HondaRadarObserver(*configuration())
       msg = observer.update([can_message(START, scan_frames())], state(START), settings, START)
       self.assertFalse(msg.hondaRadarObservations.active)

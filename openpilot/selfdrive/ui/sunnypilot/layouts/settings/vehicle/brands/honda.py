@@ -6,7 +6,7 @@ See the LICENSE.md file in the root directory for more details.
 """
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.base import BrandSettings
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.selfdrive.car.honda_radar_observer_config import OBSERVE, SHADOW
+from openpilot.selfdrive.car.honda_radar_observer_config import ASSIST, OBSERVE, SHADOW
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp
 
@@ -16,7 +16,8 @@ class HondaSettings(BrandSettings):
     super().__init__()
     self.observer = toggle_item_sp(
       lambda: tr('Accord Radar Recording'),
-      description=lambda: tr('Record radar targets with Alpha Longitudinal, Experimental Mode and DEC enabled. Observation only.'),
+      description=lambda: tr('Record radar targets with Alpha Longitudinal, Experimental Mode and DEC enabled. '
+                             'Recording alone does not control the vehicle. Turning this off also disables fusion and acceleration assist.'),
       initial_state=self._observing(),
       callback=self._set_observer, enabled=lambda: not ui_state.started,
     )
@@ -29,20 +30,32 @@ class HondaSettings(BrandSettings):
     )
     self.shadow = toggle_item_sp(
       lambda: tr('Radar Fusion Shadow'),
-      description=lambda: tr('Calculate and record radar and vision fusion. Does not control the vehicle.'),
-      initial_state=ui_state.params.get('HondaBoschARadarMode', return_default=True) == SHADOW,
-      callback=self._set_shadow, enabled=lambda: not ui_state.started and self._observing(),
+      description=lambda: tr('Calculate and record radar and vision fusion. Shadow mode alone does not control the vehicle. '
+                             'Required and locked on while radar acceleration assist is enabled.'),
+      initial_state=self._mode() in (SHADOW, ASSIST),
+      callback=self._set_shadow, enabled=lambda: not ui_state.started and self._mode() in (OBSERVE, SHADOW),
     )
-    self.items = [self.observer, self.shadow, self.overlay]
+    self.assist = toggle_item_sp(
+      lambda: tr('Radar Acceleration Assist'),
+      description=lambda: tr('Limit positive acceleration briefly when a previously confirmed visual lead is lost. '
+                             'Radar does not replace the visual lead or independently request braking or starting from rest. '
+                             'Requires UNIFIED, Alpha Longitudinal, Experimental Mode and DEC. Turning this off returns to shadow mode.'),
+      initial_state=self._mode() == ASSIST,
+      callback=self._set_assist, enabled=lambda: not ui_state.started and self._observing(),
+    )
+    self.items = [self.observer, self.shadow, self.assist, self.overlay]
 
   @staticmethod
-  def _observing():
-    return ui_state.params.get('HondaBoschARadarMode', return_default=True) in (OBSERVE, SHADOW)
+  def _mode():
+    return ui_state.params.get('HondaBoschARadarMode', return_default=True)
+
+  def _observing(self):
+    return self._mode() in (OBSERVE, SHADOW, ASSIST)
 
   def _set_observer(self, enabled):
     if not ui_state.started:
-      current = ui_state.params.get('HondaBoschARadarMode', return_default=True)
-      mode = SHADOW if enabled and current == SHADOW else OBSERVE if enabled else 0
+      current = self._mode()
+      mode = current if enabled and current in (OBSERVE, SHADOW, ASSIST) else OBSERVE if enabled else 0
       ui_state.params.put('HondaBoschARadarMode', mode, block=True)
     self.update_settings()
 
@@ -52,11 +65,20 @@ class HondaSettings(BrandSettings):
     self.update_settings()
 
   def _set_shadow(self, enabled):
-    if not ui_state.started and self._observing():
+    if not ui_state.started and self._mode() in (OBSERVE, SHADOW):
       ui_state.params.put('HondaBoschARadarMode', SHADOW if enabled else OBSERVE, block=True)
     self.update_settings()
 
+  def _set_assist(self, enabled):
+    current = self._mode()
+    if not ui_state.started and current in (OBSERVE, SHADOW, ASSIST):
+      mode = ASSIST if enabled else SHADOW if current == ASSIST else current
+      ui_state.params.put('HondaBoschARadarMode', mode, block=True)
+    self.update_settings()
+
   def update_settings(self):
-    self.observer.action_item.set_state(self._observing())
-    self.shadow.action_item.set_state(ui_state.params.get('HondaBoschARadarMode', return_default=True) == SHADOW)
+    mode = self._mode()
+    self.observer.action_item.set_state(mode in (OBSERVE, SHADOW, ASSIST))
+    self.shadow.action_item.set_state(mode in (SHADOW, ASSIST))
+    self.assist.action_item.set_state(mode == ASSIST)
     self.overlay.action_item.set_state(ui_state.params.get_bool('HondaBoschARadarOverlay'))

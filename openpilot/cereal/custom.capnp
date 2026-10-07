@@ -501,7 +501,8 @@ struct CustomReserved18 @0xc86a3d38d13eb3ef {
 struct CustomReserved19 @0xa4f1eb3323f5f582 {
 }
 
-# Independent, receive-only Accord telemetry. Never a control input.
+# Independent, receive-only Accord radar telemetry; no lead authority is granted.
+# Mode 3 uses a separately gated consumer to bound positive acceleration only.
 # Events are updates, not a complete object snapshot: absence is not deletion.
 struct HondaRadarObservations {
   schemaVersion @0 :UInt16 = 1;
@@ -520,15 +521,15 @@ struct HondaRadarObservations {
   processingTimeNs @13 :UInt64;
   rejectedEnvelopes @14 :UInt64;
   backlogCount @15 :UInt64;
-  fusion @16 :ShadowFusion;  # absent in observation-only mode; NEVER a control input
+  fusion @16 :ShadowFusion;  # telemetry, not lead authority; mode-3 assistance uses an independent bounded consumer
 
   struct ShadowFusion {
     version @0 :UInt16;
     algorithmVersion @1 :Text;
     enabled @2 :Bool;
     active @3 :Bool;
-    calibrated @4 :Bool;
-    controlAllowed @5 :Bool;  # always false in this implementation
+    calibrated @4 :Bool;  # remains false; mode-3 assistance does not claim calibration
+    controlAllowed @5 :Bool;  # remains false; no lead, independent braking or launch authority
     reason @6 :Text;
     modelMonoTime @7 :UInt64;
     modelTimestampEof @8 :UInt64;

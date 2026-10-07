@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openpilot.selfdrive.controls.lib.turn_lead_guard import TurnLeadGuard
+from openpilot.selfdrive.controls.lib.turn_lead_guard import HOLD_ACCEL_MAX, TurnLeadGuard
 
 
 NS = 1_000_000_000
@@ -145,8 +145,52 @@ def test_continuous_lost_turn_outlasts_history_and_nine_second_gap():
 def test_entry_speed_boundary_does_not_drop_an_armed_ceiling(speed):
   h = Harness()
   h.lose_lead()
-  assert h.step(speed=speed) == 0.0
+  ceiling = h.step(speed=speed)
+  assert 0.0 <= ceiling <= HOLD_ACCEL_MAX
+  if speed >= 5.0:
+    assert ceiling == 0.0
   assert h.guard.armed and h.guard.lost
+
+
+def test_speed_at_first_loss_is_held_without_ratchet_or_acceleration_above_it():
+  h = Harness()
+  h.lose_lead()
+  assert h.guard.hold_speed == 5.0
+  previous = 0.0
+  for speed in (4.95, 4.9, 4.8, 4.6, 4.3, 4.0, 3.5):
+    ceiling = h.step(speed=speed)
+    assert h.guard.hold_speed == 5.0
+    assert 0.0 < ceiling <= HOLD_ACCEL_MAX
+    assert ceiling - previous <= .05 + 1e-9
+    previous = ceiling
+  assert h.step(speed=5.0) == 0.0
+  assert h.step(speed=5.1) == 0.0
+
+
+def test_weak_lead_flicker_does_not_replace_captured_speed():
+  h = Harness()
+  h.lose_lead()
+  for _ in range(5):
+    assert h.step(speed=4.0, lead_one=lead(modelProb=.6)) == 0.0
+    assert h.guard.hold_speed == 5.0
+  assert h.step(speed=4.0) == 0.0
+  assert h.guard.hold_speed == 5.0
+  h.step(enabled=False)
+  assert h.guard.hold_speed is None
+
+
+def test_independent_braking_latches_out_speed_recovery_until_lead_reconfirmation():
+  h = Harness()
+  h.lose_lead()
+  assert h.step(speed=4.8) > 0.0
+  assert h.step(speed=4.0, independent_braking=True) == 0.0
+  for _ in range(40):
+    assert h.step(speed=3.0, independent_braking=False) == 0.0
+  assert h.guard.speed_recovery_blocked and h.guard.lost
+  h.recover_lead()
+  assert not h.guard.speed_recovery_blocked
+  assert h.step(speed=3.0) == 0.0
+  assert h.guard.hold_speed == 3.0
 
 
 @pytest.mark.parametrize('speed', [0.0, .5, 10.0, 20.0])

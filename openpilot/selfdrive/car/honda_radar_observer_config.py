@@ -5,6 +5,8 @@ PROCESS_NAME = 'hondaRadarObserver'
 SERVICE = 'hondaRadarObservations'
 OBSERVE = 1
 SHADOW = 2
+ASSIST = 3
+FUSION_MODES = (SHADOW, ASSIST)
 SCOPE_MAX_AGE_NS = 500_000_000
 
 
@@ -26,8 +28,13 @@ class ObserverSettings:
       return cls()
 
   def requested(self, cp):
-    return (self.mode in (OBSERVE, SHADOW) and self.alpha and self.experimental and self.dec
+    return (self.mode in (OBSERVE, *FUSION_MODES) and self.alpha and self.experimental and self.dec
             and cp.carFingerprint == 'HONDA_ACCORD' and cp.openpilotLongitudinalControl and not cp.notCar)
+
+  def assist_requested(self, cp, cp_sp):
+    # The Accord fingerprint names the supported Bosch platform. This never
+    # changes its radarUnavailable capability or the existing radarState path.
+    return self.mode == ASSIST and self.requested(cp) and not cp_sp.enableGasInterceptor
 
 
 def observer_requested(started, params, cp):

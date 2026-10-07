@@ -2348,8 +2348,8 @@ msgid "Accord Radar Recording"
 msgstr "雅阁雷达记录"
 
 
-msgid "Record radar targets with Alpha Longitudinal, Experimental Mode and DEC enabled. Observation only."
-msgstr "在 Alpha 纵向控制、实验模式和 DEC 均开启时记录雷达目标，仅用于观察。"
+msgid "Record radar targets with Alpha Longitudinal, Experimental Mode and DEC enabled. Recording alone does not control the vehicle. Turning this off also disables fusion and acceleration assist."
+msgstr "在 Alpha 纵向控制、实验模式和 DEC 均开启时记录雷达目标。单独记录不参与控车。关闭此项也会关闭融合计算和加速辅助。"
 
 
 msgid "Radar Target Labels"
@@ -2362,8 +2362,14 @@ msgstr "用黄色圆点显示雷达目标，右侧显示以米为单位的纵向
 msgid "Radar Fusion Shadow"
 msgstr "雷达融合影子计算"
 
-msgid "Calculate and record radar and vision fusion. Does not control the vehicle."
-msgstr "计算并记录雷达与视觉融合结果，不参与车辆控制。"
+msgid "Calculate and record radar and vision fusion. Shadow mode alone does not control the vehicle. Required and locked on while radar acceleration assist is enabled."
+msgstr "计算并记录雷达与视觉融合结果。单独的影子模式不参与控车。雷达加速辅助开启时，此项保持开启且不可单独关闭。"
+
+msgid "Radar Acceleration Assist"
+msgstr "雷达加速辅助"
+
+msgid "Limit positive acceleration briefly when a previously confirmed visual lead is lost. Radar does not replace the visual lead or independently request braking or starting from rest. Requires UNIFIED, Alpha Longitudinal, Experimental Mode and DEC. Turning this off returns to shadow mode."
+msgstr "已确认的前车短暂失去视觉跟踪时，限制正加速度。雷达不替代视觉前车，也不独立请求制动或从静止起步。需要 UNIFIED、Alpha 纵向控制、实验模式和 DEC。关闭后返回影子模式。"
 
 #: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Record Road Cameras"

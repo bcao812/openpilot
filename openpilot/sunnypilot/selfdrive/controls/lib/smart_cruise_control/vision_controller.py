@@ -52,7 +52,7 @@ class SmartCruiseControlVision:
   output_v_target: float = V_CRUISE_UNSET
   output_a_target: float = 0.
 
-  def __init__(self):
+  def __init__(self, *, hold_entry_speed: bool = False):
     self.params = Params()
     self.frame = -1
     self.long_enabled = False
@@ -61,6 +61,8 @@ class SmartCruiseControlVision:
     self.is_active = False
     self.enabled = self.params.get_bool("SmartCruiseControlVision")
     self.v_cruise_setpoint = 0.
+    self.hold_entry_speed = hold_entry_speed
+    self.entry_speed = None
 
     self.state = VisionState.disabled
     self.current_lat_acc = 0.
@@ -71,6 +73,19 @@ class SmartCruiseControlVision:
 
   def get_v_target_from_control(self) -> float:
     if self.is_active:
+      if self.hold_entry_speed:
+        if (self.entry_speed is None or not np.isfinite(self.entry_speed) or not np.isfinite(self.v_ego)
+            or not np.isfinite(self.current_lat_acc) or self.current_lat_acc < 0.
+            or not np.isfinite(self.max_pred_lat_acc) or self.max_pred_lat_acc < 0.
+            or not (np.isfinite(self.v_target) or self.v_target == float('inf') and self.max_pred_lat_acc == 0.)):
+          return float('nan')
+        # The geometric target already represents the lateral-acceleration
+        # limit. Subtracting another four seconds of deceleration from it
+        # creates an unnecessarily lower speed target throughout the turn.
+        target = max(self.v_target, MIN_V)
+        if self.current_lat_acc > _A_LAT_REG_MAX:
+          target = min(target, self.v_ego * (_A_LAT_REG_MAX / self.current_lat_acc) ** 0.5)
+        return min(float(self.entry_speed), target)
       return max(self.v_target, MIN_V) + self.a_target * _NO_OVERSHOOT_TIME_HORIZON
 
     return V_CRUISE_UNSET
@@ -183,6 +198,18 @@ class SmartCruiseControlVision:
     else:
       raise NotImplementedError(f"SCC-V state not supported: {self.state}")
 
+    if self.hold_entry_speed and self.is_active:
+      speed_error = self.get_v_target_from_control() - self.v_ego
+      if not np.isfinite(speed_error):
+        return float('nan')
+      if speed_error >= 0.0:
+        # Hold the once-captured entry speed on an otherwise comfortable
+        # curve. Independent lead/model braking remains in the planner.
+        a_target = min(_LEAVING_ACC, speed_error / _NO_OVERSHOOT_TIME_HORIZON)
+      else:
+        # Preserve proactive braking when the predicted or current curve
+        # actually requires a lower speed; do not subtract its horizon twice.
+        a_target = min(a_target, speed_error / _NO_OVERSHOOT_TIME_HORIZON)
     return a_target
 
   def update(self, sm: messaging.SubMaster, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float,
@@ -196,7 +223,14 @@ class SmartCruiseControlVision:
     self._update_params()
     self._update_calculations(sm)
 
+    previously_active = self.state in ACTIVE_STATES
     self.is_enabled, self.is_active = self._update_state_machine()
+    if self.hold_entry_speed:
+      if self.is_active:
+        if not previously_active or self.entry_speed is None:
+          self.entry_speed = self.v_ego
+      else:
+        self.entry_speed = None
     self.a_target = self._update_solution()
 
     self.output_v_target = self.get_v_target_from_control()

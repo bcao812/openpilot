@@ -41,6 +41,15 @@ def observation(frame, distance=20.0, lateral=0.0, relative=0.0, u10=20, slot=0,
               'raw': {'oemTrackId': oem, 'lifecycleRaw': 1 + 2 * frame, 'u10Raw': u10, 'u11Raw': round(relative * 64 + 864)}}
 
 
+def source_observation(timestamp, sequence, index, lifecycle, generation=1, **kwargs):
+  sample = observation(0, **kwargs)
+  sample.update(positionMonoTime=timestamp, positionSeq=sequence, frameIndex=index, generation=generation)
+  if sample['velocityValid']:
+    sample.update(velocityMonoTime=timestamp, velocitySeq=sequence + 1)
+  sample['raw']['lifecycleRaw'] = lifecycle
+  return sample
+
+
 def body(frame, observations, **overrides):
   value = {'schemaVersion': 1, 'sessionId': 'fusion-test', 'sequence': frame + 1, 'active': True, 'observations': observations,
                'scope': dict.fromkeys(('alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive'), True),
@@ -294,6 +303,210 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertTrue(all(l['state'] == 'fused' for l in out['leads']))
     self.assertFalse(out['controlAllowed'])
     self.assertFalse(out['calibrated'])
+
+  def test_recorded_m4_reassignment_across_publications_preserves_filter_but_reconfirms_pair(self):
+    # 2026-10-07 route 8b, M4: OEM 11 occupied OEM 16's slot 10.294531 ms
+    # before OEM 16's new-slot F0, across two publications. Only the preceding
+    # warm-up is synthetic; these boundary source times/IDs/geometry are logged.
+    mark = 431_461_214_261
+    old_ns = mark - 19_933_329_003
+    fusion = HondaRadarFusion()
+    for frame in range(12):
+      back = 11 - frame
+      sample = source_observation(old_ns - back * STEP, 17751 - 2 * back, (14 - back) & 15, 27 - 2 * back,
+                                  generation=868, oem=16, distance=6.31056, lateral=-.805476)
+      stamp = sample['positionMonoTime']
+      out = fusion.update(body(frame, [sample]), Inputs(stamp, distance=6.31056, lateral=-.805476), stamp + 1)
+    track = fusion.tracks[16]
+    identifier, first_ns = track.identifier, track.first_ns
+    mean, covariance = track.mean.copy(), track.covariance.copy()
+    self.assertGreater(out['leads'][0]['distanceWeight'], 0)
+
+    replacement = source_observation(mark - 19_850_653_273, 17763, 15, 17, generation=874,
+                                     oem=11, distance=29.844, lateral=9.6422)
+    publication = mark - 19_847_315_669
+    out = fusion.update(body(12, [replacement]), Inputs(publication, distance=6.31056, lateral=-.805476), publication)
+    self.assertFalse(track.active)
+    self.assertFalse(track.velocity_good)
+    self.assertFalse(track.acceleration_good)
+    self.assertEqual(track.last_invalid_reason, 'slotReassigned')
+    self.assertEqual((track.identifier, track.count), (identifier, 12))
+    np.testing.assert_array_equal(track.mean, mean)
+    np.testing.assert_array_equal(track.covariance, covariance)
+    self.assertEqual((out['leads'][0]['distanceWeight'], out['leads'][0]['velocityWeight']), (0, 0))
+
+    migrated = source_observation(mark - 19_840_358_742, 17771, 15, 29, generation=878,
+                                  slot=4, oem=16, distance=6.31056, lateral=-.7929542787)
+    main = {**migrated, 'frameMask': 15, 'velocitySeq': 0, 'velocityValid': False}
+    publication = mark - 19_789_831_294
+    out = fusion.update(body(13, [main, migrated, migrated]),
+                        Inputs(publication, distance=6.31056, lateral=-.7929542787), publication)
+    self.assertIs(fusion.tracks[16], track)
+    self.assertEqual((track.identifier, track.first_ns, track.count, track.slot), (identifier, first_ns, 13, 4))
+    self.assertEqual(track.position_ns, migrated['positionMonoTime'])
+    self.assertEqual(track.previous_position_ns, old_ns)
+    self.assertTrue(track.active)
+    self.assertTrue(track.velocity_good)
+    self.assertTrue(track.mature)
+    self.assertEqual((track.slot_reassigned_ns, track.slot_reassigned_seq), (0, 0))
+    self.assertEqual(out['counters']['positions'], 14)  # Two OEMs; AUX/duplicates add none.
+    self.assertEqual(out['leads'][0]['bindingSamples'], 1)
+    self.assertEqual(out['leads'][0]['identityState'], 'unresolved')
+    self.assertEqual((out['leads'][0]['distanceWeight'], out['leads'][0]['velocityWeight']), (0, 0))
+
+  def test_recorded_m9_same_envelope_reassignment_accepts_later_sequence(self):
+    # M9: equal F0 time and distinct global sequence numbers formerly caused
+    # OEM 20's migrated position to fail stamp <= invalid_position_ns.
+    mark = 2_420_533_395_534
+    old_ns, next_ns = mark - 9_969_549_007, mark - 9_900_247_132
+    for reverse in (False, True):
+      with self.subTest(reverse=reverse):
+        fusion = HondaRadarFusion()
+        for frame in range(3):
+          back = 2 - frame
+          sample = source_observation(old_ns - back * STEP, 193655 - 2 * back, (6 - back) & 15, 449 - 2 * back,
+                                      generation=5220, oem=20, distance=36.6984, lateral=2.3326)
+          stamp = sample['positionMonoTime']
+          fusion.update(body(frame, [sample]), Inputs(stamp), stamp + 1)
+        track = fusion.tracks[20]
+        replacement = source_observation(next_ns, 193657, 7, 1, generation=5252,
+                                         oem=36, distance=18.42, lateral=6.2707)
+        migrated = source_observation(next_ns, 193659, 7, 451, generation=5253,
+                                      slot=1, oem=20, distance=36.64128, lateral=2.4009)
+        samples = [replacement, migrated]
+        out = fusion.update(body(3, list(reversed(samples)) if reverse else samples), Inputs(next_ns), next_ns + 1)
+        self.assertIs(fusion.tracks[20], track)
+        self.assertEqual((track.slot, track.count, track.position_seq), (1, 4, 193659))
+        self.assertTrue(track.active)
+        self.assertEqual(out['counters']['positions'], 5)
+        self.assertEqual(out['counters']['old'], 0)
+
+  def test_decoder_slot_swap_preserves_both_identities_across_frame_wrap(self):
+    for plateau in (False, True):
+      for order in ((0, 1), (1, 0)):
+        with self.subTest(plateau=plateau, order=order):
+          decoder, fusion = BoschARadarObserver(2), HondaRadarFusion()
+          for frame in range(16):
+            frames = [can for slot, oem, distance in ((0, 7, 403), (1, 8, 753))
+                      for can in scan_frames(slot=slot, index=frame, life=4094 if plateau else 1 + 2 * frame,
+                                             distance=distance, azimuth=1024, velocity=864, oem_id=oem)]
+            decoder.feed(START + frame * STEP, frames)
+            advance(fusion, frame, decoder.drain())
+          tracks = dict(fusion.tracks)
+          frames = [can for slot in order for can in scan_frames(slot=slot, index=0, life=4094 if plateau else 33,
+                    distance=753 if slot == 0 else 403, azimuth=1024, velocity=864, oem_id=8 if slot == 0 else 7)]
+          decoder.feed(START + 16 * STEP, frames)
+          out = advance(fusion, 16, decoder.drain())
+          for oem, slot in ((7, 1), (8, 0)):
+            self.assertIs(fusion.tracks[oem], tracks[oem])
+            self.assertEqual((tracks[oem].slot, tracks[oem].count, tracks[oem].frame_index), (slot, 17, 0))
+            self.assertTrue(tracks[oem].active)
+          self.assertEqual(out['counters']['positions'], 34)
+
+  def test_reassignment_cannot_restore_a_really_invalidated_posterior(self):
+    failures = ('invalidGeometry', 'expired', 'withdrawn', 'conflictingFrame', 'newSlotInvalid', 'newSlotConflict',
+                'invalidLife', 'slotConflict', 'conflictingPosition', 'positionInnovation')
+    for failure in failures:
+      with self.subTest(failure=failure):
+        fusion = HondaRadarFusion()
+        for frame in range(8):
+          advance(fusion, frame)
+        track = fusion.tracks[7]
+        advance(fusion, 8, [observation(8, oem=8, distance=60, lateral=6)])
+        self.assertFalse(track.active)
+        self.assertNotEqual(track.slot_reassigned_ns, 0)
+        mean, covariance = track.mean.copy(), track.covariance.copy()
+        sample = observation(9, slot=1)
+        if failure in ('invalidGeometry', 'expired', 'withdrawn'):
+          sample.update(slot=0, positionValid=False, reason=failure)
+        elif failure == 'conflictingFrame':
+          sample = {**observation(7), 'positionValid': False, 'reason': failure}
+        elif failure in ('newSlotInvalid', 'newSlotConflict'):
+          sample.update(positionValid=False, generation=27,
+                        reason='invalidGeometry' if failure == 'newSlotInvalid' else 'conflictingFrame')
+        elif failure == 'invalidLife':
+          sample['raw']['lifecycleRaw'] = 4095
+        elif failure == 'slotConflict':
+          sample['frameIndex'] = 7
+          sample['raw']['lifecycleRaw'] = 15
+        elif failure == 'conflictingPosition':
+          sample = observation(7, distance=21)
+        else:
+          sample['dRel'] = 90
+        out = advance(fusion, 9, [sample])
+        self.assertIs(fusion.tracks[7], track)
+        self.assertFalse(track.active)
+        self.assertFalse(track.velocity_good)
+        self.assertEqual(track.count, 8)
+        np.testing.assert_array_equal(track.mean, mean)
+        np.testing.assert_array_equal(track.covariance, covariance)
+        self.assertEqual((track.slot_reassigned_ns, track.slot_reassigned_seq), (0, 0))
+        self.assertEqual((out['leads'][0]['distanceWeight'], out['leads'][0]['velocityWeight']), (0, 0))
+        # Still within 200 ms of the original sample: a cleared pending flag,
+        # not expiry, must prevent this otherwise continuous migration.
+        out = advance(fusion, 10, [observation(10, slot=1)])
+        self.assertNotEqual(fusion.tracks[7].identifier, track.identifier)
+        self.assertEqual(fusion.tracks[7].count, 1)
+        self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+
+  def test_reassignment_requires_new_slot_continuity_and_fresh_source(self):
+    for failure in ('sameSlot', 'lifecycleRestart', 'sourceGap', 'olderSequence', 'olderSource', 'futureSource'):
+      with self.subTest(failure=failure):
+        fusion = HondaRadarFusion()
+        for frame in range(8):
+          advance(fusion, frame)
+        track = fusion.tracks[7]
+        replacement = observation(8, oem=8, distance=60, lateral=6)
+        advance(fusion, 8, [replacement])
+        sample = observation(9, slot=1)
+        now = START + 9 * STEP
+        if failure == 'sameSlot':
+          sample['slot'] = 0
+        elif failure == 'lifecycleRestart':
+          sample['raw']['lifecycleRaw'] = 1
+        elif failure == 'sourceGap':
+          sample = observation(11, slot=1)
+          now = START + 11 * STEP
+        elif failure == 'olderSequence':
+          sample.update(positionSeq=replacement['positionSeq'] - 1, positionMonoTime=replacement['positionMonoTime'])
+        elif failure == 'olderSource':
+          sample['positionMonoTime'] = replacement['positionMonoTime'] - 1
+        else:
+          sample['positionMonoTime'] = now + 1
+        out = fusion.update(body(9, [sample]), Inputs(now), now)
+        current = fusion.tracks[7]
+        if failure in ('sameSlot', 'lifecycleRestart', 'sourceGap'):
+          self.assertNotEqual(current.identifier, track.identifier)
+          self.assertEqual(current.count, 1)
+        else:
+          self.assertIs(current, track)
+          self.assertFalse(current.active)
+          self.assertEqual(current.count, 8)
+        self.assertEqual((out['leads'][0]['distanceWeight'], out['leads'][0]['velocityWeight']), (0, 0))
+
+  def test_reassignment_waiting_aux_and_old_slot_events_do_not_extend_or_revoke_migration(self):
+    fusion = HondaRadarFusion()
+    for frame in range(8):
+      advance(fusion, frame)
+    track = fusion.tracks[7]
+    old = observation(7)
+    advance(fusion, 8, [observation(8, oem=8, distance=60, lateral=6)])
+    late_aux = {**old, 'velocitySeq': 1800, 'velocityMonoTime': START + 9 * STEP}
+    fusion.record_inputs(Inputs(START + 9 * STEP), START + 9 * STEP)
+    fusion.ingest([late_aux], START + 9 * STEP)
+    self.assertFalse(track.active)
+    self.assertEqual((track.position_ns, track.count), (old['positionMonoTime'], 8))
+    self.assertFalse(track.velocity_good)
+    advance(fusion, 9, [observation(9, slot=1)])
+    self.assertIs(fusion.tracks[7], track)
+    self.assertTrue(track.active)
+    self.assertEqual(track.count, 9)
+    invalid = {'slot': 0, 'positionValid': False, 'generation': old['generation'],
+               'positionMonoTime': old['positionMonoTime'], 'reason': 'invalidGeometry'}
+    advance(fusion, 10, [invalid, late_aux])
+    self.assertIs(fusion.tracks[7], track)
+    self.assertTrue(track.active)
+    self.assertEqual((track.slot, track.count, track.position_ns), (1, 9, START + 9 * STEP))
 
   def test_old_slot_invalidation_cannot_remove_migrated_target(self):
     fusion = HondaRadarFusion()
@@ -1232,7 +1445,7 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertLess(abs(lead['residualV']), lead['velocityGate'])
     self.assertEqual(lead['blend'], 1)
     self.assertEqual(lead['coastWeight'], 1)
-    self.assertEqual(out['algorithmVersion'], 'bosch-a-shadow-2')
+    self.assertEqual(out['algorithmVersion'], 'bosch-a-shadow-3')
     self.assertFalse(out['controlAllowed'])
     self.assertFalse(out['calibrated'])
 

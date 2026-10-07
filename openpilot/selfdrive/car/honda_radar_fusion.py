@@ -15,7 +15,7 @@ from capnp.lib.capnp import _DynamicListBuilder, _DynamicListReader, _DynamicStr
 
 from opendbc.car.honda.bosch_a_radar import radar_scan_continuous
 
-VERSION = 'bosch-a-shadow-2'
+VERSION = 'bosch-a-shadow-3'
 MAX_TRACKS = 32
 MAX_EVENTS = 64
 MAX_AGE_NS = 200_000_000
@@ -289,6 +289,11 @@ class Track:
   last_invalid_reason: str = ''
   last_invalid_ns: int = 0
   invalid_position_ns: int = 0
+  # A different OEM occupying this slot withdraws its contribution, but is not
+  # by itself evidence that this OEM ended. Only a qualified new-slot position
+  # can resume this posterior; all other invalidations erase that permission.
+  slot_reassigned_ns: int = 0
+  slot_reassigned_seq: int = 0
   previous_position_seq: int = 0
   previous_position_ns: int = 0
   previous_x: float = 0.0
@@ -492,9 +497,14 @@ class HondaRadarFusion:
     track.active = track.velocity_good = track.acceleration_good = False
     track.last_invalid_reason, track.last_invalid_ns = reason, now_ns
     track.invalid_position_ns = max(track.invalid_position_ns, position_ns)
+    track.slot_reassigned_ns = track.slot_reassigned_seq = 0
     for (_, identifier), binding in self.bindings.items():
       if identifier == track.identifier:
         binding.reject(reason, now_ns)
+
+  def _suspend_slot(self, track, position_ns, position_seq, now_ns):
+    self._invalidate(track, 'slotReassigned', position_ns, now_ns)
+    track.slot_reassigned_ns, track.slot_reassigned_seq = position_ns, position_seq
 
   def _suspend_bindings(self, index, reason, timestamp, except_track=0):
     for (model_index, identifier), binding in self.bindings.items():
@@ -551,20 +561,25 @@ class HondaRadarFusion:
       invalid = metadata[1] if metadata is not None else not read(observation, 'positionValid', False)
       if invalid:
         reason = read(observation, 'reason', '')
+        invalid_oem = int(read(read(observation, 'raw', {}), 'oemTrackId', 0))
         if reason == 'conflictingFrame':
           for track in self.tracks.values():
-            # A conflict in an accepted measurement invalidates its posterior.
-            # An unfinished or older scan cannot retract a different sample.
-            if (0 < stamp <= now_ns and track.slot == slot and track.position_ns == stamp and
-                track.position_seq == (metadata[2] if metadata is not None else int(read(observation, 'positionSeq', 0)))):
+            # Retract an accepted conflicting posterior, or revoke a pending
+            # migration named by a newer conflict. An unfinished/older scan
+            # cannot retract a different active, accepted position.
+            accepted = (track.slot == slot and track.position_ns == stamp and
+                        track.position_seq == (metadata[2] if metadata is not None else int(read(observation, 'positionSeq', 0))))
+            pending = track.slot_reassigned_ns and invalid_oem == track.oem_id and stamp >= track.slot_reassigned_ns
+            if 0 < stamp <= now_ns and (accepted or pending):
               self._invalidate(track, reason, stamp, now_ns)
               self.counts['rejectedPosition'] += 1
         elif reason in ('expired', 'invalidGeometry', 'withdrawn'):
           for track in self.tracks.values():
             # An old slot invalidation must not kill the identity's new slot.
             generation = int(read(observation, 'generation', 0))
-            if (track.slot == slot and track.position_ns <= stamp <= now_ns
-                and (not generation or generation == track.generation)):
+            matching_slot = track.slot == slot and (not generation or generation == track.generation)
+            pending = track.slot_reassigned_ns and invalid_oem == track.oem_id and stamp >= track.slot_reassigned_ns
+            if track.position_ns <= stamp <= now_ns and (matching_slot or pending):
               self._invalidate(track, reason, stamp, now_ns)
         continue
       seq = metadata[2] if metadata is not None else int(read(observation, 'positionSeq', 0))
@@ -577,7 +592,8 @@ class HondaRadarFusion:
       if (not fresh(stamp, now_ns, MAX_AGE_NS) or not seq or not 0 <= index < 16 or not geometry_ok or ego is None):
         if not geometry_ok:
           for previous in self.tracks.values():
-            if previous.slot == slot and previous.position_ns <= stamp <= now_ns:
+            pending = previous.slot_reassigned_ns and previous.oem_id == identifier and stamp >= previous.slot_reassigned_ns
+            if previous.position_ns <= stamp <= now_ns and (previous.slot == slot or pending):
               self._invalidate(previous, 'invalidGeometry', stamp, now_ns)
         self.counts['rejectedPosition'] += 1
         continue
@@ -607,7 +623,7 @@ class HondaRadarFusion:
         continue
       for previous in self.tracks.values():
         if previous is not track and previous.slot == slot and previous.active and previous.position_ns <= stamp:
-          self._invalidate(previous, 'slotReassigned', stamp, now_ns)
+          self._suspend_slot(previous, stamp, seq, now_ns)
       birth_reason = 'newObject'
       old_track = track
       if track is not None:
@@ -620,12 +636,20 @@ class HondaRadarFusion:
             self._invalidate(track, 'slotConflict' if slot != track.slot else 'conflictingPosition', stamp, now_ns)
             self.counts['ambiguous'] += 1
           continue
+        continuous = radar_scan_continuous(track.frame_index, track.lifecycle, track.position_ns, index, life, stamp)
         if not track.active:
-          if stamp <= track.invalid_position_ns:
-            self.counts['old'] += 1
-            continue
-          birth_reason, track = 'invalidRecovery', None
-        elif not radar_scan_continuous(track.frame_index, track.lifecycle, track.position_ns, index, life, stamp):
+          # The replacement and migrated slot can share a CAN envelope time,
+          # or arrive in different publications. Neither ordering establishes
+          # a new object if source sequence/lifecycle AND motion still agree.
+          # Same-slot returns and explicit invalidations must be born again.
+          migration = (track.slot_reassigned_ns and slot != track.slot and stamp >= track.slot_reassigned_ns
+                       and seq > track.slot_reassigned_seq and continuous)
+          if not migration:
+            if stamp <= track.invalid_position_ns:
+              self.counts['old'] += 1
+              continue
+            birth_reason, track = 'invalidRecovery', None
+        elif not continuous:
           birth_reason = 'positionGap' if stamp - track.position_ns > MAX_AGE_NS else 'lifecycleReset'
           track = None
       if track is None:
@@ -655,6 +679,7 @@ class HondaRadarFusion:
         track.generation = int(read(observation, 'generation', 0))
         track.velocity_good = False
       track.active = True
+      track.slot_reassigned_ns = track.slot_reassigned_seq = 0
       track.positions.append((stamp, x, y))
       self.counts['positions'] += 1
       self._velocity(track, observation, now_ns, projection_cache)

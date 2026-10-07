@@ -99,6 +99,55 @@ def test_stronger_model_braking_is_not_replaced_by_zero_ceiling():
       assert max(outputs) <= 0.0
 
 
+def test_turn_holds_first_loss_speed_and_allows_bounded_resistance_correction():
+  with pipeline(measured_accel=0.0) as (planner, control, state):
+    set_lead(state, True)
+    for frame in range(8):
+      step(planner, control, state, frame)
+    set_lead(state, False)
+    step(planner, control, state, 8)
+    assert planner.reference_planner.turn_lead_guard.hold_speed == 3.0
+    # Prescribed speed loss isolates the command response; this is not a
+    # claim that a particular grade or actuator has been simulated.
+    state['carState'].vEgo = 2.8
+    for frame in range(9, 24):
+      plan, outputs = step(planner, control, state, frame)
+      assert planner.reference_planner.turn_lead_guard.hold_speed == 3.0
+      assert plan.aTarget <= .1 + 1e-7
+      assert max(outputs) <= .1 + 1e-7
+      assert not plan.motionIntent.releaseAllowed
+    assert plan.aTarget > 0.0
+    assert max(outputs) > 0.0
+    assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
+    state['carState'].vEgo = 3.1
+    plan, outputs = step(planner, control, state, 24)
+    assert plan.aTarget <= 0.0
+    assert max(outputs) <= 1e-7
+
+
+def test_speed_recovery_never_overrides_a_new_braking_constraint():
+  with pipeline(measured_accel=0.0) as (planner, control, state):
+    set_lead(state, True)
+    for frame in range(8):
+      step(planner, control, state, frame)
+    set_lead(state, False)
+    step(planner, control, state, 8)
+    state['carState'].vEgo = 2.5
+    state['modelV2'].action.desiredAcceleration = -1.5
+    for frame in range(9, 15):
+      plan, outputs = step(planner, control, state, frame)
+      assert planner.reference_planner.turn_lead_guard.speed_recovery_blocked
+      assert plan.aTarget <= -1.5
+      assert max(outputs) <= 0.0
+    state['modelV2'].action.desiredAcceleration = 1.1
+    for frame in range(15, 30):
+      plan, outputs = step(planner, control, state, frame)
+      assert planner.reference_planner.turn_lead_guard.accel_ceiling == 0.0
+      assert plan.aTarget <= 0.0
+      assert max(outputs) <= 0.0
+      assert not plan.motionIntent.releaseAllowed
+
+
 def test_short_loss_and_lead_flicker_cannot_release_full_acceleration():
   with pipeline(measured_accel=0.0) as (planner, control, state):
     set_lead(state, True)

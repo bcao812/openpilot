@@ -1,4 +1,8 @@
-"""Optional Accord telemetry. Intentionally has no control or sendcan publisher."""
+"""Optional Accord telemetry; no control or sendcan publisher.
+
+Mode 3 also supplies observations to the separately gated acceleration guard.
+The shadow fusion estimates themselves have no lead or braking authority.
+"""
 import time
 import uuid
 
@@ -6,7 +10,7 @@ from opendbc.car.honda.bosch_a_radar import BoschARadarObserver, MAX_AGE_NS
 from opendbc.car.honda.hondacan import CanBus
 from openpilot.cereal import messaging
 from openpilot.common.realtime import drop_realtime, set_core_affinity
-from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, SHADOW, ObserverSettings, scope_state
+from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, FUSION_MODES, ObserverSettings, scope_state
 
 PUBLISH_PERIOD_NS = 50_000_000
 HEARTBEAT_NS = 1_000_000_000
@@ -56,7 +60,7 @@ class HondaRadarObserver:
     if active != self.active:
       self.decoder.reset()
     self.active = active
-    if settings.mode != SHADOW:
+    if settings.mode not in FUSION_MODES:
       self.fusion = None
       self.fusion_input_error = False
     elif self.fusion is None:
@@ -87,7 +91,7 @@ class HondaRadarObserver:
     self.processing_ns += time.monotonic_ns() - started_ns
     if now_ns - self.last_publish_ns < PUBLISH_PERIOD_NS:
       return None
-    if settings.mode != SHADOW and not self.decoder.events and reason == self.last_reason and now_ns - self.last_publish_ns < HEARTBEAT_NS:
+    if settings.mode not in FUSION_MODES and not self.decoder.events and reason == self.last_reason and now_ns - self.last_publish_ns < HEARTBEAT_NS:
       return None
     self.sequence += 1
     msg = messaging.new_message(SERVICE)
@@ -111,7 +115,7 @@ class HondaRadarObserver:
     body.processingTimeNs = self.processing_ns
     body.rejectedEnvelopes = self.rejected_envelopes
     body.backlogCount = self.backlog_count
-    if settings.mode == SHADOW:
+    if settings.mode in FUSION_MODES:
       try:
         if self.fusion_input_error or self.fusion is None:
           raise ValueError('Invalid shadow input since the previous publication')
@@ -168,7 +172,7 @@ def main():
       if now_ns >= next_settings_ns:
         settings = ObserverSettings.read(params)
         next_settings_ns = now_ns + HEARTBEAT_NS
-      if settings.mode == SHADOW:
+      if settings.mode in FUSION_MODES:
         if fusion_sm is None:
           fusion_sm = messaging.SubMaster(['carState', 'modelV2'])
         fusion_sm.update(0)

@@ -6,8 +6,11 @@ from opendbc.car.honda.values import CAR, CarControllerParams
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
+from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
+from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
+from openpilot.selfdrive.car.honda_radar_observer_config import ASSIST, SERVICE as HONDA_RADAR_SERVICE, ObserverSettings
 from openpilot.selfdrive.controls.lib.cruise_response import (
   CRUISE_COAST_BP, CRUISE_COAST_MIN_SPEED, CRUISE_COAST_MAX_SPEED_ERROR, CRUISE_COAST_RISK_ACCEL,
   CruiseResponse,
@@ -15,6 +18,7 @@ from openpilot.selfdrive.controls.lib.cruise_response import (
 from openpilot.selfdrive.controls.lib.drive_helpers import (CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED,
                                                           get_departure_accel_from_plan, should_stop)
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
+from openpilot.selfdrive.controls.lib.honda_radar_accel_guard import HondaRadarAccelGuard
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS,
@@ -156,6 +160,14 @@ class UnifiedLongitudinalPlanner:
     self._forward_execution_instance_ns = 0
     self.turn_lead_guard = TurnLeadGuard()
     self.turn_accel_limited = False
+    self.radar_accel_guard = HondaRadarAccelGuard()
+    self.radar_accel_limited = False
+    self.radar_settings = ObserverSettings()
+    self._radar_params = Params()
+    self._radar_settings_next_ns = 0
+    self._radar_update_ns = self._radar_log_ns = 0
+    self._radar_log_state = None
+    self._radar_log_reason = ''
     self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
     self.model_reference_adapter = ModelReferenceAdapter()
     self.stop_distance_policy = LowSpeedStopDistance()
@@ -177,6 +189,8 @@ class UnifiedLongitudinalPlanner:
     self.cruise_response.clear()
     self.turn_lead_guard.clear()
     self.turn_accel_limited = False
+    self.radar_accel_guard.clear()
+    self.radar_accel_limited = False
     self.stop_distance_policy.clear()
     self.parking_approach.clear()
     self.parking_policy_distances = None
@@ -328,7 +342,62 @@ class UnifiedLongitudinalPlanner:
       float(state['carState'].vEgo), float(state['carState'].aEgo), now_ns,
     )
 
+  def radar_accel_ceiling(self, state, *, now_ns, permitted, speed):
+    # Mode revocation is checked each planner tick. The remaining persistent
+    # settings follow the existing one-second observer/DEC poll; actual
+    # experimental, DEC, control and message health are checked every tick.
+    try:
+      mode = self._radar_params.get('HondaBoschARadarMode', return_default=True)
+      if type(mode) is not int:
+        self.radar_settings = ObserverSettings()
+      elif mode != self.radar_settings.mode or now_ns >= self._radar_settings_next_ns:
+        self.radar_settings = ObserverSettings.read(self._radar_params)
+        self._radar_settings_next_ns = now_ns + 1_000_000_000
+    except Exception:
+      self.radar_settings = ObserverSettings()
+    planner = self.planner
+    enabled = bool(permitted and self.radar_settings.assist_requested(planner.CP, planner.CP_SP)
+                   and state['selfdriveState'].experimentalMode and planner.dec.enabled() and planner.dec.active())
+    observation_ns = state.logMonoTime.get(HONDA_RADAR_SERVICE, 0)
+    observation_valid = (getattr(state, 'seen', {}).get(HONDA_RADAR_SERVICE, False)
+                         and state.valid.get(HONDA_RADAR_SERVICE, False))
+    observation = state[HONDA_RADAR_SERVICE] if observation_ns else None
+    return self.radar_accel_guard.update(
+      now_ns=now_ns, enabled=enabled, observation=observation, observation_ns=observation_ns,
+      observation_valid=observation_valid, model=state['modelV2'], model_ns=state.logMonoTime.get('modelV2'),
+      speed=speed, standstill=bool(state['carState'].standstill), ceiling_max=ACCEL_MAX,
+    )
+
+  def log_radar_accel_state(self):
+    guard = self.radar_accel_guard
+    selected = self.radar_settings.mode == ASSIST
+    previous = self._radar_log_state
+    if not selected and (previous is None or not previous[0]):
+      return
+    state = selected, guard.qualified, guard.holding, guard.accel_ceiling is not None, guard.track_key if guard.qualified else None
+    ongoing = guard.qualified or guard.accel_ceiling is not None or guard.reason != self._radar_log_reason
+    if state == previous and not (ongoing and self._radar_update_ns - self._radar_log_ns >= 1_000_000_000):
+      return
+    self._radar_log_state, self._radar_log_reason, self._radar_log_ns = state, guard.reason, self._radar_update_ns
+    planner = self.planner
+    # This identifies the selected scalar ceiling, not counterfactual body
+    # acceleration. The car controller's command and measured response remain
+    # separate evidence. No marker or per-frame raw-object dump is required.
+    try:
+      cloudlog.event('honda_radar_accel_guard', **guard.diagnostics(), mode=self.radar_settings.mode,
+                     consumerMonoTime=self._radar_update_ns, maximumReduced=self.radar_accel_limited,
+                     ceilingSelected=bool(self.radar_accel_limited and guard.accel_ceiling is not None
+                                          and self.constraint_accel == planner.output_a_target == guard.accel_ceiling),
+                     aTarget=float(planner.output_a_target), referenceAccel=float(self.reference_accel),
+                     constraintAccel=float(self.constraint_accel), intentValid=planner.motion_intent.valid,
+                     responseKind=int(planner.motion_intent.response_kind), stopReasons=int(planner.motion_intent.reasons),
+                     solverStatus=int(planner.mpc.solution_status))
+    except Exception:
+      # Optional evidence must not interrupt the control plan publication.
+      pass
+
   def update(self, state, *, now_ns):
+    self._radar_update_ns = now_ns
     planner = self.planner
     self.model_reference_mode = 'not_admitted'
     self.model_fallback_reason = ''
@@ -406,6 +475,15 @@ class UnifiedLongitudinalPlanner:
     cruise_speed = max(0.0, cruise_speed)
     steering = car_state.steeringAngleDeg - state['vehicleParameters'].angleOffsetDeg
     maximum_accel = cruise_accel_limit(planner.CP, speed, steering, self.e2e_allowed, coast_accel, planner.allow_throttle)
+    vision_curve = planner.scc.vision
+    scc_braking = (healthy and active and not reset and not forced_decel
+                   and vision_curve.hold_entry_speed and vision_curve.is_active
+                   and vision_curve.output_v_target < speed and vision_curve.output_a_target < 0.0)
+    if scc_braking:
+      # The current/predicted geometry still owns necessary deceleration even
+      # when another policy supplies the lower speed target. update_targets
+      # has already checked the active curve outputs for finite values.
+      maximum_accel = min(maximum_accel, float(vision_curve.output_a_target))
     turn_ceiling = self.turn_lead_guard.update(
       now_ns=now_ns, model_ns=state.logMonoTime.get('modelV2'), radar_ns=state.logMonoTime.get('radarState'),
       enabled=healthy and active and not reset and not forced_decel and planner.unified,
@@ -413,6 +491,10 @@ class UnifiedLongitudinalPlanner:
       steer_ratio=planner.CP.steerRatio, wheelbase=planner.CP.wheelbase,
       model_curvature=model.action.desiredCurvature,
       lead_one=state['radarState'].leadOne, lead_two=state['radarState'].leadTwo, ceiling_max=ACCEL_MAX,
+      independent_braking=(self.e2e_allowed and (model.action.desiredAcceleration < 0.0 or model.action.shouldStop)
+                           or scc_braking
+                           or policy.source != LongitudinalPlanSourceSP.cruise and policy_accel < 0.0
+                           or cruise_speed < (self.turn_lead_guard.hold_speed if self.turn_lead_guard.hold_speed is not None else speed)),
     )
     self.turn_accel_limited = turn_ceiling is not None and turn_ceiling < maximum_accel
     if turn_ceiling is not None:
@@ -420,6 +502,16 @@ class UnifiedLongitudinalPlanner:
       # Keep this ceiling in both the native reference and the existing single
       # arbitration. It does not invent a lead, a stop goal or radar authority.
       maximum_accel = min(maximum_accel, turn_ceiling)
+    if self.turn_lead_guard.hold_speed is not None:
+      cruise_speed = min(cruise_speed, self.turn_lead_guard.hold_speed)
+    radar_ceiling = self.radar_accel_ceiling(
+      state, now_ns=now_ns, permitted=healthy and active and not reset and not forced_decel and planner.unified, speed=speed)
+    self.radar_accel_limited = radar_ceiling is not None and radar_ceiling < maximum_accel
+    if radar_ceiling is not None:
+      # A confirmed radar track can prevent premature positive acceleration
+      # during a short camera gap. Its uncalibrated d/v/a never becomes a lead;
+      # stronger native lead/model braking still wins the existing minimum.
+      maximum_accel = min(maximum_accel, radar_ceiling)
     if healthy:
       cruise_ceiling = self.cruise_response.update(
         cruise_speed, speed, maximum_accel, measured_accel=measured_accel, reset=reset)
@@ -712,10 +804,11 @@ class UnifiedLongitudinalPlanner:
     observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
             trajectory_departure, lead_departure, qualified, no_model_risk)
     release_allowed = bool(trajectory_departure or lead_departure)
-    if turn_ceiling is not None and turn_ceiling <= 0.0:
-      # A zero execution ceiling cannot certify departure, even when another
-      # candidate wins with a negative target. Keep the source's raw motion
-      # description while withdrawing only movement permission.
+    if (self.turn_lead_guard.lost or turn_ceiling is not None and turn_ceiling <= 0.0
+        or radar_ceiling is not None and radar_ceiling <= 0.0):
+      # Lost-target speed support and a zero execution ceiling cannot certify
+      # departure, even when another candidate wins with a negative target.
+      # Preserve the raw motion description while withdrawing movement permission.
       moving_lead = release_allowed = False
     response_kind = MotionResponseKind.NONE
     # An ACC cruise cap still describes an absolute acceleration target. Track
@@ -751,7 +844,10 @@ class UnifiedLongitudinalPlanner:
     turn_response = (self.turn_accel_limited and active and healthy and not reset and not forced_decel and not reasons
                      and output >= 0.0 and raw_kind in (MotionReferenceKind.UNKNOWN, MotionReferenceKind.MOVING,
                                                         MotionReferenceKind.FORWARD))
-    if turn_response:
+    radar_response = (radar_ceiling is not None and active and healthy and not reset and not forced_decel and not reasons
+                     and output >= 0.0 and raw_kind in (MotionReferenceKind.UNKNOWN, MotionReferenceKind.MOVING,
+                                                        MotionReferenceKind.FORWARD))
+    if turn_response or radar_response:
       # The bounded acceleration target cannot carry MODEL's positive-I
       # permission, including the zero target and gradual recovery. Stronger
       # braking and raw stop semantics keep their original contracts below.
@@ -837,3 +933,4 @@ class UnifiedLongitudinalPlanner:
     message.reference.overridden = self.reference_overridden
     message.reference.source = self.reference_source
     message.reference.constraintSource = self.constraint_source
+    self.log_radar_accel_state()

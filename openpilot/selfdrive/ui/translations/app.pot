@@ -2274,7 +2274,7 @@ msgid "Accord Radar Recording"
 msgstr ""
 
 
-msgid "Record radar targets with Alpha Longitudinal, Experimental Mode and DEC enabled. Observation only."
+msgid "Record radar targets with Alpha Longitudinal, Experimental Mode and DEC enabled. Recording alone does not control the vehicle. Turning this off also disables fusion and acceleration assist."
 msgstr ""
 
 
@@ -2288,7 +2288,13 @@ msgstr ""
 msgid "Radar Fusion Shadow"
 msgstr ""
 
-msgid "Calculate and record radar and vision fusion. Does not control the vehicle."
+msgid "Calculate and record radar and vision fusion. Shadow mode alone does not control the vehicle. Required and locked on while radar acceleration assist is enabled."
+msgstr ""
+
+msgid "Radar Acceleration Assist"
+msgstr ""
+
+msgid "Limit positive acceleration briefly when a previously confirmed visual lead is lost. Radar does not replace the visual lead or independently request braking or starting from rest. Requires UNIFIED, Alpha Longitudinal, Experimental Mode and DEC. Turning this off returns to shadow mode."
 msgstr ""
 
 #: openpilot/selfdrive/ui/layouts/settings/toggles.py

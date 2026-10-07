@@ -132,17 +132,19 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     observer_sm.__getitem__ = Mock(return_value=getattr(wire, renderer.SERVICE).as_reader())
     overlay = renderer.HondaRadarOverlay()
     overlay.sm = observer_sm
-    overlay.enabled = True
-    overlay.next_params_ns = START + 1_000_000_000
     view = SimpleNamespace(frame=object(), client=SimpleNamespace(timestamp_eof=START), device_camera=object(),
                            model_renderer=SimpleNamespace(_car_space_transform=np.array(((640., 1000., 0), (360., 0, 1000.), (1., 0, 0)))))
-    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
+    params = Mock()
+    params.get.return_value = renderer.ASSIST
+    params.get_bool.return_value = True
+    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, params=params, active_bundle=False)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2) as clock, \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
          patch.object(renderer, 'project_radar_point', wraps=project_radar_point) as project, \
          patch.object(rl, 'draw_circle_v') as circles, patch.object(rl, 'draw_line_v') as lines, \
          patch.object(rl, 'draw_rectangle_rec') as backgrounds, patch.object(rl, 'draw_text_ex') as draw:
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      self.assertTrue(overlay.enabled)  # the assist mode keeps the requested radar overlay
       self.assertEqual(draw.call_args_list[0].args[1], '54.1')
       self.assertEqual(draw.call_count, 1)
       self.assertEqual(circles.call_count, 1)
@@ -238,12 +240,13 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       params.put_bool.assert_not_called()
       fake_ui.started = True
       settings._set_observer(False)
+      settings._set_assist(True)
       params.put.assert_called_once()
       settings._set_overlay(True)
       params.put_bool.assert_not_called()
 
 
-  def test_shadow_switch_preserves_observation_and_is_offroad_only(self):
+  def test_shadow_and_assist_switches_preserve_modes_and_are_offroad_only(self):
     from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands import honda
     from openpilot.common.params import Params
     params = Params()
@@ -252,7 +255,9 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       # Exercise the real settings callbacks/state refresh without allocating
       # GPU fonts in this headless fixture.
       settings = honda.HondaSettings.__new__(honda.HondaSettings)
-      settings.observer, settings.shadow, settings.overlay = Mock(), Mock(), Mock()
+      settings.observer, settings.shadow, settings.assist, settings.overlay = Mock(), Mock(), Mock(), Mock()
+      settings._set_assist(True)
+      self.assertEqual(params.get('HondaBoschARadarMode', return_default=True), 0)
       settings._set_shadow(True)
       self.assertNotEqual(params.get('HondaBoschARadarMode', return_default=True), 2)
       settings._set_observer(True)
@@ -262,12 +267,38 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       self.assertEqual(params.get('HondaBoschARadarMode'), 2)
       fake_ui.started = True
       settings._set_shadow(False)
+      settings._set_assist(True)
       self.assertEqual(params.get('HondaBoschARadarMode'), 2)
       fake_ui.started = False
+      settings._set_assist(True)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 3)
+      settings.observer.action_item.set_state.assert_called_with(True)
+      settings.shadow.action_item.set_state.assert_called_with(True)
+      settings.assist.action_item.set_state.assert_called_with(True)
+      settings.update_settings()
+      settings._set_observer(True)
+      settings._set_shadow(True)
+      settings._set_shadow(False)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 3)
+      fake_ui.started = True
+      settings._set_assist(False)
+      settings._set_observer(False)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 3)
+      fake_ui.started = False
+      settings._set_assist(False)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 2)
+      settings.assist.action_item.set_state.assert_called_with(False)
       settings._set_shadow(False)
       self.assertEqual(params.get('HondaBoschARadarMode'), 1)
+      settings._set_assist(False)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 1)
+      settings._set_assist(True)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 3)
       settings._set_observer(False)
       self.assertEqual(params.get('HondaBoschARadarMode'), 0)
+      settings.observer.action_item.set_state.assert_called_with(False)
+      settings.shadow.action_item.set_state.assert_called_with(False)
+      settings.assist.action_item.set_state.assert_called_with(False)
 
 
 if __name__ == '__main__':

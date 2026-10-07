@@ -6,11 +6,13 @@ See the LICENSE.md file in the root directory for more details.
 """
 
 from dataclasses import dataclass
+import math
 
 from openpilot.cereal import messaging, custom
 from opendbc.car import structs
 from openpilot.common.constants import CV
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
+from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.smart_cruise_control import SmartCruiseControl
@@ -35,7 +37,7 @@ class LongitudinalPlannerSP:
     self.events_sp = EventsSP()
     self.resolver = SpeedLimitResolver()
     self.dec = DynamicExperimentalController(CP, mpc)
-    self.scc = SmartCruiseControl()
+    self.scc = SmartCruiseControl(hold_entry_speed=resolve_longitudinal_mode(CP, CP_SP) == LongitudinalMode.UNIFIED)
     self.resolver = SpeedLimitResolver()
     self.sla = SpeedLimitAssist(CP, CP_SP)
     self.generation = int(model_bundle.generation) if (model_bundle := get_active_bundle()) else None
@@ -77,6 +79,16 @@ class LongitudinalPlannerSP:
       LongitudinalPlanSource.sccVision: (self.scc.vision.output_v_target, self.scc.vision.output_a_target),
       LongitudinalPlanSource.speedLimitAssist: (self.sla.output_v_target, self.sla.output_a_target),
     }
+
+    # An active curve guard must not silently become unrestricted cruise
+    # because comparisons with NaN happen to select another dictionary item.
+    # UNIFIED explicitly rejects this invalid policy at its existing boundary.
+    if (self.scc.vision.hold_entry_speed and self.scc.vision.is_active
+        and not all(math.isfinite(value) for value in targets[LongitudinalPlanSource.sccVision])):
+      self.source = LongitudinalPlanSource.sccVision
+      self.cruise_target = CruiseTarget(self.source, float('nan'), float('nan'))
+      self.output_v_target = float('nan')
+      return self.cruise_target
 
     self.source = min(targets, key=lambda k: targets[k][0])
     speed, acceleration = targets[self.source]

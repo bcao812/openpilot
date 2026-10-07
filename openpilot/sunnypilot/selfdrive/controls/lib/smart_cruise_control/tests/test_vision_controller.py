@@ -127,6 +127,67 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     assert self.scc_v.output_v_target == V_CRUISE_UNSET
     assert self.scc_v.output_a_target == 0.
 
+  def _entry_hold_controller(self, *, speed, predicted_lateral, current_lateral):
+    controller = SmartCruiseControlVision(hold_entry_speed=True)
+    controller.state = VisionState.enabled
+    self.sm['modelV2'].velocity.x = [float(speed)] * len(ModelConstants.T_IDXS)
+    self.sm['modelV2'].orientationRate.z = [float(predicted_lateral / speed)] * len(ModelConstants.T_IDXS)
+    self.sm['controlsState'].curvature = current_lateral / speed ** 2
+    controller.update(self.sm, True, False, speed, 0., 30.)
+    return controller
+
+  def test_comfortable_turn_holds_first_entry_speed_without_repeated_slowing(self):
+    controller = self._entry_hold_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    assert controller.state == VisionState.entering
+    assert controller.entry_speed == 10.
+    assert controller.output_v_target == 10.
+    assert controller.output_a_target == 0.
+    for _ in range(20):
+      controller.update(self.sm, True, False, 9.8, 0., 30.)
+      assert controller.entry_speed == 10.
+      assert controller.output_v_target == 10.
+      assert 0. < controller.output_a_target <= .5
+
+  def test_curve_requiring_deceleration_keeps_geometric_limit_without_double_horizon(self):
+    speed = 25.1 / 3.6
+    controller = self._entry_hold_controller(speed=speed, predicted_lateral=2.25, current_lateral=1.17)
+    assert controller.is_active
+    assert abs(controller.output_v_target - speed * (2. / 2.25) ** .5) < 1e-5
+    assert controller.output_v_target < speed
+    assert controller.output_a_target < 0.
+    # The old second horizon deduction made this roughly 14.5 km/h.
+    assert controller.output_v_target * 3.6 > 23.
+
+  def test_entry_hold_still_slows_for_excess_current_lateral_acceleration(self):
+    controller = self._entry_hold_controller(speed=20., predicted_lateral=1.5, current_lateral=3.)
+    assert controller.output_v_target <= 20. * (2. / 3.) ** .5 + 1e-5
+    assert controller.output_a_target < 0.
+
+  def test_override_and_disable_clear_curve_entry_speed(self):
+    controller = self._entry_hold_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    controller.update(self.sm, True, True, 10., 0., 30.)
+    assert controller.entry_speed is None
+    assert controller.output_v_target == V_CRUISE_UNSET
+    controller.update(self.sm, False, False, 10., 0., 30.)
+    assert controller.entry_speed is None
+
+  @parameterized.expand([(float('nan'),), (float('inf'),), (-float('inf'),)])
+  def test_active_curve_hold_does_not_hide_invalid_predicted_lateral_acceleration(self, invalid):
+    controller = self._entry_hold_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    self.sm['modelV2'].orientationRate.z = [invalid] * len(ModelConstants.T_IDXS)
+    with np.errstate(invalid='ignore'):
+      controller.update(self.sm, True, False, 10., 0., 30.)
+    assert not np.isfinite(controller.output_v_target)
+    assert not np.isfinite(controller.output_a_target)
+
+  @parameterized.expand([(float('nan'),), (float('inf'),)])
+  def test_active_curve_hold_does_not_hide_invalid_current_curvature(self, invalid):
+    controller = self._entry_hold_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    self.sm['controlsState'].curvature = invalid
+    controller.update(self.sm, True, False, 10., 0., 30.)
+    assert not np.isfinite(controller.output_v_target)
+    assert not np.isfinite(controller.output_a_target)
+
   def test_system_disabled(self):
     self.params.put_bool("SmartCruiseControlVision", False, block=True)
     self.scc_v.enabled = self.params.get_bool("SmartCruiseControlVision")

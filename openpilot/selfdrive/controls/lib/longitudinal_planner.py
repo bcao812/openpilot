@@ -257,6 +257,7 @@ def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, 
 class LongitudinalPlanner(LongitudinalPlannerSP):
   def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, trace=None, diagnostics=None):
     self.CP = CP
+    self.CP_SP = CP_SP
     self.mpc = LongitudinalMpc(dt=dt)
     LongitudinalPlannerSP.__init__(self, self.CP, CP_SP, self.mpc)
     self.fcw = False

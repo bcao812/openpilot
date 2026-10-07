@@ -1,4 +1,4 @@
-"""Limit positive acceleration after losing a recently followed car in a turn.
+"""Limit speed recovery after losing a recently followed car in a turn.
 
 This is an upper bound for the planner's existing scalar arbitration. It does
 not create a lead, request braking or provide stop/departure authority. An
@@ -19,6 +19,8 @@ MAX_ENTRY_SPEED = 10.0
 MIN_LEAD_PROBABILITY = 0.8
 MAX_LEAD_DISTANCE = 50.0
 RECOVERY_JERK = 1.0
+HOLD_SPEED_GAIN = 0.5
+HOLD_ACCEL_MAX = 0.3
 
 
 def _finite(value):
@@ -48,7 +50,7 @@ def _lead_state(lead):
 
 
 class TurnLeadGuard:
-  """One following-turn context with a zero ceiling and a gradual release.
+  """One following-turn context with a captured speed and a gradual release.
 
   ``binding`` means that this helper supplies an acceleration ceiling, including
   its release ramp. Whether it lowers the final request is decided by the
@@ -63,6 +65,8 @@ class TurnLeadGuard:
     self.armed = False
     self.lost = False
     self.accel_ceiling = None
+    self.hold_speed = None
+    self.speed_recovery_blocked = False
     self._last_now_ns = None
     self._last_model_ns = None
     self._last_radar_ns = None
@@ -75,7 +79,8 @@ class TurnLeadGuard:
     return self.accel_ceiling is not None
 
   def update(self, *, now_ns, model_ns, radar_ns, enabled, speed, standstill,
-             steering_angle, steer_ratio, wheelbase, model_curvature, lead_one, lead_two, ceiling_max):
+             steering_angle, steer_ratio, wheelbase, model_curvature, lead_one, lead_two, ceiling_max,
+             independent_braking=False):
     """Return an optional acceleration ceiling in m/s².
 
     ``steering_angle`` is the measured steering wheel angle in degrees with the learned
@@ -83,7 +88,7 @@ class TurnLeadGuard:
     desired curvature must agree that the turn has ended. The caller supplies
     its existing input-health and driver-override checks through ``enabled``.
     """
-    if enabled is not True or standstill is not False:
+    if enabled is not True or standstill is not False or not isinstance(independent_braking, bool):
       self.clear()
       return None
     if (not all(_timestamp(stamp) for stamp in (now_ns, model_ns, radar_ns))
@@ -142,6 +147,11 @@ class TurnLeadGuard:
 
     if self.armed:
       if not present:
+        if not self.lost:
+          # Capture once. Recapturing every frame would ratchet the target
+          # down when drag or a grade lowers speed while the lead is hidden.
+          self.hold_speed = float(speed)
+          self.speed_recovery_blocked = False
         self.lost = True
         self._reliable_since_ns = None
       elif self.lost:
@@ -156,11 +166,24 @@ class TurnLeadGuard:
             released = True
 
     if self.lost:
-      self.accel_ceiling = 0.0
+      # A separate admitted braking/stop/speed-limit request may deliberately
+      # lower speed after loss. Do not chase the former speed once it ends.
+      # A returning weak lead likewise has priority over drag compensation.
+      self.speed_recovery_blocked |= independent_braking or present
+      # Allow a small, bounded correction for speed lost to resistance. This
+      # remains an upper bound: model/lead/curve braking still wins the
+      # planner's minimum, and no correction is allowed above the held speed.
+      target = (0.0 if self.speed_recovery_blocked else
+                min(float(ceiling_max), HOLD_ACCEL_MAX, max(0.0, HOLD_SPEED_GAIN * (self.hold_speed - speed))))
+      previous = self.accel_ceiling if self.accel_ceiling is not None else 0.0
+      self.accel_ceiling = min(target, previous + RECOVERY_JERK * dt)
     elif self.accel_ceiling is not None and not released:
       self.accel_ceiling = min(float(ceiling_max), self.accel_ceiling + RECOVERY_JERK * dt)
       if self.accel_ceiling >= ceiling_max:
         self.accel_ceiling = None
+    if not self.lost:
+      self.hold_speed = None
+      self.speed_recovery_blocked = False
     # The confirmation interval still belonged to the zero-ceiling state.
     # Start ramping on the next update, using only actual time since release.
     return self.accel_ceiling
