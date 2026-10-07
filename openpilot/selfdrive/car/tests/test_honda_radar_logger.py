@@ -13,9 +13,11 @@ from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
-from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE
+from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, ObserverSettings, SERVICE
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import can_message, configuration, scan_frames
-from openpilot.selfdrive.car.tests.test_honda_radar_shadow import SHADOW_SETTINGS, fusion_state
+from openpilot.selfdrive.car.tests.test_honda_radar_shadow import fusion_state
+from openpilot.selfdrive.controls.lib.lead_qualification import MAX_CONTROL_OBJECTS
+from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
 from openpilot.tools.lib.logreader import LogReader, decompress_stream
 
 
@@ -35,6 +37,8 @@ def synthetic_track_diagnostics(index):
     'previousPositionMonoTime': wide + 4,
     'previousDRel': 100 + sample + 0.125,
     'previousYRel': -(100 + sample + 0.375),
+    'acceleration': -(sample + 0.125),
+    'accelerationGood': True,
   }
 
 
@@ -69,6 +73,71 @@ def synthetic_lead_diagnostics(index):
   }
 
 
+def synthetic_control_lead(index, stamp, source='radar'):
+  # These source-specific fixtures exercise the wire contract, not the
+  # producer's association, calibration or departure-confirmation behavior.
+  sample = index + 1
+  physical = source != 'vision'
+  predicted = source == 'predicted'
+  entering = index == 3 and not predicted
+  evidence = {
+    'version': 1, 'source': source, 'sessionId': 'native-logger-control' if physical else '',
+    'trackId': (1 << 40) + sample if physical else 0, 'generation': (1 << 41) + sample if physical else 0,
+    'positionMonoTime': stamp - 30_000_000 - sample, 'velocityMonoTime': stamp - 20_000_000 - sample,
+    'estimateMonoTime': stamp - 10_000_000, 'modelMonoTime': stamp - 5_000_000,
+    'positionStd': .25 + sample / 64, 'velocityStd': .125 + sample / 128,
+    'positionValid': True, 'velocityValid': True, 'accelerationValid': not predicted,
+    'followQualified': not (entering or predicted), 'brakeQualified': True,
+    'stopQualified': not (entering or predicted), 'departureQualified': not (entering or predicted),
+    'fcwQualified': not predicted, 'coasting': predicted,
+    'pathState': 'entering' if entering else 'inPath', 'pathOffset': 2.25 if entering else -.125,
+    'conflictStart': .125 if entering else 0.0, 'conflictEnd': .25 if predicted else 1.75 if entering else 10.0,
+    'lateralSpeed': -.75 if entering else .125, 'pathSource': 'modelPath' if entering else 'laneLines',
+    'visionIndex': index % 2 if source in ('vision', 'fused') else -1,
+    'reason': f'wire-control-{sample}-{source}',
+  }
+  return {
+    'present': True, 'dRel': 15.125 + 2 * index, 'yRel': -.125 * sample,
+    'vRel': .5 + index / 8, 'vLead': 5.0 + index / 4, 'vLeadK': 5.125 + index / 4,
+    'aLeadK': 0.0 if predicted else -.125 * sample, 'aLeadTau': 1.5,
+    'modelProb': .96875 if source == 'vision' else .75 if source == 'fused' else 0.0,
+    'radar': physical, 'radarTrackId': sample if physical else -1, 'evidence': evidence,
+  }
+
+
+def synthetic_control_states(now):
+  states = []
+  for index, state in enumerate(('active', 'degraded', 'cleared', 'fallback')):
+    stamp = now - 100_000_000 + index * 20_000_000
+    visions = [synthetic_control_lead(MAX_CONTROL_OBJECTS - 2 + slot, stamp, 'vision') for slot in range(2)]
+    # radard preserves the original visual messages before adding formal
+    # evidence. Their probabilities and motion values remain independent.
+    fallback = [{field: value for field, value in lead.items() if field != 'evidence'} for lead in visions]
+    if state == 'active':
+      objects = [synthetic_control_lead(track, stamp) for track in range(MAX_CONTROL_OBJECTS - 2)] + visions
+      displayed = (objects[0], objects[-1])
+    elif state == 'degraded':
+      objects = [synthetic_control_lead(0, stamp, 'predicted'), synthetic_control_lead(1, stamp, 'fused'), visions[1]]
+      displayed = (objects[1], objects[0])
+    else:
+      objects = []
+      displayed = fallback if state == 'fallback' else ({'present': False}, {'present': False})
+      if state == 'cleared':
+        fallback = [{'present': False}, {'present': False}]
+    event = messaging.new_message('radarState', valid=True)
+    event.logMonoTime = stamp
+    event.radarState = {
+      'mdMonoTime': stamp - 5_000_000, 'leadOne': displayed[0], 'leadTwo': displayed[1],
+      'radarObjects': objects, 'fusionActive': state != 'fallback',
+      'fusionHealthy': state in ('active', 'cleared'), 'fusionDegraded': state == 'degraded',
+      'fusionReason': state, 'visionLeadOne': fallback[0], 'visionLeadTwo': fallback[1],
+      'fusionClearedTracks': [(1 << 40) + 1, (1 << 40) + 2] if state == 'cleared' else [],
+      'fusionSessionId': 'native-logger-control' if state != 'fallback' else '',
+    }
+    states.append((state, event))
+  return states
+
+
 class TestHondaRadarLogger(unittest.TestCase):
   def test_native_logger_records_radar_and_vision_without_radar_qlog_duplication(self):
     # LOG_ROOT must be explicit: on a C3, OpenpilotPrefix alone does not move the
@@ -76,20 +145,22 @@ class TestHondaRadarLogger(unittest.TestCase):
     with TemporaryDirectory(prefix='honda-radar-logger-') as directory, \
          patch.dict(os.environ, {'LOG_ROOT': directory}), OpenpilotPrefix() as prefix:
       self.assertIn(prefix.prefix, Params().get_param_path())
-      pm = messaging.PubMaster([SERVICE, 'modelV2'])
+      services = (SERVICE, 'modelV2', 'radarState', 'carControlSP')
+      pm = messaging.PubMaster(list(services))
       logger_dir = Path(BASEDIR) / 'openpilot/system/loggerd'
       # Test-only dependency selection keeps host tools separate from tracked ARM binaries.
       logger_executable = os.environ.get('HONDA_RADAR_TEST_LOGGER', str(logger_dir / 'loggerd'))
       process = subprocess.Popen([logger_executable], cwd=logger_dir,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ.copy())
       try:
-        for service in (SERVICE, 'modelV2'):
+        for service in services:
           self.assertTrue(pm.wait_for_readers_to_update(service, timeout=5), f'loggerd did not subscribe to {service}')
         now = time.monotonic_ns()
         frames = [frame for slot in range(16) for frame in scan_frames(slot=slot)]
         sm = fusion_state(now)
         observation = HondaRadarObserver(*configuration(), session_id='native-logger').update(
-          [can_message(now, frames)], sm, SHADOW_SETTINGS, now + 1, sm)
+          [can_message(now, frames)], sm, ObserverSettings(CONTROL, True, True, True), now + 1, sm)
+        self.assertEqual(observation.hondaRadarObservations.mode, 4)
         self.assertTrue(observation.hondaRadarObservations.fusion.active)
         self.assertEqual(len(observation.hondaRadarObservations.fusion.tracks), 16)
         self.assertEqual(len(observation.hondaRadarObservations.fusion.leads), 3)
@@ -114,6 +185,24 @@ class TestHondaRadarLogger(unittest.TestCase):
         pm.send('modelV2', model)
         for service in (SERVICE, 'modelV2'):
           self.assertTrue(pm.wait_for_readers_to_update(service, timeout=5))
+        control_expected = []
+        for state, event in synthetic_control_states(now):
+          # Exercise the actual SP mirror conversion, whose presence field
+          # is named status rather than the formal LeadData.present.
+          mirror = messaging.new_message('carControlSP', valid=True)
+          mirror.logMonoTime = event.logMonoTime + 1
+          for name in ('leadOne', 'leadTwo'):
+            src = getattr(event.radarState.as_reader(), name)
+            dst = getattr(mirror.carControlSP, name)
+            ControlsExt.get_lead_data(dst, src)
+            self.assertEqual(dst.status, src.present)
+            self.assertEqual(dst.evidence.to_dict(), src.evidence.to_dict())
+          for service, message in (('radarState', event), ('carControlSP', mirror)):
+            expected_fields = getattr(message, service).to_dict()
+            wire = message.to_bytes()
+            control_expected.append((state, service, message.logMonoTime, expected_fields, wire))
+            pm.send(service, wire)
+            self.assertTrue(pm.wait_for_readers_to_update(service, timeout=5))
       finally:
         process.send_signal(signal.SIGINT)
         output, _ = process.communicate(timeout=10)
@@ -123,12 +212,14 @@ class TestHondaRadarLogger(unittest.TestCase):
       self.assertEqual((len(rlogs), len(qlogs)), (1, 1))
       # Compare the bytes actually sent through native IPC with the decompressed
       # rlog, without rebuilding a reader (which could change Cap'n Proto layout).
-      self.assertEqual(decompress_stream(rlogs[0].read_bytes()).count(expected_wire), 1,
+      rlog_bytes = decompress_stream(rlogs[0].read_bytes())
+      self.assertEqual(rlog_bytes.count(expected_wire), 1,
                        'loggerd did not preserve the complete radar event wire bytes exactly once')
       messages = list(LogReader(str(rlogs[0])))
       radar = [event for event in messages if event.which() == SERVICE]
       self.assertEqual(len(radar), 1)
       self.assertTrue(radar[0].valid)
+      self.assertEqual(radar[0].hondaRadarObservations.mode, 4)
       self.assertEqual(radar[0].hondaRadarObservations.to_dict(), expected)
       for name, expected_items in diagnostics.items():
         actual_items = getattr(radar[0].hondaRadarObservations.fusion, name)
@@ -137,6 +228,34 @@ class TestHondaRadarLogger(unittest.TestCase):
           for field, value in fields.items():
             with self.subTest(fusion_list=name, index=index, field=field):
               self.assertEqual(getattr(actual_items[index], field), value)
+      for state, service, timestamp, fields, wire in control_expected:
+        with self.subTest(state=state, service=service):
+          self.assertEqual(rlog_bytes.count(wire), 1, 'loggerd changed or dropped a complete control event')
+          recorded = [event for event in messages if event.which() == service and event.logMonoTime == timestamp]
+          self.assertEqual(len(recorded), 1)
+          self.assertTrue(recorded[0].valid)
+          self.assertEqual(getattr(recorded[0], service).to_dict(), fields)
+      formal = [event.radarState for event in messages if event.which() == 'radarState']
+      self.assertEqual([state.fusionReason for state in formal], ['active', 'degraded', 'cleared', 'fallback'])
+      active, degraded, cleared, fallback = formal
+      self.assertEqual(len(active.radarObjects), MAX_CONTROL_OBJECTS)
+      self.assertEqual(len({(lead.evidence.sessionId, lead.evidence.trackId)
+                            for index, lead in enumerate(active.radarObjects) if index < MAX_CONTROL_OBJECTS - 2}),
+                       MAX_CONTROL_OBJECTS - 2)
+      self.assertEqual(active.leadOne.modelProb, 0.0)
+      self.assertTrue(active.leadOne.evidence.brakeQualified)
+      self.assertFalse(active.visionLeadOne.radar)
+      self.assertTrue(degraded.fusionDegraded)
+      self.assertFalse(degraded.fusionHealthy)
+      self.assertTrue(degraded.leadTwo.evidence.coasting)
+      self.assertEqual(str(degraded.leadOne.evidence.source), 'fused')
+      self.assertTrue(cleared.fusionHealthy)
+      self.assertEqual(list(cleared.fusionClearedTracks), [(1 << 40) + 1, (1 << 40) + 2])
+      self.assertEqual(len(cleared.radarObjects), 0)
+      self.assertFalse(cleared.leadOne.present or cleared.leadTwo.present)
+      self.assertFalse(fallback.fusionActive or fallback.fusionDegraded)
+      self.assertEqual(fallback.leadOne.to_dict(), fallback.visionLeadOne.to_dict())
+      self.assertEqual(fallback.leadTwo.to_dict(), fallback.visionLeadTwo.to_dict())
       self.assertTrue(any(event.which() == 'modelV2' and event.modelV2.frameId == 712 for event in messages))
       self.assertFalse(any(event.which() == SERVICE for event in LogReader(str(qlogs[0]))))
       del pm
