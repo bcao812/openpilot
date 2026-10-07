@@ -3,8 +3,9 @@
 This adapter does not install the uncalibrated shadow d/v/a as a lead. It uses
 the observation's continuity and identity evidence, independently checks the
 current camera hypothesis, and can only hold a nonnegative acceleration cap
-during a short visual gap. The normal lead/model braking and stop owner remain
-in charge. Modes 0/1/2 never enable this adapter.
+during a short visual gap when both formal leads are absent and the confirmed
+radar target is not pulling away. The normal lead/model braking and stop owner
+remain in charge. Modes 0/1/2 never enable this adapter.
 
 All geometric, motion and noise thresholds here are conservative engineering
 admission bounds, not calibrated sensor accuracy or a cut-in detection claim.
@@ -70,20 +71,20 @@ def _project(track, elapsed, speed, yaw):
 class HondaRadarAccelGuard:
   """One current camera hypothesis (index 0), one radar identity, one ceiling.
 
-  ``qualified`` and ``holding`` are separate from ``accel_ceiling``. A fault
-  revokes qualification immediately; any already installed ceiling only
-  unwinds at RELEASE_JERK. Repeated publications cannot add confirmation or
-  extend the last independently confirmed camera time.
+  ``qualified`` and ``holding`` are separate from ``accel_ceiling``. An active
+  observer's sensor fault revokes qualification and unwinds an existing cap
+  at RELEASE_JERK. Lifecycle closure and core-input failure clear immediately.
+  Repeated publications cannot add confirmation or extend camera source time.
   """
 
   def __init__(self):
     self.clear()
 
-  def clear(self):
+  def clear(self, reason='disabled'):
     self.qualified = False
     self.holding = False
     self.accel_ceiling = None
-    self.reason = 'disabled'
+    self.reason = reason
     self.track_key = None
     self.pairs = deque(maxlen=8)
     self.last_visible_ns = 0
@@ -98,6 +99,7 @@ class HondaRadarAccelGuard:
     self._publication = None
     self.session_id = ''
     self.sequence = self.observation_ns = self.source_model_ns = self.source_eof = self.source_position_ns = 0
+    self.formal_lead_present = self.projected_ground_speed = self.ego_speed = None
 
   def diagnostics(self):
     track_id, generation, oem_id = self.track_key or (0, 0, 0)
@@ -107,7 +109,8 @@ class HondaRadarAccelGuard:
             'modelMonoTime': self._model_ns, 'modelTimestampEof': self._model_eof,
             'sourceModelMonoTime': self.source_model_ns, 'sourceTimestampEof': self.source_eof,
             'positionMonoTime': self.source_position_ns, 'lastConfirmedMonoTime': self.last_visible_ns,
-            'independentPairs': len(self.pairs)}
+            'independentPairs': len(self.pairs), 'formalLeadPresent': self.formal_lead_present,
+            'projectedGroundSpeed': self.projected_ground_speed, 'egoSpeed': self.ego_speed}
 
   def _release(self, dt, ceiling_max):
     if self.accel_ceiling is not None:
@@ -125,11 +128,13 @@ class HondaRadarAccelGuard:
     return self._release(dt, ceiling_max)
 
   def update(self, *, now_ns, enabled, observation, observation_ns, observation_valid,
-             model, model_ns, speed, standstill, ceiling_max):
+             model, model_ns, speed, standstill, ceiling_max, formal_lead_present):
     if (enabled is not True or standstill is not False or not _finite(speed, ceiling_max)
         or not MIN_SPEED < speed <= MAX_SPEED or not 0 < ceiling_max <= 2.0):
       self.clear()
       return None
+    if type(formal_lead_present) is not bool:
+      return self.clear('formalLeadInvalid')
     if (not _integer(now_ns) or now_ns <= 0
         or self._last_now_ns and not 0 < now_ns - self._last_now_ns <= MAX_AGE_NS):
       self.clear()
@@ -138,19 +143,25 @@ class HondaRadarAccelGuard:
     dt = (now_ns - self._last_now_ns) / 1e9 if self._last_now_ns else 0.0
     self._last_now_ns = now_ns
     self.holding = False
+    self.formal_lead_present, self.ego_speed = formal_lead_present, speed
+    self.projected_ground_speed = None
     def revoke(reason):
       return self._revoke(reason, dt, ceiling_max)
 
     eof = _read(model, 'timestampEof', 0)
     if (not _fresh(model_ns, now_ns) or not _fresh(eof, now_ns) or eof > model_ns
         or model_ns < self._model_ns or eof < self._model_eof):
-      return revoke('modelTime')
+      return self.clear('modelTime')
     self._model_ns, self._model_eof = model_ns, eof
     self.observation_ns = observation_ns if _integer(observation_ns) else 0
     if observation_valid is not True or not _fresh(observation_ns, now_ns) or observation is None:
       return revoke('observationStale')
     fusion = _read(observation, 'fusion')
     scope = _read(observation, 'scope')
+    scope_flags = ('alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive', 'longActive')
+    if (_read(observation, 'active') is False or _read(fusion, 'enabled') is False
+        or any(_read(scope, flag) is False for flag in scope_flags)):
+      return self.clear('scopeInactive')
     fusion_ns, fusion_eof = _read(fusion, 'modelMonoTime', 0), _read(fusion, 'modelTimestampEof', 0)
     self.source_model_ns = fusion_ns if _integer(fusion_ns) else 0
     self.source_eof = fusion_eof if _integer(fusion_eof) else 0
@@ -159,8 +170,7 @@ class HondaRadarAccelGuard:
         or _read(fusion, 'algorithmVersion') != SUPPORTED_FUSION_VERSION
         or _read(fusion, 'enabled') is not True or _read(fusion, 'active') is not True
         or _read(fusion, 'controlAllowed') is not False
-        or not all(_read(scope, flag) is True for flag in
-                   ('alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive', 'longActive'))
+        or not all(_read(scope, flag) is True for flag in scope_flags)
         or not all(_fresh(_read(scope, field, 0), now_ns, SCOPE_MAX_AGE_NS) and _read(scope, field) <= observation_ns
                    for field in ('selfdriveMonoTime', 'planMonoTime'))
         or not _fresh(fusion_ns, now_ns) or not _fresh(fusion_eof, now_ns)
@@ -189,14 +199,16 @@ class HondaRadarAccelGuard:
         return revoke('publicationOrder')
 
     tracks, leads, visions = _read(fusion, 'tracks', ()), _read(fusion, 'leads', ()), _read(model, 'leadsV3', ())
-    if not 0 <= len(tracks) <= 32 or not 0 <= len(leads) <= 3 or not 1 <= len(visions) <= 3:
+    if not 1 <= len(visions) <= 3:
+      return self.clear('modelShape')
+    if not 0 <= len(tracks) <= 32 or not 0 <= len(leads) <= 3:
       return revoke('inputShape')
     vision = visions[0]
     probability = _read(vision, 'prob')
     visual = tuple(_first(vision, field) for field in ('x', 'y', 'v'))
     model_speed, yaw = _first(_read(model, 'velocity'), 'x'), _first(_read(model, 'orientationRate'), 'z')
     if not _finite(probability, *visual, model_speed, yaw) or not 0 <= probability <= 1 or abs(yaw) > 2.0:
-      return revoke('visionInvalid')
+      return self.clear('visionInvalid')
     lead = next((lead for lead in leads if _read(lead, 'modelIndex') == 0), None)
     matched_id = _read(lead, 'trackId', 0)
     selected_id = self.track_key[0] if self.track_key is not None else matched_id
@@ -236,6 +248,7 @@ class HondaRadarAccelGuard:
     self._track_epoch_ns, self._position_seq, self._position_ns = fusion_eof, position_seq, position_ns
 
     x, y, vx = _project(track, (eof - fusion_eof) / 1e9, speed, yaw)
+    self.projected_ground_speed = vx
     residual = x - (visual[0] - RADAR_TO_CAMERA), y + visual[1]
     velocity_difference = vx - speed - (visual[2] - model_speed)
     if probability >= MIN_PROBABILITY:
@@ -273,6 +286,13 @@ class HondaRadarAccelGuard:
                                  or abs(residual[1] - self._anchor[1]) > MAX_RESIDUAL_Y
                                  or abs(velocity_difference) > MAX_VELOCITY_DIFFERENCE)):
       return revoke('visionChanged')
+    if formal_lead_present or vx > speed:
+      # Existing official obstacles still own ordinary following, including
+      # a 0.5--0.8 visual confidence fluctuation. A receding radar target is
+      # also no reason to suppress acceleration. Neither case supplies a new
+      # independent confirmation or extends the fixed camera-gap deadline.
+      self.reason = 'formalLeadPresent' if formal_lead_present else 'radarPullingAway'
+      return self._release(dt, ceiling_max)
     self.holding = True
     self.accel_ceiling = 0.0
     self.reason = 'visionGap'

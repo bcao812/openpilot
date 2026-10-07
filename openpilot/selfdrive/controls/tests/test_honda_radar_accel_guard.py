@@ -11,17 +11,19 @@ START = 1_000_000_000
 STEP = 66_000_000
 
 
-def guard_input(frame, *, gap=False, step=STEP, speed=10.0):
+def guard_input(frame, *, gap=False, step=STEP, speed=10.0, lead_speed=None, distance=20.0, probability=None):
   t = START + frame * step
-  probability = 0.2 if gap else 0.99
-  vision = {'prob': probability, 'x': [21.52] * 6, 'y': [0.0] * 6, 'v': [speed] * 6, 'a': [0.0] * 6,
+  lead_speed = speed if lead_speed is None else lead_speed
+  distance += (lead_speed - speed) * frame * step / 1e9
+  probability = (0.2 if gap else 0.99) if probability is None else probability
+  vision = {'prob': probability, 'x': [distance + 1.52] * 6, 'y': [0.0] * 6, 'v': [lead_speed] * 6, 'a': [0.0] * 6,
             'xStd': [1.0] * 6, 'yStd': [0.4] * 6, 'vStd': [1.0] * 6}
   track = {'trackId': 1, 'oemTrackId': 5, 'generation': 1, 'positionMonoTime': t, 'velocityMonoTime': t,
-           'positionSeq': frame + 1, 'dRel': 20.0, 'yRel': 0.0, 'groundSpeed': speed, 'lateralSpeed': 0.0,
+           'positionSeq': frame + 1, 'dRel': distance, 'yRel': 0.0, 'groundSpeed': lead_speed, 'lateralSpeed': 0.0,
            'positionVariance': 0.2, 'velocityVariance': 0.5, 'observations': 10 + frame,
            'active': True, 'mature': True, 'velocityGood': True, 'coasting': False, 'pathState': 'inPath',
-           'pathOffset': 0.0, 'motion': 'moving'}
-  lead = {'modelIndex': 0, 'present': not gap, 'probability': probability, 'trackId': 0 if gap else 1,
+           'pathOffset': 0.0, 'motion': 'stationary' if abs(lead_speed) < 1.0 else 'moving'}
+  lead = {'modelIndex': 0, 'present': probability > 0.5, 'probability': probability, 'trackId': 0 if gap else 1,
           'candidateTrackId': 0 if gap else 1, 'identityState': 'unresolved' if gap else 'same',
           'reason': 'noVision' if gap else 'matched', 'rejectionMonoTime': 0, 'pathState': 'inPath',
           'bindingAnchorX': 0.0, 'bindingAnchorY': 0.0, 'bindingSamples': 10 + frame,
@@ -38,7 +40,7 @@ def guard_input(frame, *, gap=False, step=STEP, speed=10.0):
   return {'now_ns': t + 1_000_000, 'enabled': True, 'observation': observation, 'observation_ns': t + 500_000,
           'observation_valid': True, 'model': {'timestampEof': t, 'leadsV3': [vision],
           'velocity': {'x': [speed]}, 'orientationRate': {'z': [0.0]}}, 'model_ns': t,
-          'speed': speed, 'standstill': False, 'ceiling_max': 2.0}
+          'speed': speed, 'standstill': False, 'ceiling_max': 2.0, 'formal_lead_present': not gap}
 
 
 def confirm(guard):
@@ -60,6 +62,94 @@ def test_requires_three_independent_pairs_over_120_ms():
     assert not fast.qualified
   fast.update(**guard_input(3, gap=True, step=50_000_000))
   assert fast.accel_ceiling is None
+
+
+@pytest.mark.parametrize('lead_speed,holding', [(0.0, True), (9.0, True), (10.0, True), (10.1, False), (12.0, False)])
+def test_far_target_gap_holds_only_when_confirmed_target_is_not_pulling_away(lead_speed, holding):
+  guard = HondaRadarAccelGuard()
+  for frame in range(3):
+    values = guard_input(frame, lead_speed=lead_speed, distance=80.0)
+    assert values['formal_lead_present'] is True
+    assert guard.update(**values) is None
+  assert guard.qualified
+  last_confirmed = guard.last_visible_ns
+  for frame in range(3, 8):
+    values = guard_input(frame, gap=True, lead_speed=lead_speed, distance=80.0)
+    assert values['formal_lead_present'] is False
+    ceiling = guard.update(**values)
+    assert guard.qualified and guard.last_visible_ns == last_confirmed
+    assert guard.holding is holding
+    assert (ceiling == 0.0) if holding else (ceiling is None)
+    assert guard.reason == ('visionGap' if holding else 'radarPullingAway')
+
+
+@pytest.mark.parametrize('probability', [0.2, 0.51, 0.65, 0.79])
+def test_weak_but_present_formal_lead_does_not_start_or_extend_a_cap(probability):
+  guard = HondaRadarAccelGuard()
+  confirm(guard)
+  last_confirmed = guard.last_visible_ns
+  for frame in range(3, 8):
+    values = guard_input(frame, gap=True, probability=probability)
+    values['formal_lead_present'] = True
+    assert guard.update(**values) is None
+    assert guard.qualified and not guard.holding and guard.last_visible_ns == last_confirmed
+    assert guard.reason == 'formalLeadPresent'
+  # Losing both formal leads can use only the remainder of the original
+  # independent-camera deadline; the weak-probability interval bought no time.
+  assert guard.update(**guard_input(8, gap=True)) == 0.0
+  assert guard.last_visible_ns == last_confirmed
+  guard.update(**guard_input(9, gap=True))
+  assert guard.update(**guard_input(10, gap=True)) > 0.0
+  assert not guard.holding and not guard.qualified
+
+
+@pytest.mark.parametrize('recovery', ['formal_lead', 'pulling_away'])
+def test_formal_lead_return_or_opening_target_only_releases_existing_cap(recovery):
+  guard = HondaRadarAccelGuard()
+  confirm(guard)
+  assert guard.update(**guard_input(3, gap=True)) == 0.0
+  last_confirmed = guard.last_visible_ns
+  values = guard_input(4, gap=True, probability=0.65)
+  if recovery == 'formal_lead':
+    values['formal_lead_present'] = True
+  else:
+    values['observation']['fusion']['tracks'][0]['groundSpeed'] = 10.1
+  assert guard.update(**values) == pytest.approx(RELEASE_JERK * STEP / 1e9)
+  assert guard.qualified and not guard.holding and guard.last_visible_ns == last_confirmed
+
+
+def test_opening_veto_uses_current_projection_instead_of_older_body_frame_velocity():
+  guard = HondaRadarAccelGuard()
+  confirm(guard)
+  values = guard_input(3, gap=True)
+  fusion = values['observation']['fusion']
+  source_ns = values['model_ns'] - 50_000_000
+  fusion.update(modelMonoTime=source_ns, modelTimestampEof=source_ns)
+  fusion['tracks'][0].update(positionMonoTime=source_ns, velocityMonoTime=source_ns, lateralSpeed=-1.0)
+  values['model']['orientationRate']['z'] = [1.0]
+  assert fusion['tracks'][0]['groundSpeed'] == values['speed']
+  assert guard.update(**values) is None
+  assert guard.qualified and not guard.holding and guard.reason == 'radarPullingAway'
+  assert guard.projected_ground_speed > values['speed']
+
+
+@pytest.mark.parametrize('value', [None, 0, 1, '', 'false'])
+def test_invalid_formal_lead_input_cannot_mean_no_lead(value):
+  guard = HondaRadarAccelGuard()
+  confirm(guard)
+  guard.update(**guard_input(3, gap=True))
+  values = guard_input(4, gap=True)
+  values['formal_lead_present'] = value
+  assert guard.update(**values) is None
+  assert not guard.qualified and not guard.holding and guard.accel_ceiling is None
+  assert guard.reason == 'formalLeadInvalid'
+
+
+def test_formal_lead_presence_is_a_required_caller_input():
+  values = guard_input(0)
+  del values['formal_lead_present']
+  with pytest.raises(TypeError, match='formal_lead_present'):
+    HondaRadarAccelGuard().update(**values)
 
 
 @pytest.mark.parametrize('repeated', ['position', 'camera', 'publication'])
@@ -176,6 +266,30 @@ def test_disengagement_stationary_or_bad_consumer_clock_drops_the_optional_cap(c
   values.update(change)
   assert guard.update(**values) is None
   assert not guard.qualified and not guard.holding
+
+
+LIFECYCLE_AND_CORE_FAULTS = {
+  'observer_closed': lambda v: v['observation'].update(active=False),
+  'fusion_disabled': lambda v: v['observation']['fusion'].update(enabled=False),
+  'long_inactive': lambda v: v['observation']['scope'].update(longActive=False),
+  'dec_inactive': lambda v: v['observation']['scope'].update(decActive=False),
+  'alpha_disabled': lambda v: v['observation']['scope'].update(alphaLong=False),
+  'stale_core_model': lambda v: v.update(model_ns=START),
+  'invalid_core_vision': lambda v: v['model']['leadsV3'][0].update(prob=float('nan')),
+  'missing_core_vision': lambda v: v['model'].update(leadsV3=[]),
+}
+
+
+@pytest.mark.parametrize('fault', LIFECYCLE_AND_CORE_FAULTS)
+def test_lifecycle_closure_or_core_fault_clears_instead_of_sensor_release(fault):
+  guard = HondaRadarAccelGuard()
+  confirm(guard)
+  guard.update(**guard_input(3, gap=True))
+  values = guard_input(4, gap=True)
+  LIFECYCLE_AND_CORE_FAULTS[fault](values)
+  assert guard.update(**values) is None
+  assert not guard.qualified and not guard.holding and guard.accel_ceiling is None
+  assert guard.track_key is None and not guard.pairs
 
 
 @pytest.mark.parametrize('mode', [0, 1, 2, 3, 4, -1])

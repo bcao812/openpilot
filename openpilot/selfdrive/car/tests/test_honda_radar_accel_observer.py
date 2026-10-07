@@ -17,14 +17,16 @@ def test_mode_three_uses_real_producer_without_granting_shadow_lead_authority():
     if gap:
       for lead in state['modelV2'].leadsV3:
         lead.prob = 0.2
-    message = observer.update([can_message(t, scan_frames(index=frame % 16, life=1 + frame * 2, velocity=864))],
+    # A slightly closing velocity avoids treating tiny filter roundoff around
+    # exactly zero relative speed as a deliberately receding fixture target.
+    message = observer.update([can_message(t, scan_frames(index=frame % 16, life=1 + frame * 2, velocity=863))],
                               state, settings, t + 1, state)
     body = message.hondaRadarObservations
     assert body.active and body.fusion.active
     assert not body.calibrated and not body.fusion.calibrated and not body.fusion.controlAllowed
     ceiling = guard.update(now_ns=t + 2, enabled=True, observation=body, observation_ns=message.logMonoTime,
                            observation_valid=message.valid, model=state['modelV2'], model_ns=t,
-                           speed=10.0, standstill=False, ceiling_max=2.0)
+                           speed=10.0, standstill=False, ceiling_max=2.0, formal_lead_present=not gap)
     if frame == 8:
       assert guard.qualified and ceiling is None
     if gap:

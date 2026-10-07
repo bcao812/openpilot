@@ -106,6 +106,9 @@ class SmartCruiseControlVision:
       # get the maximum lat accel from the model
       predicted_lat_accels = rate_plan * vel_plan
       self.max_pred_lat_acc = np.percentile(predicted_lat_accels, 97)
+      if self.hold_entry_speed and (not np.isfinite(self.max_pred_lat_acc) or self.max_pred_lat_acc < 0.):
+        self.v_target = float('nan')
+        return
 
       # get the maximum curve based on the current velocity
       v_ego = max(self.v_ego, 0.1)  # ensure a value greater than 0 for calculations

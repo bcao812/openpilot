@@ -5,6 +5,7 @@ contracts, not closed-loop stopping-distance or road-performance evidence.
 The actual observer/association producer has a separate native-wire fixture.
 """
 from contextlib import contextmanager
+import json
 from unittest.mock import patch
 
 import pytest
@@ -44,8 +45,11 @@ def pipeline(mode=ASSIST, *, blended=True, measured_accel=0.4, speed=3.0):
       yield planner, control, state
 
 
-def step(planner, control, state, frame, *, gap=False):
-  values = guard_input(frame, gap=gap, step=50_000_000, speed=state['carState'].vEgo)
+def step(planner, control, state, frame, *, gap=False, probability=None, lead_speed=None, distance=20.0):
+  # Every input in this helper is a newly prescribed fresh fixture sample.
+  # consume()/advance() must not be used to refresh recorded or fault inputs.
+  values = guard_input(frame, gap=gap, step=50_000_000, speed=state['carState'].vEgo,
+                       probability=probability, lead_speed=lead_speed, distance=distance)
   event = messaging.new_message(SERVICE)
   event.hondaRadarObservations = values['observation']
   state[SERVICE] = event.hondaRadarObservations.as_reader()
@@ -111,22 +115,106 @@ def test_independent_model_braking_and_stop_intent_cannot_be_relaxed():
       assert max(outputs) <= 0.0
 
 
-def test_native_close_lead_keeps_braking_and_stop_authority():
-  with pipeline(blended=False) as (planner, control, state):
-    for frame in range(8):
-      step(planner, control, state, frame)
-    lead = state['radarState'].leadOne
-    lead.present, lead.dRel, lead.vLead, lead.vRel = True, 2.0, 0.0, -state['carState'].vEgo
+@pytest.mark.parametrize('speed,measured_accel,blended,model_request,gap', [
+  (3.0, 0.4, False, 1.1, 2.0),
+  (1.3, 0.2, True, -0.7, 3.0),
+], ids=['abrupt_close_obstacle', 'near_stop_with_braking_history'])
+def test_native_close_lead_keeps_braking_and_stop_authority(speed, measured_accel, blended, model_request, gap, record_property):
+  def run(mode):
+    rows = []
+    with pipeline(mode, blended=blended, measured_accel=measured_accel, speed=speed) as (planner, control, state):
+      state['modelV2'].action.desiredAcceleration = model_request
+      for frame in range(8):
+        step(planner, control, state, frame)
+      lead = state['radarState'].leadOne
+      lead.present, lead.dRel, lead.vLead, lead.vRel = True, gap, 0.0, -speed
+      lead.modelProb, lead.aLeadTau = 0.99, 1.5
+      for frame in range(8, 20):
+        plan, outputs = step(planner, control, state, frame, gap=True)
+        guard = planner.reference_planner.radar_accel_guard
+        rows.append({'frame': frame, 'modelMonoTime': plan.modelMonoTime, 'mpcSource': str(planner.mpc.source),
+                     'referenceSource': str(plan.reference.source), 'referenceAccel': plan.reference.accel,
+                     'constraintAccel': plan.reference.constraintAccel, 'aTarget': plan.aTarget,
+                     'outputs': outputs, 'shouldStop': plan.shouldStop, 'stopReasons': int(plan.motionIntent.reasons),
+                     'releaseAllowed': plan.motionIntent.releaseAllowed, 'movingLead': plan.motionIntent.movingLead,
+                     'responseKind': int(plan.motionIntent.responseKind), 'solverStatus': int(plan.solverStatus),
+                     'hasLead': plan.hasLead, 'guardHolding': guard.holding, 'guardCeiling': guard.accel_ceiling})
+    return rows
+
+  baseline, candidate = run(0), run(ASSIST)
+
+  def first_braking(rows):
+    return {'firstNegativeTargetFrame': next((row['frame'] for row in rows if row['aTarget'] < 0.0), None),
+            'firstNegativeOutput': next(((row['frame'], tick) for row in rows for tick, value in enumerate(row['outputs']) if value < 0.0), None)}
+
+  # The existing junit receipt retains this complete sequence even when a
+  # later assertion fails. Equality is a no-regression contract; it does not
+  # qualify the physical clearance of this abruptly introduced obstacle.
+  record_property('formal_close_lead_response', json.dumps({
+    'speed': speed, 'measuredAccel': measured_accel, 'distance': gap, 'modelRequest': model_request,
+    'brakingHistoryFrames': 8 if model_request < 0.0 else 0,
+    'mode0': baseline, 'mode3': candidate,
+    'mode0Timing': first_braking(baseline), 'mode3Timing': first_braking(candidate),
+    'baselineFirstTargetNonnegative': baseline[0]['aTarget'] >= 0.0,
+    'scope': 'prescribed motion; reference response timing, not closed-loop clearance acceptance',
+  }, sort_keys=True))
+  assert baseline == candidate
+  assert all(row['hasLead'] and not row['guardHolding'] and row['guardCeiling'] is None for row in candidate)
+  if speed < 2.0:
+    # The shared close-stop contract is bounded to 0.3 <= v < 2.0 m/s and
+    # already-negative requests. The former 3 m/s first-frame assertion had
+    # neither prerequisite; the faster transient remains diagnostic above.
+    stopping = [row for row in candidate if row['stopReasons'] & StopReason.CLOSE_LEAD]
+    assert stopping
+    assert all(row['aTarget'] < 0.0 and row['shouldStop'] and not row['releaseAllowed']
+               and max(row['outputs']) <= 0.0 for row in stopping)
+
+
+@pytest.mark.parametrize('lead_name', ['leadOne', 'leadTwo'])
+def test_weak_formal_lead_retains_normal_control_until_both_slots_are_absent(lead_name):
+  with pipeline(measured_accel=0.0) as (planner, control, state):
+    lead = getattr(state['radarState'], lead_name)
+    lead.present, lead.dRel, lead.vLead, lead.vRel = True, 30.0, state['carState'].vEgo, 0.0
     lead.modelProb, lead.aLeadTau = 0.99, 1.5
-    for frame in range(8, 13):
-      plan, outputs = step(planner, control, state, frame, gap=True)
-      assert planner.reference_planner.radar_accel_guard.holding
-      assert plan.aTarget < 0.0 and plan.shouldStop
-      assert plan.motionIntent.reasons & StopReason.CLOSE_LEAD
-      assert not plan.motionIntent.releaseAllowed and max(outputs) <= 0.0
+    for frame in range(8):
+      step(planner, control, state, frame, distance=30.0)
+    guard = planner.reference_planner.radar_accel_guard
+    assert guard.qualified
+    last_confirmed = guard.last_visible_ns
+    lead.modelProb = 0.65
+    for frame in range(8, 15):
+      plan, outputs = step(planner, control, state, frame, gap=True, probability=0.65, distance=30.0)
+      assert guard.qualified and not guard.holding and guard.accel_ceiling is None
+      assert guard.last_visible_ns == last_confirmed and guard.reason == 'formalLeadPresent'
+      assert plan.aTarget > 0.0 and max(outputs) > 0.0
+    lead.present = False
+    plan, outputs = step(planner, control, state, 15, gap=True, distance=30.0)
+    assert guard.holding and guard.last_visible_ns == last_confirmed
+    assert plan.aTarget <= 0.0 and max(outputs) <= 1e-7
 
 
-@pytest.mark.parametrize('gate', ['mode', 'dec', 'experimental', 'long_active', 'gas_override'])
+def test_receding_far_target_does_not_suppress_native_acceleration():
+  def run(mode):
+    result = []
+    with pipeline(mode, measured_accel=0.0, speed=10.0) as (planner, control, state):
+      lead = state['radarState'].leadOne
+      lead.vLead, lead.vRel, lead.modelProb, lead.aLeadTau = 12.0, 2.0, 0.99, 1.5
+      for frame in range(15):
+        lead.present, lead.dRel = frame < 8, 80.0 + 2.0 * frame * 0.05
+        plan, outputs = step(planner, control, state, frame, gap=frame >= 8, lead_speed=12.0, distance=80.0)
+        guard = planner.reference_planner.radar_accel_guard
+        if mode == ASSIST and frame >= 8:
+          assert guard.qualified and not guard.holding and guard.accel_ceiling is None
+          assert guard.reason == 'radarPullingAway'
+        result.append((plan.aTarget, plan.shouldStop, plan.motionIntent.responseKind, outputs))
+    return result
+
+  baseline, candidate = run(0), run(ASSIST)
+  assert candidate == baseline
+  assert candidate[-1][0] > 0.0 and max(candidate[-1][-1]) > 0.0
+
+
+@pytest.mark.parametrize('gate', ['mode', 'dec', 'experimental', 'long_active', 'gas_override', 'brake_override'])
 def test_runtime_gate_loss_revokes_assist_at_the_next_planner_tick(gate):
   with pipeline() as (planner, control, state):
     for frame in range(9):
@@ -140,8 +228,10 @@ def test_runtime_gate_loss_revokes_assist_at_the_next_planner_tick(gate):
       state['selfdriveState'].experimentalMode = False
     elif gate == 'long_active':
       state['carControl'].longActive = False
-    else:
+    elif gate == 'gas_override':
       state['carState'].gasPressed = True
+    else:
+      state['carState'].brakePressed = True
     step(planner, control, state, 9, gap=True)
     guard = planner.reference_planner.radar_accel_guard
     assert not guard.qualified and not guard.holding and guard.accel_ceiling is None
@@ -217,5 +307,8 @@ def test_bounded_events_record_actual_cap_selection_and_recovery():
     for frame in range(15, 35):
       step(planner, control, state, frame)
     recovery = [call.kwargs for call in events.call_args_list if call.args[0] == 'honda_radar_accel_guard']
-    assert len(recovery) == 1
+    assert [record['reason'] for record in recovery] == ['confirming', 'confirmed']
+    assert [record['qualified'] for record in recovery] == [False, True]
     assert not recovery[0]['holding'] and 0.0 < recovery[0]['accelCeiling'] < 0.1
+    assert not recovery[1]['holding'] and recovery[1]['accelCeiling'] > recovery[0]['accelCeiling']
+    assert recovery[1]['sourceTimestampEof'] - recovery[0]['sourceTimestampEof'] >= 120_000_000

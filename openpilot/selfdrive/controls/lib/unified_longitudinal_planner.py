@@ -366,6 +366,7 @@ class UnifiedLongitudinalPlanner:
       now_ns=now_ns, enabled=enabled, observation=observation, observation_ns=observation_ns,
       observation_valid=observation_valid, model=state['modelV2'], model_ns=state.logMonoTime.get('modelV2'),
       speed=speed, standstill=bool(state['carState'].standstill), ceiling_max=ACCEL_MAX,
+      formal_lead_present=bool(state['radarState'].leadOne.present or state['radarState'].leadTwo.present),
     )
 
   def log_radar_accel_state(self):
