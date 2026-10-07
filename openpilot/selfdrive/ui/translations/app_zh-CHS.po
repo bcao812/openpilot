@@ -2356,12 +2356,8 @@ msgid "Radar Target Labels"
 msgstr "雷达目标标签"
 
 
-msgid "Show slot number and longitudinal distance in meters, for example: 3 24.7."
-msgstr "显示槽位号和以米为单位的纵向距离，例如：3 24.7。"
-
-
-msgid "Radar: slot distance (m), uncalibrated"
-msgstr "雷达：槽位 距离（米），未标定"
+msgid "Show radar detections as yellow dots with longitudinal distance in meters to the right. Radar-camera alignment is uncalibrated."
+msgstr "用黄色圆点显示雷达目标，右侧显示以米为单位的纵向距离。雷达与摄像头尚未对齐标定。"
 
 msgid "Radar Fusion Shadow"
 msgstr "雷达融合影子计算"
@@ -2369,10 +2365,10 @@ msgstr "雷达融合影子计算"
 msgid "Calculate and record radar and vision fusion. Does not control the vehicle."
 msgstr "计算并记录雷达与视觉融合结果，不参与车辆控制。"
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
+#: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Record Road Cameras"
 msgstr "高清道路录像"
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
+#: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Save high-resolution front and wide-road video while longitudinal control is active and for 10 seconds afterwards. Low-resolution video and driving logs continue. Changes take effect on the next drive."
 msgstr "在纵向控车期间及退出后的10秒内，保存前方和广角高清录像。低清录像与行车日志持续保存。更改在下次行驶时生效。"

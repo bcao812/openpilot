@@ -2282,11 +2282,7 @@ msgid "Radar Target Labels"
 msgstr ""
 
 
-msgid "Show slot number and longitudinal distance in meters, for example: 3 24.7."
-msgstr ""
-
-
-msgid "Radar: slot distance (m), uncalibrated"
+msgid "Show radar detections as yellow dots with longitudinal distance in meters to the right. Radar-camera alignment is uncalibrated."
 msgstr ""
 
 msgid "Radar Fusion Shadow"
@@ -2295,10 +2291,10 @@ msgstr ""
 msgid "Calculate and record radar and vision fusion. Does not control the vehicle."
 msgstr ""
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
+#: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Record Road Cameras"
 msgstr ""
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
+#: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Save high-resolution front and wide-road video while longitudinal control is active and for 10 seconds afterwards. Low-resolution video and driving logs continue. Changes take effect on the next drive."
 msgstr ""

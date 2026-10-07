@@ -32,6 +32,8 @@ DESCRIPTIONS = {
     "without a turn signal activated while driving over 31 mph (50 km/h)."
   ),
   "AlwaysOnDM": tr_noop("Enable driver monitoring even when sunnypilot is not engaged."),
+  "RecordRoadCameras": tr_noop("Save high-resolution front and wide-road video while longitudinal control is active and for 10 seconds afterwards. "
+                               "Low-resolution video and driving logs continue. Changes take effect on the next drive."),
   'RecordFront': tr_noop("Upload data from the driver facing camera and help improve the driver monitoring algorithm."),
   "IsMetric": tr_noop("Display speed in km/h instead of mph."),
   "RecordAudio": tr_noop("Record and store microphone audio while driving. The audio will be included in the dashcam video in comma connect."),
@@ -76,6 +78,12 @@ class TogglesLayout(Widget):
         "monitoring.png",
         False,
       ),
+      "RecordRoadCameras": (
+        lambda: tr("Record Road Cameras"),
+        DESCRIPTIONS["RecordRoadCameras"],
+        "monitoring.png",
+        False,
+      ),
       "RecordFront": (
         lambda: tr("Record and Upload Driver Camera"),
         DESCRIPTIONS["RecordFront"],
@@ -112,7 +120,7 @@ class TogglesLayout(Widget):
       toggle = toggle_item(
         title,
         desc,
-        self._params.get_bool(param),
+        self._get_toggle_state(param),
         callback=lambda state, p=param: self._toggle_callback(state, p),
         icon=icon,
       )
@@ -121,7 +129,10 @@ class TogglesLayout(Widget):
         locked = self._params.get_bool(param + "Lock")
       except UnknownKeyName:
         locked = False
-      toggle.action_item.set_enabled(not locked)
+      if param == "RecordRoadCameras" and not locked:
+        toggle.action_item.set_enabled(lambda: ui_state.is_offroad())
+      else:
+        toggle.action_item.set_enabled(not locked)
 
       # Make description callable for live translation
       additional_desc = ""
@@ -143,6 +154,11 @@ class TogglesLayout(Widget):
     self._scroller = Scroller(list(self._toggles.values()), line_separator=True, spacing=0)
 
     ui_state.add_engaged_transition_callback(self._update_toggles)
+
+  def _get_toggle_state(self, param: str) -> bool:
+    if param == "RecordRoadCameras":
+      return self._params.get(param, return_default=True)
+    return self._params.get_bool(param)
 
   def _update_state(self):
     if ui_state.sm.updated["selfdriveState"]:
@@ -202,7 +218,7 @@ class TogglesLayout(Widget):
     # TODO: make a param control list item so we don't need to manage internal state as much here
     # refresh toggles from params to mirror external changes
     for param in self._toggle_defs:
-      self._toggles[param].action_item.set_state(self._params.get_bool(param))
+      self._toggles[param].action_item.set_state(self._get_toggle_state(param))
 
     # these toggles need restart, block while engaged
     for toggle_def in self._toggle_defs:
@@ -237,6 +253,12 @@ class TogglesLayout(Widget):
       self._params.put_bool("ExperimentalMode", state, block=True)
 
   def _toggle_callback(self, state: bool, param: str):
+    if param == "RecordRoadCameras":
+      if ui_state.is_offroad():
+        self._params.put_bool(param, state, block=True)
+      self._toggles[param].action_item.set_state(self._get_toggle_state(param))
+      return
+
     if param == "ExperimentalMode":
       self._handle_experimental_mode_toggle(state)
       return

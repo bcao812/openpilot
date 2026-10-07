@@ -8,10 +8,10 @@ from openpilot.selfdrive.car.honda_radar_observer_config import OBSERVE, SHADOW
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarOverlayState, project_radar_point
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import FontWeight, gui_app
-from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.lib.text_measure import measure_text_cached
 
 SERVICE = 'hondaRadarObservations'
+MARKER_RADIUS = 6
+LABEL_FONT_SIZE = 32
 
 
 class HondaRadarOverlay:
@@ -44,7 +44,7 @@ class HondaRadarOverlay:
                       and ui_state.params.get_bool('HondaBoschARadarOverlay'))
       self.camera_offset = ui_state.params.get('CameraOffset', return_default=True) if ui_state.active_bundle else 0.0
       self.next_params_ns = now + 1_000_000_000
-      self.layout_key = None  # also refresh font/language measurements
+      self.layout_key = None
     sm = ui_state.sm
     cp = ui_state.CP
     if (not self.enabled or cp is None or cp.carFingerprint != 'HONDA_ACCORD' or not cp.openpilotLongitudinalControl
@@ -83,17 +83,13 @@ class HondaRadarOverlay:
       self.layout_key = key
     # Scope, source freshness and camera time are checked on every frame above.
     # Cached layout never caches validity or opacity.
-    for point, text, box, line in self.labels:
-      color = rl.Color(255, 215, 90, 255 if frame_ns - point.time_ns <= 80_000_000 else 140)
-      if line is not None:
-        rl.draw_line_v(*line, color)
-      rl.draw_rectangle_rec(box, rl.Color(0, 0, 0, 130))
-      rl.draw_text_ex(self.font, text, rl.Vector2(box.x + 6, box.y), 32, 0, color)
-    rl.draw_text_ex(self.font, tr('Radar: slot distance (m), uncalibrated'),
-                    rl.Vector2(rect.x + 16, rect.y + 100), 24, 0, rl.Color(255, 215, 90, 230))
+    for point, marker, text_position in self.labels:
+      color = rl.Color(255, 215, 0, 255 if frame_ns - point.time_ns <= 80_000_000 else 140)
+      rl.draw_circle_v(marker, MARKER_RADIUS, color)
+      rl.draw_text_ex(self.font, point.text, text_position, LABEL_FONT_SIZE, 0, color)
 
   def _layout_labels(self, points, transform, camera_height, rect):
-    boxes, labels = [], []
+    labels = []
     for point in points:
       position = project_radar_point(point, transform, camera_height, self.camera_offset)
       if position is None:
@@ -101,31 +97,7 @@ class HondaRadarOverlay:
       x, y = position
       if not (rect.x <= x <= rect.x + rect.width and rect.y <= y <= rect.y + rect.height):
         continue
-      text = point.text
-      size = measure_text_cached(self.font, text, 32)
-      width, height = size.x + 12, 38
-      x = max(rect.x, min(x - width / 2, rect.x + rect.width - width))
-      base_y = max(rect.y, min(y - height, rect.y + rect.height - height))
-      box_y = base_y
-      # Bounded, deterministic label separation. Slot coordinates stay unchanged.
-      # At an edge, clamping collapses half of the alternating candidates. Search
-      # far enough in either direction to place all 16 labels on a C3 viewport.
-      for row in range(32):
-        shift = ((row + 1) // 2) * (height + 2) * (-1 if row % 2 else 1)
-        candidate_y = max(rect.y, min(base_y + shift, rect.y + rect.height - height))
-        # Plain bounds avoid allocating CFFI rectangles and crossing into raylib
-        # for every candidate/pair in the dense 16-label case.
-        if not any(x < right and x + width > left and candidate_y < bottom and candidate_y + height > top
-                   for left, top, right, bottom in boxes):
-          box_y = candidate_y
-          break
-      boxes.append((x, box_y, x + width, box_y + height))
-      box = rl.Rectangle(x, box_y, width, height)
-      line = None
-      if abs(box_y - base_y) > 1:
-        # Preserve the actual projected location when text is moved for spacing.
-        endpoint = rl.Vector2(max(box.x, min(position[0], box.x + box.width)),
-                              max(box.y, min(position[1], box.y + box.height)))
-        line = (rl.Vector2(*position), endpoint)
-      labels.append((point, text, box, line))
+      # Never shift detections to make room for text. The dot marks the exact
+      # ground-plane projection; distance stays immediately to its right.
+      labels.append((point, rl.Vector2(x, y), rl.Vector2(x + MARKER_RADIUS + 6, y - LABEL_FONT_SIZE / 2)))
     return labels

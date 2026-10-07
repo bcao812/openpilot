@@ -7,23 +7,26 @@ from openpilot.selfdrive.ui.tests.test_sunnylink_removed import HeadlessUITestCa
 
 class TestRoadRecordingSettings(HeadlessUITestCase):
   def test_default_opt_out_and_onroad_write_guard(self):
-    from openpilot.selfdrive.ui.sunnypilot.layouts.settings import device
+    from openpilot.selfdrive.ui.layouts.settings import toggles
 
     params = Params()
     params.remove('RecordRoadCameras')
     self.assertIs(params.get('RecordRoadCameras', return_default=True), True)
-    layout = device.DeviceLayoutSP.__new__(device.DeviceLayoutSP)
+    layout = toggles.TogglesLayout.__new__(toggles.TogglesLayout)
     layout._params = params
-    layout._record_road_cameras = SimpleNamespace(action_item=Mock())
+    road_toggle = SimpleNamespace(action_item=Mock())
+    layout._toggles = {'RecordRoadCameras': road_toggle}
     state = SimpleNamespace(is_offroad=lambda: True)
-    with patch.object(device, 'ui_state', state):
-      layout._set_record_road_cameras(False)
+    with patch.object(toggles, 'ui_state', state):
+      self.assertIs(layout._get_toggle_state('RecordRoadCameras'), True)
+      layout._toggle_callback(False, 'RecordRoadCameras')
       self.assertIs(params.get('RecordRoadCameras', return_default=True), False)
-      layout._record_road_cameras.action_item.set_state.assert_called_with(False)
+      road_toggle.action_item.set_state.assert_called_with(False)
       state.is_offroad = lambda: False
-      layout._set_record_road_cameras(True)
+      layout._toggle_callback(True, 'RecordRoadCameras')
       self.assertFalse(params.get_bool('RecordRoadCameras'))
-      layout._record_road_cameras.action_item.set_state.assert_called_with(False)
+      road_toggle.action_item.set_state.assert_called_with(False)
       state.is_offroad = lambda: True
-      layout._set_record_road_cameras(True)
+      layout._toggle_callback(True, 'RecordRoadCameras')
       self.assertTrue(params.get_bool('RecordRoadCameras'))
+      self.assertFalse(params.get_bool('OnroadCycleRequested'))

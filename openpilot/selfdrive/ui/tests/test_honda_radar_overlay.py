@@ -38,7 +38,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
           overlay.ingest(msg.hondaRadarObservations.as_reader(), msg.logMonoTime, t + 1)
         points = overlay.points(START + 120_000_000, START + 120_000_001)
         self.assertEqual(len(points), 1)
-        self.assertEqual(points[0].text, '0 25.6')
+        self.assertEqual(points[0].text, '25.6')
 
   def test_uncompleted_scan_conflict_cannot_retract_another_scan(self):
     observer = HondaRadarObserver(*configuration(), session_id='fixture')
@@ -48,7 +48,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
                         (START + 120_000_000, [scan_frames()[0], scan_frames(distance=1001)[0]])):
       msg = observer.update([can_message(t, incoming)], state(t), SETTINGS, t + 1)
       overlay.ingest(msg.hondaRadarObservations.as_reader(), msg.logMonoTime, t + 1)
-    self.assertEqual(overlay.points(START + 120_000_000, START + 120_000_001)[0].text, '0 25.6')
+    self.assertEqual(overlay.points(START + 120_000_000, START + 120_000_001)[0].text, '25.6')
 
   def test_current_scan_conflict_retracts_only_until_a_new_observation(self):
     observer = HondaRadarObserver(*configuration(), session_id='fixture')
@@ -59,10 +59,10 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       msg = observer.update([can_message(t, incoming)], state(t), SETTINGS, t + 1)
       overlay.ingest(msg.hondaRadarObservations.as_reader(), msg.logMonoTime, t + 1)
       self.assertEqual(bool(overlay.points(t, t + 1)), expected)
-    self.assertEqual(overlay.points(START + 120_000_000, START + 120_000_001)[0].text, '0 25.6')
+    self.assertEqual(overlay.points(START + 120_000_000, START + 120_000_001)[0].text, '25.6')
 
-  def test_format_exactly_slot_space_one_decimal(self):
-    for slot, distance, expected in ((0, 8.0, '0 8.0'), (3, 24.74, '3 24.7'), (3, 24.76, '3 24.8'), (15, 120, '15 120.0')):
+  def test_format_distance_only_one_decimal(self):
+    for slot, distance, expected in ((0, 8.0, '8.0'), (3, 24.74, '24.7'), (3, 24.76, '24.8'), (15, 120, '120.0')):
       self.assertEqual(RadarLabelPoint(slot, distance, 0, START, 1, 1).text, expected)
 
   def test_camera_time_selection_no_future_or_immortal_labels(self):
@@ -71,7 +71,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     overlay.ingest(data, START + 1, START + 1)
     self.assertEqual(len(overlay.history[0]), 1)  # position and AUX are one sample
     self.assertFalse(overlay.points(START - 1, START + 1))
-    self.assertEqual(overlay.points(START, START + 1)[0].text, '0 54.1')
+    self.assertEqual(overlay.points(START, START + 1)[0].text, '54.1')
     self.assertFalse(overlay.points(START + 300_000_000, START + 300_000_000))
 
   def test_scope_exit_session_change_and_missing_batches_clear_history(self):
@@ -89,7 +89,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     event = dict(data['observations'][0], generation=2, positionSeq=9, positionMonoTime=START + 2, dRel=25.0)
     overlay.ingest(dict(data, sequence=2, observations=[event]), START + 3, START + 3)
     self.assertEqual(len(overlay.history[0]), 1)
-    self.assertEqual(overlay.points(START + 2, START + 3)[0].text, '0 25.0')
+    self.assertEqual(overlay.points(START + 2, START + 3)[0].text, '25.0')
     for distance in (float('nan'), float('inf'), -1.0):
       bad = dict(event, dRel=distance, positionSeq=10)
       overlay.ingest(dict(data, sequence=overlay.sequence + 1, observations=[bad]), START + 4, START + 4)
@@ -139,12 +139,21 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2) as clock, \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
-         patch.object(renderer, 'measure_text_cached', return_value=SimpleNamespace(x=120, y=32)), \
          patch.object(renderer, 'project_radar_point', wraps=project_radar_point) as project, \
-         patch.object(rl, 'draw_line_v'), patch.object(rl, 'draw_rectangle_rec'), patch.object(rl, 'draw_text_ex') as draw:
+         patch.object(rl, 'draw_circle_v') as circles, patch.object(rl, 'draw_line_v') as lines, \
+         patch.object(rl, 'draw_rectangle_rec') as backgrounds, patch.object(rl, 'draw_text_ex') as draw:
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
-      self.assertEqual(draw.call_args_list[0].args[1], '0 54.1')
-      self.assertEqual(draw.call_count, 2)
+      self.assertEqual(draw.call_args_list[0].args[1], '54.1')
+      self.assertEqual(draw.call_count, 1)
+      self.assertEqual(circles.call_count, 1)
+      marker, radius, color = circles.call_args.args
+      expected = project_radar_point(overlay.state.points(START, START + 2)[0], view.model_renderer._car_space_transform, 1.2)
+      self.assertAlmostEqual(marker.x, expected[0], places=3)
+      self.assertAlmostEqual(marker.y, expected[1], places=3)
+      self.assertGreater(draw.call_args.args[2].x, marker.x + radius)
+      self.assertEqual((color.r, color.g, color.b), (255, 215, 0))
+      backgrounds.assert_not_called()
+      lines.assert_not_called()
       original_x = draw.call_args_list[0].args[2].x
       observer_sm.updated[renderer.SERVICE] = False
       draw.reset_mock()
@@ -166,15 +175,18 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       clock.return_value = START + 210_000_000
       view.client.timestamp_eof = START + 200_000_000
       draw.reset_mock()
+      circles.reset_mock()
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
-      self.assertEqual(draw.call_count, 1)  # only the legend remains after expiry
+      draw.assert_not_called()
+      circles.assert_not_called()
       draw.reset_mock()
       clock.return_value = START + 2
       view.client.timestamp_eof = START - 1
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
-      self.assertEqual(draw.call_count, 1)  # legend only; future position not drawn
+      draw.assert_not_called()  # future position not drawn
+      circles.assert_not_called()
 
-  def test_sixteen_labels_near_screen_edge_remain_readable(self):
+  def test_sixteen_markers_near_screen_edge_keep_projected_positions(self):
     import numpy as np
     import pyray as rl
     from openpilot.cereal import log, messaging
@@ -197,17 +209,21 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
-         patch.object(renderer, 'measure_text_cached', return_value=SimpleNamespace(x=120, y=32)), \
+         patch.object(rl, 'draw_circle_v') as circles, \
          patch.object(rl, 'draw_line_v') as lines, patch.object(rl, 'draw_rectangle_rec') as rectangles, \
          patch.object(rl, 'draw_text_ex') as text:
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
-    boxes = [call.args[0] for call in rectangles.call_args_list]
-    self.assertEqual(len(boxes), 16)
-    self.assertGreater(lines.call_count, 0)
-    self.assertEqual([call.args[1] for call in text.call_args_list[:-1]], [f'{slot} 54.1' for slot in range(16)])
-    for i, box in enumerate(boxes):
-      self.assertTrue(0 <= box.x <= 1280 - box.width and 0 <= box.y <= 720 - box.height)
-      self.assertFalse(any(rl.check_collision_recs(box, other) for other in boxes[:i]))
+    markers = [call.args[0] for call in circles.call_args_list]
+    self.assertEqual(len(markers), 16)
+    rectangles.assert_not_called()
+    lines.assert_not_called()
+    self.assertEqual([call.args[1] for call in text.call_args_list], ['54.1'] * 16)
+    # Identical radar positions must remain identical on screen, even when
+    # crowded. Label avoidance must never fabricate separated detections.
+    self.assertEqual(len({(marker.x, marker.y) for marker in markers}), 1)
+    for marker, call in zip(markers, text.call_args_list, strict=True):
+      self.assertTrue(0 <= marker.x <= 1280 and 0 <= marker.y <= 720)
+      self.assertGreater(call.args[2].x, marker.x)
 
   def test_settings_callbacks_keep_other_switches_and_are_offroad_only(self):
     from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands import honda

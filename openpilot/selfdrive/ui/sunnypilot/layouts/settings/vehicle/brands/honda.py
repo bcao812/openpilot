@@ -22,7 +22,8 @@ class HondaSettings(BrandSettings):
     )
     self.overlay = toggle_item_sp(
       lambda: tr('Radar Target Labels'),
-      description=lambda: tr('Show slot number and longitudinal distance in meters, for example: 3 24.7.'),
+      description=lambda: tr('Show radar detections as yellow dots with longitudinal distance in meters to the right. '
+                             'Radar-camera alignment is uncalibrated.'),
       initial_state=ui_state.params.get_bool('HondaBoschARadarOverlay'),
       callback=self._set_overlay, enabled=lambda: not ui_state.started,
     )

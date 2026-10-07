@@ -11,7 +11,7 @@ from openpilot.common.hardware import HARDWARE
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.widgets.list_view import option_item_sp, multiple_button_item_sp, button_item_sp, \
-  dual_button_item_sp, toggle_item_sp, Spacer
+  dual_button_item_sp, Spacer
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.button import ButtonStyle
 from openpilot.system.ui.widgets.confirm_dialog import alert_dialog, ConfirmDialog
@@ -78,15 +78,6 @@ class DeviceLayoutSP(DeviceLayout):
       inline=True,
     )
 
-    self._record_road_cameras = toggle_item_sp(
-      title=lambda: tr("Record Road Cameras"),
-      description=lambda: tr("Save high-resolution front and wide-road video while longitudinal control is active and for 10 seconds afterwards. "
-                             "Low-resolution video and driving logs continue. Changes take effect on the next drive."),
-      initial_state=self._params.get("RecordRoadCameras", return_default=True),
-      callback=self._set_record_road_cameras,
-      enabled=lambda: ui_state.is_offroad(),
-    )
-
     self._quiet_mode_and_dcam = dual_button_item_sp(
       left_text=lambda: tr("Quiet Mode"),
       right_text=lambda: tr("Driver Camera Preview"),
@@ -131,8 +122,6 @@ class DeviceLayoutSP(DeviceLayout):
       self._device_wake_mode,
       LineSeparator(),
       self._max_time_offroad,
-      LineSeparator(),
-      self._record_road_cameras,
       LineSeparator(height=10),
       self._quiet_mode_and_dcam,
       self._reg_and_training,
@@ -146,11 +135,6 @@ class DeviceLayoutSP(DeviceLayout):
 
   def _offroad_transition(self):
     self._power_buttons.action_item.right_button.set_visible(ui_state.is_offroad())
-
-  def _set_record_road_cameras(self, enabled):
-    if ui_state.is_offroad():
-      self._params.put_bool("RecordRoadCameras", enabled, block=True)
-    self._record_road_cameras.action_item.set_state(self._params.get("RecordRoadCameras", return_default=True))
 
   @staticmethod
   def wake_mode_description() -> str:
@@ -204,8 +188,6 @@ class DeviceLayoutSP(DeviceLayout):
 
   def _update_state(self):
     super()._update_state()
-
-    self._record_road_cameras.action_item.set_state(self._params.get("RecordRoadCameras", return_default=True))
 
     # Handle Always Offroad button
     always_offroad = ui_state.params.get_bool("OffroadMode")

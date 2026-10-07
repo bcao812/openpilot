@@ -24,7 +24,7 @@ class RadarLabelPoint:
 
   @property
   def text(self):
-    return f'{self.slot} {self.distance:.1f}'
+    return f'{self.distance:.1f}'
 
 
 class RadarOverlayState:
