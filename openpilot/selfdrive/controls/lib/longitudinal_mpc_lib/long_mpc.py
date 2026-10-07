@@ -696,10 +696,18 @@ class LongitudinalMpc:
     initial_distance = float(lead.dRel) + advance - ego_advance
     acceleration = np.clip(a_lead, -10.0, 5.0) * np.exp(-tau * (T_IDXS + elapsed)**2 / 2.0)
     velocity = initial_velocity + np.cumsum(T_DIFFS * acceleration)
-    # A forward vehicle may stop; a measured approaching vehicle must not be
-    # turned into a stationary one by the legacy nonnegative-speed clamp.
+    # Keep the existing forward stopping and clearly opposing predictions.
+    # Within the producer's [-2, 0] non-opposing direction interval, blend
+    # only the forecast's reverse-acceleration component continuously. This
+    # is an engineering motion-model policy: measured d/v/a and qualification
+    # remain intact, and a small negative velocity is never declared noise
+    # or replaced by a stationary target. Positive acceleration is unchanged.
     if initial_velocity >= 0.0:
       velocity = np.maximum(velocity, 0.0)
+    elif initial_velocity > -2.0 and a_lead < 0.0:
+      velocity_base = np.maximum(velocity, initial_velocity)
+      reverse_weight = -initial_velocity / 2.0  # This branch has 0 < weight < 1.
+      velocity = velocity_base + reverse_weight * (velocity - velocity_base)
     raw_position = initial_distance + np.cumsum(T_DIFFS * velocity)
     raw_trajectory = np.column_stack((raw_position, velocity))
     nonnegative_velocity = max(0.0, initial_velocity)

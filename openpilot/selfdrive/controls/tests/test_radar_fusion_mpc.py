@@ -1017,6 +1017,127 @@ def test_mild_negative_radar_velocity_keeps_approaching_geometry():
   assert action(planner) < 0.0
 
 
+@pytest.mark.parametrize('speed,a0,distance,lead_speed,lead_acceleration,start,alignment_ns,expected_x0,expected_v0,expected_x10', [
+  (4.188114166259766, -0.5062192678451538, 17.479167938232422, -0.0602441169321537, -2.5708842277526855,
+   0.7778034210205078, 49068416, 17.26700520236193, -0.18627953748592974, 13.676217081056151),
+  (4.152256011962891, -0.5448019504547119, 17.479167938232422, -0.0602441169321537, -2.5708842277526855,
+   0.7778034210205078, 110202583, 16.9960673302231, -0.3422777626409075, 10.61000930564217),
+  (1.0514822006225586, -0.18802042305469513, 5.570803165435791, -0.08574940264225006, -0.7474237680435181,
+   0.10351847112178802, 93279354, 5.460660318684282, -0.15524186349386138, 3.509812642972538),
+  (0.9412540197372437, -0.5520215630531311, 5.309693336486816, -0.12712086737155914, -0.5738447904586792,
+   1.4378634691238403, 52973833, 5.251518269643627, -0.15748766942879147, 3.351951817979633),
+  (1.5158843994140625, -0.3846769332885742, 7.0452561378479, -0.21278104186058044, -1.6375515460968018,
+   1.0249863862991333, 49840499, 6.9565881676161725, -0.29432147086488114, 2.2758020435090476),
+  (1.498730182647705, -0.3723600506782532, 7.0452561378479, -0.21278104186058044, -1.6375515460968018,
+   1.0249863862991333, 99785969, 6.864484965295978, -0.3755778349965633, 1.0125149541543208),
+])
+def test_recorded_small_negative_motion_keeps_measurements_and_a_safe_model_trajectory(
+    speed, a0, distance, lead_speed, lead_acceleration, start, alignment_ns, expected_x0, expected_v0, expected_x10):
+  # a85d0e7 / route 8a samples 0,1,2,3,10,11. This checks the explicit motion
+  # hypothesis and requested plan, not the object's measured future behavior.
+  lead = object_lead(distance=distance, speed=lead_speed, ego_speed=speed, acceleration=lead_acceleration,
+                     start=start, end=10.0, path='entering', persistent=False)
+  recorded = deepcopy(vars(lead))
+  reference_ns = EPOCH_NS + alignment_ns
+  planner = solve(fused_state(lead), speed=speed, acceleration=a0, iterations=3,
+                  now_ns=reference_ns, reference_ns=reference_ns)
+  projection, = planner._fusion_projections
+  assert vars(lead) == recorded
+  np.testing.assert_allclose(projection.raw_trajectory[0], [expected_x0, expected_v0], atol=1e-12, rtol=0.0)
+  assert projection.raw_trajectory[-1, 0] == pytest.approx(expected_x10, abs=1e-10, rel=0.0)
+  assert np.all(projection.raw_trajectory[:, 1] < 0.0)  # The measured approach never becomes a stationary substitute.
+  assert np.any(projection.occupied)
+  assert moving_window_clearance(planner, projection) >= CRASH_DISTANCE
+
+
+@pytest.mark.parametrize('lead_speed', [-5.0, np.nextafter(-2.0, -np.inf), -2.0, 0.0, 1e-6, 5.0])
+@pytest.mark.parametrize('lead_acceleration', [-2.5, 0.0, 2.5])
+def test_forward_and_clearly_opposing_motion_predictions_remain_exact(lead_speed, lead_acceleration):
+  lead = object_lead(distance=30.0, speed=lead_speed, acceleration=lead_acceleration)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  projection = planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS)
+  dt = np.diff(T_IDXS, prepend=0.0)
+  acceleration = lead_acceleration*np.exp(-lead.aLeadTau*T_IDXS**2/2.0)
+  expected_velocity = lead_speed + np.cumsum(dt*acceleration)
+  if lead_speed >= 0.0:
+    expected_velocity = np.maximum(expected_velocity, 0.0)
+  expected_position = lead.dRel + np.cumsum(dt*expected_velocity)
+  np.testing.assert_array_equal(projection.raw_trajectory, np.column_stack((expected_position, expected_velocity)))
+
+
+@pytest.mark.parametrize('lead_speed', [-1.9, -1.0, -1e-6])
+def test_positive_acceleration_can_depart_from_small_negative_speed_without_model_attenuation(lead_speed):
+  lead = object_lead(distance=30.0, speed=lead_speed, acceleration=2.5)
+  recorded = deepcopy(vars(lead))
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  projection = planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS)
+  dt = np.diff(T_IDXS, prepend=0.0)
+  acceleration = lead.aLeadK*np.exp(-lead.aLeadTau*T_IDXS**2/2.0)
+  expected_velocity = lead_speed + np.cumsum(dt*acceleration)
+  expected_position = lead.dRel + np.cumsum(dt*expected_velocity)
+  np.testing.assert_array_equal(projection.raw_trajectory, np.column_stack((expected_position, expected_velocity)))
+  assert projection.raw_trajectory[-1, 1] > 0.0 and vars(lead) == recorded
+
+
+@pytest.mark.parametrize('boundary', [-2.0, 0.0])
+@pytest.mark.parametrize('precision', [np.float32, np.float64])
+def test_aligned_motion_model_is_continuous_at_adjacent_wire_and_double_speeds(boundary, precision):
+  # Hold source and initial epochs equal. The pre-existing signed-time
+  # alignment of raw lead speed is a separate contract, unchanged here.
+  speeds = [float(np.nextafter(precision(boundary), precision(direction))) for direction in (-np.inf, np.inf)]
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  projections = [planner.project_fusion_lead(object_lead(distance=7.5, speed=speed, acceleration=-2.5),
+                                            slot=None, reference_ns=EPOCH_NS) for speed in speeds]
+  dt = np.diff(T_IDXS, prepend=0.0)
+  reverse_change = np.cumsum(dt * -2.5 * np.exp(-1.5*T_IDXS**2/2.0))
+  # On [-2,0], v_future=v0*(1-delta_v/2); outside it the slope is at most 1.
+  # Integrating this Lipschitz bound tests continuity without a time filter.
+  velocity_lipschitz = 1.0 + abs(reverse_change[-1])/2.0
+  rounding = 4.0*(N+1)*np.spacing(max(np.max(np.abs(p.raw_trajectory)) for p in projections))
+  assert np.max(np.abs(projections[1].raw_trajectory[:, 0]-projections[0].raw_trajectory[:, 0])) <= (
+    T_IDXS[-1]*velocity_lipschitz*(speeds[1]-speeds[0]) + rounding)
+  for speed, projection in zip(speeds, projections, strict=True):
+    assert projection.raw_trajectory[0, 1] == speed
+
+
+def test_adjacent_opposing_boundary_inputs_keep_the_same_infeasible_short_window():
+  # A hard -2 switch gave one side +0.359 m behind feasibility and the other
+  # -0.247 m for these nearly identical Float32 measurements. The continuous
+  # model retains the same occupied-geometry failure on both sides.
+  planners = []
+  for speed in (-1.9999990463256836, -2.0000009536743164):
+    lead = object_lead(distance=7.5, speed=speed, acceleration=-2.5, end=0.625, persistent=False)
+    planner = LongitudinalMpc()
+    planner.set_cur_state(10.0, 0.0)
+    planner.set_weights(prev_accel_constraint=False)
+    planner.update(fused_state(lead), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+    assert planner.solution_status != 0 and not planner.previous_solution_valid
+    assert planner.finite_risk_braking_accel is None
+    planners.append(planner)
+  assert abs(planners[0].diagnostic_occupancy_bounds[-1][2]-planners[1].diagnostic_occupancy_bounds[-1][2]) < 2e-6
+
+
+@pytest.mark.parametrize('boundary', [-2.0, 0.0])
+def test_aligned_continuous_motion_model_has_no_matched_input_reference_acceleration_step(boundary, record_property):
+  from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import sample_reference_acceleration
+  requests = []
+  for speed in (boundary-1e-6, boundary+1e-6):
+    # Hold admission and occupancy fixed to isolate this motion-model change
+    # from the producer's independent direction/authority decisions.
+    lead = object_lead(distance=40.0, speed=speed, acceleration=-2.5)
+    planner = solve(fused_state(lead), iterations=12)
+    requests.append(float(np.clip(sample_reference_acceleration(planner.a_solution, 0.55), ACCEL_MIN, ACCEL_MAX)))
+  step = abs(requests[1]-requests[0])
+  record_property('boundary_reference_acceleration_pair', requests)
+  record_property('boundary_reference_acceleration_step', step)
+  # Numerical comparison of matched converged fixtures; no such filter or
+  # acceleration-step cap is added to production.
+  assert step < 1e-3
+
+
 @pytest.mark.parametrize('offset_ns', [-50_000_000, 100_000_000])
 def test_prediction_and_occupancy_are_aligned_to_the_initial_state_epoch(offset_ns):
   planner = LongitudinalMpc()
