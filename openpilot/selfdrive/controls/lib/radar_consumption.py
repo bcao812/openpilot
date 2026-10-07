@@ -7,7 +7,7 @@ Malformed publications are left intact for the existing input-failure path.
 """
 from dataclasses import dataclass
 
-from openpilot.selfdrive.car.honda_radar_relevance import HORIZON, loss_relevant
+from openpilot.selfdrive.car.honda_radar_relevance import HORIZON, loss_relevant, remaining_occupancy_window
 from openpilot.selfdrive.controls.lib.lead_qualification import (
   MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, _finite, _integer, _object_key, _read,
   coast_measurement_expired, control_leads, lead_identity, qualified_lead,
@@ -97,8 +97,7 @@ def _published_objects(radar, publication_ns):
 def _relevant_at_consumption(lead, now_ns, speed):
   evidence = _read(lead, 'evidence')
   elapsed = (now_ns - _read(evidence, 'estimateMonoTime')) / 1e9
-  start = max(0.0, _read(evidence, 'conflictStart') - elapsed)
-  end = _read(evidence, 'conflictEnd') - elapsed
+  start, end = remaining_occupancy_window(_read(evidence, 'conflictStart'), _read(evidence, 'conflictEnd'), elapsed)
   if end <= start:
     return False
   state = str(_read(evidence, 'pathState'))

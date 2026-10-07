@@ -1,10 +1,12 @@
 """Active fusion object contracts; execution is from a committed host snapshot."""
 import copy
 import math
+from dataclasses import replace
 
 import pytest
 
-from openpilot.selfdrive.car.honda_radar_control import COAST_NS, MAX_OBJECTS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _qualified_path
+from openpilot.selfdrive.car.honda_radar_control import COAST_NS, HORIZON, MAX_OBJECTS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _qualified_path
+from openpilot.selfdrive.car.honda_radar_relevance import remaining_occupancy_window
 
 
 START = 10_000_000_000
@@ -95,6 +97,55 @@ def test_new_immature_radar_waits_for_observer_maturity_not_visual_confirmation(
     sample = radar(frame, mature=frame == 2, observations=frame + 1)
     result = controller.update(**scene(frame, tracks=[sample]))
     assert bool(result.objects) is (frame == 2)
+
+
+@pytest.mark.parametrize('start,end,age,expected', [
+  (0.0, HORIZON, .05, (0.0, HORIZON)),
+  (2.0, HORIZON, .25, (1.75, HORIZON)),
+  (0.0, .3, .35, (0.0, -.05)),
+  (.1, .3, .05, (.05, .25)),
+  (0.0, HORIZON - 1e-6, .25, (0.0, HORIZON - 1e-6 - .25)),
+])
+def test_occupancy_age_preserves_only_the_exact_forecast_boundary(start, end, age, expected):
+  assert remaining_occupancy_window(start, end, age) == pytest.approx(expected)
+
+
+def test_far_historical_path_does_not_invent_a_crossing_or_latch_a_later_invalid_position():
+  controller = HondaRadarControl()
+  controller.update(**scene(tracks=[radar(distance=90.0, speed=-.65)]))
+  assert not controller._tracks[1].relevant
+  for frame in range(1, 4):
+    result = controller.update(**scene(frame, tracks=[radar(frame, distance=90.0, speed=-.65)], short_path=True))
+    claim = evidence(result)
+    assert result.healthy and not result.degraded and not result.cleared
+    assert claim['coasting'] and claim['conflictEnd'] == HORIZON
+    assert not claim['physicalConflictValid']
+    assert controller._tracks[1].path_ns == START and not controller._tracks[1].relevant
+  result = controller.update(**scene(4, tracks=[radar(4, distance=90.0, active=False, lastInvalidReason='positionInnovation')]))
+  assert result.healthy and not result.degraded and not result.objects and not result.cleared
+  assert not controller._lost_tracks
+
+
+@pytest.mark.parametrize('prediction_limited', [False, True])
+def test_genuine_finite_history_still_expires_even_with_a_quality_limit(prediction_limited):
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  memory = controller._tracks[1]
+  memory.path = replace(memory.path, end=.3, prediction_limited=prediction_limited)
+  path = controller._historical_path(memory, START + COAST_NS)
+  assert path.state == 'outOfPath' and not path.physical_valid
+  assert memory.path_ns == memory.position_ns == memory.velocity_ns == START
+
+
+def test_unknown_horizon_never_extends_near_measurement_or_path_authority():
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  memory = controller._tracks[1]
+  assert controller._historical_path(memory, START + COAST_NS).end == HORIZON
+  assert controller._historical_path(memory, START + COAST_NS + 1).state == 'unknown'
+  result = controller.update(**scene(6, tracks=[]))
+  assert not result.objects and result.degraded and not result.cleared
+  assert controller._lost_tracks[('control-fixture', 1)].position_ns == START
 
 
 @pytest.mark.parametrize('previous_distance,previous_lateral,current_lateral,expected_degraded', [

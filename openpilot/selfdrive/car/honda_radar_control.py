@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 import math
 from numbers import Real
 
-from openpilot.selfdrive.car.honda_radar_relevance import loss_relevant
+from openpilot.selfdrive.car.honda_radar_relevance import loss_relevant, remaining_occupancy_window
 
 
 VERSION = 1
@@ -508,7 +508,7 @@ class HondaRadarControl:
       return _Path()
     dt = (eof - memory.path_ns) / 1e9
     path = memory.path
-    start, end = max(0.0, path.start - dt), path.end - dt
+    start, end = remaining_occupancy_window(path.start, path.end, dt, horizon=HORIZON)
     if end <= start:
       return _Path('outOfPath', path.offset + path.rate * dt, path.rate, source='previousPath')
     offset = path.offset + path.rate * dt

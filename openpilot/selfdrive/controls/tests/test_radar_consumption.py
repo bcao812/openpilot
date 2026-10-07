@@ -158,6 +158,22 @@ def test_relevant_loss_persists_through_empty_fresh_messages_and_unrelated_recov
     assert consumer.degraded and consumer.lost_identities == ((SESSION, 7),)
 
 
+@pytest.mark.parametrize('distance,expected_loss', [(80.0, False), (6.6, True)])
+def test_consumption_age_does_not_turn_a_forecast_boundary_into_a_far_crossing(distance, expected_loss):
+  predicted = coast(relevant=True)
+  predicted.dRel = distance
+  predicted.evidence.conflictEnd = 10.0
+  consumer = RadarConsumption()
+  frame = radar_frame(predicted, display=(predicted,))
+  view = consume_frame(consumer, frame)
+  assert not view.radarObjects and not view.leadOne.present
+  assert consumer.expired_identities == ((SESSION, 7),)
+  assert consumer.degraded is expected_loss
+  assert frame.fusionClearedTracks == view.fusionClearedTracks == ()
+  assert predicted.evidence.positionMonoTime == PUBLICATION - 300_000_000
+  assert predicted.evidence.estimateMonoTime == PUBLICATION
+
+
 @pytest.mark.parametrize('recovery', ['same', 'different_session', 'different_track', 'migrated_slot', 'coast', 'caution'])
 def test_only_fresh_same_physical_identity_recovers_the_loss(recovery):
   consumer = RadarConsumption()

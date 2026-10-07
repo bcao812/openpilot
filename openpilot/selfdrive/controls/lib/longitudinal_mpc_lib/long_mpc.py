@@ -993,13 +993,41 @@ class LongitudinalMpc:
                                'witnessInitialAcceleration': float(self.x0[2]), 'witnessReleaseJerk': float(jerks[0])}
     return tuple(choices)
 
+  def occupancy_behind_position_limit(self, projection, stage, *, constraint_time):
+    """Certify the complete occupied interval at a shared later position row.
+
+    Hard acceleration boxes, linear a(t) and continuous v(t)>=0 imply
+    v(t)>=max(v0+a_floor*t, 0). Thus x(g)-x(t)>=s_min(g)-s_min(t) for g>=t.
+    Bounding x(g) by every lead(t)+that progress difference preserves actual
+    clearance without tying an earlier moving target to a later ego position.
+    """
+    left, right = T_IDXS[stage], T_IDXS[stage+1]
+    start, end = max(left, projection.conflict_start), min(right, projection.conflict_end)
+    speed = float(self.x0[1])
+    acceleration_floor = min(ACCEL_MIN, float(self.x0[2]))
+    if (not np.all(np.isfinite([speed, self.x0[2], constraint_time])) or speed < 0.0
+        or not left <= start < end <= constraint_time <= right):
+      raise ValueError('Behind occupancy transport requires a later in-stage row')
+    lead_position = float(projection.raw_trajectory[stage, 0])
+    lead_velocity = float((projection.raw_trajectory[stage+1, 0] - lead_position) / (right-left))
+    times = [start, end]
+    # lead_x(t)-s_min(t) is convex before the lower-bound stop and linear
+    # afterwards. Endpoints and this stationary point contain its minimum.
+    stationary = (lead_velocity-speed) / acceleration_floor
+    if start < stationary < end and stationary < speed / -acceleration_floor:
+      times.append(stationary)
+    minimum_progress = self.ego_progress_bound(speed, acceleration_floor, constraint_time)
+    limit = min(lead_position + lead_velocity*(timestamp-left)
+                + (minimum_progress-self.ego_progress_bound(speed, acceleration_floor, timestamp)) for timestamp in times)
+    return float(limit - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER)
+
   def finite_occupancy_bounds(self, projections=None, *, passing_speed_limit=None, witness=None, witness_jerks=None):
     """Fold finite physical conflicts into one exact position row per stage.
 
-    A stage's latest occupied instant and smallest raw object position form
-    a conservative outer bound for every object in that stage. Nonnegative
-    continuous ego velocity then makes the single end-position bound sufficient
-    throughout all those occupancy intervals. Persistent following retains its
+    Every behind condition is transported to the stage's latest occupied
+    instant using a certified lower bound on intervening ego progress. The
+    tightest condition then certifies every object's entire occupied interval
+    with one position row. Persistent following retains its
     existing soft headway problem; no constraint uses its stopping equivalence
     or the solver's impossible-gap distance enlargement as physical geometry.
     """
@@ -1017,9 +1045,10 @@ class LongitudinalMpc:
         start, end = max(left, projection.conflict_start), min(right, projection.conflict_end)
         if end <= start:
           continue
-        # Raw prediction is linear between its nodes, as in the FCW check.
-        positions = np.interp([start, end], T_IDXS, projection.raw_trajectory[:, 0])
         if passing_speed_limit is not None:
+          # Passing pivots can precede an object's occupied end. Their
+          # existing transport uses a certified upper speed instead.
+          positions = np.interp([start, end], T_IDXS, projection.raw_trajectory[:, 0])
           if projection.pass_before:
             conditions[stage].append((float(start-left), float(np.max(positions)+STOP_DISTANCE+OCCUPANCY_POSITION_BUFFER), True,
                                       projection.identity))
@@ -1027,14 +1056,16 @@ class LongitudinalMpc:
             conditions[stage].append((float(end-left), float(np.min(positions)-CRASH_DISTANCE-OCCUPANCY_POSITION_BUFFER), False,
                                       projection.identity))
           continue
-        limit = float(np.min(positions) - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER)
-        previous = bounds[stage]
-        identities = (projection.identity,)
-        if previous is not None:
-          end = max(end, left + previous.duration)
-          limit = min(limit, previous.position_limit)
-          identities = (*previous.identities, *identities)
-        bounds[stage] = OccupancyBound(float(end - left), limit, identities)
+        conditions[stage].append(projection)
+    if passing_speed_limit is None:
+      for stage, objects in enumerate(conditions):
+        if not objects:
+          continue
+        # Decide the common time first. Reusing a bound computed at another
+        # object's earlier end would make the result depend on list order.
+        end = min(T_IDXS[stage+1], max(projection.conflict_end for projection in objects))
+        limit = min(self.occupancy_behind_position_limit(projection, stage, constraint_time=end) for projection in objects)
+        bounds[stage] = OccupancyBound(float(end - T_IDXS[stage]), limit, tuple(projection.identity for projection in objects))
     if passing_speed_limit is not None:
       for stage, rows in enumerate(conditions):
         if not rows:
@@ -1276,14 +1307,16 @@ class LongitudinalMpc:
         end = min(T_IDXS[stage+1], projection.conflict_end)
         if end <= start:
           continue
-        positions = np.interp([start, end], T_IDXS, projection.raw_trajectory[:, 0])
         if projection.pass_before:
+          positions = np.interp([start, end], T_IDXS, projection.raw_trajectory[:, 0])
           limit = np.max(positions) + STOP_DISTANCE + OCCUPANCY_POSITION_BUFFER
           limit += self._passing_speed_limit * max(0.0, bound.duration - (start - T_IDXS[stage]))
+        elif self._passing_speed_limit is None:
+          limit = self.occupancy_behind_position_limit(projection, stage, constraint_time=T_IDXS[stage] + bound.duration)
         else:
+          positions = np.interp([start, end], T_IDXS, projection.raw_trajectory[:, 0])
           limit = np.min(positions) - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER
-          if self._passing_speed_limit is not None:
-            limit -= self._passing_speed_limit * max(0.0, (end - T_IDXS[stage]) - bound.duration)
+          limit -= self._passing_speed_limit * max(0.0, (end - T_IDXS[stage]) - bound.duration)
         if abs(position - limit) <= tolerance:
           token = self.lead_influence_token(projection.lead)
           if token is not None:

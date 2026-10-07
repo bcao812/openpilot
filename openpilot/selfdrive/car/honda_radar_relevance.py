@@ -5,6 +5,18 @@ import math
 HORIZON = 10.0
 
 
+def remaining_occupancy_window(start, end, elapsed, *, horizon=HORIZON):
+  """Age a known exit without turning the forecast boundary into an exit.
+
+  Callers separately enforce the measurement and path evidence deadlines.
+  An endpoint exactly at the forecast horizon means that no clearing event
+  was established; keeping that meaning does not renew any evidence clock.
+  A genuinely finite endpoint still expires, even if other quality flags
+  describe it as limited.
+  """
+  return max(0.0, start - elapsed), horizon if end == horizon else end - elapsed
+
+
 def loss_relevant(*, distance, ground_speed, ego_speed, path_state, conflict_start, conflict_end,
                   lateral_speed, horizon=HORIZON):
   """Use an already qualified hypothesis to decide whether its loss matters.

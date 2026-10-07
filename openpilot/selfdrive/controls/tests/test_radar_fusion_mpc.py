@@ -18,7 +18,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan
 from openpilot.selfdrive.controls.lib.lead_qualification import MAX_CONTROL_OBJECTS
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_STOP_DISTANCE, CRASH_DISTANCE, MODEL_V_REF, MPC_INVALID_INPUT, MPC_OCCUPANCY_UNSATISFIED, N,
-  OCCUPANCY_POSITION_REINTEGRATION_LIMIT, QP_FEASIBILITY_TOL, REFERENCE_BOUND, REST_STATE_TOL,
+  OCCUPANCY_POSITION_BUFFER, OCCUPANCY_POSITION_REINTEGRATION_LIMIT, QP_FEASIBILITY_TOL, REFERENCE_BOUND, REST_STATE_TOL,
   RISK_STOP_DISTANCE, STOP_DISTANCE, T_IDXS,
   LongitudinalMpc, LongitudinalPlanSource, MpcReference,
 )
@@ -119,6 +119,24 @@ def stationary_window_clearance(planner, distance, start, end):
   return minimum
 
 
+def moving_window_clearance(planner, projection):
+  """Independent polynomial-root check of each continuous relative-position segment."""
+  minimum = float('inf')
+  for stage, jerk in enumerate(planner.j_solution):
+    left, right = T_IDXS[stage:stage+2]
+    lo, hi = max(projection.conflict_start, left)-left, min(projection.conflict_end, right)-left
+    if hi < lo:
+      continue
+    position, velocity, acceleration = planner.x_sol[stage]
+    lead_position = projection.raw_trajectory[stage, 0]
+    lead_velocity = (projection.raw_trajectory[stage+1, 0]-lead_position)/(right-left)
+    coefficients = [lead_position-position, lead_velocity-velocity, -acceleration/2.0, -jerk/6.0]
+    extrema = np.polynomial.polynomial.polyroots(np.polynomial.polynomial.polyder(coefficients))
+    times = [lo, hi, *(float(root.real) for root in extrema if abs(root.imag) < 1e-10 and lo <= root.real <= hi)]
+    minimum = min(minimum, float(np.min(np.polynomial.polynomial.polyval(times, coefficients))))
+  return minimum
+
+
 @pytest.mark.parametrize('lead_speed', [0.0, 4.0])
 def test_new_radar_without_any_visual_confirmation_requests_braking(lead_speed):
   lead = object_lead(distance=30.0, speed=lead_speed, ego_speed=15.0)
@@ -180,6 +198,135 @@ def test_short_crossing_brakes_and_releases_without_a_permanent_rest_limit():
   assert projection.occupied[T_IDXS == cover_end][0]
   assert not np.any(projection.occupied[T_IDXS > cover_end])
   assert planner.v_solution[-1] > stationary.v_solution[-1] + 1.0
+
+
+@pytest.mark.parametrize('speed,a0,distance,lead_speed,lead_acceleration,end,alignment_ns', [
+  (16.686721801757812, -0.08589210361242294, 10.332793235778809, 10.936553001403809,
+   0.45718914270401, 1.340597152709961, 100621282),
+  (16.70214080810547, 0.012393898330628872, 9.821605682373047, 10.865662574768066,
+   0.28191542625427246, 1.2554775476455688, 100354875),
+  (16.756868362426758, 0.24996110796928406, 7.364883899688721, 10.652046203613281,
+   -0.10135208815336227, 0.7025191783905029, 42423000),
+  (16.72172737121582, -0.11459379643201828, 7.364883899688721, 10.652046203613281,
+   -0.10135208815336227, 0.7025191783905029, 91693885),
+  (16.72758674621582, -0.066969133913517, 6.682292461395264, 10.601381301879883,
+   -0.1549449861049652, 0.6321916580200195, 42437271),
+  (16.70784568786621, -0.11034934222698212, 6.121922969818115, 10.456089973449707,
+   -0.39006689190864563, 0.5813595652580261, 44257479),
+  (16.70939826965332, 0.009480171836912632, 5.621070861816406, 10.334680557250977,
+   -0.4930892586708069, 0.6480633616447449, 44101177),
+  (16.7175350189209, -0.05677497386932373, 5.111467361450195, 10.274609565734863,
+   -0.49771347641944885, 0.7227144241333008, 43521542),
+])
+def test_retained_moving_target_windows_admit_continuously_safe_behind_plans(
+    speed, a0, distance, lead_speed, lead_acceleration, end, alignment_ns):
+  # Fixed geometry from a85d0e7 / route 89 track 57, expanded samples 7..14.
+  # The old earliest-lead/latest-ego boxes were physically infeasible; these
+  # are cold native solves of the same geometry, not a replay of its QP history.
+  crossing = object_lead(57, distance=distance, speed=lead_speed, ego_speed=speed, acceleration=lead_acceleration,
+                         end=end, persistent=False)
+  reference_ns = EPOCH_NS + alignment_ns
+  planner = solve(fused_state(crossing), speed=speed, acceleration=a0, iterations=3,
+                  now_ns=reference_ns, reference_ns=reference_ns)
+  projection, = planner._fusion_projections
+  assert moving_window_clearance(planner, projection) >= CRASH_DISTANCE
+  assert planner.trajectory_minimum_velocity(planner.x_sol, planner.j_solution) >= -QP_FEASIBILITY_TOL
+  assert np.min(planner.a_solution[1:]) >= ACCEL_MIN - QP_FEASIBILITY_TOL
+  assert np.max(planner.a_solution[1:]) <= ACCEL_MAX + QP_FEASIBILITY_TOL
+  h = T_IDXS[1]
+  first_position = speed*h + (2.0*a0+ACCEL_MIN)*h*h/6.0
+  first_velocity = speed + (a0+ACCEL_MIN)*h/2.0
+  old_box_impossible = False
+  for stage, bound in enumerate(planner._occupancy_bounds):
+    if bound is None:
+      continue
+    start, finish = max(T_IDXS[stage], projection.conflict_start), min(T_IDXS[stage+1], projection.conflict_end)
+    old_limit = np.min(np.interp([start, finish], T_IDXS, projection.raw_trajectory[:, 0]))
+    old_limit -= CRASH_DISTANCE + OCCUPANCY_POSITION_BUFFER
+    elapsed = T_IDXS[stage] + bound.duration - h
+    assert elapsed >= 0.0 and first_velocity + ACCEL_MIN*elapsed > 0.0
+    minimum_position = first_position + first_velocity*elapsed + ACCEL_MIN*elapsed**2/2.0
+    old_box_impossible |= minimum_position > old_limit
+  assert old_box_impossible
+
+
+def test_transport_does_not_admit_the_next_retained_infeasible_window():
+  speed, a0 = 16.70136260986328, -0.15578755736351013
+  crossing = object_lead(57, distance=4.528200626373291, speed=10.232539176940918, ego_speed=speed,
+                         acceleration=-0.5102481842041016, end=0.7762875556945801, persistent=False)
+  reference_ns = EPOCH_NS + 44_256_125
+  planner = LongitudinalMpc()
+  planner.set_cur_state(speed, a0)
+  planner.set_weights(prev_accel_constraint=False)
+  planner.update(fused_state(crossing), reference=MpcReference(20.0), now_ns=reference_ns, reference_ns=reference_ns)
+  assert planner.solution_status != 0 and not planner.previous_solution_valid
+  assert planner.finite_risk_braking_accel is None
+
+
+@pytest.mark.parametrize('lead_speed', [0.0, -0.25])
+def test_stationary_and_approaching_targets_keep_their_original_single_object_bound(lead_speed):
+  lead = object_lead(distance=30.0, speed=lead_speed, ego_speed=15.0, persistent=False)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(15.0, 0.0)
+  projection = planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS)
+  bounds = planner.finite_occupancy_bounds((projection,))
+  for stage, bound in enumerate(bounds):
+    assert bound is not None
+    original = min(projection.raw_trajectory[stage:stage+2, 0]) - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER
+    assert bound.position_limit == pytest.approx(original, abs=1e-12, rel=0.0)
+
+
+@pytest.mark.parametrize('a0', [-5.0, ACCEL_MIN, 1.0])
+def test_transport_velocity_floor_includes_the_actual_initial_acceleration(a0):
+  lead = object_lead(distance=0.8, speed=12.0, start=0.0, end=0.03, path='entering', persistent=False)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, a0)
+  projection = planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS)
+  limit = planner.occupancy_behind_position_limit(projection, 0, constraint_time=0.03)
+  # Lead speed exceeds the velocity lower bound, so the earliest instant is
+  # the analytic minimum. A fixed -3.5 assumption would overgrant when a0=-5.
+  expected = 0.8 + 10.0*0.03 + min(ACCEL_MIN, a0)*0.03**2/2.0 - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER
+  assert limit == pytest.approx(expected, abs=1e-12, rel=0.0)
+  with pytest.raises(ValueError, match='later in-stage row'):
+    planner.occupancy_behind_position_limit(projection, 0, constraint_time=0.02)
+
+
+def test_transport_bound_includes_the_interior_relative_velocity_extremum():
+  lead = object_lead(distance=10.0, speed=13.0, ego_speed=15.0, start=0.3, end=0.6, path='entering', persistent=False)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(15.0, 0.0)
+  projection = planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS)
+  stage = int(np.searchsorted(T_IDXS, 0.3)-1)
+  limit = planner.occupancy_behind_position_limit(projection, stage, constraint_time=0.6)
+  extremum = (13.0-15.0)/ACCEL_MIN
+  assert 0.3 < extremum < 0.6
+  expected = (10.0 + 13.0*extremum + 15.0*(0.6-extremum) + ACCEL_MIN*(0.6**2-extremum**2)/2.0
+              - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER)
+  assert limit == pytest.approx(expected, abs=1e-12, rel=0.0)
+  endpoint_only = min(10.0 + 13.0*t + 15.0*(0.6-t) + ACCEL_MIN*(0.6**2-t*t)/2.0 for t in (0.3, 0.6))
+  assert limit < endpoint_only - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER - 1e-4
+
+
+@pytest.mark.parametrize('with_rest', [False, True])
+def test_multiple_end_times_share_one_order_independent_row_with_the_original_rest_goal(with_rest):
+  early = object_lead(1, distance=2.0, speed=0.5, ego_speed=1.0, start=0.03, end=0.10, path='entering', persistent=False)
+  later = object_lead(2, distance=3.0, speed=0.75, ego_speed=1.0, start=0.07, end=0.20, path='entering', persistent=False)
+  reference = rest_reference(1.0, 6) if with_rest else MpcReference(20.0)
+  forward = solve(fused_state(early, later), speed=1.0, reference=reference, iterations=3)
+  reverse = solve(fused_state(later, early), speed=1.0, reference=reference, iterations=3)
+  np.testing.assert_array_equal(forward.params, reverse.params)
+  np.testing.assert_allclose(forward.x_sol, reverse.x_sol, atol=1e-9, rtol=0.0)
+  for a, b in zip(forward._occupancy_bounds, reverse._occupancy_bounds, strict=True):
+    assert (a is None) == (b is None)
+    if a is not None:
+      assert (a.duration, a.position_limit, a.position_lower_limit) == (b.duration, b.position_limit, b.position_lower_limit)
+      assert set(a.identities) == set(b.identities)
+  assert forward._occupancy_bounds[1].duration == pytest.approx(0.20-T_IDXS[1])
+  for projection in forward._fusion_projections:
+    assert moving_window_clearance(forward, projection) >= CRASH_DISTANCE
+  if with_rest:
+    assert forward.rest_goal_state == reverse.rest_goal_state == 'satisfied'
+    assert np.max(np.abs(forward.x_sol[6:, 1:])) <= REST_STATE_TOL
 
 
 @pytest.mark.parametrize('distance,start,end,speed', [(40.0, 0.1, 0.5, 15.0), (5.0, 4.0, 6.0, 20.0)])
@@ -491,7 +638,7 @@ def test_same_object_cannot_publish_inconsistent_physical_windows_in_its_display
   assert planner.finite_risk_braking_accel is None and planner.finite_risk_evidence == ()
 
 
-@pytest.mark.parametrize('case', ['coasting', 'stale', 'bad_input', 'caution', 'visual', 'degraded', 'late_passing', 'conservative_envelope'])
+@pytest.mark.parametrize('case', ['coasting', 'stale', 'bad_input', 'caution', 'visual', 'degraded', 'late_passing'])
 def test_solver_failure_alone_never_grants_finite_risk_emergency_braking(case):
   crossing = object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False, physical_window=(0.02, 0.10))
   state = fused_state(crossing)
@@ -512,19 +659,19 @@ def test_solver_failure_alone_never_grants_finite_risk_emergency_braking(case):
     state.fusionDegraded = True
   elif case == 'late_passing':
     state = fused_state(object_lead(distance=5.0, start=4.0, end=6.0, path='entering', persistent=False, physical_window=(4.0, 6.0)))
-  else:
-    # The conservative stage-end/min-object-position row can be infeasible
-    # although the real faster target maintains a positive gap throughout.
-    # That software envelope is not a proof of an unavoidable physical risk.
-    state = fused_state(object_lead(distance=0.8, speed=12.0, start=0.0, end=0.10, path='entering', persistent=False,
-                                   physical_window=(0.0, 0.10)))
   planner = LongitudinalMpc()
   planner.set_cur_state(10.0, 0.0)
   planner.set_weights(prev_accel_constraint=False)
   planner.update(state, reference=MpcReference(20.0), now_ns=now_ns, reference_ns=reference_ns)
   assert planner.finite_risk_braking_accel is None and planner.finite_risk_evidence == ()
-  if case == 'conservative_envelope':
-    assert planner.solution_status != 0
+
+
+def test_faster_target_no_longer_fails_the_old_box_and_has_no_emergency_proof():
+  crossing = object_lead(distance=0.8, speed=12.0, start=0.0, end=0.10, path='entering', persistent=False,
+                         physical_window=(0.0, 0.10))
+  planner = solve(fused_state(crossing), iterations=3)
+  assert moving_window_clearance(planner, planner._fusion_projections[0]) >= CRASH_DISTANCE
+  assert planner.finite_risk_braking_accel is None and planner.finite_risk_evidence == ()
 
 
 def test_numeric_failure_without_physical_proof_has_no_emergency_braking_evidence(monkeypatch):
