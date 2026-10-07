@@ -116,7 +116,21 @@ def test_saturation_reacquisition_clears_only_the_proven_identity_loss(recovery,
   assert all(row['radar']['fusionRiskUnresolved'] for row in rows[24:26])
   position = next(sample for sample in rows[25]['raw_observations'] if sample['positionValid'])
   assert position['raw']['lifecycleRaw'] == 4094 and not position['velocityValid']
-  assert not any((obj['evidence']['sessionId'], obj['evidence']['trackId']) == identity for obj in objects(rows[25]))
+  unresolved = rows[25:26] if recovery == 'same_identity' else rows[25:]
+  for row in unresolved:
+    assert row['radar']['fusionRiskUnresolved'] and not row['release']
+    for track in row['fusion_tracks']:
+      if track['trackId'] == identity[1]:
+        assert not track['active'] and not track['velocityGood']
+    for obj in objects(row):
+      evidence = obj['evidence']
+      if (evidence['sessionId'], evidence['trackId']) == identity:
+        # A retained risk may still brake by prediction. Another OEM must
+        # neither refresh its measurements nor grant it follow/departure.
+        assert evidence['source'] == 'predicted' and evidence['coasting']
+        assert evidence['positionMonoTime'] == initial['evidence']['positionMonoTime']
+        assert evidence['velocityMonoTime'] == initial['evidence']['velocityMonoTime']
+        assert not evidence['followQualified'] and not evidence['departureQualified']
 
   if recovery == 'same_identity':
     restored = rows[26]['fusion_tracks'][0]
