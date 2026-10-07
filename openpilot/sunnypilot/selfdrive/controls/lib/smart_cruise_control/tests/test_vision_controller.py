@@ -188,7 +188,7 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     assert not np.isfinite(controller.output_v_target)
     assert not np.isfinite(controller.output_a_target)
 
-  def test_active_curve_hold_rejects_negative_prediction_before_square_root():
+  def test_active_curve_hold_rejects_negative_prediction_before_square_root(self):
     controller = self._entry_hold_controller(speed=10., predicted_lateral=1.5, current_lateral=2.)
     self.sm['modelV2'].velocity.x = [-1.] * len(ModelConstants.T_IDXS)
     controller.update(self.sm, True, False, 10., 0., 30.)
