@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from openpilot.selfdrive.car.honda_radar_control import COAST_NS, HORIZON, MAX_OBJECTS, MAX_TRACKS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _qualified_path
+from openpilot.selfdrive.car.honda_radar_control import COAST_NS, HORIZON, MAX_OBJECTS, MAX_TRACKS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _corridors, _qualified_path
 from openpilot.selfdrive.car.honda_radar_relevance import remaining_occupancy_window
 
 
@@ -67,6 +67,73 @@ def scene(frame=0, *, tracks=None, leads=None, bindings=None, ego=10.0, short_pa
 
 def evidence(result):
   return result.objects[0]['evidence']
+
+
+@pytest.mark.parametrize('points', [
+  (), ((0.0, 0.0),), ((0.0, 0.0), (0.0, 0.0)), ((0.0, 0.0), (1e-6, 0.0)),
+  ((0.0, 0.0), (20.0, 0.0)), ((0.0, 0.0), (20.0, 4.0)),
+  ((0.0, 0.0), (10.0, 0.0), (20.0, 10.0)),
+  ((0.0, 0.0), (10.0, -10.0), (20.0, -10.0)),
+  tuple((2.0 * i, 4.0 * math.sin(i * .2)) for i in range(33)),
+], ids=['empty', 'one-point', 'duplicate', 'degenerate', 'straight', 'sloped', 'left-bend', 'right-bend', 'full-s-bend'])
+def test_static_lane_comparison_preserves_consumed_full_relation_fields(points):
+  corridor = _Corridor(points, 'modelPath')
+  samples = [(x, y) for x in (-1.0, 0.0, 5.0, 10.0, 20.0, 64.0, 65.0) for y in (-12.0, -2.0, 0.0, 2.0, 12.0)]
+  # Include finite support endpoints/corners and both sides of the lane
+  # agreement threshold, without replacing the polyline with its tangent.
+  for x, y in points:
+    samples.extend((x, y + offset) for offset in (-2.0, -.750000001, -.75, 0.0, .75, .750000001, 2.0))
+    samples.extend(((math.nextafter(x, -math.inf), y), (math.nextafter(x, math.inf), y)))
+  for x, y in samples:
+    full = corridor.relation(x, y, 0.0, 0.0)
+    current = corridor.relation(x, y, 0.0, 0.0, horizon=0.0)
+    # These are exactly the fields the lane/path disagreement gate consumes.
+    assert (current.state == 'unknown', current.offset) == (full.state == 'unknown', full.offset), (points, x, y)
+
+
+@pytest.mark.parametrize('curve', [False, True])
+@pytest.mark.parametrize('offset', [0.0, -.75, .75, -.750001, .750001, 3.0])
+def test_static_lane_projection_preserves_corridor_admission(monkeypatch, curve, offset):
+  model = scene(lanes=True)['model']
+  model['position'] = {'x': [2.0 * i for i in range(33)],
+                       'y': [2.0 * math.sin(i * .2) if curve else 0.0 for i in range(33)]}
+  for line, width in zip(model['laneLines'], (-5.4, -1.8, 1.8, 5.4), strict=True):
+    line['x'] = list(model['position']['x'])
+    line['y'] = [y + offset + width for y in model['position']['y']]
+  current = _corridors(model)
+  relation = _Corridor.relation
+
+  def full_relation(self, *args, **kwargs):
+    kwargs['horizon'] = HORIZON
+    return relation(self, *args, **kwargs)
+
+  monkeypatch.setattr(_Corridor, 'relation', full_relation)
+  assert current == _corridors(model)
+  if not curve:
+    assert bool(current[1].points) is (abs(offset) <= .75)
+
+
+@pytest.mark.parametrize('fault', ['nonfinite', 'reversed', 'mismatched', 'too-narrow', 'too-wide', 'low-prob', 'high-std', 'nan-prob'])
+def test_static_lane_projection_still_rejects_invalid_lane_evidence(fault):
+  model = scene(lanes=True)['model']
+  if fault == 'nonfinite':
+    model['laneLines'][1]['y'][2] = math.nan
+  elif fault == 'reversed':
+    model['laneLines'][1]['x'][2] = -1.0
+  elif fault == 'mismatched':
+    model['laneLines'][1]['y'].pop()
+  elif fault in ('too-narrow', 'too-wide'):
+    width = 2.19 if fault == 'too-narrow' else 4.81
+    model['laneLines'][1]['y'] = [-width / 2] * 33
+    model['laneLines'][2]['y'] = [width / 2] * 33
+  elif fault == 'low-prob':
+    model['laneLineProbs'][1] = .649
+  elif fault == 'high-std':
+    model['laneLineStds'][2] = .501
+  else:
+    model['laneLineProbs'][1] = math.nan
+  path, lane = _corridors(model)
+  assert path.points and not lane.points
 
 
 @pytest.mark.parametrize('speed', [0.0, -.2, -.7, 4.0, 10.0])

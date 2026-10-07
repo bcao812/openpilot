@@ -356,7 +356,9 @@ def _corridors(model):
     # A lane change/turn whose actual planned path disagrees with the lane
     # center cannot extend that path using a different lane's distant geometry.
     if path.points:
-      comparison = path.relation(*center, 0.0, 0.0)
+      # Only the current offset/unknown result is consumed here. Preserve the
+      # full finite-polyline projection without computing future occupancy.
+      comparison = path.relation(*center, 0.0, 0.0, horizon=0.0)
       if comparison.state != 'unknown' and abs(comparison.offset) > .75:
         return path, lane
     centers.append(center)
