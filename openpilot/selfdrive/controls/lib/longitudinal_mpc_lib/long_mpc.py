@@ -814,13 +814,18 @@ class LongitudinalMpc:
   @classmethod
   def occupancy_clearance_extrema(cls, projection, states, jerks, *, horizon=MAX_T):
     """Exact extrema of raw lead-minus-ego geometry over the real window."""
-    if not np.any(projection.occupied):
+    if not projection.occupied.any():
       return float('inf'), -float('inf')
     minimum, maximum = float('inf'), -float('inf')
     for stage in range(N):
-      start = max(float(T_IDXS[stage]), projection.conflict_start)
+      left = float(T_IDXS[stage])
+      start = max(left, projection.conflict_start)
+      # Stage times are increasing. Keep the point at a closed occupancy
+      # endpoint, but no later stage can contribute beyond the real window.
+      if start >= horizon or left > projection.conflict_end:
+        break
       end = min(float(T_IDXS[stage+1]), projection.conflict_end, horizon)
-      if end < start or start >= horizon:
+      if end < start:
         continue
       duration = T_IDXS[stage+1] - T_IDXS[stage]
       lead_position = projection.raw_trajectory[stage, 0]
@@ -832,13 +837,13 @@ class LongitudinalMpc:
       # Relative velocity is quadratic on a constant-jerk ego segment. Its
       # roots contain every interior clearance extremum of this interpolation.
       if abs(jerk) < 1e-12:
-        if abs(state[2]) > 1e-12:
-          times.append((lead_velocity - state[1]) / state[2])
+        if abs(acceleration) > 1e-12:
+          times.append((lead_velocity - velocity) / acceleration)
       else:
-        discriminant = state[2]**2 + 2.0 * jerk * (lead_velocity - state[1])
+        discriminant = acceleration**2 + 2.0 * jerk * (lead_velocity - velocity)
         if discriminant >= 0.0:
           root = np.sqrt(discriminant)
-          times.extend(((-state[2] - root) / jerk, (-state[2] + root) / jerk))
+          times.extend(((-acceleration - root) / jerk, (-acceleration + root) / jerk))
       for timestamp in times:
         if lo <= timestamp <= hi:
           # Keep integrate_jerk's position arithmetic and its operation order,
@@ -1068,7 +1073,7 @@ class LongitudinalMpc:
     bounds = [None] * N
     conditions = [[] for _ in range(N)]
     for projection in projections:
-      if projection.persistent or not np.any(projection.occupied):
+      if projection.persistent or not projection.occupied.any():
         continue
       for stage, (left, right) in enumerate(zip(T_IDXS[:-1], T_IDXS[1:], strict=True)):
         start, end = max(left, projection.conflict_start), min(right, projection.conflict_end)
@@ -1325,13 +1330,16 @@ class LongitudinalMpc:
         if self._constraint_cost_weights[-1] > 0.0 and tightest < -tolerance:
           active.update(token for column, token in enumerate(tokens) if token is not None
                         and abs(margins[column] - tightest) <= tolerance)
+    # The projection set and masks are fixed during this attribution pass.
+    # Inspect each mask once; every remaining object's own interval and row
+    # still participates independently at every occupied stage below.
+    finite_projections = tuple(projection for projection in self._fusion_projections
+                               if not projection.persistent and projection.occupied.any())
     for stage, bound in enumerate(self._occupancy_bounds):
       if bound is None:
         continue
       position = self.integrate_jerk(self.x_sol[stage], self.j_solution[stage], bound.duration)[0]
-      for projection in self._fusion_projections:
-        if projection.persistent or not np.any(projection.occupied):
-          continue
+      for projection in finite_projections:
         start = max(T_IDXS[stage], projection.conflict_start)
         end = min(T_IDXS[stage+1], projection.conflict_end)
         if end <= start:

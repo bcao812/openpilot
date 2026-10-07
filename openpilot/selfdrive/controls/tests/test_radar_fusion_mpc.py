@@ -450,6 +450,21 @@ def test_position_only_clearance_preserves_exact_dynamics_and_continuous_extrema
   assert actual == (min(candidates), max(candidates))
 
 
+@pytest.mark.parametrize('horizon, expected', [(10.0, (-80.0, 120.0)), (float(T_IDXS[6]), (20.0, 120.0))])
+def test_clearance_window_traversal_keeps_closed_node_endpoints(horizon, expected):
+  planner = LongitudinalMpc()
+  lead = object_lead(distance=20.0, speed=0.0, ego_speed=0.0, persistent=False)
+  projection = planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS)
+  projection = replace(projection, conflict_start=float(T_IDXS[4]), conflict_end=float(T_IDXS[6]))
+  states, jerks = np.zeros((N+1, 3)), np.zeros(N)
+  # Deliberate node discontinuities make each boundary side independently
+  # observable here. Dynamic continuity has its own acceptance check; this
+  # geometric helper must retain the original closed-window endpoint rules.
+  states[3, 0] = -100.0  # Its endpoint is exactly the occupied window's start.
+  states[6, 0] = 100.0   # Its start is exactly the occupied window's end.
+  assert planner.occupancy_clearance_extrema(projection, states, jerks, horizon=horizon) == expected
+
+
 @pytest.mark.parametrize('with_rest', [False, True])
 def test_multiple_end_times_share_one_order_independent_row_with_the_original_rest_goal(with_rest):
   early = object_lead(1, distance=2.0, speed=0.5, ego_speed=1.0, start=0.03, end=0.10, path='entering', persistent=False)
