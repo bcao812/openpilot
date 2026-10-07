@@ -1017,37 +1017,61 @@ def test_mild_negative_radar_velocity_keeps_approaching_geometry():
   assert action(planner) < 0.0
 
 
-@pytest.mark.parametrize('speed,a0,distance,lead_speed,lead_acceleration,start,alignment_ns,expected_x0,expected_v0,expected_x10', [
+@pytest.mark.parametrize('speed,a0,distance,lead_speed,lead_acceleration,start,alignment_ns,expected_x0,expected_v0,expected_x10,accepted', [
   (4.188114166259766, -0.5062192678451538, 17.479167938232422, -0.0602441169321537, -2.5708842277526855,
-   0.7778034210205078, 49068416, 17.26700520236193, -0.18627953748592974, 13.676217081056151),
+   0.7778034210205078, 49068416, 17.26700520236193, -0.18627953748592974, 13.676217081056151, True),
   (4.152256011962891, -0.5448019504547119, 17.479167938232422, -0.0602441169321537, -2.5708842277526855,
-   0.7778034210205078, 110202583, 16.9960673302231, -0.3422777626409075, 10.61000930564217),
+   0.7778034210205078, 110202583, 16.9960673302231, -0.3422777626409075, 10.61000930564217, False),
   (1.0514822006225586, -0.18802042305469513, 5.570803165435791, -0.08574940264225006, -0.7474237680435181,
-   0.10351847112178802, 93279354, 5.460660318684282, -0.15524186349386138, 3.509812642972538),
+   0.10351847112178802, 93279354, 5.460660318684282, -0.15524186349386138, 3.509812642972538, True),
   (0.9412540197372437, -0.5520215630531311, 5.309693336486816, -0.12712086737155914, -0.5738447904586792,
-   1.4378634691238403, 52973833, 5.251518269643627, -0.15748766942879147, 3.351951817979633),
+   1.4378634691238403, 52973833, 5.251518269643627, -0.15748766942879147, 3.351951817979633, True),
   (1.5158843994140625, -0.3846769332885742, 7.0452561378479, -0.21278104186058044, -1.6375515460968018,
-   1.0249863862991333, 49840499, 6.9565881676161725, -0.29432147086488114, 2.2758020435090476),
+   1.0249863862991333, 49840499, 6.9565881676161725, -0.29432147086488114, 2.2758020435090476, True),
   (1.498730182647705, -0.3723600506782532, 7.0452561378479, -0.21278104186058044, -1.6375515460968018,
-   1.0249863862991333, 99785969, 6.864484965295978, -0.3755778349965633, 1.0125149541543208),
+   1.0249863862991333, 99785969, 6.864484965295978, -0.3755778349965633, 1.0125149541543208, True),
 ])
-def test_recorded_small_negative_motion_keeps_measurements_and_a_safe_model_trajectory(
-    speed, a0, distance, lead_speed, lead_acceleration, start, alignment_ns, expected_x0, expected_v0, expected_x10):
+def test_recorded_small_negative_motion_preserves_inputs_and_enforces_native_acceptance(
+    speed, a0, distance, lead_speed, lead_acceleration, start, alignment_ns, expected_x0, expected_v0, expected_x10, accepted):
+  from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import sample_reference_acceleration
   # a85d0e7 / route 8a samples 0,1,2,3,10,11. This checks the explicit motion
   # hypothesis and requested plan, not the object's measured future behavior.
+  # Sample 1 repeatedly exceeds the unchanged native-reintegration budget;
+  # correct prediction alone cannot turn that rejected iterate into a plan.
   lead = object_lead(distance=distance, speed=lead_speed, ego_speed=speed, acceleration=lead_acceleration,
                      start=start, end=10.0, path='entering', persistent=False)
   recorded = deepcopy(vars(lead))
   reference_ns = EPOCH_NS + alignment_ns
-  planner = solve(fused_state(lead), speed=speed, acceleration=a0, iterations=3,
-                  now_ns=reference_ns, reference_ns=reference_ns)
-  projection, = planner._fusion_projections
-  assert vars(lead) == recorded
-  np.testing.assert_allclose(projection.raw_trajectory[0], [expected_x0, expected_v0], atol=1e-12, rtol=0.0)
-  assert projection.raw_trajectory[-1, 0] == pytest.approx(expected_x10, abs=1e-10, rel=0.0)
-  assert np.all(projection.raw_trajectory[:, 1] < 0.0)  # The measured approach never becomes a stationary substitute.
-  assert np.any(projection.occupied)
-  assert moving_window_clearance(planner, projection) >= CRASH_DISTANCE
+  planner = LongitudinalMpc()
+  for iteration in range(3):
+    # fail/reset clears x0 and restores default weights. Reinstall the SAME
+    # actual problem; success at a reset zero state would not be recovery.
+    planner.set_cur_state(speed, a0)
+    planner.set_weights(prev_accel_constraint=False)
+    projection = planner.project_fusion_lead(lead, slot=None, reference_ns=reference_ns)
+    np.testing.assert_allclose(projection.raw_trajectory[0], [expected_x0, expected_v0], atol=1e-12, rtol=0.0)
+    assert projection.raw_trajectory[-1, 0] == pytest.approx(expected_x10, abs=1e-10, rel=0.0)
+    assert np.all(projection.raw_trajectory[:, 1] < 0.0)  # No stationary substitute for measured approach.
+    assert np.any(projection.occupied)
+    planner.update(fused_state(lead), reference=MpcReference(20.0), now_ns=reference_ns, reference_ns=reference_ns)
+    assert vars(lead) == recorded
+    assert planner.diagnostic_last_x0 == (0.0, speed, a0)
+    assert planner.diagnostic_solve_calls == iteration + 1
+    if accepted:
+      assert planner.solution_status == planner.last_solver_status == 0 and planner.previous_solution_valid
+      assert moving_window_clearance(planner, planner._fusion_projections[0]) >= CRASH_DISTANCE
+      request = sample_reference_acceleration(planner.a_solution, 0.55)
+      assert ACCEL_MIN-QP_FEASIBILITY_TOL <= request <= ACCEL_MAX+QP_FEASIBILITY_TOL
+    else:
+      assert planner.solution_status == planner.last_solver_status == MPC_OCCUPANCY_UNSATISFIED
+      assert planner.diagnostic_last_solver_return == 0
+      assert planner.failure_reason == 'finite_occupancy_dynamics_residual_exceeded'
+      diagnostics = planner.diagnostic_occupancy_projection
+      assert diagnostics is not None and diagnostics['applied'] is False
+      defect = diagnostics['maximumNativeDynamicsDefect']
+      assert defect[0] > OCCUPANCY_POSITION_REINTEGRATION_LIMIT and defect[1] > QP_FEASIBILITY_TOL
+      assert not planner.previous_solution_valid and planner.object_influence_identities == ()
+      assert planner.finite_risk_braking_accel is None and planner.finite_risk_evidence == ()
 
 
 @pytest.mark.parametrize('lead_speed', [-5.0, np.nextafter(-2.0, -np.inf), -2.0, 0.0, 1e-6, 5.0])
