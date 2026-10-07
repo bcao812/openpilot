@@ -12,7 +12,7 @@ from numbers import Real
 import struct
 
 from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.controls.lib.lead_qualification import lead_identity, qualified_lead
+from openpilot.selfdrive.controls.lib.lead_qualification import _read, lead_identity, qualified_lead
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import (
   LowSpeedStopDistanceEvidence, MAX_SOURCE_GAP_NS, PARKING_START_SPEED,
 )
@@ -123,7 +123,7 @@ class VisionLeadUncertainty:
         continue
       if getattr(lead, 'present', None) is not True:
         return replace(result, reason='unmatched_vision_slot')
-      evidence = getattr(lead, 'evidence', None)
+      evidence = _read(lead, 'evidence')
       formal = getattr(evidence, 'version', 0) == 1
       source = str(getattr(evidence, 'source', 'legacy'))
       if formal and source in ('radar', 'fused'):

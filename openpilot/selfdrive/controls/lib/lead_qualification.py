@@ -21,7 +21,16 @@ SOURCES = ('vision', 'radar', 'fused', 'predicted')
 
 
 def _read(value, field, default=None):
-  return value.get(field, default) if isinstance(value, dict) else getattr(value, field, default)
+  if isinstance(value, dict):
+    return value.get(field, default)
+  if field == 'evidence':
+    # Reading an absent struct through a Cap'n Proto builder allocates it.
+    # Qualification is observational, including for legacy messages that
+    # never set this pointer. A reader also keeps nested evidence reads pure.
+    as_reader = getattr(value, 'as_reader', None)
+    if callable(as_reader):
+      value = as_reader()
+  return getattr(value, field, default)
 
 
 def _finite(value):

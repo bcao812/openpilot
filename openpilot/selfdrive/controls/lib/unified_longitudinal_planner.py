@@ -143,7 +143,7 @@ def has_departing_lead(radar_state, speed, delay, *, minimum_gap_base=CREEP_FOLL
     if not all(math.isfinite(value) for value in values):
       return False
     identity = lead_identity(lead)
-    evidence = getattr(lead, 'evidence', None)
+    evidence = getattr(lead.as_reader() if hasattr(lead, 'as_reader') else lead, 'evidence', None)
     lateral = evidence.pathOffset if getattr(evidence, 'version', 0) == 1 else lead.yRel
     if getattr(evidence, 'version', 0) == 1 and identity != primary_identity:
       # A distant second vehicle need not depart for the blocking vehicle to
@@ -389,6 +389,9 @@ class UnifiedLongitudinalPlanner:
   def radar_input_state(self, state, now_ns):
     self.refresh_radar_settings(now_ns)
     radar = state['radarState']
+    if hasattr(radar, 'as_reader'):
+      radar = radar.as_reader()
+      state = RadarInputView(state, radar)
     self.fusion_admitted = bool(
       (getattr(radar, 'fusionActive', False) or getattr(radar, 'fusionDegraded', False)) and self.planner.unified
       and self.radar_settings.control_requested(self.planner.CP, self.planner.CP_SP)

@@ -135,7 +135,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     view = SimpleNamespace(frame=object(), client=SimpleNamespace(timestamp_eof=START), device_camera=object(),
                            model_renderer=SimpleNamespace(_car_space_transform=np.array(((640., 1000., 0), (360., 0, 1000.), (1., 0, 0)))))
     params = Mock()
-    params.get.return_value = renderer.ASSIST
+    params.get.return_value = 3
     params.get_bool.return_value = True
     ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, params=params, active_bundle=False)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2) as clock, \

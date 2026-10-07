@@ -76,8 +76,12 @@ MPC_INVALID_SOLUTION = -2
 MPC_SOLVER_ERROR = -3
 MPC_GOAL_INFEASIBLE = -4
 MPC_GOAL_UNSATISFIED = -5
+MPC_OCCUPANCY_UNSATISFIED = -6
 REFERENCE_BOUND = 1e4
 REST_STATE_TOL = 1e-3
+# Keep numerical constraint residuals separate from the existing geometric
+# clearance. The exact post-solve check still requires CRASH_DISTANCE.
+OCCUPANCY_POSITION_BUFFER = 1e-3
 # A numerical repair requires observed residuals this small. This is not the
 # native QP request tolerance, nor a change to the physical rest acceptance box.
 QP_FEASIBILITY_TOL = 1e-9
@@ -107,6 +111,13 @@ class LeadProjection:
   conflict_start: float
   conflict_end: float
   persistent: bool
+
+
+@dataclass(frozen=True)
+class OccupancyBound:
+  duration: float
+  position_limit: float
+  identities: tuple
 
 
 @dataclass(frozen=True)
@@ -368,6 +379,7 @@ class LongitudinalMpc:
     self.source = LongitudinalPlanSource.cruise
 
   def reset(self):
+    clear_occupancy_bounds = getattr(self, '_native_occupancy_bounds_active', False)
     self.diagnostic_reset_calls += 1
     self.solver.reset()
 
@@ -379,6 +391,18 @@ class LongitudinalMpc:
     self._cost_diagonals = [matrix.ravel(order='F')[::matrix.shape[0]+1] for matrix in self._cost_matrices]
     self._rest_constraint_buffers = [(np.zeros((2, X_DIM), order='F'), np.zeros((2, U_DIM), order='F'),
                                       np.full(2, -1.0), np.ones(2)) for _ in range(N)]
+    if clear_occupancy_bounds:
+      # solver.reset() clears iterates, not the installed model constraints.
+      # Ordinary update rewrites every row; direct run after failure/reset
+      # must also be unable to inherit an old crossing or physical state box.
+      for stage, (C, D, lower, upper) in enumerate(self._rest_constraint_buffers):
+        self.solver.constraints_set(stage, 'C', C)
+        self.solver.constraints_set(stage, 'D', D)
+        self.solver.constraints_set(stage, 'lg', lower)
+        self.solver.constraints_set(stage, 'ug', upper)
+      for stage in range(1, N+1):
+        self.solver.constraints_set(stage, 'lbx', np.full(2, -REFERENCE_BOUND))
+        self.solver.constraints_set(stage, 'ubx', np.full(2, REFERENCE_BOUND))
 
     self.x_sol = np.zeros((N+1, X_DIM))
     self.u_sol = np.zeros((N, 1))
@@ -413,6 +437,9 @@ class LongitudinalMpc:
     self.fcw_object_identity = None
     self._obstacle_identities = ()
     self._fusion_projections = ()
+    self._occupancy_bounds = (None,) * N
+    self._native_occupancy_bounds_active = False
+    self.diagnostic_occupancy_bounds = ()
     self.solution_status = 0
     self.last_solver_status = 0
     self.failure_reason = ''
@@ -754,6 +781,80 @@ class LongitudinalMpc:
             return True
     return False
 
+  def finite_occupancy_bounds(self):
+    """Fold finite physical conflicts into one exact position row per stage.
+
+    A stage's latest occupied instant and smallest raw object position form
+    a conservative outer bound for every object in that stage. Nonnegative
+    continuous ego velocity then makes the single end-position bound sufficient
+    throughout all those occupancy intervals. Persistent following retains its
+    existing soft headway problem; no constraint uses its stopping equivalence
+    or the solver's impossible-gap distance enlargement as physical geometry.
+    """
+    bounds = [None] * N
+    for projection in self._fusion_projections:
+      if projection.persistent or not np.any(projection.occupied):
+        continue
+      for stage, (left, right) in enumerate(zip(T_IDXS[:-1], T_IDXS[1:], strict=True)):
+        start, end = max(left, projection.conflict_start), min(right, projection.conflict_end)
+        if end <= start:
+          continue
+        # Raw prediction is linear between its nodes, as in the FCW check.
+        positions = np.interp([start, end], T_IDXS, projection.raw_trajectory[:, 0])
+        limit = float(np.min(positions) - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER)
+        previous = bounds[stage]
+        identities = (projection.identity,)
+        if previous is not None:
+          end = max(end, left + previous.duration)
+          limit = min(limit, previous.position_limit)
+          identities = (*previous.identities, *identities)
+        bounds[stage] = OccupancyBound(float(end - left), limit, identities)
+    return tuple(bounds)
+
+  def occupancy_speed_row(self, stage):
+    """One sufficient continuous nonnegative-speed row, with fixed-x0 care."""
+    duration = T_IDXS[stage+1] - T_IDXS[stage]
+    if stage == 0:
+      # v+a*h/2 may be negative for a valid low-speed initial state even
+      # though a rapid release of braking can keep v(t)>=0. Preserve the
+      # existing split proof: fixed b1 is checked, leaving b2 as the one row.
+      split = self.initial_rest_split(self.x0, duration)
+      if (self.x0[1] < 0.0 or split <= 0.0
+          or self.x0[1] + self.x0[2] * split / 2.0 < 0.0):
+        raise ValueError('Finite occupancy has no forward initial certificate')
+      return np.array([0.0, 1.0, (duration + split) / 2.0]), duration * split / 2.0
+    # v(0), v(h) are constrained at the nodes. The third quadratic Bernstein
+    # coefficient v+a*h/2>=0 certifies this entire velocity polynomial. This
+    # is a stronger feasible subset than the ordinary split-rest certificate.
+    return np.array([0.0, 1.0, duration / 2.0]), 0.0
+
+  def occupancy_trajectory_error(self, states, jerks, *, tolerance):
+    """Recheck the final trajectory, including any rest-precision adjustment."""
+    if not any(getattr(self, '_occupancy_bounds', ())):
+      return ''
+    if (states.shape != (N+1, X_DIM) or jerks.shape != (N,)
+        or not np.all(np.isfinite(states)) or not np.all(np.isfinite(jerks))):
+      return 'invalid_finite_occupancy_trajectory'
+    if (np.any(states[1:, 1] < -tolerance)
+        or np.any(states[1:, 2] < self.params[1:, 0] - tolerance)
+        or np.any(states[1:, 2] > self.params[1:, 1] + tolerance)):
+      return 'finite_occupancy_physical_bounds_violated'
+    if self.trajectory_minimum_velocity(states, jerks) < -tolerance:
+      return 'finite_occupancy_continuous_velocity_violated'
+    for stage, bound in enumerate(self._occupancy_bounds):
+      if bound is None:
+        continue
+      row, control = self.occupancy_speed_row(stage)
+      if row @ states[stage] + control * jerks[stage] < -tolerance:
+        return 'finite_occupancy_continuous_velocity_violated'
+      position = self.integrate_jerk(states[stage], jerks[stage], bound.duration)[0]
+      if position > bound.position_limit + tolerance:
+        return 'finite_occupancy_position_bound_violated'
+    for projection in self._fusion_projections:
+      if not projection.persistent and self.collision_in_occupancy(projection, states, jerks):
+        return 'finite_occupancy_clearance_violated'
+    return ''
+
   def fusion_fcw_identity(self, projection):
     if projection.identity is not None:
       return projection.identity
@@ -1082,6 +1183,8 @@ class LongitudinalMpc:
           self.x0, states, jerks, node, self.params, tolerance=arithmetic,
           recovery_position_limit=getattr(self, 'rest_recovery_position_limit', None),
         )
+        if not reason:
+          reason = self.occupancy_trajectory_error(states, jerks, tolerance=arithmetic)
       candidates.append({'node': node, 'reason': reason})
       if not reason:
         self.effective_rest_node = node
@@ -1318,13 +1421,26 @@ class LongitudinalMpc:
     # without redundant C rows; exact due-rest keeps its existing separate path.
     constrained_stages = max(0, node - 1) if future else 0
     splits = []
+    occupancy_stages = []
+    self._native_occupancy_bounds_active = any(self._occupancy_bounds)
     for stage, duration in enumerate(np.diff(T_IDXS)):
       C, D, lower, upper = self._rest_constraint_buffers[stage]
       C.fill(0.0)
       D.fill(0.0)
       lower.fill(-1.0)
       upper.fill(1.0)
-      if stage < constrained_stages:
+      bound = self._occupancy_bounds[stage]
+      if bound is not None:
+        C[0], D[0, 0] = self.occupancy_speed_row(stage)
+        lower[0], upper[0] = 0.0, REFERENCE_BOUND
+        endpoint = bound.duration
+        C[1] = [1.0, endpoint, endpoint**2 / 2.0]
+        D[1, 0] = endpoint**3 / 6.0
+        lower[1], upper[1] = -REFERENCE_BOUND, bound.position_limit
+        occupancy_stages.append(stage)
+        if stage < constrained_stages:
+          splits.append(None)
+      elif stage < constrained_stages:
         # x0 is fixed. Admission and the native C row share this exact split.
         split = self.initial_rest_split(self.x0, duration) if stage == 0 else duration / 2.0
         C[1] = [0.0, 1.0, (duration + split) / 2.0]
@@ -1336,13 +1452,23 @@ class LongitudinalMpc:
         # At stage zero b1 is fixed and was certified by the split choice.
         # Keeping that row inactive avoids a redundant initial-state equality.
         splits.append(float(split))
+      elif self._native_occupancy_bounds_active:
+        # An earlier between-node reverse excursion cannot buy extra space
+        # for a later crossing. Keep this one-row certificate on the remaining
+        # ordinary intervals too; future-rest intervals retain their two rows.
+        C[0], D[0, 0] = self.occupancy_speed_row(stage)
+        lower[0], upper[0] = 0.0, REFERENCE_BOUND
       self.solver.constraints_set(stage, 'C', C)
       self.solver.constraints_set(stage, 'D', D)
       self.solver.constraints_set(stage, 'lg', lower)
       self.solver.constraints_set(stage, 'ug', upper)
     if future:
-      self.diagnostic_rest_goal['continuousSpeedCertificate'] = 'quadratic_bernstein'
+      self.diagnostic_rest_goal['continuousSpeedCertificate'] = (
+        'quadratic_bernstein_with_finite_occupancy_rows' if occupancy_stages else 'quadratic_bernstein'
+      )
       self.diagnostic_rest_goal['continuousSpeedSplitTimes'] = splits
+      if occupancy_stages:
+        self.diagnostic_rest_goal['finiteOccupancyStages'] = occupancy_stages
 
   @staticmethod
   def due_rest_primal(initial_state):
@@ -1608,6 +1734,13 @@ class LongitudinalMpc:
         # never publish this relaxed solution as goal satisfaction.
         self.rest_goal_braking_accel = minimum_accel
 
+    if any(self._occupancy_bounds):
+      # Position clearance is not bought with an impossible acceleration or
+      # a backwards velocity excursion. Intersect after the rest boxes are
+      # built so a crossing can never relax a simultaneous model stop.
+      lower[1:, 0] = np.maximum(lower[1:, 0], 0.0)
+      lower[1:, 1] = np.maximum(lower[1:, 1], self.params[1:, 0])
+      upper[1:, 1] = np.minimum(upper[1:, 1], self.params[1:, 1])
     self.set_continuous_rest_bounds()
 
     self.install_cost_weights(weights)
@@ -1690,6 +1823,8 @@ class LongitudinalMpc:
     self.fcw_object_identity = None
     self._obstacle_identities = ()
     self._fusion_projections = ()
+    self._occupancy_bounds = (None,) * N
+    self.diagnostic_occupancy_bounds = ()
     self.rest_goal = None
     self.rest_goal_state = 'none'
     self.rest_goal_reason = ''
@@ -1828,6 +1963,11 @@ class LongitudinalMpc:
     self.params[:,5] = LEAD_DANGER_FACTOR
 
     try:
+      self._occupancy_bounds = self.finite_occupancy_bounds()
+      self.diagnostic_occupancy_bounds = tuple(
+        (stage, bound.duration, bound.position_limit, bound.identities)
+        for stage, bound in enumerate(self._occupancy_bounds) if bound is not None
+      )
       self.set_reference_problem(reference, x_obstacles, sources, accel_min, t_follow, lead_slots=lead_slots)
     except (TypeError, ValueError, FloatingPointError):
       self.fail(MPC_INVALID_INPUT)
@@ -1847,6 +1987,10 @@ class LongitudinalMpc:
         self.crash_cnt = 0
         self._fusion_fcw_counts = {}
         self._fusion_fcw_epochs = {}
+        return
+      if (failure := self.occupancy_trajectory_error(self.x_sol, self.j_solution, tolerance=QP_FEASIBILITY_TOL)):
+        self.fail(MPC_OCCUPANCY_UNSATISFIED)
+        self.failure_reason = failure
         return
       self.update_fusion_fcw(projections, now_ns=now_ns)
     elif (radarstate.leadOne.present and np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
@@ -1886,6 +2030,7 @@ class LongitudinalMpc:
     failed_goal = self.rest_goal
     effective_node = self.effective_rest_node
     goal_diagnostic = self.diagnostic_rest_goal
+    occupancy_diagnostic = self.diagnostic_occupancy_bounds
     solve_time = self.solve_time
     last_cloudlog_t = self.last_cloudlog_t
     timestamp = time.monotonic()
@@ -1896,7 +2041,11 @@ class LongitudinalMpc:
     self.solution_status = status
     self.last_solver_status = status
     self.failure_reason = {MPC_INVALID_INPUT: 'invalid_input', MPC_INVALID_SOLUTION: 'nonfinite_solution',
-                           MPC_SOLVER_ERROR: 'solver_exception'}.get(status, 'solver_status')
+                           MPC_SOLVER_ERROR: 'solver_exception',
+                           MPC_OCCUPANCY_UNSATISFIED: 'finite_occupancy_unsatisfied'}.get(status, 'solver_status')
+    self.diagnostic_occupancy_bounds = occupancy_diagnostic
+    if occupancy_diagnostic and status > 0:
+      self.failure_reason = 'finite_occupancy_solver_failure'
     if failed_goal is not None:
       self.rest_goal = failed_goal
       self.rest_goal_state, self.rest_goal_reason = 'solver_failure', self.failure_reason

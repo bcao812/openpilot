@@ -7,7 +7,7 @@ empty-road turn cannot establish the following context on its own.
 import math
 from numbers import Real
 
-from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
+from openpilot.selfdrive.controls.lib.lead_qualification import _read, qualified_lead
 
 
 MAX_INPUT_AGE_NS = 250_000_000
@@ -129,8 +129,9 @@ class TurnLeadGuard:
     if new_radar and reliable:
       # Source time, not repeated consumer ticks, dates the last observation.
       self._last_reliable_radar_ns = max(
-        getattr(lead.evidence, 'positionMonoTime', radar_ns) if getattr(getattr(lead, 'evidence', None), 'version', 0) == 1 else radar_ns
-        for lead, state in zip(leads, lead_states, strict=True) if state[1])
+        _read(evidence, 'positionMonoTime', radar_ns) if _read(evidence, 'version', 0) == 1 else radar_ns
+        for lead, state in zip(leads, lead_states, strict=True) if state[1]
+        for evidence in (_read(lead, 'evidence'),))
 
     released = False
     if self.armed:

@@ -13,7 +13,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL, ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
-from openpilot.selfdrive.controls.lib.lead_qualification import control_leads, qualified_lead
+from openpilot.selfdrive.controls.lib.lead_qualification import _read, control_leads, qualified_lead
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_BRAKE, LEAD_DANGER_FACTOR, REFERENCE_BOUND, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource,
   get_T_FOLLOW, get_safe_obstacle_distance, get_stopped_equivalence_factor,
@@ -94,7 +94,7 @@ def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float, *, mi
         continue
       if not qualified_lead(lead, 'brake', 0.95, now_ns=now_ns):
         return False
-      evidence = getattr(lead, 'evidence', None)
+      evidence = _read(lead, 'evidence')
       horizon = CREEP_FINISH_T
       if getattr(evidence, 'version', 0) == 1:
         reference = max(evidence.estimateMonoTime, evidence.modelMonoTime, evidence.positionMonoTime,
@@ -199,7 +199,7 @@ def should_stop_for_close_lead(v_ego: float, a_target: float, radar_state, actua
     values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.yRel, lead.modelProb)
     if not qualified_lead(lead, 'stop', 0.98, now_ns=now_ns) or not all(math.isfinite(value) for value in values):
       continue
-    evidence = getattr(lead, 'evidence', None)
+    evidence = _read(lead, 'evidence')
     lateral_offset = evidence.pathOffset if getattr(evidence, 'version', 0) == 1 else lead.yRel
     if (0.0 < lead.dRel <= stopping_budget
         and abs(lead.vLead) <= STOP_SPEED and lead.vRel < -0.2 and lead.aLeadK <= 0.2

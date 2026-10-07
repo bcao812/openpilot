@@ -45,6 +45,37 @@ def test_legacy_and_formal_vision_keep_the_callers_probability_gate(probability,
   assert qualified_lead(SimpleNamespace(present=True, modelProb=probability), 'brake', 0.0) is True
 
 
+@pytest.mark.parametrize('formal', [False, True])
+def test_native_cereal_builder_reads_preserve_dict_and_serialized_message(formal):
+  from openpilot.cereal import log
+
+  payload = vars(formal_lead()).copy()
+  if formal:
+    payload['evidence'] = vars(payload['evidence'])
+  else:
+    del payload['evidence']
+    payload['modelProb'] = .99
+  radar = log.RadarState.new_message()
+  radar.leadOne = payload
+  radar.leadTwo = {'present': False}
+  radar.fusionActive = formal
+  if formal:
+    radar.radarObjects = [payload]
+  lead = radar.leadOne
+  assert lead._has('evidence') is formal
+  before = radar.to_dict()
+  serialized = radar.to_bytes()
+  radar.clear_write_flag()
+
+  assert qualified_lead(lead, 'brake', now_ns=NOW)
+  assert lead_identity(lead) == (('radar-session-a', 7) if formal else None)
+  assert len(control_leads(radar, 'brake', now_ns=NOW)) == 1
+
+  assert lead._has('evidence') is formal
+  assert radar.to_dict() == before
+  assert radar.to_bytes() == serialized
+
+
 @pytest.mark.parametrize('field', ['positionMonoTime', 'velocityMonoTime', 'modelMonoTime'])
 def test_republishing_old_measurements_does_not_refresh_their_control_age(field):
   lead = formal_lead(evidence={field: NOW - MAX_MEASUREMENT_AGE_NS - 1})

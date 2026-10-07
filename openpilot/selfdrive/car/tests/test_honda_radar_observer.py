@@ -148,7 +148,7 @@ class TestHondaRadarObserver(unittest.TestCase):
 
   def test_entry_boundary_does_not_expand_control_scope(self):
     for settings in (ObserverSettings(1, False, True, True), ObserverSettings(1, True, False, True),
-                     ObserverSettings(1, True, True, False), ObserverSettings(4, True, True, True)):
+                     ObserverSettings(1, True, True, False), ObserverSettings(5, True, True, True)):
       observer = HondaRadarObserver(*configuration())
       msg = observer.update([can_message(START, scan_frames())], state(START), settings, START)
       self.assertFalse(msg.hondaRadarObservations.active)

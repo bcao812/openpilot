@@ -11,13 +11,16 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan
 from openpilot.selfdrive.controls.lib.lead_qualification import MAX_CONTROL_OBJECTS
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  COMFORT_STOP_DISTANCE, CRASH_DISTANCE, MODEL_V_REF, MPC_INVALID_INPUT, N, RISK_STOP_DISTANCE, STOP_DISTANCE, T_IDXS,
+  COMFORT_STOP_DISTANCE, CRASH_DISTANCE, MODEL_V_REF, MPC_INVALID_INPUT, MPC_OCCUPANCY_UNSATISFIED, N,
+  QP_FEASIBILITY_TOL, REFERENCE_BOUND, REST_STATE_TOL, RISK_STOP_DISTANCE, STOP_DISTANCE, T_IDXS,
   LongitudinalMpc, LongitudinalPlanSource, MpcReference,
 )
-from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, ModelSource, MovingPreference
+from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, ModelSource, MovingPreference, RestGoal
+from openpilot.selfdrive.controls.tests.test_mpc_problem_contract import NativeProblemRecorder
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
 
 
@@ -51,10 +54,10 @@ def fused_state(*objects, display=()):
   return state
 
 
-def solve(objects, *, speed=10.0, reference=None, iterations=12, now_ns=EPOCH_NS, reference_ns=EPOCH_NS):
+def solve(objects, *, speed=10.0, acceleration=0.0, reference=None, iterations=12, now_ns=EPOCH_NS, reference_ns=EPOCH_NS):
   planner = LongitudinalMpc()
   planner.diagnostic_obstacles_enabled = True
-  planner.set_cur_state(speed, 0.0)
+  planner.set_cur_state(speed, acceleration)
   planner.set_weights(prev_accel_constraint=False)
   reference = MpcReference(20.0) if reference is None else reference
   for _ in range(iterations):
@@ -71,6 +74,17 @@ def action(planner):
 def advance(lead, stamp):
   evidence = lead.evidence
   evidence.positionMonoTime = evidence.velocityMonoTime = evidence.estimateMonoTime = evidence.modelMonoTime = stamp
+
+
+def rest_reference(speed, node):
+  end = float(T_IDXS[node])
+  velocity = np.maximum(0.0, speed * (1.0 - T_IDXS / end))
+  position = np.cumsum(np.diff(T_IDXS, prepend=0.0) * velocity)
+  acceleration = np.where(velocity > 0.0, -speed / end, 0.0)
+  preference = MovingPreference(position, velocity, acceleration, np.ones(N+1, dtype=bool))
+  source = ModelSource(EPOCH_NS, EPOCH_NS, EPOCH_NS, proxy_age_s=0.0)
+  rest = RestGoal((0, node), (0.0, end), EPOCH_NS + round(end * 1e9), end, node, end, None)
+  return MpcReference(20.0, typed_model=ModelReferenceEvidence(source, preference, (rest,)))
 
 
 def stationary_window_clearance(planner, distance, start, end):
@@ -173,7 +187,7 @@ def test_crossing_without_reachable_time_overlap_does_not_create_a_stop(distance
   assert planner.crash_cnt == 0 and planner.rest_recovery_position_limit is None
 
 
-def test_between_node_occupancy_is_kept_and_fcw_checks_its_real_time():
+def test_between_node_occupancy_is_kept_and_fcw_checks_its_real_time(record_property):
   crossing = object_lead(distance=8.0, start=0.7, end=0.85, path='entering', persistent=False)
   assert not np.any((T_IDXS >= 0.7) & (T_IDXS <= 0.85))
   planner = solve(fused_state(crossing))
@@ -182,7 +196,13 @@ def test_between_node_occupancy_is_kept_and_fcw_checks_its_real_time():
   assert projection.occupied[interval] and projection.occupied[interval + 1]
   assert not np.any(projection.occupied[interval + 2:])
   assert action(planner) < 0.0
-  assert stationary_window_clearance(planner, 8.0, 0.7, 0.85) >= CRASH_DISTANCE
+  clearance = stationary_window_clearance(planner, 8.0, 0.7, 0.85)
+  assert clearance >= CRASH_DISTANCE
+  assert np.min(planner.a_solution) >= ACCEL_MIN - QP_FEASIBILITY_TOL
+  assert np.max(planner.a_solution) <= ACCEL_MAX + QP_FEASIBILITY_TOL
+  record_property('minimum_occupancy_clearance', clearance)
+  record_property('minimum_acceleration', float(np.min(planner.a_solution)))
+  record_property('maximum_absolute_jerk', float(np.max(np.abs(planner.j_solution))))
   # The independent straight trajectory reaches x=8 inside this unsampled
   # occupancy window. Checking only the native node times would miss it.
   states = np.column_stack((10.0 * T_IDXS, np.full(N+1, 10.0), np.zeros(N+1)))
@@ -190,6 +210,125 @@ def test_between_node_occupancy_is_kept_and_fcw_checks_its_real_time():
   clear = object_lead(distance=8.0, start=0.1, end=0.2, path='entering', persistent=False)
   clear_projection = planner.project_fusion_lead(clear, slot=None, reference_ns=EPOCH_NS)
   assert not planner.collision_in_occupancy(clear_projection, states, np.zeros(N))
+
+
+def test_short_crossing_has_an_independent_bounded_jerk_feasibility_witness():
+  # This is an emergency, not a comfortable-following fixture: ramp with at
+  # most 12 m/s^3 to the existing -3.5 m/s^2 bound, then release after crossing.
+  # It proves the fixed geometry has a feasible native-grid control sequence;
+  # the preceding test still requires the actual solver to find a safe one.
+  accelerations = np.zeros(N+1)
+  accelerations[1:4] = np.maximum(ACCEL_MIN, -12.0 * T_IDXS[1:4])
+  jerks = np.diff(accelerations) / np.diff(T_IDXS)
+  states = [np.array([0.0, 10.0, 0.0])]
+  for jerk, duration in zip(jerks, np.diff(T_IDXS), strict=True):
+    position, velocity, acceleration = states[-1]
+    states.append(np.array([position + velocity * duration + acceleration * duration**2 / 2.0 + jerk * duration**3 / 6.0,
+                            velocity + acceleration * duration + jerk * duration**2 / 2.0,
+                            acceleration + jerk * duration]))
+  witness = SimpleNamespace(x_sol=np.array(states), j_solution=jerks)
+  assert np.max(np.abs(jerks)) <= 12.0 + 1e-12
+  assert np.min(accelerations) >= ACCEL_MIN and np.max(accelerations) <= ACCEL_MAX
+  assert np.min(witness.x_sol[:, 1]) > 0.0
+  assert stationary_window_clearance(witness, 8.0, 0.7, 0.85) > CRASH_DISTANCE
+
+
+def test_crossing_and_model_rest_are_both_kept_then_all_native_rows_are_rewritten():
+  crossing = object_lead(distance=6.0, ego_speed=1.0, start=0.7, end=0.85, path='entering', persistent=False)
+  reference = rest_reference(1.0, 6)
+  planner = LongitudinalMpc()
+  recorder = NativeProblemRecorder(planner.solver)
+  planner.solver = recorder
+  planner.set_cur_state(1.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+  for state, candidate in ((fused_state(crossing), reference), (fused_state(), reference),
+                           (radar_state(), MpcReference(20.0))):
+    for _ in range(12):
+      planner.update(state, reference=candidate, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+      assert planner.solution_status == planner.last_solver_status == 0
+    if candidate is reference:
+      assert planner.rest_goal_state == 'satisfied'
+      lower, upper = planner.diagnostic_reference_bounds
+      np.testing.assert_array_equal(lower[6:, 0], 0.0)
+      np.testing.assert_array_equal(lower[6:, 1], -REST_STATE_TOL)
+      np.testing.assert_array_equal(upper[6:, 0], REST_STATE_TOL)
+      np.testing.assert_array_equal(upper[6:, 1], 0.0)
+      assert np.max(np.abs(planner.x_sol[6:, 1:])) <= REST_STATE_TOL
+      if state.radarObjects:
+        assert planner.diagnostic_occupancy_bounds
+        assert recorder.constraints[3, 'C'][1, 0] == 1.0
+        assert stationary_window_clearance(planner, 6.0, 0.7, 0.85) >= CRASH_DISTANCE
+      else:
+        assert not planner.diagnostic_occupancy_bounds
+        for stage in range(N):
+          np.testing.assert_array_equal(recorder.constraints[stage, 'C'][:, 0], 0.0)
+    else:
+      assert not planner.diagnostic_occupancy_bounds and not planner._native_occupancy_bounds_active
+      for stage in range(N):
+        np.testing.assert_array_equal(recorder.constraints[stage, 'C'], 0.0)
+        np.testing.assert_array_equal(recorder.constraints[stage, 'D'], 0.0)
+        np.testing.assert_array_equal(recorder.constraints[stage, 'lg'], -1.0)
+        np.testing.assert_array_equal(recorder.constraints[stage, 'ug'], 1.0)
+      for stage in range(1, N+1):
+        np.testing.assert_array_equal(recorder.constraints[stage, 'lbx'], -REFERENCE_BOUND)
+        np.testing.assert_array_equal(recorder.constraints[stage, 'ubx'], REFERENCE_BOUND)
+      assert action(planner) > 0.0
+
+
+def test_early_crossing_preserves_feasible_low_speed_brake_release_before_rest():
+  speed, acceleration = 0.01, -0.5
+  assert speed + acceleration * T_IDXS[1] / 2.0 < 0.0
+  crossing = object_lead(distance=2.0, ego_speed=speed, start=0.0, end=0.03, path='entering', persistent=False)
+  planner = solve(fused_state(crossing), speed=speed, acceleration=acceleration, reference=rest_reference(speed, 6))
+  assert planner.rest_goal_state == 'satisfied'
+  assert planner.diagnostic_occupancy_bounds[0][0] == 0
+  assert planner.trajectory_minimum_velocity(planner.x_sol, planner.j_solution) >= -QP_FEASIBILITY_TOL
+  assert stationary_window_clearance(planner, 2.0, 0.0, 0.03) >= CRASH_DISTANCE
+
+
+def test_impossible_finite_conflict_reports_failure_and_reset_removes_its_native_bounds():
+  crossing = object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False)
+  planner = LongitudinalMpc()
+  recorder = NativeProblemRecorder(planner.solver)
+  planner.solver = recorder
+  planner.set_cur_state(10.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+  planner.update(fused_state(crossing), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.solution_status != 0 and not planner.previous_solution_valid
+  assert planner.failure_reason.startswith('finite_occupancy_')
+  assert planner.diagnostic_occupancy_bounds
+  assert not planner._native_occupancy_bounds_active
+  # These checks precede the next update; solver.reset alone cannot be assumed
+  # to erase model constraints for a direct run caller.
+  for stage in range(N):
+    np.testing.assert_array_equal(recorder.constraints[stage, 'C'], 0.0)
+    np.testing.assert_array_equal(recorder.constraints[stage, 'D'], 0.0)
+  for stage in range(1, N+1):
+    np.testing.assert_array_equal(recorder.constraints[stage, 'lbx'], -REFERENCE_BOUND)
+    np.testing.assert_array_equal(recorder.constraints[stage, 'ubx'], REFERENCE_BOUND)
+  planner.set_cur_state(10.0, 0.0)
+  for _ in range(12):
+    planner.update(fused_state(), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+    assert planner.solution_status == 0
+  assert action(planner) > 0.0 and not planner.diagnostic_occupancy_bounds
+
+
+def test_rest_postprocessing_cannot_publish_a_trajectory_that_breaks_the_crossing_row(monkeypatch):
+  crossing = object_lead(distance=8.0, start=0.7, end=0.85, path='entering', persistent=False)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+
+  def unsafe_postprocessing():
+    planner.x_sol[:, 0] = 10.0 * T_IDXS
+    planner.x_sol[:, 1], planner.x_sol[:, 2] = 10.0, 0.0
+    planner.j_solution[:] = 0.0
+
+  monkeypatch.setattr(planner, 'check_effective_rest_goal', unsafe_postprocessing)
+  planner.update(fused_state(crossing), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.solution_status == MPC_OCCUPANCY_UNSATISFIED
+  assert planner.failure_reason == 'finite_occupancy_position_bound_violated'
+  assert not planner.previous_solution_valid
 
 
 def test_other_objects_do_not_inherit_the_display_leads_compact_stop_distance():

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import math
 from numbers import Real
 
-from openpilot.selfdrive.controls.lib.lead_qualification import lead_identity, qualified_lead
+from openpilot.selfdrive.controls.lib.lead_qualification import _read, lead_identity, qualified_lead
 
 
 DEFAULT_RISK_DISTANCE = 6.0
@@ -57,7 +57,7 @@ def _tracked_observation(lead, speed, now_ns=None):
     return None
   values = tuple(float(value) for value in values)
   distance, relative_speed, lead_speed, _, _, lateral = values
-  evidence = getattr(lead, 'evidence', None)
+  evidence = _read(lead, 'evidence')
   lateral = evidence.pathOffset if getattr(evidence, 'version', 0) == 1 else lateral
   if (distance <= 0.0 or abs(lateral) > 1.2
       or abs(lead_speed - speed - relative_speed) > 0.5):
@@ -67,7 +67,7 @@ def _tracked_observation(lead, speed, now_ns=None):
 
 def _observation(lead, speed, now_ns=None):
   values = _tracked_observation(lead, speed, now_ns)
-  evidence = getattr(lead, 'evidence', None)
+  evidence = _read(lead, 'evidence')
   if getattr(evidence, 'version', 0) == 1 and not evidence.accelerationValid:
     return None
   if values is None or not 0.0 <= values[2] <= 2.0 or not -0.5 <= values[3] <= 0.2:
@@ -160,7 +160,7 @@ class LowSpeedStopDistance:
       tracked = _tracked_observation(lead, speed, now_ns)
       observation = _observation(lead, speed, now_ns)
       previous = self._lead_previous[i]
-      evidence = getattr(lead, 'evidence', None)
+      evidence = _read(lead, 'evidence')
       formal = getattr(evidence, 'version', 0) == 1
       position_ns = getattr(evidence, 'positionMonoTime', 0) if formal else radar_ns
       estimate_ns = getattr(evidence, 'estimateMonoTime', 0) if formal else radar_ns
