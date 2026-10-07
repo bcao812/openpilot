@@ -473,6 +473,7 @@ class LongitudinalMpc:
     self._obstacle_identities = ()
     self._fusion_projections = ()
     self._occupancy_bounds = (None,) * N
+    self._occupancy_limit_cache = {}
     self._native_occupancy_bounds_active = False
     self.diagnostic_occupancy_bounds = ()
     self.diagnostic_occupancy_projection = None
@@ -525,6 +526,7 @@ class LongitudinalMpc:
 
   def invalidate_reference_history(self):
     """Drop UNIFIED reference provenance without moving the consumer clock."""
+    self._occupancy_limit_cache = {}
     self._reference_epoch_ns = None
     self._reference_acceleration = None
     self._reference_pending_ns = None
@@ -611,6 +613,7 @@ class LongitudinalMpc:
     self.set_cost_weights(cost_weights, constraint_cost_weights)
 
   def set_cur_state(self, v, a):
+    self._occupancy_limit_cache = {}
     v_prev = self.x0[1]
     self.x0[1] = v
     self.x0[2] = a
@@ -823,6 +826,7 @@ class LongitudinalMpc:
       lead_position = projection.raw_trajectory[stage, 0]
       lead_velocity = (projection.raw_trajectory[stage+1, 0] - lead_position) / duration
       state, jerk = states[stage], jerks[stage]
+      position, velocity, acceleration = state
       lo, hi = start - T_IDXS[stage], end - T_IDXS[stage]
       times = [lo, hi]
       # Relative velocity is quadratic on a constant-jerk ego segment. Its
@@ -837,7 +841,11 @@ class LongitudinalMpc:
           times.extend(((-state[2] - root) / jerk, (-state[2] + root) / jerk))
       for timestamp in times:
         if lo <= timestamp <= hi:
-          clearance = lead_position + lead_velocity * timestamp - cls.integrate_jerk(state, jerk, timestamp)[0]
+          # Keep integrate_jerk's position arithmetic and its operation order,
+          # without allocating the unused velocity/acceleration result.
+          next_acceleration = acceleration + jerk * timestamp
+          ego_position = position + velocity * timestamp + (2.0 * acceleration + next_acceleration) * timestamp**2 / 6.0
+          clearance = lead_position + lead_velocity * timestamp - ego_position
           minimum, maximum = min(minimum, float(clearance)), max(maximum, float(clearance))
     return minimum, maximum
 
@@ -1009,6 +1017,17 @@ class LongitudinalMpc:
     Bounding x(g) by every lead(t)+that progress difference preserves actual
     clearance without tying an earlier moving target to a later ego position.
     """
+    # Attribution consumes the same row after the solve. Bind reuse to the
+    # complete input, including mutable array contents and the actual float
+    # time: reconstructing a row time can differ by an ULP. Retain object
+    # references in the entry so Python cannot recycle either identity.
+    raw = projection.raw_trajectory
+    key = (id(projection), id(raw), raw.shape, raw.dtype.str, raw.tobytes(),
+           self.x0.shape, self.x0.dtype.str, self.x0.tobytes(), stage, constraint_time,
+           projection.conflict_start, projection.conflict_end)
+    cached = self._occupancy_limit_cache.get(key)
+    if cached is not None:
+      return cached[2]
     left, right = T_IDXS[stage], T_IDXS[stage+1]
     start, end = max(left, projection.conflict_start), min(right, projection.conflict_end)
     speed = float(self.x0[1])
@@ -1027,7 +1046,9 @@ class LongitudinalMpc:
     minimum_progress = self.ego_progress_bound(speed, acceleration_floor, constraint_time)
     limit = min(lead_position + lead_velocity*(timestamp-left)
                 + (minimum_progress-self.ego_progress_bound(speed, acceleration_floor, timestamp)) for timestamp in times)
-    return float(limit - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER)
+    result = float(limit - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER)
+    self._occupancy_limit_cache[key] = projection, raw, result
+    return result
 
   def finite_occupancy_bounds(self, projections=None, *, passing_speed_limit=None, witness=None, witness_jerks=None):
     """Fold finite physical conflicts into one exact position row per stage.
@@ -2265,6 +2286,7 @@ class LongitudinalMpc:
       self.failure_reason = ''
 
   def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None, now_ns=None, reference_ns=None):
+    self._occupancy_limit_cache = {}
     # Reading an unset struct through a capnp builder allocates it. MPC and
     # UI attribution observe the exact incoming message; they never edit it.
     if hasattr(radarstate, 'as_reader'):

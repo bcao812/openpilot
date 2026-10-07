@@ -307,6 +307,134 @@ def test_transport_bound_includes_the_interior_relative_velocity_extremum():
   assert limit < endpoint_only - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER - 1e-4
 
 
+@pytest.mark.parametrize('change', [
+  'projection', 'raw_array', 'raw_position', 'raw_velocity', 'x0_position', 'x0_velocity', 'x0_acceleration', 'stage', 'time',
+])
+def test_coast_bound_reuse_requires_the_complete_exact_input(change, monkeypatch):
+  planner = LongitudinalMpc()
+  planner.set_cur_state(15.0, -0.2)
+  lead = object_lead(distance=30.0, speed=13.0, ego_speed=15.0, end=0.55, persistent=False)
+  lead.evidence.source, lead.evidence.coasting, lead.evidence.fcwQualified = 'predicted', True, False
+  projection = planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS)
+  stage, timestamp = 2, 0.6
+  calls = []
+  original = planner.ego_progress_bound
+
+  def count_progress(*args):
+    calls.append(args)
+    return original(*args)
+
+  monkeypatch.setattr(planner, 'ego_progress_bound', count_progress)
+  first = planner.occupancy_behind_position_limit(projection, stage, constraint_time=timestamp)
+  evaluated = len(calls)
+  assert evaluated > 0
+  assert planner.occupancy_behind_position_limit(projection, stage, constraint_time=timestamp) == first
+  assert len(calls) == evaluated
+  if change == 'projection':
+    projection = replace(projection)
+  elif change == 'raw_array':
+    projection = replace(projection, raw_trajectory=projection.raw_trajectory.copy())
+  elif change.startswith('raw_'):
+    # Even an unconsumed field in the complete mutable trajectory invalidates
+    # reuse; neither object identity nor a sampled row proves unchanged input.
+    column = 0 if change == 'raw_position' else 1
+    projection.raw_trajectory[stage, column] += 0.01
+  elif change.startswith('x0_'):
+    index = ('x0_position', 'x0_velocity', 'x0_acceleration').index(change)
+    planner.x0[index] = np.nextafter(planner.x0[index], np.inf)
+  elif change == 'stage':
+    stage, timestamp = 1, T_IDXS[2]
+  else:
+    timestamp = np.nextafter(timestamp, np.inf)
+  actual = planner.occupancy_behind_position_limit(projection, stage, constraint_time=timestamp)
+  assert len(calls) > evaluated
+  cold = LongitudinalMpc()
+  cold.x0[:] = planner.x0
+  assert actual == cold.occupancy_behind_position_limit(projection, stage, constraint_time=timestamp)
+
+
+@pytest.mark.parametrize('invalidation', ['update', 'reset', 'fail', 'reference', 'state'])
+def test_occupancy_bound_reuse_ends_with_the_current_problem(invalidation):
+  planner = LongitudinalMpc()
+  planner.set_cur_state(15.0, 0.0)
+  lead = object_lead(distance=30.0, speed=13.0, ego_speed=15.0, end=0.55, persistent=False)
+  projection = planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS)
+  planner.occupancy_behind_position_limit(projection, 2, constraint_time=0.6)
+  prior = planner._occupancy_limit_cache
+  assert prior
+  if invalidation == 'update':
+    planner.update(fused_state(), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  elif invalidation == 'reset':
+    planner.reset()
+  elif invalidation == 'fail':
+    planner.fail(MPC_INVALID_INPUT)
+  elif invalidation == 'reference':
+    planner.invalidate_reference_history()
+  else:
+    planner.set_cur_state(15.0, 0.0)
+  assert planner._occupancy_limit_cache == {}
+  assert planner._occupancy_limit_cache is not prior
+
+
+def test_tied_finite_objects_reuse_only_their_own_current_geometry_for_attribution():
+  planner = LongitudinalMpc()
+  planner.set_cur_state(0.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+  objects = [object_lead(track, distance=2.0, speed=0.0, ego_speed=0.0, persistent=False) for track in (1, 2)]
+  planner._fusion_projections = tuple(planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS) for lead in objects)
+  planner._occupancy_bounds = planner.finite_occupancy_bounds()
+  # A stopped trajectory exactly on the shared physical row isolates hard
+  # occupancy attribution from soft following costs and the cruise objective.
+  planner.x_sol[:, 0] = planner._occupancy_bounds[0].position_limit
+  planner._influence_problem = np.full((N+1, 1), np.inf), (None,), (None,), None
+  planner.previous_solution_valid = True
+  planner.record_object_influence()
+  assert set(planner.object_influence_identities) == {('radar-test', 1), ('radar-test', 2)}
+  planner._fusion_projections[1].raw_trajectory[:, 0] += 1.0
+  planner.record_object_influence()
+  assert planner.object_influence_identities == (('radar-test', 1),)
+
+
+@pytest.mark.parametrize('horizon', [5.0, 10.0])
+@pytest.mark.parametrize('case', ['rest', 'constant_acceleration', 'two_roots', 'no_roots'])
+def test_position_only_clearance_preserves_exact_dynamics_and_continuous_extrema(case, horizon):
+  planner = LongitudinalMpc()
+  lead = object_lead(distance=40.0, speed=2.0, persistent=False)
+  projection = planner.project_fusion_lead(lead, slot=None, reference_ns=EPOCH_NS)
+  states = np.zeros((N+1, 3))
+  jerks = np.zeros(N)
+  candidates = []
+  for stage, duration in enumerate(np.diff(T_IDXS)):
+    lead_velocity = (projection.raw_trajectory[stage+1, 0] - projection.raw_trajectory[stage, 0]) / duration
+    states[stage] = [3.0, lead_velocity, 0.0]
+    times = [0.0, min(duration, horizon-T_IDXS[stage])]
+    if case == 'rest':
+      states[stage, 1] = 0.0
+    elif case == 'constant_acceleration':
+      states[stage, 1:] = lead_velocity-duration/2.0, 1.0
+      times.append((lead_velocity-states[stage, 1])/states[stage, 2])
+    elif case == 'two_roots':
+      # Relative velocity is -(t-duration/4)*(t-3*duration/4).
+      states[stage, 1:] = lead_velocity+3.0*duration**2/16.0, -duration
+      jerks[stage] = 2.0
+      # Use the same actual floating inputs to the independent dynamics
+      # evaluator; retain both quadratic roots even when only one is extremal.
+      discriminant = states[stage, 2]**2 + 2.0*jerks[stage]*(lead_velocity-states[stage, 1])
+      times.extend(((-states[stage, 2]-np.sqrt(discriminant))/jerks[stage],
+                    (-states[stage, 2]+np.sqrt(discriminant))/jerks[stage]))
+    else:
+      states[stage, 1] = lead_velocity+1.0
+      jerks[stage] = 2.0
+    if T_IDXS[stage] >= horizon:
+      continue
+    for elapsed in times:
+      if 0.0 <= elapsed <= min(duration, horizon-T_IDXS[stage]):
+        position = LongitudinalMpc.integrate_jerk(states[stage], jerks[stage], elapsed)[0]
+        candidates.append(float(projection.raw_trajectory[stage, 0] + lead_velocity*elapsed-position))
+  actual = planner.occupancy_clearance_extrema(projection, states, jerks, horizon=horizon)
+  assert actual == (min(candidates), max(candidates))
+
+
 @pytest.mark.parametrize('with_rest', [False, True])
 def test_multiple_end_times_share_one_order_independent_row_with_the_original_rest_goal(with_rest):
   early = object_lead(1, distance=2.0, speed=0.5, ego_speed=1.0, start=0.03, end=0.10, path='entering', persistent=False)
