@@ -6,7 +6,7 @@ shadow candidate is never permission to actuate, including when two sensors
 agree. CAN envelope times are not physical radar measurement timestamps.
 """
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 import time
 
@@ -260,6 +260,19 @@ class Binding:
 
 
 @dataclass
+class SaturationRecovery:
+  """One witnessed 4093 -> invalid 4095 -> first 4094 transition.
+
+  The invalid scan is an identity witness only, never a position measurement.
+  A position-only return remains inactive until its own AUX qualifies motion.
+  """
+  sentinel_ns: int
+  frame_index: int
+  raw_geometry: tuple[int, int, int]
+  return_position: tuple | None = None
+
+
+@dataclass
 class Track:
   identifier: int
   oem_id: int
@@ -298,6 +311,8 @@ class Track:
   previous_position_ns: int = 0
   previous_x: float = 0.0
   previous_y: float = 0.0
+  saturation_ready: bool = False
+  saturation_recovery: SaturationRecovery | None = None
   # Six distinct position samples; AUX updates never add a sample.
   positions: deque = field(default_factory=lambda: deque(maxlen=6))
 
@@ -498,6 +513,7 @@ class HondaRadarFusion:
     track.last_invalid_reason, track.last_invalid_ns = reason, now_ns
     track.invalid_position_ns = max(track.invalid_position_ns, position_ns)
     track.slot_reassigned_ns = track.slot_reassigned_seq = 0
+    track.saturation_ready, track.saturation_recovery = False, None
     for (_, identifier), binding in self.bindings.items():
       if identifier == track.identifier:
         binding.reject(reason, now_ns)
@@ -510,6 +526,68 @@ class HondaRadarFusion:
     for (model_index, identifier), binding in self.bindings.items():
       if model_index == index and identifier != except_track:
         binding.reject(reason, timestamp)
+
+  @staticmethod
+  def _saturation_competition(track, observations, now_ns):
+    # Examine the bounded received batch, including invalid complete claims.
+    # Event order must not make a same-scan competing slot look unambiguous.
+    for observation in observations:
+      stamp = int(read(observation, 'positionMonoTime', 0))
+      if not track.position_ns <= stamp <= now_ns or int(read(observation, 'frameMask', 0)) & 15 != 15:
+        continue
+      slot = int(read(observation, 'slot', -1))
+      oem = int(read(read(observation, 'raw', {}), 'oemTrackId', 0))
+      if 0 <= slot < 16 and ((slot == track.slot and oem != track.oem_id) or (slot != track.slot and oem == track.oem_id)):
+        return True
+    return False
+
+  def _saturation_witness(self, track, observation, observations, now_ns):
+    if track.saturation_recovery is None and not (track.active and track.mature and track.saturation_ready):
+      return None
+    raw = read(observation, 'raw', {})
+    stamp, index = int(read(observation, 'positionMonoTime', 0)), int(read(observation, 'frameIndex', -1))
+    status, distance, azimuth = (int(read(raw, key, -1)) for key in ('statusRaw', 'rangeRaw', 'azimuthRaw'))
+    if (read(observation, 'reason', '') != 'invalidGeometry' or read(observation, 'positionValid', False)
+        or int(read(observation, 'frameMask', 0)) & 15 != 15 or int(read(raw, 'lifecycleRaw', -1)) != 4095
+        or int(read(raw, 'oemTrackId', 0)) != track.oem_id or int(read(observation, 'slot', -1)) != track.slot
+        or not (0 <= status < 15 and 0 <= distance < 4095 and 0 <= azimuth < 2047 and distance * .05712 - 3 > 0)
+        or not fresh(stamp, now_ns, MAX_AGE_NS) or self._saturation_competition(track, observations, now_ns)):
+      return None
+    previous = track.saturation_recovery
+    geometry = status, distance, azimuth
+    if previous is not None:
+      # The decoder publishes F0..F3 and AUX snapshots of the same invalid
+      # scan. Repetition neither creates another witness nor extends its age.
+      return previous if (stamp, index, geometry) == (previous.sentinel_ns, previous.frame_index, previous.raw_geometry) else None
+    if (track.active and track.mature and track.saturation_ready and track.lifecycle == 4093 and track.velocity_good
+        and fresh(track.velocity_ns, stamp, MAX_AGE_NS) and fresh(track.position_ns, stamp, MAX_AGE_NS)
+        and fresh(track.position_ns, now_ns, MAX_AGE_NS)
+        and track.position_ns < stamp and 0 <= index < 16 and ((index - track.frame_index) & 15) == 1):
+      return SaturationRecovery(stamp, index, geometry)
+    return None
+
+  def _saturation_return(self, track, observation, observations, now_ns):
+    witness = track.saturation_recovery
+    if witness is None:
+      return ''
+    raw = read(observation, 'raw', {})
+    stamp, index = int(read(observation, 'positionMonoTime', 0)), int(read(observation, 'frameIndex', -1))
+    status, distance, azimuth = (int(read(raw, key, -1)) for key in ('statusRaw', 'rangeRaw', 'azimuthRaw'))
+    if (track.last_invalid_reason != 'invalidGeometry' or int(read(observation, 'slot', -1)) != track.slot
+        or int(read(raw, 'lifecycleRaw', -1)) != 4094 or ((index - witness.frame_index) & 15) != 1
+        or not track.position_ns < witness.sentinel_ns < stamp or not fresh(track.position_ns, now_ns, MAX_AGE_NS)
+        or not (0 <= status < 15 and 0 <= distance < 4095 and 0 <= azimuth < 2047 and distance * .05712 - 3 > 0)
+        or int(read(observation, 'frameMask', 0)) & 15 != 15 or self._saturation_competition(track, observations, now_ns)):
+      return ''
+    signature = (stamp, int(read(observation, 'positionSeq', 0)), int(read(observation, 'generation', 0)), index,
+                 float(read(observation, 'dRel')), float(read(observation, 'yRel')),
+                 status, distance, azimuth)
+    if witness.return_position is not None and signature != witness.return_position:
+      self._invalidate(track, 'conflictingPosition', stamp, now_ns)
+      self.counts['ambiguous'] += 1
+      return ''
+    witness.return_position = signature
+    return 'ready' if int(read(observation, 'frameMask', 0)) & 16 else 'waiting'
 
   def _velocity(self, track, observation, now_ns, projection_cache=None):
     if not track.active:
@@ -570,7 +648,9 @@ class HondaRadarFusion:
             accepted = (track.slot == slot and track.position_ns == stamp and
                         track.position_seq == (metadata[2] if metadata is not None else int(read(observation, 'positionSeq', 0))))
             pending = track.slot_reassigned_ns and invalid_oem == track.oem_id and stamp >= track.slot_reassigned_ns
-            if 0 < stamp <= now_ns and (accepted or pending):
+            saturation = (track.saturation_recovery is not None and (slot == track.slot or invalid_oem == track.oem_id)
+                          and stamp >= track.saturation_recovery.sentinel_ns)
+            if 0 < stamp <= now_ns and (accepted or pending or saturation):
               self._invalidate(track, reason, stamp, now_ns)
               self.counts['rejectedPosition'] += 1
         elif reason in ('expired', 'invalidGeometry', 'withdrawn'):
@@ -579,8 +659,12 @@ class HondaRadarFusion:
             generation = int(read(observation, 'generation', 0))
             matching_slot = track.slot == slot and (not generation or generation == track.generation)
             pending = track.slot_reassigned_ns and invalid_oem == track.oem_id and stamp >= track.slot_reassigned_ns
-            if track.position_ns <= stamp <= now_ns and (matching_slot or pending):
+            saturation = (track.saturation_recovery is not None and (slot == track.slot or invalid_oem == track.oem_id)
+                          and stamp >= track.saturation_recovery.sentinel_ns)
+            if track.position_ns <= stamp <= now_ns and (matching_slot or pending or saturation):
+              witness = self._saturation_witness(track, observation, observations, now_ns)
               self._invalidate(track, reason, stamp, now_ns)
+              track.saturation_recovery = witness
         continue
       seq = metadata[2] if metadata is not None else int(read(observation, 'positionSeq', 0))
       raw = read(observation, 'raw', {})
@@ -622,10 +706,12 @@ class HondaRadarFusion:
         self.counts['old'] += 1
         continue
       for previous in self.tracks.values():
-        if previous is not track and previous.slot == slot and previous.active and previous.position_ns <= stamp:
+        if (previous is not track and previous.slot == slot and (previous.active or previous.saturation_recovery is not None)
+            and previous.position_ns <= stamp):
           self._suspend_slot(previous, stamp, seq, now_ns)
       birth_reason = 'newObject'
       old_track = track
+      saturation_recovery = False
       if track is not None:
         delta = (index - track.frame_index) & 15
         life_delta = (life - track.lifecycle) & 4095
@@ -641,10 +727,15 @@ class HondaRadarFusion:
           # The replacement and migrated slot can share a CAN envelope time,
           # or arrive in different publications. Neither ordering establishes
           # a new object if source sequence/lifecycle AND motion still agree.
-          # Same-slot returns and explicit invalidations must be born again.
+          # The witnessed first saturation transition is the sole same-slot
+          # invalidGeometry exception; it still needs position and native AUX.
           migration = (track.slot_reassigned_ns and slot != track.slot and stamp >= track.slot_reassigned_ns
                        and seq > track.slot_reassigned_seq and continuous)
-          if not migration:
+          recovery = self._saturation_return(track, observation, observations, now_ns)
+          if recovery == 'waiting':
+            continue
+          saturation_recovery = recovery == 'ready'
+          if not migration and not saturation_recovery:
             if stamp <= track.invalid_position_ns:
               self.counts['old'] += 1
               continue
@@ -667,6 +758,12 @@ class HondaRadarFusion:
           self._invalidate(track, 'positionInnovation', stamp, now_ns)
           self.counts['rejectedPosition'] += 1
           continue
+        saturation_ready = (track.active and track.mature and slot == track.slot and delta == 1
+                            and track.lifecycle == 4091 and life == 4093)
+        if saturation_recovery:
+          # Qualify the ordinary position AND velocity corrections on private
+          # state. A rejected AUX must never publish the old identity active.
+          track = replace(track, positions=deque(track.positions, maxlen=6))
         track.mean, track.covariance, track.epoch_ns = mean, covariance, stamp
         track.measure(0, x, POSITION_NOISE**2)
         track.measure(1, y, (.3 + .01 * x)**2)
@@ -678,11 +775,18 @@ class HondaRadarFusion:
         track.slot, track.frame_index, track.lifecycle = slot, index, life
         track.generation = int(read(observation, 'generation', 0))
         track.velocity_good = False
+        track.saturation_ready = saturation_ready
       track.active = True
       track.slot_reassigned_ns = track.slot_reassigned_seq = 0
+      track.saturation_recovery = None
       track.positions.append((stamp, x, y))
-      self.counts['positions'] += 1
       self._velocity(track, observation, now_ns, projection_cache)
+      if saturation_recovery:
+        if not track.velocity_good:
+          self._invalidate(old_track, 'invalidVelocity', stamp, now_ns)
+          continue
+        self.tracks[identifier] = track
+      self.counts['positions'] += 1
     expired = [key for key, track in self.tracks.items() if now_ns - track.position_ns > HISTORY_NS]
     for key in expired:
       del self.tracks[key]

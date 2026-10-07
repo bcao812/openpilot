@@ -77,6 +77,31 @@ def projection_fixture():
   return track, history
 
 
+def saturation_fixture():
+  fusion = HondaRadarFusion()
+  for frame in range(8):
+    sample = observation(frame)
+    sample['raw'].update(lifecycleRaw=4079 + 2 * frame, statusRaw=7, rangeRaw=403, azimuthRaw=1024)
+    advance(fusion, frame, [sample])
+  sentinel = observation(8)
+  sentinel.update(positionValid=False, velocityValid=False, positionSeq=0, velocitySeq=0, generation=0,
+                  dRel=0.0, yRel=0.0, vRel=0.0, reason='invalidGeometry')
+  sentinel['raw'].update(lifecycleRaw=4095, statusRaw=7, rangeRaw=403, azimuthRaw=1024)
+  returned = observation(9)
+  returned['generation'] = 2
+  returned['raw'].update(lifecycleRaw=4094, statusRaw=7, rangeRaw=403, azimuthRaw=1024)
+  return fusion, sentinel, returned
+
+
+def position_only(sample):
+  result = copy.deepcopy(sample)
+  result.update(frameMask=15, velocitySeq=0, velocityMonoTime=0, velocityValid=False, vRel=0.0)
+  result['raw'].update(u10Raw=0, u11Raw=0)
+  if result['positionValid']:
+    result['reason'] = 'positionOnly'
+  return result
+
+
 class TestHondaRadarFusion(unittest.TestCase):
   def test_native_reads_preserve_scalars_defaults_properties_and_errors(self):
     from openpilot.cereal import custom
@@ -604,6 +629,184 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertEqual(len(identifiers), 1)
     self.assertEqual(out['counters']['positions'], 36)
     self.assertGreater(out['leads'][0]['distanceWeight'], .5)
+
+  def test_recorded_342_first_saturation_return_keeps_physical_identity(self):
+    # Route 89, segment 15: source/ego/model clocks and raw measurements are
+    # copied from track342-reacquisition.json. Recorded decoder generations
+    # change at the sentinel; they are deliberately not physical object IDs.
+    rows = (
+      (924450550062, 50318, 5, 4087, 1195, 690, 1047, 885, 65, 924442196312, 18.6826114654541,
+       924467680739, 924423661646, -.002433937741443515, 924481354646),
+      (924511323344, 50326, 6, 4089, 1195, 690, 1047, 886, 64, 924502036260, 18.677932739257812,
+       924517201573, 924473663416, -.00264874123968184, 924537474073),
+      (924571265635, 50334, 7, 4091, 1195, 690, 1047, 885, 64, 924563254906, 18.688756942749023,
+       924567966312, 924523665344, -.0032938183285295963, 924592373239),
+      (924642906364, 50342, 8, 4093, 1195, 689, 1047, 881, 64, 924635500583, 18.700733184814453,
+       924618017146, 924573665552, -.003514645854011178, 924645072927),
+      (924713209333, 0, 9, 4095, 0, 688, 1047, 879, 64, 924705037823, 18.702844619750977,
+       924717383604, 924673665916, -.0036914919037371874, 924753765583),
+      (924783916364, 50356, 10, 4094, 1206, 687, 1046, 875, 64, 924774263968, 18.714942932128906,
+       924767525531, 924723668312, -.0038886340335011482, 924804038812),
+    )
+    fusion = HondaRadarFusion()
+    identifier = None
+    for packet, (stamp, seq, index, life, generation, distance, azimuth, u11, u10, ego_ns, speed,
+                 model_ns, eof_ns, yaw, now) in enumerate(rows):
+      x = distance * .05712 - 3
+      sample = source_observation(stamp, seq, index, life, generation, oem=60, slot=1, distance=x,
+                                  lateral=x * math.tan((azimuth - 1024) / 2048.0), relative=(u11 - 864) / 64, u10=u10)
+      sample['raw'].update(statusRaw=7, rangeRaw=distance, azimuthRaw=azimuth)
+      if life == 4095:
+        sample.update(positionValid=False, velocityValid=False, velocitySeq=0, dRel=0.0, yRel=0.0, vRel=0.0,
+                      reason='invalidGeometry')
+      sm = Inputs(ego_ns, speed=speed, yaw=-yaw, probability=0)
+      sm.logMonoTime['modelV2'], sm['modelV2'].timestampEof = model_ns, eof_ns
+      out = fusion.update(body(packet, [position_only(sample), sample]), sm, now)
+      track = fusion.tracks[60]
+      if identifier is None:
+        identifier = track.identifier
+      self.assertEqual(track.identifier, identifier)
+      self.assertEqual(track.count, packet + 1 if packet < 4 else 4 if packet == 4 else 5)
+      self.assertEqual(track.active, life != 4095)
+      if life == 4095:
+        self.assertEqual(track.position_ns, rows[3][0])
+        self.assertFalse(out['tracks'][0]['velocityGood'])
+      if packet == 5:
+        self.assertTrue(track.velocity_good)
+        self.assertTrue(track.mature)
+        self.assertEqual((track.position_ns, track.position_seq, track.generation), (stamp, seq, generation))
+        self.assertEqual(track.previous_position_ns, rows[3][0])
+        self.assertLess(track.innovation, .3)
+    self.assertEqual(out['counters']['rejectedPosition'], 0)
+    self.assertEqual(out['counters']['rejectedVelocity'], 0)
+
+  def test_saturation_return_waits_for_its_own_aux_without_refreshing_old_position(self):
+    fusion, sentinel, returned = saturation_fixture()
+    old = fusion.tracks[7]
+    identity, position = old.identifier, old.position_ns
+    out = advance(fusion, 8, [position_only(sentinel), sentinel, sentinel])
+    self.assertFalse(old.active)
+    self.assertEqual(old.count, 8)
+    self.assertEqual(out['counters']['positions'], 8)
+    main = position_only(returned)
+    for delay in (1, 10_000_000):
+      now = START + 9 * STEP + delay
+      out = fusion.update(body(fusion.sequence, [main, main]), Inputs(now), now)
+      self.assertFalse(fusion.tracks[7].active)
+      self.assertEqual((fusion.tracks[7].position_ns, fusion.tracks[7].count), (position, 8))
+      self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+    now = START + 9 * STEP + 20_000_000
+    out = fusion.update(body(fusion.sequence, [returned]), Inputs(now), now)
+    track = fusion.tracks[7]
+    self.assertEqual(track.identifier, identity)
+    self.assertTrue(track.active and track.velocity_good and track.mature)
+    self.assertEqual((track.position_ns, track.count), (returned['positionMonoTime'], 9))
+    self.assertEqual(out['counters']['positions'], 9)
+    # Repeating this AUX is not a second position or recovery observation.
+    fusion.update(body(fusion.sequence, [returned]), Inputs(now + 1), now + 1)
+    self.assertEqual(fusion.tracks[7].count, 9)
+
+  def test_saturation_return_requires_witnessed_growth_and_lifecycle_only_sentinel(self):
+    failures = ('noSentinel', 'noGrowth', 'status', 'range', 'azimuth', 'oem', 'incomplete', 'scanSkip',
+                'expired', 'withdrawn', 'secondInvalidScan', 'competingInvalidSlot')
+    for failure in failures:
+      with self.subTest(failure=failure):
+        fusion, sentinel, returned = saturation_fixture()
+        if failure == 'noGrowth':
+          fusion = HondaRadarFusion()
+          sample = observation(7)
+          sample['raw'].update(lifecycleRaw=4093, statusRaw=7, rangeRaw=403, azimuthRaw=1024)
+          advance(fusion, 7, [sample])
+        identity = fusion.tracks[7].identifier
+        if failure in ('status', 'range', 'azimuth', 'oem'):
+          key, value = {'status': ('statusRaw', 15), 'range': ('rangeRaw', 4095),
+                        'azimuth': ('azimuthRaw', 2047), 'oem': ('oemTrackId', 255)}[failure]
+          sentinel['raw'][key] = value
+        elif failure == 'incomplete':
+          sentinel['frameMask'] = 7
+        elif failure == 'scanSkip':
+          sentinel['frameIndex'] += 1
+        elif failure in ('expired', 'withdrawn'):
+          sentinel['reason'] = failure
+        claims = [sentinel]
+        if failure == 'competingInvalidSlot':
+          other = copy.deepcopy(sentinel)
+          other['slot'] = 1
+          claims = [other, sentinel]
+        if failure != 'noSentinel':
+          advance(fusion, 8, claims)
+        frame = 9
+        if failure == 'secondInvalidScan':
+          extra = copy.deepcopy(sentinel)
+          extra.update(positionMonoTime=START + 9 * STEP, frameIndex=9)
+          advance(fusion, 9, [extra])
+          returned.update(positionMonoTime=START + 10 * STEP, velocityMonoTime=START + 10 * STEP,
+                          frameIndex=10, positionSeq=1001, velocitySeq=1002)
+          frame = 10
+        now = START + frame * STEP + 1
+        fusion.update(body(fusion.sequence, [returned]), Inputs(now), now)
+        self.assertNotEqual(fusion.tracks[7].identifier, identity)
+        self.assertEqual(fusion.tracks[7].count, 1)
+
+  def test_saturation_return_rejects_velocity_identity_and_position_failures(self):
+    failures = ('positionOnly', 'badQuality', 'badNative', 'invalidVelocity', 'velocityInnovation', 'velocityAge',
+                'velocityFuture', 'velocityDuplicate', 'sourceExpired', 'positionDuplicate', 'sourceOld',
+                'positionJump', 'lateralJump', 'changedAuxPosition', 'replacement', 'slotConflict', 'frameConflict')
+    for failure in failures:
+      with self.subTest(failure=failure):
+        fusion, sentinel, returned = saturation_fixture()
+        old = fusion.tracks[7]
+        identity, position, count = old.identifier, old.position_ns, old.count
+        advance(fusion, 8, [sentinel])
+        now = START + 9 * STEP + 1
+        claims = [returned]
+        if failure == 'positionOnly':
+          claims = [position_only(returned)]
+        elif failure == 'badQuality':
+          returned['raw']['u10Raw'] = 256
+        elif failure == 'badNative':
+          returned['raw']['u11Raw'] = 1728
+        elif failure == 'invalidVelocity':
+          returned['velocityValid'] = False
+        elif failure == 'velocityInnovation':
+          returned['vRel'], returned['raw']['u11Raw'] = 12.0, 1632
+        elif failure == 'velocityAge':
+          returned['velocityMonoTime'] -= 50_000_001
+        elif failure == 'velocityFuture':
+          returned['velocityMonoTime'] = now + 1
+        elif failure == 'velocityDuplicate':
+          returned['velocitySeq'] = old.velocity_seq
+        elif failure == 'sourceExpired':
+          now += 201_000_000
+        elif failure == 'positionDuplicate':
+          returned['positionSeq'] = old.position_seq
+        elif failure == 'sourceOld':
+          returned['positionMonoTime'] = old.position_ns - 1
+        elif failure == 'positionJump':
+          returned['dRel'] += 20
+        elif failure == 'lateralJump':
+          returned['yRel'] += 8
+        elif failure == 'changedAuxPosition':
+          advance(fusion, 9, [position_only(returned)])
+          returned['dRel'] += .1
+          now += 10_000_000
+        elif failure == 'replacement':
+          stamp = START + 8 * STEP + 2
+          fusion.update(body(fusion.sequence, [observation(8, oem=8, distance=60)]), Inputs(stamp), stamp)
+        elif failure == 'slotConflict':
+          other = copy.deepcopy(returned)
+          other.update(slot=1, positionSeq=returned['positionSeq'] + 1)
+          claims = [other, returned]
+        else:
+          conflict = copy.deepcopy(sentinel)
+          conflict['reason'] = 'conflictingFrame'
+          stamp = START + 8 * STEP + 2
+          fusion.update(body(fusion.sequence, [conflict]), Inputs(stamp), stamp)
+        out = fusion.update(body(fusion.sequence, claims), Inputs(now), now)
+        track = fusion.tracks[7]
+        self.assertFalse(track.identifier == identity and track.active)
+        self.assertEqual((old.position_ns, old.count), (position, count))
+        self.assertEqual(out['leads'][0]['distanceWeight'], 0)
 
   def test_plateau_does_not_inherit_invalid_geometry_or_a_real_lifecycle_restart(self):
     for failure in ('invalidLife', 'positionJump', 'lifecycleRestart'):
