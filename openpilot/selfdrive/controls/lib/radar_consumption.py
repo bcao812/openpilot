@@ -43,6 +43,9 @@ class _AbsentLead:
 class RadarConsumptionView:
   def __init__(self, radar, expired):
     self._radar = radar
+    # This producer claim belongs to the same publication as the object view.
+    # Keep it fixed even when a mutable fixture/reader is reused later.
+    self.fusionRiskUnresolved = bool(getattr(radar, 'fusionRiskUnresolved', False))
     self.radarObjects = tuple(lead for lead in radar.radarObjects if _object_key(lead) not in expired)
     self.leadOne = _AbsentLead(radar.leadOne) if _object_key(radar.leadOne) in expired else radar.leadOne
     self.leadTwo = _AbsentLead(radar.leadTwo) if _object_key(radar.leadTwo) in expired else radar.leadTwo
@@ -55,7 +58,8 @@ class RadarConsumptionView:
 
   def to_dict(self):
     return {**self._radar.to_dict(), 'radarObjects': [lead.to_dict() for lead in self.radarObjects],
-            'leadOne': self.leadOne.to_dict(), 'leadTwo': self.leadTwo.to_dict()}
+            'leadOne': self.leadOne.to_dict(), 'leadTwo': self.leadTwo.to_dict(),
+            'fusionRiskUnresolved': self.fusionRiskUnresolved}
 
 
 @dataclass(frozen=True)

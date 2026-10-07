@@ -144,6 +144,7 @@ def synthetic_control_states(now):
       'mdMonoTime': stamp - 5_000_000, 'leadOne': displayed[0], 'leadTwo': displayed[1],
       'radarObjects': objects, 'fusionActive': state != 'fallback',
       'fusionHealthy': state in ('active', 'edge', 'cleared'), 'fusionDegraded': state == 'degraded',
+      'fusionRiskUnresolved': state == 'degraded',
       'fusionReason': state, 'visionLeadOne': fallback[0], 'visionLeadTwo': fallback[1],
       'fusionClearedTracks': [(1 << 40) + 1, (1 << 40) + 2] if state == 'cleared' else [],
       'fusionSessionId': 'native-logger-control' if state != 'fallback' else '',
@@ -171,6 +172,7 @@ def synthetic_object_influence_events(now):
     if service == 'longitudinalPlan':
       event.longitudinalPlan.modelMonoTime = model_ns
       event.longitudinalPlan.objectInfluences = influences
+      event.longitudinalPlan.radarRiskUnresolved = True
     else:
       motion = event.controlsState.motionState
       motion.version, motion.enabled, motion.phase = 1, True, 'track'
@@ -295,6 +297,7 @@ class TestHondaRadarLogger(unittest.TestCase):
       self.assertTrue(active.leadOne.evidence.brakeQualified)
       self.assertFalse(active.visionLeadOne.radar)
       self.assertTrue(degraded.fusionDegraded)
+      self.assertEqual([state.fusionRiskUnresolved for state in formal], [False, True, False, False, False])
       self.assertFalse(degraded.fusionHealthy)
       self.assertTrue(degraded.leadTwo.evidence.coasting)
       self.assertEqual(str(degraded.leadOne.evidence.source), 'fused')
@@ -319,6 +322,8 @@ class TestHondaRadarLogger(unittest.TestCase):
         value = getattr(recorded[0], service)
         if service == 'controlsState':
           value = value.motionState
+        else:
+          self.assertTrue(value.radarRiskUnresolved)
         influences = value.objectInfluences
         influence_lists[service] = influences
         self.assertEqual([str(item.kind) for item in influences], ['braking', 'hold', 'caution'])

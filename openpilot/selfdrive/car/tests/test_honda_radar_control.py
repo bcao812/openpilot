@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from openpilot.selfdrive.car.honda_radar_control import COAST_NS, HORIZON, MAX_OBJECTS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _qualified_path
+from openpilot.selfdrive.car.honda_radar_control import COAST_NS, HORIZON, MAX_OBJECTS, MAX_TRACKS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _qualified_path
 from openpilot.selfdrive.car.honda_radar_relevance import remaining_occupancy_window
 
 
@@ -604,6 +604,7 @@ def test_duplicate_publication_cannot_extend_raw_measurement_age_or_coast_foreve
   coast['model_ns'] = coast['model']['timestampEof'] = START + 240_000_000
   result = controller.update(**coast)
   assert result.objects and evidence(result)['source'] == 'predicted'
+  assert result.degraded and not result.risk_unresolved
   assert evidence(result)['positionMonoTime'] == START
   from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
   assert qualified_lead(result.objects[0], 'brake', now_ns=coast['now_ns'])
@@ -611,6 +612,7 @@ def test_duplicate_publication_cannot_extend_raw_measurement_age_or_coast_foreve
   coast['model_ns'] = coast['model']['timestampEof'] = START + COAST_NS
   result = controller.update(**coast)
   assert not result.objects and result.degraded and not result.cleared
+  assert result.risk_unresolved
 
 
 def test_same_sequence_changed_payload_is_rejected_and_new_sequence_recovers():
@@ -622,8 +624,10 @@ def test_same_sequence_changed_payload_is_rejected_and_new_sequence_recovers():
   changed['observation']['fusion']['tracks'][0]['dRel'] = 18.0
   result = controller.update(**changed)
   assert not result.objects and result.reason == 'publicationOrder' and result.degraded
+  assert result.risk_unresolved
   restored = controller.update(**scene(1))
   assert restored.healthy and not restored.degraded and restored.objects
+  assert not restored.risk_unresolved
 
 
 def test_out_of_order_source_rejects_without_giving_old_identity_new_lifetime():
@@ -644,10 +648,12 @@ def test_session_and_reset_clear_identity_before_accepting_new_source():
   restarted['observation']['sessionId'] = 'new-session'
   result = controller.update(**restarted)
   assert result.reason == 'observerReset' and not result.objects and not result.cleared
+  assert result.risk_unresolved
   recovered = scene(2)
   recovered['observation']['sessionId'] = 'new-session'
   result = controller.update(**recovered)
   assert result.objects and evidence(result)['sessionId'] == 'new-session' and result.degraded
+  assert result.risk_unresolved
   # The caller owns an explicit driver disengage/re-engage reset. An observer
   # restart or waiting past TTL is not evidence that its old obstacle departed.
   controller.reset()
@@ -655,6 +661,7 @@ def test_session_and_reset_clear_identity_before_accepting_new_source():
   reengaged['observation']['sessionId'] = 'new-session'
   result = controller.update(**reengaged)
   assert result.objects and result.healthy and not result.degraded
+  assert not result.risk_unresolved
 
 
 def test_slot_generation_change_preserves_physical_track_without_reconfirmation():
@@ -687,6 +694,7 @@ def test_far_irrelevant_target_loss_does_not_latch_acceleration_block(speed):
   controller.update(**scene(tracks=[radar(distance=100.0, speed=speed)]))
   result = controller.update(**scene(7, tracks=[]))
   assert result.healthy and not result.degraded and not result.objects
+  assert not result.risk_unresolved
   assert not result.cleared  # no invented positive claim that the road cleared
 
 
@@ -694,9 +702,52 @@ def test_lost_same_track_can_clear_with_fresh_out_of_path_even_after_memory_expi
   controller = HondaRadarControl()
   controller.update(**scene())
   missing = controller.update(**scene(7, tracks=[]))
-  assert missing.degraded
+  assert missing.degraded and missing.risk_unresolved
   cleared = controller.update(**scene(8, tracks=[radar(8, lateral=4.0)]))
   assert cleared.healthy and not cleared.degraded and cleared.cleared == (1,)
+  assert not cleared.risk_unresolved
+
+
+def test_unresolved_risk_survives_fresh_empty_packets_until_same_identity_recovers():
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  for frame in (7, 8, 100, 500):
+    result = controller.update(**scene(frame, tracks=[]))
+    assert result.healthy and result.degraded and result.risk_unresolved
+    assert not result.objects and not result.cleared
+  recovered = controller.update(**scene(501))
+  assert recovered.objects and not recovered.degraded and not recovered.risk_unresolved
+
+
+def test_unresolved_loss_capacity_overflow_stays_explicit_until_lifecycle_reset():
+  controller = HondaRadarControl()
+  tracks = [radar(identifier=i, oem=i, distance=10.0) for i in range(1, MAX_TRACKS + 1)]
+  controller.update(**scene(tracks=tracks))
+  missing = controller.update(**scene(7, tracks=[]))
+  assert missing.risk_unresolved and len(controller._lost_tracks) == MAX_TRACKS
+  controller.update(**scene(8, tracks=[radar(8, identifier=MAX_TRACKS + 1, distance=10.0)]))
+  overflow = controller.update(**scene(15, tracks=[]))
+  assert overflow.risk_unresolved and controller._unresolved_loss
+  recovered = [radar(16, identifier=i, oem=i, distance=10.0) for i in range(1, MAX_TRACKS + 1)]
+  result = controller.update(**scene(16, tracks=recovered))
+  assert not controller._lost_tracks and result.risk_unresolved and result.degraded
+  controller.reset()
+  result = controller.update(**scene(17, tracks=[]))
+  assert not result.risk_unresolved
+
+
+@pytest.mark.parametrize('boundary', ['disabled', 'core_invalid'])
+def test_producer_reset_early_returns_cannot_republish_previous_loss(boundary):
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  assert controller.update(**scene(7, tracks=[])).risk_unresolved
+  values = scene(8, tracks=[])
+  if boundary == 'disabled':
+    values['enabled'] = False
+  else:
+    values['v_ego'] = math.nan
+  result = controller.update(**values)
+  assert not result.risk_unresolved and not controller._lost_tracks and not controller._unresolved_loss
 
 
 def test_same_confirmed_visual_stream_recovers_from_radar_loss_without_timeout():
@@ -708,6 +759,7 @@ def test_same_confirmed_visual_stream_recovers_from_radar_loss_without_timeout()
     values['observation_valid'] = False
     result = controller.update(**values)
     assert not result.healthy and not result.degraded
+    assert not result.risk_unresolved
     assert len(result.objects) == 1 and evidence(result)['reason'] == 'visionFallback'
     assert evidence(result)['source'] == 'fused' and evidence(result)['trackId'] == 1
     assert result.objects[0]['dRel'] == 20.0 and not result.objects[0]['radar']
@@ -743,6 +795,7 @@ def test_healthy_no_target_is_distinct_from_sensor_fault():
   failed['observation_valid'] = False
   failure = HondaRadarControl().update(**failed)
   assert not failure.healthy and failure.degraded and failure.reason == 'observationStale'
+  assert not empty.risk_unresolved and not failure.risk_unresolved
 
 
 def test_complete_collection_preserves_32_radar_objects_and_two_visual_candidates():
@@ -771,6 +824,19 @@ def test_formal_cereal_schema_accepts_full_object_contract():
   assert state.radarObjects[0].present
   assert str(state.radarObjects[0].evidence.source) == 'radar'
   assert state.radarObjects[0].evidence.conflictEnd == 10.0
+
+
+def test_retained_loss_capnp_wire_and_old_payload_defaults():
+  from openpilot.cereal import messaging
+  for service, field in (('radarState', 'fusionRiskUnresolved'), ('longitudinalPlan', 'radarRiskUnresolved')):
+    event = messaging.new_message(service, valid=True)
+    assert not getattr(getattr(event, service), field)
+    wire = messaging.log_from_bytes(event.to_bytes())
+    assert not getattr(getattr(wire, service), field)
+    event.clear_write_flag()
+    setattr(getattr(event, service), field, True)
+    wire = messaging.log_from_bytes(event.to_bytes())
+    assert getattr(getattr(wire, service), field)
 
 
 def test_actual_shadow_producer_exports_qualified_acceleration_for_formal_adapter():

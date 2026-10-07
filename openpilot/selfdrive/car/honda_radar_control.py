@@ -108,6 +108,7 @@ class RadarControlResult:
   reason: str
   cleared: tuple[int, ...] = ()
   session_id: str = ''
+  risk_unresolved: bool = False
 
 
 @dataclass(frozen=True)
@@ -931,9 +932,10 @@ class HondaRadarControl:
                        for identifier, memory in previous_tracks.items())
       if not unresolved:
         degraded = False
-    degraded |= self._unresolved_loss or bool(self._lost_tracks)
+    risk_unresolved = self._unresolved_loss or bool(self._lost_tracks)
+    degraded |= risk_unresolved
     if reason == 'active' and degraded:
       reason = 'objectDegraded'
     elif reason == 'active' and not objects:
       reason = 'noQualifiedObjects'
-    return RadarControlResult(leads, objects, healthy, degraded, reason, tuple(sorted(cleared)), self._session)
+    return RadarControlResult(leads, objects, healthy, degraded, reason, tuple(sorted(cleared)), self._session, risk_unresolved)

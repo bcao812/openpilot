@@ -332,13 +332,14 @@ class RadarD:
       self.radar_state.fusionActive = enabled
       self.radar_state.fusionHealthy = result.healthy
       self.radar_state.fusionDegraded = result.degraded
+      self.radar_state.fusionRiskUnresolved = result.risk_unresolved
       self.radar_state.fusionReason = result.reason
       self.radar_state.fusionClearedTracks = getattr(result, 'cleared', ())
       self.radar_state.fusionSessionId = getattr(result, 'session_id', '')
-      state = enabled, result.healthy, result.degraded, result.reason
+      state = enabled, result.healthy, result.degraded, result.risk_unresolved, result.reason
       if state != self.fusion_state:
         cloudlog.event('honda_radar_control', enabled=enabled, healthy=result.healthy, degraded=result.degraded,
-                       reason=result.reason, objects=len(result.objects))
+                       riskUnresolved=result.risk_unresolved, reason=result.reason, objects=len(result.objects))
         self.fusion_state = state
 
   def publish(self, pm: messaging.PubMaster):

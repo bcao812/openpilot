@@ -27,10 +27,11 @@ def coast(*, publication=PUBLICATION, relevant=False, track=7):
                                'lateralSpeed': 0.0 if relevant else -.25})
 
 
-def radar_frame(*objects, publication=PUBLICATION, display=(), degraded=False, cleared=(), session=SESSION):
+def radar_frame(*objects, publication=PUBLICATION, display=(), degraded=False, risk_unresolved=False, cleared=(), session=SESSION):
   empty = SimpleNamespace(present=False)
   slots = (*display, empty, empty)
   return SimpleNamespace(fusionActive=True, fusionHealthy=True, fusionDegraded=degraded, fusionReason='active',
+                         fusionRiskUnresolved=risk_unresolved,
                          fusionSessionId=session, fusionClearedTracks=cleared, mdMonoTime=publication,
                          radarObjects=list(objects), leadOne=slots[0], leadTwo=slots[1])
 
@@ -149,8 +150,10 @@ def test_missing_or_future_publication_cannot_prove_natural_age(publication):
 def test_relevant_loss_persists_through_empty_fresh_messages_and_unrelated_recovery():
   consumer = RadarConsumption()
   predicted = coast(relevant=True)
-  view = consume_frame(consumer, radar_frame(predicted, display=(predicted,)))
+  raw = radar_frame(predicted, display=(predicted,))
+  view = consume_frame(consumer, raw)
   assert view.radarObjects == () and consumer.degraded
+  assert not raw.fusionRiskUnresolved and not view.fusionRiskUnresolved
   for elapsed in (100_000_000, 2_000_000_000, 30_000_000_000):
     now = PUBLICATION + elapsed
     other = formal_lead(now_ns=now, evidence={'trackId': 9})
@@ -218,6 +221,17 @@ def test_consumer_does_not_clear_original_degraded_status_or_publish_a_clear():
   assert view.fusionClearedTracks == raw.fusionClearedTracks == (12,)
 
 
+def test_expiry_view_freezes_producer_risk_metadata_and_old_schema_defaults_false():
+  raw = radar_frame(coast(), risk_unresolved=True)
+  consumer = RadarConsumption()
+  view = consume_frame(consumer, raw)
+  assert view.fusionRiskUnresolved and not consumer.degraded
+  raw.fusionRiskUnresolved = False
+  assert view.fusionRiskUnresolved
+  del raw.fusionRiskUnresolved
+  assert not consume_frame(consumer, raw).fusionRiskUnresolved
+
+
 def test_valid_caution_does_not_prevent_another_coast_expiring_or_create_a_loss_latch():
   edge = caution_lead(now_ns=PUBLICATION, evidence={'trackId': 12})
   raw = radar_frame(edge, coast())
@@ -249,7 +263,7 @@ def native_frame(frame):
 def test_native_message_bytes_and_all_source_timestamps_remain_unchanged():
   predicted = coast()
   fresh = formal_lead(now_ns=PUBLICATION, evidence={'trackId': 5})
-  native = native_frame(radar_frame(fresh, predicted, display=(predicted, fresh)))
+  native = native_frame(radar_frame(fresh, predicted, display=(predicted, fresh), risk_unresolved=True))
   before, serialized = native.to_dict(), native.to_bytes()
   native.clear_write_flag()
   consumer = RadarConsumption()
@@ -258,3 +272,4 @@ def test_native_message_bytes_and_all_source_timestamps_remain_unchanged():
   assert [lead.evidence.trackId for lead in control_leads(view)] == [5]
   assert native.to_dict() == before and native.to_bytes() == serialized
   assert len(native.radarObjects) == 2 and native.leadOne.present
+  assert view.fusionRiskUnresolved and view.to_dict()['fusionRiskUnresolved']

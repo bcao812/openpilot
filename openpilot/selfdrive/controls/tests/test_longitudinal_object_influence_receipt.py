@@ -2,6 +2,7 @@ import pytest
 
 from openpilot.cereal import custom, log
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 from openpilot.selfdrive.controls.lib.object_influence import plan_object_influences
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness
 
@@ -22,6 +23,27 @@ def test_controls_acknowledges_actual_plan_without_changing_command():
   assert len(motion.objectInfluences) == 1
   assert motion.objectInfluences[0].trackId == 17
   assert motion.planMonoTime == observed.control.sm.logMonoTime['longitudinalPlan']
+
+
+def test_radar_loss_claim_does_not_change_owner_or_receipts_before_existing_force_decel_rules():
+  observed, baseline = ControlsHarness(), ControlsHarness()
+  for consumer in (observed, baseline):
+    consumer.plan.aTarget = -1.0
+    consumer.plan.objectInfluences = [object_record()]
+  observed.plan.radarRiskUnresolved = True
+  command, motion = observed.step()
+  baseline_command, baseline_motion = baseline.step()
+  assert command.to_dict() == baseline_command.to_dict()
+  assert motion.to_dict() == baseline_motion.to_dict()
+  assert not motion.degraded and len(motion.objectInfluences) == 1
+  # The next force-deceleration plan still uses the existing independent
+  # stop reason; the informational radar claim never replaces this contract.
+  observed.plan.motionIntent.reasons = int(StopReason.FORCE_DECEL)
+  _, motion = observed.step()
+  assert not motion.degraded and not motion.objectInfluences
+  observed.selfdrive_state.enabled = False
+  command, motion = observed.step()
+  assert not command.longActive and not motion.objectInfluences
 
 
 @pytest.mark.parametrize('pedal', ['gasPressed', 'brakePressed'])

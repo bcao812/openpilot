@@ -139,11 +139,13 @@ def test_radar_stop_holds_on_dropout_and_releases_for_same_car_departure(outcome
     frozen = rows[27]['observer_ns'], rows[27]['observer_position_ns']
     assert all((row['observer_ns'], row['observer_position_ns']) == frozen for row in rows[28:])
     assert any(row['radar'].get('fusionDegraded', False) for row in rows[36:])
+    assert all(row['radar']['fusionRiskUnresolved'] for row in rows[36:])
     for row in rows[36:]:
       assert not row['release']
       assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
       assert all(sample['brake'] and not sample['release'] and sample['accel'] <= 0.0 for sample in row['can'])
   else:
+    assert not any(row['radar']['fusionRiskUnresolved'] for row in rows)
     identity = rows[27]['radar']['leadOne']['evidence']['trackId']
     assert all(row['radar']['leadOne']['evidence']['trackId'] == identity for row in rows[28:])
     assert any(row['release'] and not row['stop'] for row in rows[28:])

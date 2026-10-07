@@ -11,6 +11,7 @@ from openpilot.selfdrive.controls.lib.lead_qualification import control_leads
 from openpilot.selfdrive.controls.lib.longitudinal_planner import has_safe_moving_lead
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import has_departing_lead
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import CapturingPublisher
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
 from openpilot.selfdrive.controls.tests.test_radar_consumption import (
@@ -105,12 +106,117 @@ def test_relevant_consumer_loss_keeps_zero_cap_and_hold_identity_until_driver_re
       state = state_at(frame, now=now, publication=publication)
       planner.update(state, now_ns=now)
       assert planner.reference_planner.radar_consumption.degraded
+      assert planner.reference_planner.radar_risk_unresolved
+      assert not state['radarState'].fusionRiskUnresolved
+      publisher = CapturingPublisher()
+      with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=now):
+        planner.publish(state, publisher)
+      assert publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
       assert planner.reference_planner.radar_held_identity == (SESSION, 7)
       assert planner.output_a_target <= 0.0
       assert not planner.motion_intent.moving_lead and not planner.motion_intent.release_allowed
     state['carState'].gasPressed = True
     planner.update(state, now_ns=now + 1_000_000)
   assert not planner.reference_planner.radar_consumption.degraded
+  assert not planner.reference_planner.radar_risk_unresolved
+
+
+@pytest.mark.parametrize('degraded,risk_unresolved', [(False, False), (True, False), (False, True), (True, True)])
+def test_only_explicit_producer_loss_claim_requests_the_main_plan_alert(degraded, risk_unresolved):
+  planner = enabled_planner(5.0)
+  state = state_at(radar_frame(degraded=degraded, risk_unresolved=risk_unresolved), speed=5.0)
+  with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
+    planner.update(state, now_ns=CONSUMPTION)
+  assert planner.motion_intent.valid and not planner.reference_planner.radar_consumption.degraded
+  assert planner.reference_planner.radar_risk_unresolved is risk_unresolved
+  publisher = CapturingPublisher()
+  with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
+    planner.publish(state, publisher)
+  assert publisher.messages['longitudinalPlan'].valid
+  assert publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved is risk_unresolved
+
+
+def test_claim_alone_does_not_change_mpc_objects_acceleration_or_motion_intent():
+  outputs = []
+  for risk in (False, True):
+    planner = enabled_planner(5.0)
+    primary = formal_lead(now_ns=PUBLICATION, dRel=40.0, vLead=5.5, vLeadK=5.5, vRel=.5,
+                          evidence={'trackId': 5})
+    state = state_at(radar_frame(primary, display=(primary,), degraded=True, risk_unresolved=risk), speed=5.0)
+    with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
+      planner.update(state, now_ns=CONSUMPTION)
+    assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
+    publisher = CapturingPublisher()
+    with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
+      planner.publish(state, publisher)
+    plan = publisher.messages['longitudinalPlan'].longitudinalPlan
+    assert plan.radarRiskUnresolved is risk
+    outputs.append((planner.output_a_target, planner.mpc.params.copy(), plan.motionIntent.to_dict(),
+                    [row.to_dict() for row in plan.objectInfluences]))
+  assert outputs[0][0] == outputs[1][0]
+  np.testing.assert_array_equal(outputs[0][1], outputs[1][1])
+  assert outputs[0][2:] == outputs[1][2:]
+
+
+@pytest.mark.parametrize('consumer_loss', [False, True])
+def test_scope_exit_clears_only_producer_claim_while_retained_consumer_risk_needs_driver_reset(consumer_loss):
+  planner = enabled_planner(1.0)
+  objects = (coast(relevant=True),) if consumer_loss else ()
+  state = state_at(radar_frame(*objects, degraded=True, risk_unresolved=True))
+  with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
+    planner.update(state, now_ns=CONSUMPTION)
+    assert planner.reference_planner.radar_risk_unresolved
+    Params().put('HondaBoschARadarMode', SHADOW, block=True)
+    now = CONSUMPTION + 100_000_000
+    state = state_at(radar_frame(publication=now, risk_unresolved=True), now=now, publication=now)
+    planner.update(state, now_ns=now)
+    assert not planner.reference_planner.fusion_admitted
+    assert planner.reference_planner.radar_risk_unresolved is consumer_loss
+    assert planner.reference_planner.radar_consumption.degraded is consumer_loss
+    state['carState'].gasPressed = True
+    planner.update(state, now_ns=now + 1_000_000)
+  assert not planner.reference_planner.radar_risk_unresolved
+  assert not planner.reference_planner.radar_consumption.degraded
+
+
+@pytest.mark.parametrize('failure', ['source_epoch', 'owner', 'model_shape', 'pitch', 'throttle', 'mpc'])
+def test_invalid_early_returns_clear_the_current_plan_claim(failure):
+  planner = enabled_planner(5.0)
+  ref = planner.reference_planner
+  ref.radar_risk_unresolved = True
+  state = state_at(radar_frame(degraded=True, risk_unresolved=True), speed=5.0)
+  if failure == 'source_epoch':
+    state.logMonoTime['carState'] = CONSUMPTION + 1
+  elif failure == 'owner':
+    state['controlsState'].motionState.version = 0
+  elif failure == 'model_shape':
+    state['modelV2'].velocity.x = []
+  elif failure == 'pitch':
+    state['carControl'].orientationNED = [0.0, float('nan'), 0.0]
+  elif failure == 'throttle':
+    state['modelV2'].meta.disengagePredictions.gasPressProbs = [1.0, float('nan')]
+  with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
+    if failure == 'mpc':
+      with patch.object(planner.mpc, 'update', side_effect=lambda *a, **kw: setattr(planner.mpc, 'solution_status', 1)):
+        planner.update(state, now_ns=CONSUMPTION)
+    else:
+      planner.update(state, now_ns=CONSUMPTION)
+  assert not ref.radar_risk_unresolved and not planner.motion_intent.valid
+  publisher = CapturingPublisher()
+  with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
+    planner.publish(state, publisher)
+  assert not publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
+
+
+def test_non_unified_main_plan_publishes_false_even_after_a_retained_claim():
+  planner = enabled_planner(5.0)
+  state = state_at(radar_frame(), speed=5.0)
+  planner.reference_planner.radar_risk_unresolved = True
+  publisher = CapturingPublisher()
+  with patch.object(planner, 'unified', False), \
+       patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
+    planner.publish(state, publisher)
+  assert not publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
 
 
 def test_invalid_radar_transport_cannot_clear_a_consumption_loss():

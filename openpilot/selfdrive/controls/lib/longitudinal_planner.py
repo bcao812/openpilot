@@ -665,6 +665,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     longitudinalPlan.hasLead = sm['radarState'].leadOne.present
     longitudinalPlan.longitudinalPlanSource = self.mpc.source
     longitudinalPlan.fcw = self.fcw
+    longitudinalPlan.radarRiskUnresolved = bool(self.unified and self.reference_planner.radar_risk_unresolved)
 
     longitudinalPlan.aTarget = float(self.output_a_target)
     longitudinalPlan.shouldStop = bool(self.output_should_stop)

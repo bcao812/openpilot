@@ -205,6 +205,7 @@ class UnifiedLongitudinalPlanner:
     self.caution_object_identities = ()
     self.mitigation_object_evidence = ()
     self.fusion_admitted = False
+    self.radar_risk_unresolved = False
     self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
     self.model_reference_adapter = ModelReferenceAdapter()
     self.stop_distance_policy = LowSpeedStopDistance()
@@ -231,6 +232,7 @@ class UnifiedLongitudinalPlanner:
     self.caution_accel_limited = False
     self.caution_object_identities = ()
     self.mitigation_object_evidence = ()
+    self.radar_risk_unresolved = False
     self.stop_distance_policy.clear()
     self.parking_approach.clear()
     self.parking_policy_distances = None
@@ -491,6 +493,7 @@ class UnifiedLongitudinalPlanner:
       pass
 
   def update(self, state, *, now_ns):
+    self.radar_risk_unresolved = False
     self.caution_accel_limited = False
     self.caution_object_identities = ()
     self.mitigation_object_evidence = ()
@@ -499,6 +502,13 @@ class UnifiedLongitudinalPlanner:
       # Full planner updates still observe the driver lifecycle after a scope
       # exit; a sensor-only fallback call need not fabricate car/control data.
       self.reset_radar_consumption_for_driver(state)
+    # Consumer expiry can discover a loss after the producer's publication.
+    # Only explicit retained losses request driver intervention; the broader
+    # fusionDegraded flag also covers valid short coasts and quality changes.
+    self.radar_risk_unresolved = bool(
+      self.radar_consumption.degraded
+      or self.fusion_admitted and getattr(state['radarState'], 'fusionRiskUnresolved', False)
+    )
     self._radar_update_ns = now_ns
     planner = self.planner
     self.model_reference_mode = 'not_admitted'
