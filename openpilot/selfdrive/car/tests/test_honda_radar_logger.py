@@ -39,6 +39,9 @@ def synthetic_track_diagnostics(index):
     'previousYRel': -(100 + sample + 0.375),
     'acceleration': -(sample + 0.125),
     'accelerationGood': True,
+    'lateralPositionVariance': sample + 0.375,
+    'lateralVelocityVariance': sample + 1.625,
+    'lateralVelocityValid': True,
   }
 
 
@@ -80,6 +83,7 @@ def synthetic_control_lead(index, stamp, source='radar'):
   physical = source != 'vision'
   predicted = source == 'predicted'
   entering = index == 3 and not predicted
+  edge = index == 4 and physical and not predicted
   evidence = {
     'version': 1, 'source': source, 'sessionId': 'native-logger-control' if physical else '',
     'trackId': (1 << 40) + sample if physical else 0, 'generation': (1 << 41) + sample if physical else 0,
@@ -87,10 +91,11 @@ def synthetic_control_lead(index, stamp, source='radar'):
     'estimateMonoTime': stamp - 10_000_000, 'modelMonoTime': stamp - 5_000_000,
     'positionStd': .25 + sample / 64, 'velocityStd': .125 + sample / 128,
     'positionValid': True, 'velocityValid': True, 'accelerationValid': not predicted,
-    'followQualified': not (entering or predicted), 'brakeQualified': True,
-    'stopQualified': not (entering or predicted), 'departureQualified': not (entering or predicted),
-    'fcwQualified': not predicted, 'coasting': predicted,
-    'pathState': 'entering' if entering else 'inPath', 'pathOffset': 2.25 if entering else -.125,
+    'followQualified': not (entering or predicted or edge), 'brakeQualified': not edge,
+    'stopQualified': not (entering or predicted or edge), 'departureQualified': not (entering or predicted or edge),
+    'fcwQualified': not (predicted or edge), 'coasting': predicted, 'cautionQualified': edge,
+    'pathState': 'edge' if edge else 'entering' if entering else 'inPath',
+    'pathOffset': 2.125 if edge else 2.25 if entering else -.125,
     'conflictStart': .125 if entering else 0.0, 'conflictEnd': .25 if predicted else 1.75 if entering else 10.0,
     'lateralSpeed': -.75 if entering else .125, 'pathSource': 'modelPath' if entering else 'laneLines',
     'visionIndex': index % 2 if source in ('vision', 'fused') else -1,
@@ -107,7 +112,7 @@ def synthetic_control_lead(index, stamp, source='radar'):
 
 def synthetic_control_states(now):
   states = []
-  for index, state in enumerate(('active', 'degraded', 'cleared', 'fallback')):
+  for index, state in enumerate(('active', 'degraded', 'edge', 'cleared', 'fallback')):
     stamp = now - 100_000_000 + index * 20_000_000
     visions = [synthetic_control_lead(MAX_CONTROL_OBJECTS - 2 + slot, stamp, 'vision') for slot in range(2)]
     # radard preserves the original visual messages before adding formal
@@ -119,6 +124,9 @@ def synthetic_control_states(now):
     elif state == 'degraded':
       objects = [synthetic_control_lead(0, stamp, 'predicted'), synthetic_control_lead(1, stamp, 'fused'), visions[1]]
       displayed = (objects[1], objects[0])
+    elif state == 'edge':
+      objects = [synthetic_control_lead(4, stamp), visions[0]]
+      displayed = (objects[0], objects[1])
     else:
       objects = []
       displayed = fallback if state == 'fallback' else ({'present': False}, {'present': False})
@@ -129,13 +137,41 @@ def synthetic_control_states(now):
     event.radarState = {
       'mdMonoTime': stamp - 5_000_000, 'leadOne': displayed[0], 'leadTwo': displayed[1],
       'radarObjects': objects, 'fusionActive': state != 'fallback',
-      'fusionHealthy': state in ('active', 'cleared'), 'fusionDegraded': state == 'degraded',
+      'fusionHealthy': state in ('active', 'edge', 'cleared'), 'fusionDegraded': state == 'degraded',
       'fusionReason': state, 'visionLeadOne': fallback[0], 'visionLeadTwo': fallback[1],
       'fusionClearedTracks': [(1 << 40) + 1, (1 << 40) + 2] if state == 'cleared' else [],
       'fusionSessionId': 'native-logger-control' if state != 'fallback' else '',
     }
     states.append((state, event))
   return states
+
+
+def synthetic_object_influence_events(now):
+  # Artificial wire values only: no solver, owner acceptance, measurement
+  # quality or causal contribution is established by these attribution rows.
+  model_ns = now - 5_000_000
+  events = []
+  for index, service in enumerate(('longitudinalPlan', 'controlsState')):
+    influences = [
+      {'version': 1, 'sessionId': 'native-logger-control', 'trackId': (1 << 40) + 1,
+       'modelMonoTime': 0, 'visionIndex': -1, 'kind': 'braking', 'strength': .875 - index * .25},
+      {'version': 1, 'sessionId': '', 'trackId': 0, 'modelMonoTime': model_ns,
+       'visionIndex': 1, 'kind': 'hold', 'strength': 1.0},
+      {'version': 1, 'sessionId': 'native-logger-control', 'trackId': (1 << 40) + 5,
+       'modelMonoTime': 0, 'visionIndex': -1, 'kind': 'caution', 'strength': .375 - index * .25},
+    ]
+    event = messaging.new_message(service, valid=True)
+    event.logMonoTime = now + 2 + index
+    if service == 'longitudinalPlan':
+      event.longitudinalPlan.modelMonoTime = model_ns
+      event.longitudinalPlan.objectInfluences = influences
+    else:
+      motion = event.controlsState.motionState
+      motion.version, motion.enabled, motion.phase = 1, True, 'track'
+      motion.planMonoTime, motion.modelMonoTime = events[0].logMonoTime, model_ns
+      motion.objectInfluences = influences
+    events.append(event)
+  return events
 
 
 class TestHondaRadarLogger(unittest.TestCase):
@@ -145,7 +181,7 @@ class TestHondaRadarLogger(unittest.TestCase):
     with TemporaryDirectory(prefix='honda-radar-logger-') as directory, \
          patch.dict(os.environ, {'LOG_ROOT': directory}), OpenpilotPrefix() as prefix:
       self.assertIn(prefix.prefix, Params().get_param_path())
-      services = (SERVICE, 'modelV2', 'radarState', 'carControlSP')
+      services = (SERVICE, 'modelV2', 'radarState', 'carControlSP', 'longitudinalPlan', 'controlsState')
       pm = messaging.PubMaster(list(services))
       logger_dir = Path(BASEDIR) / 'openpilot/system/loggerd'
       # Test-only dependency selection keeps host tools separate from tracked ARM binaries.
@@ -203,6 +239,13 @@ class TestHondaRadarLogger(unittest.TestCase):
             control_expected.append((state, service, message.logMonoTime, expected_fields, wire))
             pm.send(service, wire)
             self.assertTrue(pm.wait_for_readers_to_update(service, timeout=5))
+        for event in synthetic_object_influence_events(now):
+          service = event.which()
+          expected_fields = getattr(event, service).to_dict()
+          wire = event.to_bytes()
+          control_expected.append(('objectInfluences', service, event.logMonoTime, expected_fields, wire))
+          pm.send(service, wire)
+          self.assertTrue(pm.wait_for_readers_to_update(service, timeout=5))
       finally:
         process.send_signal(signal.SIGINT)
         output, _ = process.communicate(timeout=10)
@@ -236,8 +279,8 @@ class TestHondaRadarLogger(unittest.TestCase):
           self.assertTrue(recorded[0].valid)
           self.assertEqual(getattr(recorded[0], service).to_dict(), fields)
       formal = [event.radarState for event in messages if event.which() == 'radarState']
-      self.assertEqual([state.fusionReason for state in formal], ['active', 'degraded', 'cleared', 'fallback'])
-      active, degraded, cleared, fallback = formal
+      self.assertEqual([state.fusionReason for state in formal], ['active', 'degraded', 'edge', 'cleared', 'fallback'])
+      active, degraded, edge, cleared, fallback = formal
       self.assertEqual(len(active.radarObjects), MAX_CONTROL_OBJECTS)
       self.assertEqual(len({(lead.evidence.sessionId, lead.evidence.trackId)
                             for index, lead in enumerate(active.radarObjects) if index < MAX_CONTROL_OBJECTS - 2}),
@@ -249,6 +292,13 @@ class TestHondaRadarLogger(unittest.TestCase):
       self.assertFalse(degraded.fusionHealthy)
       self.assertTrue(degraded.leadTwo.evidence.coasting)
       self.assertEqual(str(degraded.leadOne.evidence.source), 'fused')
+      self.assertEqual(str(edge.leadOne.evidence.pathState), 'edge')
+      self.assertTrue(edge.leadOne.evidence.cautionQualified)
+      self.assertFalse(edge.leadOne.evidence.brakeQualified or edge.leadOne.evidence.stopQualified)
+      mirrors = [event.carControlSP for event in messages if event.which() == 'carControlSP']
+      self.assertEqual(len(mirrors), len(formal))
+      self.assertEqual(str(mirrors[2].leadOne.evidence.pathState), 'edge')
+      self.assertTrue(mirrors[2].leadOne.evidence.cautionQualified)
       self.assertTrue(cleared.fusionHealthy)
       self.assertEqual(list(cleared.fusionClearedTracks), [(1 << 40) + 1, (1 << 40) + 2])
       self.assertEqual(len(cleared.radarObjects), 0)
@@ -256,6 +306,26 @@ class TestHondaRadarLogger(unittest.TestCase):
       self.assertFalse(fallback.fusionActive or fallback.fusionDegraded)
       self.assertEqual(fallback.leadOne.to_dict(), fallback.visionLeadOne.to_dict())
       self.assertEqual(fallback.leadTwo.to_dict(), fallback.visionLeadTwo.to_dict())
+      influence_lists = {}
+      for service in ('longitudinalPlan', 'controlsState'):
+        recorded = [event for event in messages if event.which() == service]
+        self.assertEqual(len(recorded), 1)
+        value = getattr(recorded[0], service)
+        if service == 'controlsState':
+          value = value.motionState
+        influences = value.objectInfluences
+        influence_lists[service] = influences
+        self.assertEqual([str(item.kind) for item in influences], ['braking', 'hold', 'caution'])
+        self.assertTrue(all(item.version == 1 for item in influences))
+        self.assertEqual(influences[0].sessionId, 'native-logger-control')
+        self.assertEqual(influences[0].trackId, (1 << 40) + 1)
+        self.assertEqual((influences[1].sessionId, influences[1].trackId, influences[1].visionIndex), ('', 0, 1))
+        self.assertEqual(influences[1].modelMonoTime, now - 5_000_000)
+        self.assertEqual(influences[2].trackId, (1 << 40) + 5)
+      self.assertEqual(influence_lists['longitudinalPlan'][0].strength, .875)
+      self.assertEqual(influence_lists['controlsState'][0].strength, .625)
+      self.assertEqual(influence_lists['longitudinalPlan'][2].strength, .375)
+      self.assertEqual(influence_lists['controlsState'][2].strength, .125)
       self.assertTrue(any(event.which() == 'modelV2' and event.modelV2.frameId == 712 for event in messages))
       self.assertFalse(any(event.which() == SERVICE for event in LogReader(str(qlogs[0]))))
       del pm

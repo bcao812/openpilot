@@ -21,6 +21,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import (CONTROL_N, CREEP_SPE
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.honda_radar_accel_guard import HondaRadarAccelGuard
 from openpilot.selfdrive.controls.lib.lead_qualification import control_leads, lead_identity, qualified_lead
+from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS,
@@ -148,6 +149,8 @@ def has_departing_lead(radar_state, speed, delay, *, minimum_gap_base=CREEP_FOLL
     if getattr(evidence, 'version', 0) == 1 and identity != primary_identity:
       # A distant second vehicle need not depart for the blocking vehicle to
       # lead us forward. Every independent obstacle still constrains the MPC.
+      if qualified_lead(lead, 'caution', 0.0, now_ns=now_ns):
+        continue
       if (not qualified_lead(lead, 'brake', 0.95, now_ns=now_ns)
           or lead.dRel + min(lead.vRel, 0.0) * CREEP_FINISH_T < minimum_gap):
         return False
@@ -197,6 +200,9 @@ class UnifiedLongitudinalPlanner:
     self._radar_log_reason = ''
     self.radar_held_identity = None
     self.radar_release_identity = None
+    self.radar_consumption = RadarConsumption()
+    self.caution_accel_limited = False
+    self.caution_object_identities = ()
     self.fusion_admitted = False
     self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
     self.model_reference_adapter = ModelReferenceAdapter()
@@ -221,6 +227,8 @@ class UnifiedLongitudinalPlanner:
     self.turn_accel_limited = False
     self.radar_accel_guard.clear()
     self.radar_accel_limited = False
+    self.caution_accel_limited = False
+    self.caution_object_identities = ()
     self.stop_distance_policy.clear()
     self.parking_approach.clear()
     self.parking_policy_distances = None
@@ -397,6 +405,19 @@ class UnifiedLongitudinalPlanner:
       and self.radar_settings.control_requested(self.planner.CP, self.planner.CP_SP)
       and state['selfdriveState'].experimentalMode and self.planner.dec.enabled()
     )
+    car, control = state['carState'], state['carControl']
+    reset = (state['controlsState'].longControlState == LongCtrlState.off or car.vCruise == V_CRUISE_UNSET
+             or not (state['selfdriveState'].enabled and control.enabled and control.longActive)
+             or car.gasPressed or car.brakePressed or control.cruiseControl.override)
+    if reset:
+      self.radar_consumption.clear()
+    if getattr(radar, 'fusionActive', False) and self.fusion_admitted:
+      if state.valid.get('radarState', False) and state.all_checks(service_list=['radarState']):
+        radar = self.radar_consumption.update(
+          radar, publication_ns=state.logMonoTime.get('radarState'), now_ns=now_ns,
+          speed=car.vEgo, retain_losses=not reset,
+        )
+      return RadarInputView(state, radar)
     if not getattr(radar, 'fusionActive', False) or self.fusion_admitted:
       return state
     fallback = log.RadarState.new_message()
@@ -450,6 +471,8 @@ class UnifiedLongitudinalPlanner:
       pass
 
   def update(self, state, *, now_ns):
+    self.caution_accel_limited = False
+    self.caution_object_identities = ()
     state = self.radar_input_state(state, now_ns)
     self._radar_update_ns = now_ns
     planner = self.planner
@@ -587,12 +610,22 @@ class UnifiedLongitudinalPlanner:
       # during a short camera gap. Its uncalibrated d/v/a never becomes a lead;
       # stronger native lead/model braking still wins the existing minimum.
       maximum_accel = min(maximum_accel, radar_ceiling)
-    fusion_degraded = bool(self.fusion_admitted and getattr(radar, 'fusionDegraded', False))
+    fusion_degraded = bool(self.radar_consumption.degraded
+                           or self.fusion_admitted and getattr(radar, 'fusionDegraded', False))
     if fusion_degraded:
       # Losing an admitted obstacle is not fresh free-space evidence. Existing
       # visual/model braking remains available; recovery comes from the sensor
       # producer's explicit fresh identity/path evidence, never a cap timer.
       maximum_accel = min(maximum_accel, 0.0)
+    caution_identities = ()
+    if self.fusion_admitted and healthy and active and not reset and maximum_accel > 0.0:
+      caution_identities = tuple(
+        lead_identity(lead) for lead in control_leads(radar, 'caution', 0.0, now_ns=now_ns)
+        if lead.vRel < 0.0 and lead.dRel / -lead.vRel <= 2.0
+      )
+      # Keep this weak precaution out of MPC and CruiseResponse. A zero bound
+      # there would create a zero-speed preference near rest, accidentally
+      # granting a possible outer-body overlap new stop/HOLD authority.
     if healthy:
       cruise_ceiling = self.cruise_response.update(
         cruise_speed, speed, maximum_accel, measured_accel=measured_accel, reset=reset)
@@ -781,6 +814,14 @@ class UnifiedLongitudinalPlanner:
     if model_stop_evidence and speed < STOP_SPEED and CarControllerParams.BOSCH_GAS_LOOKUP_BP[0] < self.constraint_accel:
       self.constraint_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
       self.constraint_source = LongitudinalPlanSource.e2e
+    if caution_identities and min(self.reference_accel, self.constraint_accel) > 0.0:
+      # One final candidate arbitration: the caution purpose only removes an
+      # existing positive request. Stronger or tied independent requests, and
+      # all independently established stopping reasons, retain their meaning.
+      self.constraint_accel = 0.0
+      self.constraint_source = LongitudinalPlanSource.cruise
+      self.caution_accel_limited = True
+      self.caution_object_identities = caution_identities
     planner._observe(constraintKnown=True, constraintAccel=float(self.constraint_accel))
     output = float(np.clip(min(self.reference_accel, self.constraint_accel), ACCEL_MIN, ACCEL_MAX))
     if evidence is not None and evidence.unknown is not None and self.model_reference_mode == 'invalid':
@@ -896,7 +937,7 @@ class UnifiedLongitudinalPlanner:
       # a stop held for another physical vehicle, even if the model accelerates.
       release_allowed = False
     if (self.turn_lead_guard.lost or turn_ceiling is not None and turn_ceiling <= 0.0
-        or radar_ceiling is not None and radar_ceiling <= 0.0 or fusion_degraded):
+        or radar_ceiling is not None and radar_ceiling <= 0.0 or fusion_degraded or self.caution_accel_limited):
       # Lost-target speed support and a zero execution ceiling cannot certify
       # departure, even when another candidate wins with a negative target.
       # Preserve the raw motion description while withdrawing movement permission.
@@ -935,7 +976,8 @@ class UnifiedLongitudinalPlanner:
     turn_response = (self.turn_accel_limited and active and healthy and not reset and not forced_decel and not reasons
                      and output >= 0.0 and raw_kind in (MotionReferenceKind.UNKNOWN, MotionReferenceKind.MOVING,
                                                         MotionReferenceKind.FORWARD))
-    radar_response = ((radar_ceiling is not None or fusion_degraded) and active and healthy and not reset and not forced_decel and not reasons
+    radar_response = ((radar_ceiling is not None or fusion_degraded or self.caution_accel_limited)
+                     and active and healthy and not reset and not forced_decel and not reasons
                      and output >= 0.0 and raw_kind in (MotionReferenceKind.UNKNOWN, MotionReferenceKind.MOVING,
                                                         MotionReferenceKind.FORWARD))
     if turn_response or radar_response:

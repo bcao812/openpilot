@@ -5,9 +5,14 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+import time
+
 import pyray as rl
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import (
+  MESSAGE_MAX_AGE_NS, accepted_influences, influence_rgb, lead_influence_strength,
+)
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.fastmath import clamp
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -37,7 +42,7 @@ class ChevronMetrics:
     """Check if dev UI should be rendered"""
     return ui_state.chevron_metrics != ChevronOptions.OFF and self._lead_status_alpha > 0.0
 
-  def _draw_lead(self, lead_data, lead_vehicle, v_ego: float, rect: rl.Rectangle):
+  def _draw_lead(self, lead_data, lead_vehicle, v_ego: float, rect: rl.Rectangle, influence_strength: float = 0.0):
     """Draw lead vehicle status information (distance, speed, TTC)"""
     if not self.should_render():
       return
@@ -56,7 +61,7 @@ class ChevronMetrics:
     if not text_lines:
       return
 
-    self._render_text_lines(text_lines, chevron_x, chevron_y, sz, rect)
+    self._render_text_lines(text_lines, chevron_x, chevron_y, sz, rect, influence_strength)
 
   @staticmethod
   def _build_text_lines(d_rel: float, v_rel: float, v_ego: float) -> list[str]:
@@ -87,7 +92,7 @@ class ChevronMetrics:
     return text_lines
 
   def _render_text_lines(self, text_lines: list[str], chevron_x: float, chevron_y: float,
-                         sz: float, rect: rl.Rectangle):
+                         sz: float, rect: rl.Rectangle, influence_strength: float = 0.0):
     """Render text lines with proper centering and positioning"""
     font_size = 40
     line_height = 50
@@ -103,7 +108,7 @@ class ChevronMetrics:
       text_y = max(margin, text_y)
 
     alpha = int(255 * self._lead_status_alpha)
-    text_color = rl.Color(255, 255, 255, alpha)
+    text_color = rl.Color(*(influence_rgb(influence_strength) or (255, 255, 255)), alpha)
     shadow_color = rl.Color(0, 0, 0, int(200 * self._lead_status_alpha))
 
     for i, line in enumerate(text_lines):
@@ -137,11 +142,19 @@ class ChevronMetrics:
       return
 
     v_ego = sm['carState'].vEgo
+    now_ns = time.monotonic_ns()
+    influences = accepted_influences(sm, now_ns)
+    if (not sm.valid.get('radarState', False)
+        or not 0 <= now_ns - sm.logMonoTime.get('radarState', 0) <= MESSAGE_MAX_AGE_NS):
+      influences = ()
+    model_ns = getattr(radar_state, 'mdMonoTime', 0)
 
     if has_lead_one and lead_vehicles[0].chevron:
-      self._draw_lead(lead_one, lead_vehicles[0], v_ego, rect)
+      strength = lead_influence_strength(lead_one, influences, legacy_model_ns=model_ns, legacy_slot=0)
+      self._draw_lead(lead_one, lead_vehicles[0], v_ego, rect, strength)
 
     if has_lead_two and lead_vehicles[1].chevron:
       d_rel_diff = abs(lead_one.dRel - lead_two.dRel) if has_lead_one else float('inf')
       if d_rel_diff > 3.0:
-        self._draw_lead(lead_two, lead_vehicles[1], v_ego, rect)
+        strength = lead_influence_strength(lead_two, influences, legacy_model_ns=model_ns, legacy_slot=1)
+        self._draw_lead(lead_two, lead_vehicles[1], v_ego, rect, strength)

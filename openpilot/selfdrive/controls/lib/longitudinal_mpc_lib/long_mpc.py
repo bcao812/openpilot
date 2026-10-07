@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from numbers import Integral, Real
 import numpy as np
@@ -111,6 +111,7 @@ class LeadProjection:
   conflict_start: float
   conflict_end: float
   persistent: bool
+  pass_before: bool = False
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,7 @@ class OccupancyBound:
   duration: float
   position_limit: float
   identities: tuple
+  position_lower_limit: float = -REFERENCE_BOUND
 
 
 @dataclass(frozen=True)
@@ -440,6 +442,11 @@ class LongitudinalMpc:
     self._occupancy_bounds = (None,) * N
     self._native_occupancy_bounds_active = False
     self.diagnostic_occupancy_bounds = ()
+    self._passing_witness = None
+    self._passing_speed_limit = None
+    self.diagnostic_passing = None
+    self.object_influence_identities = ()
+    self._influence_problem = None
     self.solution_status = 0
     self.last_solver_status = 0
     self.failure_reason = ''
@@ -749,14 +756,15 @@ class LongitudinalMpc:
     return tuple(result)
 
   @classmethod
-  def collision_in_occupancy(cls, projection, states, jerks):
-    """Check raw geometry over the actual crossing window, between nodes too."""
+  def occupancy_clearance_extrema(cls, projection, states, jerks, *, horizon=MAX_T):
+    """Exact extrema of raw lead-minus-ego geometry over the real window."""
     if not np.any(projection.occupied):
-      return False
+      return float('inf'), -float('inf')
+    minimum, maximum = float('inf'), -float('inf')
     for stage in range(N):
       start = max(float(T_IDXS[stage]), projection.conflict_start)
-      end = min(float(T_IDXS[stage+1]), projection.conflict_end, 5.0)
-      if end < start or start >= 5.0:
+      end = min(float(T_IDXS[stage+1]), projection.conflict_end, horizon)
+      if end < start or start >= horizon:
         continue
       duration = T_IDXS[stage+1] - T_IDXS[stage]
       lead_position = projection.raw_trajectory[stage, 0]
@@ -777,11 +785,91 @@ class LongitudinalMpc:
       for timestamp in times:
         if lo <= timestamp <= hi:
           clearance = lead_position + lead_velocity * timestamp - cls.integrate_jerk(state, jerk, timestamp)[0]
-          if clearance < CRASH_DISTANCE:
-            return True
-    return False
+          minimum, maximum = min(minimum, float(clearance)), max(maximum, float(clearance))
+    return minimum, maximum
 
-  def finite_occupancy_bounds(self):
+  @classmethod
+  def collision_in_occupancy(cls, projection, states, jerks):
+    """FCW uses the actual interval and the selected passing/yielding side."""
+    minimum, maximum = cls.occupancy_clearance_extrema(projection, states, jerks, horizon=5.0)
+    return maximum > -STOP_DISTANCE if projection.pass_before else minimum < CRASH_DISTANCE
+
+  def select_occupancy_branches(self, projections, reference):
+    """Admit a single non-accelerating passing witness, never race a crossing.
+
+    Only a physically impossible behind-all-objects branch motivates this
+    alternative. The SAME integrated witness must clear all other objects,
+    including persistent front vehicles; individual passing decisions cannot
+    contradict each other. Independent model braking/stop goals veto it.
+    """
+    finite = tuple(p for p in projections if not p.persistent and np.any(p.occupied))
+    if not finite or reference is None or self.x0[1] <= 0.0:
+      return projections
+    if (reference.typed_model is not None or any(value is not None for value in (
+        reference.model_position, reference.model_velocity, reference.model_acceleration))):
+      return projections
+    lower = np.broadcast_to(np.asarray(reference.accel_min, dtype=float), (N+1,))
+    upper = np.broadcast_to(np.asarray(reference.accel_max, dtype=float), (N+1,))
+    if not np.all(np.isfinite([lower, upper])) or np.any(lower > 0.0) or np.any(upper < 0.0):
+      return projections
+    impossible_behind = False
+    for projection in finite:
+      start, end = max(0.0, projection.conflict_start), min(MAX_T, projection.conflict_end)
+      interior = []
+      for stage, duration in enumerate(np.diff(T_IDXS)):
+        lead_velocity = (projection.raw_trajectory[stage+1, 0] - projection.raw_trajectory[stage, 0]) / duration
+        extremum = (lead_velocity - self.x0[1]) / ACCEL_MIN
+        if max(start, T_IDXS[stage]) < extremum < min(end, T_IDXS[stage+1], -self.x0[1] / ACCEL_MIN):
+          interior.append(float(extremum))
+      times = np.concatenate(([start], T_IDXS[(T_IDXS > start) & (T_IDXS < end)], interior, [end]))
+      minimum_progress = np.array([self.ego_progress_bound(self.x0[1], ACCEL_MIN, float(t)) for t in times])
+      # Instant full braking is a LOWER bound on forward travel, even with
+      # measured positive a0 and finite jerk. Falling behind that bound is
+      # impossible; no actual trajectory is replaced by this calculation.
+      gap = np.interp(times, T_IDXS, projection.raw_trajectory[:, 0]) - minimum_progress
+      impossible_behind |= bool(np.min(gap) < CRASH_DISTANCE + OCCUPANCY_POSITION_BUFFER)
+    if not impossible_behind:
+      return projections
+
+    states, jerks = np.empty((N+1, X_DIM)), np.zeros(N)
+    states[0] = self.x0
+    # Release the existing acceleration over the first native interval. This
+    # includes real a0; a constant-speed path with an instantaneous a0 reset
+    # would not be a witness in this MPC's dynamics.
+    jerks[0] = -self.x0[2] / T_IDXS[1]
+    for stage, duration in enumerate(np.diff(T_IDXS)):
+      states[stage+1] = self.integrate_jerk(states[stage], jerks[stage], duration)
+    if self.trajectory_minimum_velocity(states, jerks) < 0.0:
+      return projections
+    choices = []
+    for projection in projections:
+      if not np.any(projection.occupied):
+        choices.append(projection)
+        continue
+      minimum, maximum = self.occupancy_clearance_extrema(projection, states, jerks)
+      if minimum >= STOP_DISTANCE:
+        choices.append(projection)
+      elif not projection.persistent and projection.conflict_start > 0.0 and maximum <= -STOP_DISTANCE:
+        choices.append(replace(projection, pass_before=True))
+      else:
+        self.diagnostic_passing = {'accepted': False, 'reason': 'shared_witness_conflicts_with_object',
+                                   'identity': projection.identity}
+        return projections
+    if not any(p.pass_before for p in choices):
+      return projections
+    speed_limit = float(np.max(states[:, 1]))
+    bounds = self.finite_occupancy_bounds(tuple(choices), passing_speed_limit=speed_limit, witness=states, witness_jerks=jerks)
+    if bounds is None:
+      self.diagnostic_passing = {'accepted': False, 'reason': 'shared_witness_has_no_bounded_corridor'}
+      return projections
+    self._passing_witness = states, jerks
+    self._passing_speed_limit = speed_limit
+    self.diagnostic_passing = {'accepted': True, 'identities': tuple(p.identity for p in choices if p.pass_before),
+                               'speedLimit': speed_limit, 'clearance': STOP_DISTANCE,
+                               'witnessInitialAcceleration': float(self.x0[2]), 'witnessReleaseJerk': float(jerks[0])}
+    return tuple(choices)
+
+  def finite_occupancy_bounds(self, projections=None, *, passing_speed_limit=None, witness=None, witness_jerks=None):
     """Fold finite physical conflicts into one exact position row per stage.
 
     A stage's latest occupied instant and smallest raw object position form
@@ -791,8 +879,14 @@ class LongitudinalMpc:
     existing soft headway problem; no constraint uses its stopping equivalence
     or the solver's impossible-gap distance enlargement as physical geometry.
     """
+    if projections is None:
+      projections = self._fusion_projections
+      passing_speed_limit = self._passing_speed_limit
+      if self._passing_witness is not None:
+        witness, witness_jerks = self._passing_witness
     bounds = [None] * N
-    for projection in self._fusion_projections:
+    conditions = [[] for _ in range(N)]
+    for projection in projections:
       if projection.persistent or not np.any(projection.occupied):
         continue
       for stage, (left, right) in enumerate(zip(T_IDXS[:-1], T_IDXS[1:], strict=True)):
@@ -801,6 +895,14 @@ class LongitudinalMpc:
           continue
         # Raw prediction is linear between its nodes, as in the FCW check.
         positions = np.interp([start, end], T_IDXS, projection.raw_trajectory[:, 0])
+        if passing_speed_limit is not None:
+          if projection.pass_before:
+            conditions[stage].append((float(start-left), float(np.max(positions)+STOP_DISTANCE+OCCUPANCY_POSITION_BUFFER), True,
+                                      projection.identity))
+          else:
+            conditions[stage].append((float(end-left), float(np.min(positions)-CRASH_DISTANCE-OCCUPANCY_POSITION_BUFFER), False,
+                                      projection.identity))
+          continue
         limit = float(np.min(positions) - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER)
         previous = bounds[stage]
         identities = (projection.identity,)
@@ -809,6 +911,30 @@ class LongitudinalMpc:
           limit = min(limit, previous.position_limit)
           identities = (*previous.identities, *identities)
         bounds[stage] = OccupancyBound(float(end - left), limit, identities)
+    if passing_speed_limit is not None:
+      for stage, rows in enumerate(conditions):
+        if not rows:
+          continue
+        # One position row has a lower and upper bound at the same time.
+        # Monotone x and certified v<=speed_limit conservatively transport
+        # all earlier/later conditions there. Try only three bounded pivots,
+        # and admit a corridor only when the shared witness fits it exactly.
+        times = [row[0] for row in rows]
+        ahead_times = [row[0] for row in rows if row[2]]
+        pivots = sorted({min(times), max(times), min(ahead_times) if ahead_times else max(times)})
+        for pivot in pivots:
+          position_lower, position_upper = -REFERENCE_BOUND, REFERENCE_BOUND
+          for timestamp, limit, ahead, _ in rows:
+            if ahead:
+              position_lower = max(position_lower, limit + passing_speed_limit * max(0.0, pivot - timestamp))
+            else:
+              position_upper = min(position_upper, limit - passing_speed_limit * max(0.0, timestamp - pivot))
+          position = self.integrate_jerk(witness[stage], witness_jerks[stage], pivot)[0]
+          if position_lower <= position <= position_upper:
+            bounds[stage] = OccupancyBound(pivot, position_upper, tuple(row[3] for row in rows), position_lower)
+            break
+        if bounds[stage] is None:
+          return None
     return tuple(bounds)
 
   def occupancy_speed_row(self, stage):
@@ -835,6 +961,9 @@ class LongitudinalMpc:
     if (states.shape != (N+1, X_DIM) or jerks.shape != (N,)
         or not np.all(np.isfinite(states)) or not np.all(np.isfinite(jerks))):
       return 'invalid_finite_occupancy_trajectory'
+    if max(float(np.max(np.abs(states[0] - self.x0))),
+           float(np.max(np.abs(self.trajectory_dynamics_defects(states, jerks))))) > tolerance:
+      return 'finite_occupancy_dynamics_residual_exceeded'
     if (np.any(states[1:, 1] < -tolerance)
         or np.any(states[1:, 2] < self.params[1:, 0] - tolerance)
         or np.any(states[1:, 2] > self.params[1:, 1] + tolerance)):
@@ -848,11 +977,20 @@ class LongitudinalMpc:
       if row @ states[stage] + control * jerks[stage] < -tolerance:
         return 'finite_occupancy_continuous_velocity_violated'
       position = self.integrate_jerk(states[stage], jerks[stage], bound.duration)[0]
-      if position > bound.position_limit + tolerance:
+      if position > bound.position_limit + tolerance or position < bound.position_lower_limit - tolerance:
         return 'finite_occupancy_position_bound_violated'
     for projection in self._fusion_projections:
-      if not projection.persistent and self.collision_in_occupancy(projection, states, jerks):
-        return 'finite_occupancy_clearance_violated'
+      if not projection.persistent:
+        minimum, maximum = self.occupancy_clearance_extrema(projection, states, jerks)
+        if (maximum > -STOP_DISTANCE if projection.pass_before else minimum < CRASH_DISTANCE):
+          return 'finite_occupancy_clearance_violated'
+    if self._passing_speed_limit is not None:
+      if np.any(states[:, 1] > self._passing_speed_limit + tolerance):
+        return 'finite_occupancy_passing_speed_exceeded'
+      for stage, jerk in enumerate(jerks):
+        row, control = self.occupancy_speed_row(stage)
+        if row @ states[stage] + control * jerk > self._passing_speed_limit + tolerance:
+          return 'finite_occupancy_passing_speed_exceeded'
     return ''
 
   def fusion_fcw_identity(self, projection):
@@ -901,6 +1039,83 @@ class LongitudinalMpc:
     self._fusion_fcw_counts, self._fusion_fcw_epochs = counts, epochs
     self.fcw_object_identity = max(counts, key=counts.get) if counts else None
     self.crash_cnt = counts.get(self.fcw_object_identity, 0)
+
+  @staticmethod
+  def lead_influence_token(lead, *, model_ns=0, slot=None):
+    """Frame-scoped visual identity is separate from physical radar identity."""
+    if lead is None or not lead.present:
+      return None
+    identity = lead_identity(lead)
+    if identity is not None:
+      return identity
+    evidence = getattr(lead, 'evidence', None)
+    if evidence is not None and evidence.version == 1 and str(evidence.source) == 'vision':
+      model_ns, slot = evidence.modelMonoTime, evidence.visionIndex
+    if isinstance(model_ns, Integral) and model_ns > 0 and slot in (0, 1):
+      return 'vision', int(model_ns), int(slot)
+    return None
+
+  def record_object_influence(self):
+    """Objects active in this accepted problem, not counterfactual CAN effect.
+
+    Consumers must still check that the owner adopted this reference and no
+    stronger final cap replaced it. A geometrically nearest but zero-cost,
+    nonbinding object does not acquire a contribution merely by being present.
+    """
+    self.object_influence_identities = ()
+    if self.solution_status != 0 or not self.previous_solution_valid or self._influence_problem is None:
+      return
+    obstacles, tokens, compact_slots, reference = self._influence_problem
+    comfort_bases = np.array([reference.comfort_stop_distance if reference is not None and slot is not None else STOP_DISTANCE
+                              for slot in compact_slots])
+    risk_bases = np.array([reference.lead_risk_stop_distances[slot] if reference is not None and slot is not None else STOP_DISTANCE
+                           for slot in compact_slots])
+    comfort_obstacles = obstacles + STOP_DISTANCE - comfort_bases
+    active = set()
+    tolerance = 1e-6
+    for stage in range(1, N+1):
+      position, velocity = self.x_sol[stage, :2]
+      desired = get_safe_obstacle_distance(velocity, self.params[stage, 4])
+      minimum = float(np.min(comfort_obstacles[stage]))
+      error = minimum - position - desired
+      typed = self.params[stage, TYPED_MODEL_MODE] > 0.5
+      if (self.diagnostic_reference_weights[stage, 0] > 0.0
+          and (error < -tolerance if typed else abs(error) > tolerance)):
+        active.update(token for column, token in enumerate(tokens) if token is not None
+                      and abs(comfort_obstacles[stage, column] - minimum) <= tolerance)
+      if stage < N:
+        margins = obstacles[stage] - position - self.params[stage, 5] * (desired - STOP_DISTANCE + risk_bases)
+        tightest = float(np.min(margins))
+        if self._constraint_cost_weights[-1] > 0.0 and tightest < -tolerance:
+          active.update(token for column, token in enumerate(tokens) if token is not None
+                        and abs(margins[column] - tightest) <= tolerance)
+    for stage, bound in enumerate(self._occupancy_bounds):
+      if bound is None:
+        continue
+      position = self.integrate_jerk(self.x_sol[stage], self.j_solution[stage], bound.duration)[0]
+      for projection in self._fusion_projections:
+        if projection.persistent or not np.any(projection.occupied):
+          continue
+        start = max(T_IDXS[stage], projection.conflict_start)
+        end = min(T_IDXS[stage+1], projection.conflict_end)
+        if end <= start:
+          continue
+        positions = np.interp([start, end], T_IDXS, projection.raw_trajectory[:, 0])
+        if projection.pass_before:
+          limit = np.max(positions) + STOP_DISTANCE + OCCUPANCY_POSITION_BUFFER
+          limit += self._passing_speed_limit * max(0.0, bound.duration - (start - T_IDXS[stage]))
+        else:
+          limit = np.min(positions) - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER
+          if self._passing_speed_limit is not None:
+            limit -= self._passing_speed_limit * max(0.0, (end - T_IDXS[stage]) - bound.duration)
+        if abs(position - limit) <= tolerance:
+          token = self.lead_influence_token(projection.lead)
+          if token is not None:
+            active.add(token)
+    if (self._passing_speed_limit is not None
+        and np.any(np.abs(self.v_solution[1:] - self._passing_speed_limit) <= tolerance)):
+      active.update(self.lead_influence_token(projection.lead) for projection in self._fusion_projections if projection.pass_before)
+    self.object_influence_identities = tuple(sorted((token for token in active if token is not None), key=repr))
 
   def reference_obstacles(self, reference, t_follow):
     if reference.typed_model is not None and not isinstance(reference.typed_model, ModelReferenceEvidence):
@@ -1432,11 +1647,11 @@ class LongitudinalMpc:
       bound = self._occupancy_bounds[stage]
       if bound is not None:
         C[0], D[0, 0] = self.occupancy_speed_row(stage)
-        lower[0], upper[0] = 0.0, REFERENCE_BOUND
+        lower[0], upper[0] = 0.0, self._passing_speed_limit if self._passing_speed_limit is not None else REFERENCE_BOUND
         endpoint = bound.duration
         C[1] = [1.0, endpoint, endpoint**2 / 2.0]
         D[1, 0] = endpoint**3 / 6.0
-        lower[1], upper[1] = -REFERENCE_BOUND, bound.position_limit
+        lower[1], upper[1] = bound.position_lower_limit, bound.position_limit
         occupancy_stages.append(stage)
         if stage < constrained_stages:
           splits.append(None)
@@ -1457,7 +1672,7 @@ class LongitudinalMpc:
         # for a later crossing. Keep this one-row certificate on the remaining
         # ordinary intervals too; future-rest intervals retain their two rows.
         C[0], D[0, 0] = self.occupancy_speed_row(stage)
-        lower[0], upper[0] = 0.0, REFERENCE_BOUND
+        lower[0], upper[0] = 0.0, self._passing_speed_limit if self._passing_speed_limit is not None else REFERENCE_BOUND
       self.solver.constraints_set(stage, 'C', C)
       self.solver.constraints_set(stage, 'D', D)
       self.solver.constraints_set(stage, 'lg', lower)
@@ -1741,6 +1956,16 @@ class LongitudinalMpc:
       lower[1:, 0] = np.maximum(lower[1:, 0], 0.0)
       lower[1:, 1] = np.maximum(lower[1:, 1], self.params[1:, 0])
       upper[1:, 1] = np.minimum(upper[1:, 1], self.params[1:, 1])
+      if self._passing_speed_limit is not None:
+        upper[1:, 0] = np.minimum(upper[1:, 0], self._passing_speed_limit)
+    if self._passing_witness is not None:
+      # This dynamically consistent feasible branch witness is a warm start,
+      # not a substituted solution. There is still exactly one native solve.
+      states, jerks = self._passing_witness
+      for stage in range(N+1):
+        self.solver.set(stage, 'x', states[stage])
+        if stage < N:
+          self.solver.set(stage, 'u', np.array([jerks[stage]]))
     self.set_continuous_rest_bounds()
 
     self.install_cost_weights(weights)
@@ -1825,6 +2050,11 @@ class LongitudinalMpc:
     self._fusion_projections = ()
     self._occupancy_bounds = (None,) * N
     self.diagnostic_occupancy_bounds = ()
+    self._passing_witness = None
+    self._passing_speed_limit = None
+    self.diagnostic_passing = None
+    self.object_influence_identities = ()
+    self._influence_problem = None
     self.rest_goal = None
     self.rest_goal_state = 'none'
     self.rest_goal_reason = ''
@@ -1858,6 +2088,7 @@ class LongitudinalMpc:
           raise ValueError('Fusion initial state is not current at the consumer')
         with np.errstate(over='ignore', invalid='ignore'):
           projections = self.fusion_lead_projections(radarstate, now_ns=now_ns, reference_ns=reference_ns)
+          projections = self.select_occupancy_branches(projections, reference)
         self._fusion_projections = projections
       except (AttributeError, TypeError, ValueError, FloatingPointError, OverflowError):
         self.fail(MPC_INVALID_INPUT)
@@ -1872,12 +2103,12 @@ class LongitudinalMpc:
           self.rest_recovery_position_limit = float(limit)
       obstacles = [np.full(N+1, np.inf), np.full(N+1, np.inf)]
       sources = [LongitudinalPlanSource.cruise, LongitudinalPlanSource.cruise]
-      lead_slots, identities = [None, None], [None, None]
+      lead_slots, identities, influence_tokens = [None, None], [None, None], [None, None]
       for projection in projections:
         # A reversing target has no positive forward stopping-distance credit.
         obstacle = (projection.trajectory[:, 0]
                     + get_stopped_equivalence_factor(np.maximum(projection.trajectory[:, 1], 0.0)))
-        obstacles.append(np.where(projection.occupied, obstacle, np.inf))
+        obstacles.append(np.where(projection.occupied & (not projection.pass_before), obstacle, np.inf))
         sources.append(MPC_SOURCES[projection.slot] if projection.slot is not None else LongitudinalPlanSource.lead0)
         # Additional objects and finite occupancy never inherit lead0's
         # separately qualified compact distance merely by sharing its enum.
@@ -1885,6 +2116,7 @@ class LongitudinalMpc:
                         and qualified_lead(projection.lead, 'stop', now_ns=now_ns) else None)
         lead_slots.append(compact_slot)
         identities.append(projection.identity)
+        influence_tokens.append(self.lead_influence_token(projection.lead))
     else:
       for lead in (radarstate.leadOne, radarstate.leadTwo):
         if lead.present and not np.all(np.isfinite([lead.dRel, lead.vLead, lead.aLeadK, lead.aLeadTau])):
@@ -1911,6 +2143,8 @@ class LongitudinalMpc:
       lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
       obstacles = [lead_0_obstacle, lead_1_obstacle]
       sources = list(MPC_SOURCES)
+      influence_tokens = [self.lead_influence_token(lead, model_ns=getattr(radarstate, 'mdMonoTime', 0), slot=slot)
+                          for slot, lead in enumerate((radarstate.leadOne, radarstate.leadTwo))]
     accel_min, accel_max = ACCEL_MIN, ACCEL_MAX
     ordinary_continuation = False
     if reference is not None:
@@ -1934,6 +2168,7 @@ class LongitudinalMpc:
             obstacles[lead_index] = np.full(N+1, np.inf)
       obstacles.extend(reference_obstacles)
       sources.extend(reference_sources)
+      influence_tokens.extend([None] * len(reference_sources))
       if fusion_active:
         lead_slots.extend([None] * len(reference_sources))
         identities.extend([None] * len(reference_sources))
@@ -1949,6 +2184,9 @@ class LongitudinalMpc:
           obstacles[index][unsupported] = continuation_obstacle[unsupported]
       self._obstacle_identities = tuple(identities)
     x_obstacles = np.column_stack(obstacles)
+    influence_slots = (lead_slots if lead_slots is not None
+                       else tuple(MPC_SOURCES.index(source) if source in MPC_SOURCES else None for source in sources))
+    self._influence_problem = x_obstacles.copy(), tuple(influence_tokens), tuple(influence_slots), reference
     selected = int(np.argmin(x_obstacles[1 if reference is not None else 0]))
     self.source = sources[selected]
     if fusion_active:
@@ -1965,7 +2203,7 @@ class LongitudinalMpc:
     try:
       self._occupancy_bounds = self.finite_occupancy_bounds()
       self.diagnostic_occupancy_bounds = tuple(
-        (stage, bound.duration, bound.position_limit, bound.identities)
+        (stage, bound.duration, bound.position_limit, bound.identities, bound.position_lower_limit)
         for stage, bound in enumerate(self._occupancy_bounds) if bound is not None
       )
       self.set_reference_problem(reference, x_obstacles, sources, accel_min, t_follow, lead_slots=lead_slots)
@@ -1998,6 +2236,7 @@ class LongitudinalMpc:
       self.crash_cnt += 1
     else:
       self.crash_cnt = 0
+    self.record_object_influence()
 
   def observe_obstacles(self, obstacles, sources, *, ordinary_continuation=False):
     """Copy a bounded constraint summary; never rebuild a reference or solve."""
@@ -2031,6 +2270,7 @@ class LongitudinalMpc:
     effective_node = self.effective_rest_node
     goal_diagnostic = self.diagnostic_rest_goal
     occupancy_diagnostic = self.diagnostic_occupancy_bounds
+    passing_diagnostic = self.diagnostic_passing
     solve_time = self.solve_time
     last_cloudlog_t = self.last_cloudlog_t
     timestamp = time.monotonic()
@@ -2044,6 +2284,7 @@ class LongitudinalMpc:
                            MPC_SOLVER_ERROR: 'solver_exception',
                            MPC_OCCUPANCY_UNSATISFIED: 'finite_occupancy_unsatisfied'}.get(status, 'solver_status')
     self.diagnostic_occupancy_bounds = occupancy_diagnostic
+    self.diagnostic_passing = passing_diagnostic
     if occupancy_diagnostic and status > 0:
       self.failure_reason = 'finite_occupancy_solver_failure'
     if failed_goal is not None:

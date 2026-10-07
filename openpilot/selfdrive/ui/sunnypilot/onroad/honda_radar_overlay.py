@@ -6,6 +6,7 @@ from openpilot.cereal import log, messaging
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.car.honda_radar_observer_config import FUSION_MODES, OBSERVE
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarOverlayState, project_radar_point
+from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import accepted_influences, influence_rgb, radar_influence_strength
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 
@@ -83,8 +84,10 @@ class HondaRadarOverlay:
       self.layout_key = key
     # Scope, source freshness and camera time are checked on every frame above.
     # Cached layout never caches validity or opacity.
+    influences = accepted_influences(sm, now)
     for point, marker, text_position in self.labels:
-      color = rl.Color(255, 215, 0, 255 if frame_ns - point.time_ns <= 80_000_000 else 140)
+      rgb = influence_rgb(radar_influence_strength(point, influences)) or (255, 215, 0)
+      color = rl.Color(*rgb, 255 if frame_ns - point.time_ns <= 80_000_000 else 140)
       rl.draw_circle_v(marker, MARKER_RADIUS, color)
       rl.draw_text_ex(self.font, point.text, text_position, LABEL_FONT_SIZE, 0, color)
 

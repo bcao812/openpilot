@@ -16,7 +16,7 @@ MAX_PREDICTION_AGE_NS = 350_000_000
 MAX_POSITION_STD = 20.0
 MAX_VELOCITY_STD = 20.0
 MIN_VISION_BRAKE_DISTANCE = -1.52  # Camera origin to the front bumper, as in radard.
-PURPOSES = ('follow', 'brake', 'stop', 'departure', 'fcw')
+PURPOSES = ('follow', 'brake', 'stop', 'departure', 'fcw', 'caution')
 SOURCES = ('vision', 'radar', 'fused', 'predicted')
 
 
@@ -90,6 +90,9 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
   source = str(_read(evidence, 'source', 'legacy'))
   if source not in SOURCES or _read(evidence, purpose + 'Qualified', False) is not True:
     return False
+  if purpose == 'caution' and (source not in ('radar', 'fused') or any(
+      _read(evidence, name + 'Qualified', False) is not False for name in PURPOSES if name != 'caution')):
+    return False
   if source == 'vision':
     vision_index = _read(evidence, 'visionIndex')
     if probability < min_model_prob or not _integer(vision_index) or vision_index not in (0, 1):
@@ -136,7 +139,8 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
   if not isinstance(acceleration_valid, bool) or (not acceleration_valid and values[4] != 0.0):
     return False
   path_state = str(_read(evidence, 'pathState', 'unknown'))
-  if path_state not in (('inPath', 'entering') if purpose in ('brake', 'fcw') else ('inPath',)):
+  path_states = ('edge',) if purpose == 'caution' else ('inPath', 'entering') if purpose in ('brake', 'fcw') else ('inPath',)
+  if path_state not in path_states:
     return False
   path_values = tuple(_read(evidence, field) for field in ('pathOffset', 'conflictStart', 'conflictEnd', 'lateralSpeed'))
   path_source = _read(evidence, 'pathSource', '')
@@ -149,6 +153,27 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
   if purpose == 'departure' and (values[3] <= 0.0 or values[2] <= 0.0):
     return False
   return True
+
+
+def coast_measurement_expired(lead, *, publication_ns, now_ns):
+  """Recognize only a qualified coast aging past its real measurement limit.
+
+  Publication time is the actual radarState event time. Checking at an
+  invented earlier time, or refreshing source timestamps, could conceal a
+  producer that already published invalid evidence. All other freshness and
+  evidence requirements remain unchanged; this grants no control authority.
+  """
+  if (not _integer(publication_ns, 1) or not _integer(now_ns, 1) or publication_ns > now_ns
+      or not qualified_lead(lead, 'brake', 0.0, now_ns=publication_ns, require_active_window=False)):
+    return False
+  evidence = _read(lead, 'evidence')
+  if str(_read(evidence, 'source')) != 'predicted' or _read(evidence, 'coasting') is not True:
+    return False
+  if (not 0 <= now_ns - _read(evidence, 'estimateMonoTime') <= MAX_ESTIMATE_AGE_NS
+      or not 0 <= now_ns - _read(evidence, 'modelMonoTime') <= MAX_PREDICTION_AGE_NS):
+    return False
+  return any(now_ns - _read(evidence, field) > MAX_PREDICTION_AGE_NS
+             for field in ('positionMonoTime', 'velocityMonoTime'))
 
 
 def _object_key(lead):

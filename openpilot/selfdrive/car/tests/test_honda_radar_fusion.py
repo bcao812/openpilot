@@ -1349,6 +1349,80 @@ class TestHondaRadarFusion(unittest.TestCase):
         self.assertEqual(out['leads'][0]['velocityWeight'], 0)
         self.assertEqual(out['leads'][0]['vRel'], 0)
 
+  def test_lateral_quality_exports_projected_covariance_without_borrowing_aux_quality(self):
+    for lateral_position, lateral_velocity, offset in ((.75, 2.5, 10_000_000), (0.0, 0.0, 0), (8.0, 9.0, 0)):
+      with self.subTest(position_variance=lateral_position, velocity_variance=lateral_velocity, offset=offset):
+        fusion = HondaRadarFusion()
+        for frame in range(4):
+          advance(fusion, frame, [observation(frame, velocity=False)], probability=0)
+        track = fusion.tracks[7]
+        track.covariance = np.diag([.125, lateral_position, .0625, lateral_velocity])
+        stamp = track.position_ns + offset
+        _, expected = track.project(stamp, fusion.history)
+        out = fusion.update(body(4, []), Inputs(stamp, probability=0), stamp + 1)
+        snapshot = out['tracks'][0]
+        self.assertEqual(snapshot['lateralPositionVariance'], expected[1, 1])
+        self.assertEqual(snapshot['lateralVelocityVariance'], expected[3, 3])
+        self.assertNotEqual(snapshot['lateralPositionVariance'], snapshot['positionVariance'])
+        self.assertNotEqual(snapshot['lateralVelocityVariance'], snapshot['velocityVariance'])
+        self.assertFalse(snapshot['velocityGood'])
+        self.assertTrue(snapshot['lateralVelocityValid'])
+        self.assertFalse(out['calibrated'])
+
+  def test_lateral_quality_requires_three_independent_positions_and_120_ms(self):
+    for span in (119_999_999, 120_000_000):
+      with self.subTest(span=span):
+        fusion = HondaRadarFusion()
+        for frame, offset in enumerate((0, 60_000_000, span)):
+          stamp = START + offset
+          sample = source_observation(stamp, 100 * frame + 1, frame, 1 + 2 * frame, velocity=False)
+          out = fusion.update(body(frame, [sample]), Inputs(stamp, probability=0), stamp + 1)
+          snapshot = out['tracks'][0]
+          self.assertEqual(snapshot['observations'], frame + 1)
+          self.assertEqual(snapshot['lateralVelocityValid'], frame == 2 and span >= 120_000_000)
+
+  def test_aux_updates_cannot_create_or_refresh_lateral_position_history(self):
+    fusion = HondaRadarFusion()
+    advance(fusion, 0)
+    original = observation(0)
+    for frame in (1, 2):
+      auxiliary = {**original, 'velocitySeq': 1000 + frame, 'velocityMonoTime': START + frame * 20_000_000}
+      out = advance(fusion, frame, [auxiliary], probability=0)
+      snapshot = out['tracks'][0]
+      self.assertEqual(snapshot['positionMonoTime'], START)
+      self.assertEqual(snapshot['observations'], 1)
+      self.assertEqual(len(fusion.tracks[7].positions), 1)
+      self.assertFalse(snapshot['lateralVelocityValid'])
+    for frame in (3, 4):
+      out = advance(fusion, frame, probability=0)
+      self.assertEqual(out['tracks'][0]['lateralVelocityValid'], frame == 4)
+    latest = observation(4)
+    auxiliary = {**latest, 'velocitySeq': 2000, 'velocityMonoTime': START + 4 * STEP + 33_000_000}
+    out = advance(fusion, 5, [auxiliary], probability=0)
+    self.assertTrue(out['tracks'][0]['lateralVelocityValid'])
+    self.assertEqual(out['tracks'][0]['positionMonoTime'], latest['positionMonoTime'])
+    self.assertEqual(len(fusion.tracks[7].positions), 3)
+    self.assertEqual(advance(fusion, 8, [auxiliary], probability=0)['tracks'], [])
+
+  def test_invalid_lateral_covariance_never_grants_prediction_quality(self):
+    for axis in (1, 3):
+      for value in (-.01, math.nan, math.inf, -math.inf):
+        with self.subTest(axis=axis, value=value):
+          fusion = HondaRadarFusion()
+          for frame in range(3):
+            advance(fusion, frame, probability=0)
+          track = fusion.tracks[7]
+          track.covariance = np.diag([.25, .5, 1.0, 2.0])
+          track.covariance[axis, axis] = value
+          stamp = track.position_ns
+          with np.errstate(invalid='ignore'):
+            out = fusion.update(body(3, []), Inputs(stamp, probability=0), stamp + 1)
+          if math.isfinite(value):
+            self.assertTrue(out['tracks'][0]['active'])
+            self.assertFalse(out['tracks'][0]['lateralVelocityValid'])
+          else:
+            self.assertEqual(out['tracks'], [])
+
   def test_distinct_ambiguous_ids_are_not_averaged(self):
     fusion = HondaRadarFusion()
     for frame in range(8):
@@ -1390,6 +1464,7 @@ class TestHondaRadarFusion(unittest.TestCase):
         for frame in range(12):
           out = advance(fusion, frame)
         old = observation(11)
+        self.assertTrue(out['tracks'][0]['lateralVelocityValid'])
         old_identifier = out['tracks'][0]['trackId']
         invalid = {'slot': 0, 'positionValid': False, 'positionMonoTime': old['positionMonoTime'],
                    'positionSeq': old['positionSeq'], 'reason': reason}
@@ -1397,6 +1472,7 @@ class TestHondaRadarFusion(unittest.TestCase):
         track, lead = out['tracks'][0], out['leads'][0]
         self.assertFalse(track['active'])
         self.assertFalse(track['velocityGood'])
+        self.assertFalse(track['lateralVelocityValid'])
         self.assertEqual(track['lastInvalidReason'], reason)
         self.assertEqual(track['lastInvalidMonoTime'], START + 12 * STEP + 1)
         self.assertEqual(track['positionMonoTime'], old['positionMonoTime'])
@@ -1407,16 +1483,20 @@ class TestHondaRadarFusion(unittest.TestCase):
                      'velocityMonoTime': START + 12 * STEP}
         out = advance(fusion, 13, [auxiliary])
         self.assertFalse(out['tracks'][0]['active'])
+        self.assertFalse(out['tracks'][0]['lateralVelocityValid'])
         self.assertEqual(out['leads'][0]['distanceWeight'], 0)
         out = advance(fusion, 14)
         self.assertNotEqual(out['tracks'][0]['trackId'], old_identifier)
         self.assertEqual(out['tracks'][0]['observations'], 1)
+        self.assertFalse(out['tracks'][0]['lateralVelocityValid'])
         self.assertEqual(out['tracks'][0]['lastInvalidReason'], reason)
         self.assertEqual(out['leads'][0]['distanceWeight'], 0)
         out = advance(fusion, 15)
         self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+        self.assertFalse(out['tracks'][0]['lateralVelocityValid'])
         out = advance(fusion, 16)
         self.assertTrue(out['tracks'][0]['mature'])
+        self.assertTrue(out['tracks'][0]['lateralVelocityValid'])
         self.assertGreater(out['leads'][0]['distanceWeight'], 0)
 
   def test_conflicting_duplicate_position_immediately_revokes_the_posterior(self):

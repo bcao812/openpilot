@@ -13,6 +13,8 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL, ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
+from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
+from openpilot.selfdrive.controls.lib.object_influence import plan_object_influences
 from openpilot.selfdrive.controls.lib.lead_qualification import _read, control_leads, qualified_lead
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_BRAKE, LEAD_DANGER_FACTOR, REFERENCE_BOUND, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource,
@@ -91,6 +93,10 @@ def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float, *, mi
   if fusion_active:
     for lead in leads:
       if lead is followed[0]:
+        continue
+      if qualified_lead(lead, 'caution', 0.0, now_ns=now_ns):
+        # A qualified outer-edge return grants only the separate acceleration
+        # precaution. It cannot require a different in-lane car to stop/depart.
         continue
       if not qualified_lead(lead, 'brake', 0.95, now_ns=now_ns):
         return False
@@ -668,6 +674,28 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.reference_planner.publish(longitudinalPlan)
     if self.unified:
       self.reference_timing.publish(longitudinalPlan.reference)
+      # Display evidence observes the completed arbitration. It never uses a
+      # nearest-node source label as proof that an object changed this plan.
+      ref, intent = self.reference_planner, self.motion_intent
+      evidence = ref.model_evidence
+      independent_stop = (bool(intent.reasons & (StopReason.E2E | StopReason.CRUISE | StopReason.FORCE_DECEL))
+                          or evidence is not None and (evidence.no_forward or evidence.has_rest_intent)
+                          or ref.e2e_allowed and sm['modelV2'].action.shouldStop)
+      try:
+        longitudinalPlan.objectInfluences = plan_object_influences(
+          sm['radarState'], active_identities=getattr(self.mpc, 'object_influence_identities', ()),
+          now_ns=int(plan_send.logMonoTime), permitted=bool(plan_send.valid and intent.valid and intent.ready and not ref.standby),
+          fusion_admitted=ref.fusion_admitted,
+          reference_accepted=bool(not ref.reference_overridden and abs(self.output_a_target - ref.reference_accel) < 1e-6
+                                  and ref.constraint_accel > ref.reference_accel + 1e-6),
+          independent_stop=independent_stop, object_stop=bool(intent.reasons & (StopReason.MPC | StopReason.CLOSE_LEAD)),
+          held_identity=ref.radar_held_identity, release_identity=ref.radar_release_identity,
+          caution_identities=getattr(ref, 'caution_object_identities', ()) if getattr(ref, 'caution_accel_limited', False) else (),
+          standstill=bool(sm['carState'].standstill), target_accel=float(self.output_a_target), accel_min=ACCEL_MIN, accel_max=ACCEL_MAX,
+        )
+      except (AttributeError, TypeError, ValueError, OverflowError):
+        # A display-only record cannot interrupt plan publication.
+        longitudinalPlan.objectInfluences = []
     observe(self.observation, "publish", self.observation_result, longitudinalPlan, self)
 
     pm.send('longitudinalPlan', plan_send)

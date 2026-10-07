@@ -1,0 +1,102 @@
+import pytest
+
+from openpilot.cereal import custom, log
+from openpilot.selfdrive.controls.lib.object_influence import plan_object_influences
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness
+
+
+def object_record(kind='braking', strength=0.4):
+  return {'version': 1, 'sessionId': 'radar-session', 'trackId': 17, 'modelMonoTime': 0, 'visionIndex': -1, 'kind': kind, 'strength': strength}
+
+
+def test_controls_acknowledges_actual_plan_without_changing_command():
+  observed, baseline = ControlsHarness(), ControlsHarness()
+  for consumer in (observed, baseline):
+    consumer.plan.aTarget = -1.0
+  observed.plan.objectInfluences = [object_record()]
+  command, motion = observed.step()
+  baseline_command, baseline_motion = baseline.step()
+  assert command.to_dict() == baseline_command.to_dict()
+  assert motion.phase == baseline_motion.phase == 'track'
+  assert len(motion.objectInfluences) == 1
+  assert motion.objectInfluences[0].trackId == 17
+  assert motion.planMonoTime == observed.control.sm.logMonoTime['longitudinalPlan']
+
+
+@pytest.mark.parametrize('pedal', ['gasPressed', 'brakePressed'])
+def test_manual_override_clears_an_earlier_object_receipt_on_the_same_tick(pedal):
+  consumer = ControlsHarness()
+  consumer.plan.aTarget = -1.0
+  consumer.plan.objectInfluences = [object_record()]
+  _, motion = consumer.step()
+  assert motion.objectInfluences
+  setattr(consumer.car_state, pedal, True)
+  command, motion = consumer.step()
+  assert not command.longActive
+  assert not motion.objectInfluences
+
+
+def test_rejected_or_expired_plan_does_not_republish_prior_red_object():
+  consumer = ControlsHarness()
+  consumer.plan.aTarget = -1.0
+  consumer.plan.objectInfluences = [object_record()]
+  _, motion = consumer.step()
+  assert motion.objectInfluences
+  _, motion = consumer.step(new_plan=False, now_ns=consumer.now_ns + 260_000_000)
+  assert motion.degraded or motion.waitingForFreshInput
+  assert not motion.objectInfluences
+
+
+def test_new_plan_without_object_evidence_clears_the_receipt():
+  consumer = ControlsHarness()
+  consumer.plan.aTarget = -1.0
+  consumer.plan.objectInfluences = [object_record()]
+  assert consumer.step()[1].objectInfluences
+  consumer.plan.objectInfluences = []
+  assert not consumer.step()[1].objectInfluences
+
+
+def test_real_owner_hold_has_maximum_strength_and_rejected_release_is_not_red():
+  consumer = ControlsHarness()
+  consumer.plan.objectInfluences = [object_record('hold', 1.0)]
+  _, motion = consumer.hold()
+  assert len(motion.objectInfluences) == 1
+  assert motion.objectInfluences[0].kind == 'hold'
+  assert motion.objectInfluences[0].strength == 1.0
+  consumer.plan.objectInfluences = [object_record('release')]
+  _, motion = consumer.step()
+  assert motion.resolvedStop
+  assert not motion.objectInfluences
+
+
+def test_reading_old_capnp_inputs_does_not_allocate_evidence_or_influence_fields():
+  state = log.RadarState.new_message(mdMonoTime=2_000_000_000)
+  state.leadTwo.present = True
+  before = state.to_dict()
+  records = plan_object_influences(
+    state, active_identities=(('vision', 2_000_000_000, 1),), now_ns=2_000_000_000,
+    permitted=True, fusion_admitted=False, reference_accepted=True, independent_stop=False, object_stop=False,
+    held_identity=None, release_identity=None, standstill=False, target_accel=-1.0, accel_min=-3.5, accel_max=2.0,
+  )
+  assert len(records) == 1
+  assert records[0]['visionIndex'] == 1
+  assert state.to_dict() == before
+
+
+def test_edge_caution_wire_defaults_and_actual_owner_zero_ceiling_receipt():
+  evidence = custom.RadarLeadEvidence.new_message()
+  assert not evidence.cautionQualified
+  evidence.cautionQualified = True
+  evidence.pathState = 'edge'
+  with custom.RadarLeadEvidence.from_bytes(evidence.to_bytes()) as decoded:
+    assert decoded.cautionQualified and decoded.pathState == 'edge'
+    assert not any((decoded.brakeQualified, decoded.stopQualified, decoded.departureQualified, decoded.fcwQualified))
+  consumer = ControlsHarness()
+  consumer.plan.aTarget = 0.0
+  consumer.plan.objectInfluences = [object_record('caution', 0.15)]
+  command, motion = consumer.step()
+  assert motion.phase == 'track' and not motion.resolvedStop
+  assert command.actuators.accel == 0.0
+  assert len(motion.objectInfluences) == 1
+  assert motion.objectInfluences[0].kind == 'caution'
+  assert motion.objectInfluences[0].strength == pytest.approx(0.15)

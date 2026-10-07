@@ -1495,6 +1495,7 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   reference @41 :LongitudinalReference;
   solverStatus @42 :Int32;
   diagnostics @43 :LongitudinalPlanDiagnostics;
+  objectInfluences @44 :List(Custom.LongitudinalObjectInfluence);
 
 
   solverExecutionTime @35 :Float32;
@@ -1608,6 +1609,9 @@ struct LongitudinalMotionState {
   referenceConsumerMonoTime @16 :UInt64;
   referenceProducerInstanceMonoTime @17 :UInt64;
   referenceSourceAdvanced @18 :Bool;
+  # Only the motion owner's adopted current-plan records; empty on rejection.
+  # planMonoTime identifies the exact plan carrying these records.
+  objectInfluences @19 :List(Custom.LongitudinalObjectInfluence);
 }
 
 struct UiPlan {

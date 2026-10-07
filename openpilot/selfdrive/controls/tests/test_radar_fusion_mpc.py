@@ -331,6 +331,144 @@ def test_rest_postprocessing_cannot_publish_a_trajectory_that_breaks_the_crossin
   assert not planner.previous_solution_valid
 
 
+def late_passing_objects():
+  # Motion/occupancy values from route 8b / sample 10 of the retained
+  # 1f86b1c pilot. This is a fixed geometric fixture, not a complete replay of
+  # its cost history or an assertion about the physical objects' identities.
+  front = object_lead(5, distance=47.113563537597656, speed=10.071088790893555, acceleration=-0.6348151564598083,
+                      start=0.0, end=5.55867338180542, persistent=False)
+  first = object_lead(9, distance=37.096771240234375, speed=-1.3435324430465698, acceleration=0.3417064845561981,
+                      start=3.637268304824829, end=10.0, path='entering', persistent=False)
+  second = object_lead(10, distance=35.18659591674805, speed=-1.8218282461166382,
+                       start=5.349180698394775, end=10.0, path='entering', persistent=False)
+  return front, first, second
+
+
+def test_late_crossings_use_one_nonaccelerating_joint_passing_witness(record_property):
+  speed, acceleration = 11.190595626831055, 0.16649655997753143
+  planner = solve(fused_state(*late_passing_objects()), speed=speed, acceleration=acceleration)
+  assert planner.diagnostic_passing['accepted']
+  assert [p.identity[1] for p in planner._fusion_projections if p.pass_before] == [9, 10]
+  witness, jerks = planner._passing_witness
+  np.testing.assert_array_equal(witness[0], [0.0, speed, acceleration])
+  assert witness[1, 2] == pytest.approx(0.0, abs=1e-12)
+  np.testing.assert_array_equal(jerks[1:], 0.0)
+  assert planner.diagnostic_passing['witnessReleaseJerk'] < 0.0
+  assert planner._passing_speed_limit == pytest.approx(speed + acceleration * T_IDXS[1] / 2.0)
+  assert np.max(planner.v_solution) <= planner._passing_speed_limit + QP_FEASIBILITY_TOL
+  for projection in planner._fusion_projections:
+    minimum, maximum = planner.occupancy_clearance_extrema(projection, planner.x_sol, planner.j_solution)
+    if projection.pass_before:
+      assert maximum <= -STOP_DISTANCE
+    else:
+      assert minimum >= CRASH_DISTANCE
+  assert planner.diagnostic_solve_calls == 12
+  record_property('joint_passing_initial_request', action(planner))
+  record_property('joint_passing_speed_limit', planner._passing_speed_limit)
+
+
+@pytest.mark.parametrize('veto', ['near_persistent_car', 'model_rest', 'negative_acceleration_ceiling'])
+def test_passing_cannot_spend_nearer_lead_or_independent_model_braking(veto):
+  speed, acceleration = 11.190595626831055, 0.16649655997753143
+  objects = late_passing_objects()
+  reference = MpcReference(20.0)
+  if veto == 'near_persistent_car':
+    objects = (*objects, object_lead(20, distance=18.0, speed=0.0, ego_speed=speed))
+  elif veto == 'model_rest':
+    reference = rest_reference(speed, N)
+  else:
+    reference = MpcReference(20.0, accel_max=-0.3)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(speed, acceleration)
+  planner.set_weights(prev_accel_constraint=False)
+  planner.update(fused_state(*objects), reference=reference, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner._passing_speed_limit is None
+  assert not planner.diagnostic_passing or not planner.diagnostic_passing['accepted']
+  # This frozen initial state cannot stay behind the approaching second
+  # crossing through its whole horizon. Failure remains explicit when the
+  # only alternative is vetoed; it is not presented as a safe stop/pass.
+  assert planner.solution_status != 0 and not planner.previous_solution_valid
+
+
+def test_joint_passing_exit_clears_both_position_sides_and_speed_ceiling():
+  speed, acceleration = 11.190595626831055, 0.16649655997753143
+  planner = LongitudinalMpc()
+  recorder = NativeProblemRecorder(planner.solver)
+  planner.solver = recorder
+  planner.set_cur_state(speed, acceleration)
+  planner.set_weights(prev_accel_constraint=False)
+  for _ in range(12):
+    planner.update(fused_state(*late_passing_objects()), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+    assert planner.solution_status == 0
+  assert planner._passing_speed_limit is not None
+  assert any(row.position_lower_limit > -REFERENCE_BOUND for row in planner._occupancy_bounds if row is not None)
+  for _ in range(12):
+    planner.update(radar_state(), reference=MpcReference(20.0))
+    assert planner.solution_status == 0
+  assert planner._passing_speed_limit is None and planner.diagnostic_passing is None
+  for stage in range(N):
+    np.testing.assert_array_equal(recorder.constraints[stage, 'C'], 0.0)
+    np.testing.assert_array_equal(recorder.constraints[stage, 'D'], 0.0)
+    np.testing.assert_array_equal(recorder.constraints[stage, 'lg'], -1.0)
+    np.testing.assert_array_equal(recorder.constraints[stage, 'ug'], 1.0)
+  for stage in range(1, N+1):
+    np.testing.assert_array_equal(recorder.constraints[stage, 'ubx'], REFERENCE_BOUND)
+  assert action(planner) > 0.0
+
+
+def test_finite_occupancy_rejects_a_dynamically_disconnected_native_trajectory(monkeypatch):
+  crossing = object_lead(distance=8.0, start=0.7, end=0.85, path='entering', persistent=False)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+  actual_postprocessing = planner.check_effective_rest_goal
+
+  def disconnected_postprocessing():
+    actual_postprocessing()
+    planner.x_sol[6, 0] -= 1.0  # Outside the occupancy: point clearance alone cannot catch this.
+
+  monkeypatch.setattr(planner, 'check_effective_rest_goal', disconnected_postprocessing)
+  planner.update(fused_state(crossing), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.solution_status == MPC_OCCUPANCY_UNSATISFIED
+  assert planner.failure_reason == 'finite_occupancy_dynamics_residual_exceeded'
+  assert not planner.previous_solution_valid
+
+
+@pytest.mark.parametrize('source', ['radar', 'vision', 'legacy_vision'])
+def test_active_object_tokens_use_physical_or_current_visual_identity(source):
+  if source == 'legacy_vision':
+    state = radar_state(distance=25.0, speed=2.0)
+    state.mdMonoTime = EPOCH_NS
+  else:
+    state = fused_state(object_lead(distance=25.0, speed=2.0, ego_speed=15.0, source=source))
+  planner = solve(state, speed=15.0)
+  expected = ('radar-test', 1) if source == 'radar' else ('vision', EPOCH_NS, 0)
+  assert planner.object_influence_identities == (expected,)
+  assert action(planner) < 0.0
+  assert planner.diagnostic_solve_calls == 12
+
+
+def test_virtual_cruise_winner_does_not_attribute_an_unused_far_radar_object():
+  planner = solve(fused_state(object_lead(distance=200.0, speed=25.0)))
+  assert planner.object_influence_identities == ()
+  assert action(planner) > 0.0
+
+
+def test_objects_tight_at_different_horizon_stages_both_retain_constraint_evidence():
+  first = object_lead(1, distance=15.0, speed=5.0)
+  second = object_lead(2, distance=40.0, speed=0.0)
+  planner = solve(fused_state(first, second))
+  assert set(planner.object_influence_identities) == {('radar-test', 1), ('radar-test', 2)}
+
+
+def test_new_failure_clears_previously_active_constraint_tokens():
+  planner = solve(fused_state(object_lead(distance=25.0, speed=2.0)), speed=15.0)
+  assert planner.object_influence_identities
+  bad = object_lead(distance=float('nan'))
+  planner.update(fused_state(bad), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.solution_status != 0 and planner.object_influence_identities == ()
+
+
 def test_other_objects_do_not_inherit_the_display_leads_compact_stop_distance():
   displayed = object_lead(1, distance=10.0, ego_speed=0.0)
   nearer = object_lead(2, distance=6.0, ego_speed=0.0)

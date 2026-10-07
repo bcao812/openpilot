@@ -716,6 +716,19 @@ class HondaRadarFusion:
         motion = 'oncoming' if vx < -2 else 'stationary' if abs(vx) < 1 else 'moving'
       coasting = not track.active or now_ns - track.position_ns > 100_000_000
       velocity_good = track.active and track.velocity_good and fresh(track.velocity_ns, now_ns, MAX_AGE_NS)
+      lateral_position_variance, lateral_velocity_variance = float(covariance[1, 1]), float(covariance[3, 3])
+      # Ingest appends only independent, accepted position sequences. AUX may
+      # refine longitudinal velocity, but cannot supply lateral history or
+      # refresh its last position time. These are engineering covariances,
+      # not calibrated accuracy; the consumer owns its prediction budget.
+      position_times = tuple(sample[0] for sample in track.positions)
+      lateral_velocity_valid = bool(
+        track.active and track.mature and len(position_times) >= MIN_OBSERVATIONS
+        and 0 < position_times[0] and position_times[-1] == track.position_ns
+        and position_times[-1] - position_times[0] >= MIN_SPAN_NS
+        and all(a < b for a, b in zip(position_times[:-1], position_times[1:], strict=True))
+        and finite(lateral_position_variance, lateral_velocity_variance)
+        and min(lateral_position_variance, lateral_velocity_variance) >= 0)
       snapshots.append({'trackId': track.identifier, 'oemTrackId': track.oem_id, 'slot': track.slot, 'positionSeq': track.position_seq,
           'positionMonoTime': track.position_ns, 'velocityMonoTime': track.velocity_ns, 'dRel': float(mean[0]), 'yRel': float(mean[1]),
           'groundSpeed': vx, 'lateralSpeed': vy, 'positionVariance': float(covariance[0, 0]), 'velocityVariance': float(covariance[2, 2]),
@@ -727,7 +740,9 @@ class HondaRadarFusion:
           'previousPositionSeq': track.previous_position_seq, 'previousPositionMonoTime': track.previous_position_ns,
           'previousDRel': track.previous_x, 'previousYRel': track.previous_y,
           'acceleration': track.acceleration,
-          'accelerationGood': velocity_good and track.acceleration_good})
+          'accelerationGood': velocity_good and track.acceleration_good,
+          'lateralPositionVariance': lateral_position_variance, 'lateralVelocityVariance': lateral_velocity_variance,
+          'lateralVelocityValid': lateral_velocity_valid})
       if track.active:
         candidates.append((track, mean, covariance, relation, motion, coasting, velocity_good))
     result = []

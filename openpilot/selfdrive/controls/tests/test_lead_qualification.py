@@ -201,3 +201,31 @@ def test_equal_ranges_do_not_merge_distinct_tracks_and_oversize_is_not_silently_
   leads = [formal_lead(evidence={'trackId': index + 1}) for index in range(MAX_CONTROL_OBJECTS + 1)]
   radar = SimpleNamespace(fusionActive=True, radarObjects=leads, leadOne=leads[0], leadTwo=leads[1])
   assert control_leads(radar) == tuple(leads)
+
+
+def caution_lead(*, now_ns=NOW, evidence=None, **changes):
+  flags = {'followQualified': False, 'brakeQualified': False, 'stopQualified': False,
+           'departureQualified': False, 'fcwQualified': False, 'cautionQualified': True,
+           'pathState': 'edge'}
+  flags.update(evidence or {})
+  return formal_lead(now_ns=now_ns, evidence=flags, **changes)
+
+
+def test_fresh_edge_caution_never_grants_braking_stopping_departure_or_fcw():
+  lead = caution_lead(vRel=-10.0, vLead=0.0)
+  assert qualified_lead(lead, 'caution', now_ns=NOW)
+  for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw'):
+    assert not qualified_lead(lead, purpose, 0.0, now_ns=NOW)
+  assert not qualified_lead(lead, 'caution', now_ns=NOW + MAX_MEASUREMENT_AGE_NS + 1)
+  assert not qualified_lead(caution_lead(source='vision'), 'caution', now_ns=NOW)
+  assert not qualified_lead(caution_lead(source='predicted'), 'caution', now_ns=NOW)
+
+
+@pytest.mark.parametrize('field,value', [
+  ('positionMonoTime', NOW + 1), ('velocityMonoTime', NOW - MAX_MEASUREMENT_AGE_NS - 1),
+  ('modelMonoTime', 0), ('positionValid', False), ('velocityValid', False), ('sessionId', ''),
+  ('trackId', 0), ('pathState', 'inPath'), ('coasting', True), ('brakeQualified', True),
+  ('stopQualified', True), ('departureQualified', True), ('positionStd', float('nan')),
+])
+def test_edge_caution_keeps_full_source_and_role_validation(field, value):
+  assert not qualified_lead(caution_lead(evidence={field: value}), 'caution', now_ns=NOW)

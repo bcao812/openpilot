@@ -30,7 +30,8 @@ from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurv
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
-from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent
+from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent, StopReason
+from openpilot.selfdrive.controls.lib.object_influence import accepted_object_influences
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer
 from openpilot.selfdrive.modeld.constants import LAT_SMOOTH_SECONDS, ModelConstants
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
@@ -335,6 +336,18 @@ class Controls(ControlsExt):
         setattr(actuators, p, 0.0)
         observe(longitudinal_observation, "sanitized")
 
+    self._object_influence_receipt = []
+    try:
+      self._object_influence_receipt = accepted_object_influences(
+        long_plan, self.LoC, CS, long_active=bool(CC.longActive), plan_valid=motion_input.get('plan_valid', False),
+        plan_ns=int(self.sm.logMonoTime['longitudinalPlan']), now_ns=now_ns, output_accel=float(actuators.accel),
+        independent_stop=bool(self.LoC.motion_reasons & (StopReason.E2E | StopReason.CRUISE | StopReason.FORCE_DECEL
+                                                        | StopReason.CREEP | StopReason.INVALID)),
+      )
+    except (AttributeError, TypeError, ValueError, OverflowError):
+      # Receipt failure only removes a display annotation; it cannot affect
+      # the completed owner decision or its command.
+      pass
     observe(longitudinal_observation, "end")
     return CC, lac_log
 
@@ -407,6 +420,7 @@ class Controls(ControlsExt):
       motion.waitingForFreshInput = bool(self.LoC.motion_waiting_for_fresh_input)
       motion.planMonoTime = int(self.sm.logMonoTime['longitudinalPlan'])
       motion.modelMonoTime = int(self.sm['longitudinalPlan'].modelMonoTime)
+      motion.objectInfluences = getattr(self, '_object_influence_receipt', [])
       if self.reference_timing_check is not None:
         check = self.reference_timing_check
         motion.referenceTimingVersion = REFERENCE_TIMING_VERSION

@@ -76,6 +76,7 @@ struct RadarLeadEvidence {
   visionIndex @25 :Int16 = -1;
   reason @26 :Text;
   modelMonoTime @27 :UInt64;
+  cautionQualified @28 :Bool;  # edge occupancy may only withdraw positive acceleration
 
   enum Source {
     legacy @0;
@@ -83,6 +84,26 @@ struct RadarLeadEvidence {
     radar @2;
     fused @3;
     predicted @4;
+  }
+}
+
+# Read-only attribution of an adopted object constraint. Strength describes
+# request magnitude, not collision probability or counterfactual contribution.
+struct LongitudinalObjectInfluence {
+  version @0 :UInt8;
+  sessionId @1 :Text;
+  trackId @2 :UInt64;
+  modelMonoTime @3 :UInt64;
+  visionIndex @4 :Int8 = -1;
+  kind @5 :Kind;
+  strength @6 :Float32;
+
+  enum Kind {
+    follow @0;
+    braking @1;
+    hold @2;
+    release @3;
+    caution @4;
   }
 }
 
@@ -588,6 +609,7 @@ struct HondaRadarObservations {
     inPath @1;
     outOfPath @2;
     entering @3;
+    edge @4;  # outer body-overlap caution, not proven entry into the swept path
   }
 
   enum Motion {
@@ -652,6 +674,9 @@ struct HondaRadarObservations {
     previousYRel @31 :Float64;
     acceleration @32 :Float64;
     accelerationGood @33 :Bool;
+    lateralPositionVariance @34 :Float64;  # engineering covariance, not calibrated sigma
+    lateralVelocityVariance @35 :Float64;
+    lateralVelocityValid @36 :Bool;
   }
 
   struct FusionLead {

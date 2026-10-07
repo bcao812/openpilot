@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from openpilot.selfdrive.car.honda_radar_control import COAST_NS, MAX_OBJECTS, HondaRadarControl
+from openpilot.selfdrive.car.honda_radar_control import COAST_NS, MAX_OBJECTS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _qualified_path
 
 
 START = 10_000_000_000
@@ -23,6 +23,7 @@ def radar(frame=0, *, identifier=1, oem=7, distance=20.0, speed=10.0, lateral=0.
             'positionSeq': 10 + frame, 'positionMonoTime': stamp, 'velocityMonoTime': stamp,
             'dRel': distance, 'yRel': lateral, 'groundSpeed': speed, 'lateralSpeed': lateral_speed,
             'positionVariance': .2, 'velocityVariance': .3, 'observations': 10 + frame,
+            'lateralPositionVariance': .04, 'lateralVelocityVariance': .01, 'lateralVelocityValid': True,
             'active': True, 'mature': True, 'velocityGood': True, 'coasting': False,
             'acceleration': -.4, 'accelerationGood': True, 'lastInvalidReason': '', 'lastInvalidMonoTime': 0,
             'previousPositionSeq': 9 + frame, 'previousPositionMonoTime': stamp - STEP}
@@ -145,7 +146,7 @@ def test_third_entering_object_survives_two_existing_far_leads():
   assert not entering['evidence']['stopQualified']
 
 
-def test_curved_path_uses_ground_velocity_normal_to_path():
+def test_sloped_straight_path_uses_ground_velocity_normal_to_path():
   values = scene(tracks=[radar(lateral=2.152, lateral_speed=1.0)])
   values['model']['position']['y'] = [-.1 * x for x in values['model']['position']['x']]
   result = HondaRadarControl().update(**values)
@@ -153,6 +154,233 @@ def test_curved_path_uses_ground_velocity_normal_to_path():
   assert abs(evidence(result)['pathOffset']) < 1e-9
   assert abs(evidence(result)['lateralSpeed']) < 1e-9
   assert evidence(result)['followQualified']
+
+
+def test_current_outside_object_enters_a_later_bend_of_the_full_path():
+  values = scene(tracks=[radar(distance=5.0, lateral=3.0, speed=5.0)])
+  # Radar coordinates: (0, 0) -> (10, 0) -> (20, 10). The object has
+  # zero current cross-track velocity, but meets the bend at (13, 3), t=1.6.
+  values['model']['position'] = {'x': [1.52, 11.52, 21.52], 'y': [0.0, 0.0, -10.0]}
+  result = HondaRadarControl().update(**values)
+  assert len(result.objects) == 1
+  entry = evidence(result)
+  assert entry['pathState'] == 'entering' and entry['pathOffset'] == pytest.approx(3.0)
+  assert entry['lateralSpeed'] == 0.0
+  assert entry['conflictStart'] == pytest.approx((8.0 - SWEPT_HALF_WIDTH * math.sqrt(2.0)) / 5.0 - .15)
+  assert entry['conflictEnd'] == pytest.approx((8.0 + SWEPT_HALF_WIDTH * math.sqrt(2.0)) / 5.0 + .25)
+  assert entry['conflictStart'] < 1.6 < entry['conflictEnd']
+  assert entry['brakeQualified'] and not entry['followQualified']
+
+
+def test_prediction_does_not_extend_the_initial_tangent_past_a_turn():
+  corridor = _Corridor(((0.0, 0.0), (10.0, 0.0), (20.0, 20.0)), 'modelPath')
+  # The first tangent would suggest entry after 4 s, x=25 m. No such
+  # straight corridor exists; the actual finite path has already turned.
+  result = corridor.relation(5.0, -6.0, 5.0, 1.0)
+  assert result.state == 'outOfPath'
+
+
+def test_finite_bend_occupancy_does_not_fill_the_remaining_mpc_horizon():
+  corridor = _Corridor(((0.0, 0.0), (10.0, 10.0), (20.0, 10.0)), 'modelPath')
+  result = corridor.relation(5.0, 3.0, 5.0, 0.0)
+  assert result.state == 'inPath'
+  assert result.start == 0.0
+  assert result.end == pytest.approx((2.0 * math.sqrt(2.0) - 2.0) / 5.0 + .25)
+
+
+def test_internal_corner_has_no_gap_between_the_finite_segment_strips():
+  corridor = _Corridor(((0.0, 0.0), (10.0, 0.0), (20.0, 10.0)), 'modelPath')
+  # Outside both finite strips' along-segment intervals, inside the corner's
+  # 2 m body-overlap disk. This is a real join, not a tangent extension.
+  result = corridor.relation(10.5, -1.5, 0.0, 0.0)
+  assert result.state == 'inPath'
+  assert result.offset == pytest.approx(-math.sqrt(2.5))
+  assert result.start == 0.0 and result.end == 10.0
+
+
+def test_disjoint_bend_intervals_use_braking_envelope_without_permanent_follow():
+  values = scene(tracks=[radar(distance=1.0, speed=4.0)])
+  values['model']['position'] = {'x': [1.52, 11.52, 21.52, 31.52, 51.52],
+                               'y': [0.0, 0.0, -10.0, 0.0, 0.0]}
+  result = HondaRadarControl().update(**values)
+  assert evidence(result)['conflictStart'] == 0.0 and evidence(result)['conflictEnd'] == 10.0
+  assert evidence(result)['brakeQualified']
+  assert not evidence(result)['followQualified'] and not evidence(result)['stopQualified']
+  assert 'disjointOccupancyEnvelope' in evidence(result)['reason']
+
+
+def test_short_crossing_interval_is_found_without_sampling_the_future():
+  corridor = _Corridor(((0.0, 0.0), (20.0, 0.0)), 'modelPath')
+  result = corridor.relation(10.0, -3.0, 0.0, 30.0)
+  assert result.state == 'entering'
+  assert result.start == 0.0 and result.end == pytest.approx(5.0 / 30.0 + .25)
+
+
+@pytest.mark.parametrize('changes', [
+  {'lateralVelocityValid': False}, {'lateralVelocityVariance': 4.01},
+  {'lateralVelocityVariance': math.nan}, {'lateralPositionVariance': 4.0},
+])
+def test_lateral_prediction_limits_preserve_current_longitudinal_authority(changes):
+  # Poor vy must not erase a newly observed stationary/forward-moving lead.
+  for speed in (0.0, 4.0):
+    result = HondaRadarControl().update(**scene(tracks=[radar(speed=speed, lateral_speed=2.0, **changes)]))
+    claim = evidence(result)
+    assert claim['pathState'] == 'inPath' and claim['conflictEnd'] == 10.0
+    assert all(claim[purpose + 'Qualified'] for purpose in ('follow', 'brake', 'stop', 'fcw'))
+    assert claim['departureQualified'] is (speed > .5)
+    assert 'lateralPredictionLimited' in claim['reason']
+
+
+def test_lateral_position_uncertainty_cannot_create_or_clear_an_obstacle():
+  invalid = radar(lateralPositionVariance=4.01)
+  result = HondaRadarControl().update(**scene(tracks=[invalid]))
+  assert not result.objects and not result.cleared
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  uncertain = controller.update(**scene(1, tracks=[radar(1, lateral=1.0, lateralPositionVariance=4.01)]))
+  assert evidence(uncertain)['source'] == 'predicted'
+  assert uncertain.degraded and not uncertain.cleared
+
+
+def test_qualified_entry_is_not_cleared_when_its_lateral_prediction_budget_ends():
+  values = scene(tracks=[radar(distance=5.0, lateral=3.0, speed=5.0, lateralVelocityVariance=1.0)])
+  values['model']['position'] = {'x': [1.52, 11.52, 21.52], 'y': [0.0, 0.0, -10.0]}
+  result = HondaRadarControl().update(**values)
+  # Trusted lateral horizon is (2 - sqrt(.04)) / sqrt(1) = 1.8 s;
+  # entry is inside it, the clearing time is outside it.
+  assert evidence(result)['pathState'] == 'entering'
+  assert evidence(result)['conflictStart'] < 1.8 and evidence(result)['conflictEnd'] == 10.0
+  assert evidence(result)['brakeQualified'] and not evidence(result)['departureQualified']
+
+
+def test_entry_only_beyond_lateral_quality_horizon_is_unknown():
+  corridor = _Corridor(((0.0, 0.0), (100.0, 0.0)), 'modelPath')
+  result = _qualified_path((corridor,), 20.0, 4.0, 0.0, -.5, .04, 1.0, True)
+  assert result.state == 'unknown' and result.prediction_limited
+  assert result.observed_out  # current position remains measured geometry
+  objects = HondaRadarControl().update(**scene(tracks=[radar(lateral=4.0, lateral_speed=-.5,
+                                                           lateralVelocityVariance=1.0)]))
+  assert not objects.objects and not objects.cleared
+
+
+def test_fresh_measured_out_clears_old_lead_without_trusting_lateral_prediction():
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  controller.update(**scene(7, tracks=[]))
+  result = controller.update(**scene(8, tracks=[radar(8, lateral=4.0, lateral_speed=-.5, lateralVelocityValid=False)]))
+  assert result.healthy and not result.degraded
+  assert result.cleared == (1,) and not result.objects
+
+
+def test_finite_path_end_is_unknown_future_space_not_proof_of_departure():
+  values = scene(tracks=[radar(distance=5.0, speed=10.0)])
+  values['model']['position'] = {'x': [1.52, 11.52], 'y': [0.0, 0.0]}
+  result = HondaRadarControl().update(**values)
+  assert evidence(result)['pathState'] == 'inPath' and evidence(result)['conflictEnd'] == 10.0
+  assert evidence(result)['followQualified'] and evidence(result)['departureQualified']
+  assert 'lateralPredictionLimited' in evidence(result)['reason']
+
+
+@pytest.mark.parametrize('lateral', [-1.7, -1.6, 1.6, 1.7])
+def test_new_outer_only_stationary_object_is_caution_without_stop_or_fcw(lateral):
+  from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
+  result = HondaRadarControl().update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=lateral)], ego=4.0))
+  assert len(result.objects) == 1 and not result.leads[0]['present'] and not result.leads[1]['present']
+  target = result.objects[0]
+  claim = target['evidence']
+  assert target['dRel'] == 3.0 and target['vLeadK'] == 0.0 and target['modelProb'] == 0.0
+  assert claim['trackId'] == 1 and claim['positionMonoTime'] == START
+  assert claim['pathState'] == 'edge' and claim['cautionQualified']
+  assert qualified_lead(target, 'caution', now_ns=START + 2_000_000)
+  assert all(not claim[purpose + 'Qualified'] for purpose in ('brake', 'follow', 'stop', 'departure', 'fcw'))
+  assert 'edgePossibleBodyOverlap' in claim['reason']
+
+
+def test_new_inner_stationary_radar_is_a_full_obstacle_without_vision():
+  result = HondaRadarControl().update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=1.0)], ego=4.0))
+  assert result.leads[0]['present'] and evidence(result)['source'] == 'radar'
+  assert all(evidence(result)[purpose + 'Qualified'] for purpose in ('brake', 'follow', 'stop', 'fcw'))
+  assert not evidence(result)['cautionQualified']
+
+
+def test_outer_cut_in_is_sent_now_with_its_future_inner_occupancy():
+  result = HondaRadarControl().update(**scene(tracks=[radar(distance=8.0, speed=0.0, lateral=1.7, lateral_speed=-1.0)], ego=5.0))
+  claim = evidence(result)
+  assert claim['pathState'] == 'entering' and claim['brakeQualified'] and claim['fcwQualified']
+  assert not claim['cautionQualified'] and not claim['stopQualified']
+  # Outer overlap exists now; it is not a license to invent an inner obstacle
+  # at t=0. The MPC receives this interval now and can anticipate the cut-in.
+  assert claim['conflictStart'] == pytest.approx((1.7 - SWEPT_HALF_WIDTH) - .15)
+  assert claim['conflictEnd'] == pytest.approx((1.7 + SWEPT_HALF_WIDTH) + .25)
+  assert claim['conflictStart'] > 0.0
+  assert not result.leads[0]['present']
+
+
+def test_outer_unknown_inner_prediction_is_recorded_without_fake_clear():
+  result = HondaRadarControl().update(**scene(tracks=[radar(lateral=1.6, lateral_speed=-.1, lateralVelocityVariance=1.0)]))
+  assert evidence(result)['pathState'] == 'edge' and evidence(result)['cautionQualified']
+  assert 'edgeInnerUnknown' in evidence(result)['reason'] and not result.cleared
+
+
+def test_unknown_inner_does_not_retire_a_previous_future_collision_risk():
+  controller = HondaRadarControl()
+  first = controller.update(**scene(tracks=[radar(distance=8.0, speed=0.0, lateral=1.6, lateral_speed=-2.0)], ego=5.0))
+  assert evidence(first)['pathState'] == 'entering' and evidence(first)['brakeQualified']
+  later = controller.update(**scene(1, tracks=[radar(1, distance=8.0, speed=0.0, lateral=1.5, lateral_speed=-.1,
+                                                   lateralVelocityVariance=1.0)], ego=5.0))
+  assert evidence(later)['source'] == 'predicted' and evidence(later)['brakeQualified']
+  assert later.degraded and not later.cleared
+
+
+def test_caution_only_loss_does_not_create_coasting_or_a_persistent_stop_latch():
+  controller = HondaRadarControl()
+  first = controller.update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=1.6)], ego=4.0))
+  assert evidence(first)['cautionQualified']
+  missing = controller.update(**scene(1, tracks=[], ego=4.0))
+  assert missing.healthy and not missing.degraded and not missing.objects and not missing.cleared
+  expired = controller.update(**scene(7, tracks=[], ego=4.0))
+  assert not expired.degraded and not expired.objects
+  coast = HondaRadarControl().update(**scene(tracks=[radar(lateral=1.6, coasting=True)]))
+  assert not coast.objects
+
+
+def test_near_independent_visual_lead_retains_authority_beside_radar_caution():
+  visual = vision(distance=7.0, speed=3.0)
+  result = HondaRadarControl().update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=1.6)],
+                                                   leads=[visual, {'present': False}]))
+  assert len(result.objects) == 2
+  assert result.leads[0]['dRel'] == 7.0 and result.leads[0]['vLeadK'] == 3.0
+  assert result.leads[0]['evidence']['source'] == 'vision' and result.leads[0]['evidence']['brakeQualified']
+  assert next(lead for lead in result.objects if lead['radar'])['evidence']['cautionQualified']
+
+
+def test_confirmed_visual_body_occupancy_keeps_radar_motion_through_long_visual_gap():
+  controller = HondaRadarControl()
+  initial = controller.update(**scene(tracks=[radar(distance=20.0, speed=8.0, lateral=1.6)],
+                                     leads=[vision(distance=23.0, speed=11.0)],
+                                     bindings=[binding(bias_x=-3.0, bias_y=1.6)]))
+  assert evidence(initial)['source'] == 'fused' and evidence(initial)['pathSource'] == 'visionLead'
+  assert initial.leads[0]['dRel'] == 20.0 and initial.leads[0]['vLeadK'] == 8.0
+  for frame in range(1, 22):
+    current = controller.update(**scene(frame, tracks=[radar(frame, distance=20.0, speed=8.0, lateral=1.6)]))
+    claim = evidence(current)
+    assert claim['source'] == 'radar' and not claim['coasting'] and not claim['cautionQualified']
+    assert all(claim[purpose + 'Qualified'] for purpose in ('brake', 'follow', 'stop', 'departure', 'fcw'))
+    assert current.leads[0]['modelProb'] == 0.0 and current.leads[0]['vLeadK'] == 8.0
+    assert 'confirmedOccupancyHysteresis' in claim['reason'] and not current.degraded
+  assert frame * STEP > 883_000_000
+
+
+def test_inner_confirmation_uses_two_metre_exit_hysteresis_then_resets():
+  controller = HondaRadarControl()
+  controller.update(**scene(tracks=[radar(lateral=1.0, speed=0.0)]))
+  edge = controller.update(**scene(1, tracks=[radar(1, lateral=1.7, speed=0.0)]))
+  assert evidence(edge)['brakeQualified'] and evidence(edge)['stopQualified']
+  assert not evidence(edge)['cautionQualified'] and not edge.cleared
+  outside = controller.update(**scene(2, tracks=[radar(2, lateral=2.5, speed=0.0)]))
+  assert not outside.objects and outside.cleared == (1,)
+  returned = controller.update(**scene(3, tracks=[radar(3, lateral=1.7, speed=0.0)]))
+  assert evidence(returned)['cautionQualified'] and not evidence(returned)['brakeQualified']
 
 
 def test_short_stop_trajectory_uses_quality_lanes_only_inside_spatial_support():
@@ -184,8 +412,8 @@ def test_crossing_uses_finite_window_then_explicit_fresh_clear():
   controller = HondaRadarControl()
   start = controller.update(**scene(tracks=[radar(lateral=3.0, lateral_speed=-2.0, speed=0.0)]))
   assert evidence(start)['pathState'] == 'entering'
-  assert evidence(start)['conflictStart'] == pytest.approx(.35)
-  assert evidence(start)['conflictEnd'] == pytest.approx(2.75)
+  assert evidence(start)['conflictStart'] == pytest.approx((3.0 - SWEPT_HALF_WIDTH) / 2.0 - .15)
+  assert evidence(start)['conflictEnd'] == pytest.approx((3.0 + SWEPT_HALF_WIDTH) / 2.0 + .25)
   assert not evidence(start)['stopQualified']
   for frame in range(1, 44):
     lateral = 3.0 - 2.0 * frame * STEP / 1e9
@@ -206,7 +434,7 @@ def test_crossing_uses_finite_window_then_explicit_fresh_clear():
 def test_current_crossing_is_not_a_permanent_stationary_follow_lead():
   result = HondaRadarControl().update(**scene(tracks=[radar(speed=0.0, lateral_speed=-2.0)]))
   assert evidence(result)['pathState'] == 'inPath'
-  assert evidence(result)['conflictEnd'] == pytest.approx(1.25)
+  assert evidence(result)['conflictEnd'] == pytest.approx(SWEPT_HALF_WIDTH / 2.0 + .25)
   assert not evidence(result)['followQualified'] and not evidence(result)['stopQualified']
   assert evidence(result)['brakeQualified']
 
@@ -484,3 +712,206 @@ def test_actual_shadow_producer_exports_qualified_acceleration_for_formal_adapte
   assert fusion['tracks'][0]['accelerationGood']
   assert result.objects and evidence(result)['accelerationValid']
   assert evidence(result)['source'] == 'radar' and result.leads[0]['modelProb'] == 0.0
+
+
+# Frozen adapter-level geometry from road-pilot-1f86b1c/summary.json, route 8b,
+# samples 0/2 (frames 2269/2274); companion images are pilot-nearby-frames-02.
+# This old source did NOT record lateral covariances. The test deliberately
+# supplies favorable synthetic .04/.01 covariances, rather than claiming they
+# were measured, and proves that even trusted motion cannot create occupancy
+# at t=0 from a currently outer-band reflection.
+_PILOT_SIDE_REFLECTIONS = [{'sample': 0,
+  'frame': 2269,
+  'publication_ns': 136242133489,
+  'model_ns': 136233587239,
+  'eof_ns': 136190426270,
+  'ego': 8.746807098388672,
+  'x': 4.216198444366455,
+  'y': -1.7217763662338257,
+  'vx': -0.16044360399246216,
+  'normal_rate': 0.24599501490592957,
+  'position_ns': 136210734062,
+  'velocity_ns': 136220964062,
+  'p_var': 0.030461630975248122,
+  'v_var': 0.5845580760245106,
+  'path_x': [-3.9745984281580604e-14,
+             0.08357738703489304,
+             0.3347155749797821,
+             0.7544216513633728,
+             1.3450621366500854,
+             2.1068882942199707,
+             3.0417866706848145,
+             4.145932674407959,
+             5.432933807373047,
+             6.902228832244873,
+             8.54925537109375,
+             10.397666931152344,
+             12.397364616394043,
+             14.597555160522461,
+             16.985197067260742,
+             19.547456741333008,
+             22.290090560913086,
+             25.194034576416016,
+             28.206090927124023,
+             31.420467376708984,
+             34.79814910888672,
+             38.31191635131836,
+             41.903560638427734,
+             45.70494079589844,
+             49.57240295410156,
+             53.660919189453125,
+             57.77796936035156,
+             61.96537399291992,
+             66.18708038330078,
+             70.63762664794922,
+             75.09484100341797,
+             79.53392028808594,
+             84.11902618408203],
+  'path_y': [2.0672685785427802e-11,
+             0.0004960374790243804,
+             0.001963886898010969,
+             0.004851106554269791,
+             0.009746572934091091,
+             0.01761939935386181,
+             0.02943246439099312,
+             0.046008531004190445,
+             0.06900731474161148,
+             0.09992892295122147,
+             0.1398097574710846,
+             0.1879616379737854,
+             0.24440155923366547,
+             0.3103697597980499,
+             0.38216540217399597,
+             0.45976021885871887,
+             0.5402615070343018,
+             0.62256920337677,
+             0.7048532366752625,
+             0.7834905385971069,
+             0.8576461672782898,
+             0.9229746460914612,
+             0.9842485785484314,
+             1.0329585075378418,
+             1.0755566358566284,
+             1.1049113273620605,
+             1.129662036895752,
+             1.1485536098480225,
+             1.154301404953003,
+             1.1597819328308105,
+             1.1645357608795166,
+             1.1696650981903076,
+             1.1650820970535278]},
+ {'sample': 2,
+  'frame': 2274,
+  'publication_ns': 136492714010,
+  'model_ns': 136483881093,
+  'eof_ns': 136440433614,
+  'ego': 9.178969383239746,
+  'x': 2.513760805130005,
+  'y': -1.5951945781707764,
+  'vx': 0.35375237464904785,
+  'normal_rate': 0.3788110017776489,
+  'position_ns': 136413108228,
+  'velocity_ns': 136413108228,
+  'p_var': 0.027395029631493095,
+  'v_var': 0.34474544626309367,
+  'path_x': [4.084066418386101e-12,
+             0.08551658689975739,
+             0.3424296975135803,
+             0.7709989547729492,
+             1.3755521774291992,
+             2.154404640197754,
+             3.114359140396118,
+             4.252651691436768,
+             5.578297138214111,
+             7.089252948760986,
+             8.787909507751465,
+             10.699236869812012,
+             12.766985893249512,
+             15.041107177734375,
+             17.514619827270508,
+             20.173503875732422,
+             23.024845123291016,
+             26.03857421875,
+             29.16537094116211,
+             32.523170471191406,
+             36.03512191772461,
+             39.702571868896484,
+             43.45730209350586,
+             47.420249938964844,
+             51.48243713378906,
+             55.75885772705078,
+             60.12183380126953,
+             64.5504150390625,
+             69.00020599365234,
+             73.71189880371094,
+             78.47523498535156,
+             83.23377990722656,
+             88.10639953613281],
+  'path_y': [1.2912060309844264e-11,
+             0.0006036136182956398,
+             0.002402914222329855,
+             0.005783681757748127,
+             0.011328121647238731,
+             0.020148620009422302,
+             0.033500418066978455,
+             0.05253341794013977,
+             0.07808314263820648,
+             0.11107687652111053,
+             0.15197566151618958,
+             0.2005065381526947,
+             0.25629085302352905,
+             0.32038414478302,
+             0.388311505317688,
+             0.4598207473754883,
+             0.5311398506164551,
+             0.6023056507110596,
+             0.6692330837249756,
+             0.7291707992553711,
+             0.7838699221611023,
+             0.8272429704666138,
+             0.8643614649772644,
+             0.887698233127594,
+             0.902121901512146,
+             0.9058391451835632,
+             0.9058959484100342,
+             0.8944356441497803,
+             0.8722158074378967,
+             0.8496828079223633,
+             0.8395617604255676,
+             0.8172851204872131,
+             0.7932747006416321]}]
+
+
+@pytest.mark.parametrize('sample', _PILOT_SIDE_REFLECTIONS, ids=lambda row: str(row['frame']))
+def test_recorded_side_reflection_uses_future_inner_interval_even_with_favorable_quality(sample):
+  points = tuple((x - 1.52, -y) for x, y in zip(sample['path_x'], sample['path_y'], strict=True))
+  # Invert the old producer's reported normal speed using its nearest segment;
+  # no additional velocity samples or arbitrary zero-velocity prior are used.
+  nearest = None
+  for (px, py), (qx, qy) in zip(points, points[1:], strict=False):
+    dx, dy = qx - px, qy - py
+    length = math.hypot(dx, dy)
+    along = ((sample['x'] - px) * dx + (sample['y'] - py) * dy) / length**2
+    if not 0.0 <= along <= 1.0:
+      continue
+    offset = ((sample['y'] - py) * dx - (sample['x'] - px) * dy) / length
+    if nearest is None or abs(offset) < nearest[0]:
+      nearest = abs(offset), dx, dy, length
+  assert nearest is not None
+  _, dx, dy, length = nearest
+  vy = (sample['normal_rate'] * length + sample['vx'] * dy) / dx
+  track = radar(identifier=4, distance=sample['x'], lateral=sample['y'], speed=sample['vx'], lateral_speed=vy,
+                positionMonoTime=sample['position_ns'], velocityMonoTime=sample['velocity_ns'],
+                positionVariance=sample['p_var'], velocityVariance=sample['v_var'])
+  values = scene(tracks=[track], ego=sample['ego'])
+  values.update(now_ns=sample['publication_ns'], model_ns=sample['model_ns'], observation_ns=sample['publication_ns'] - 1)
+  values['model'].update(timestampEof=sample['eof_ns'], position={'x': sample['path_x'], 'y': sample['path_y']})
+  values['observation']['fusion'].update(modelMonoTime=sample['model_ns'], modelTimestampEof=sample['eof_ns'],
+                                         egoMonoTime=sample['model_ns'])
+  result = HondaRadarControl().update(**values)
+  claim = evidence(result)
+  assert result.healthy and not result.degraded and len(result.objects) == 1
+  assert claim['trackId'] == 4 and claim['pathState'] == 'entering' and claim['brakeQualified']
+  assert claim['conflictStart'] > .8  # current OUT is not a fabricated close in-path obstacle
+  assert not claim['followQualified'] and not claim['stopQualified'] and not claim['departureQualified']
+  assert not result.leads[0]['present']
