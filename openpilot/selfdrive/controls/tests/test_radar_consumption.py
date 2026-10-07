@@ -1,5 +1,6 @@
 """Message age must retire one coast without laundering invalid evidence."""
 from copy import deepcopy
+from math import ceil
 from types import SimpleNamespace
 
 import pytest
@@ -285,9 +286,16 @@ def test_native_tick_snapshot_freezes_values_without_caching_qualification():
   assert qualified_lead(frozen, 'brake', .95, now_ns=PUBLICATION)
   assert not qualified_lead(frozen, 'brake', 1.0, now_ns=PUBLICATION)
   assert not qualified_lead(frozen, 'caution', 0.0, now_ns=PUBLICATION)
-  assert not qualified_lead(frozen, 'brake', .95, now_ns=PUBLICATION + 100_000_000)
-  assert qualified_lead(frozen, 'brake', .95, now_ns=PUBLICATION + 100_000_000, require_active_window=False)
-  assert not qualified_lead(frozen, 'brake', .95, now_ns=PUBLICATION + 200_000_001, require_active_window=False)
+  raw = native.as_reader().radarObjects[0]
+  assert frozen.evidence.conflictEnd == raw.evidence.conflictEnd
+  # The published Float32 window end need not equal the decimal fixture.
+  boundary = PUBLICATION + ceil(raw.evidence.conflictEnd * 1e9)
+  for candidate in (raw, frozen):
+    assert qualified_lead(candidate, 'brake', .95, now_ns=boundary - 1)
+    assert not qualified_lead(candidate, 'brake', .95, now_ns=boundary)
+    assert not qualified_lead(candidate, 'brake', .95, now_ns=boundary + 1)
+    assert qualified_lead(candidate, 'brake', .95, now_ns=boundary + 1, require_active_window=False)
+    assert not qualified_lead(candidate, 'brake', .95, now_ns=PUBLICATION + 200_000_001, require_active_window=False)
   with pytest.raises(AttributeError):
     frozen.dRel = 0.0
   with pytest.raises(AttributeError):
