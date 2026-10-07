@@ -8,7 +8,7 @@ import pytest
 from openpilot.selfdrive.controls.lib.lead_qualification import (
   MAX_PREDICTION_AGE_NS, coast_measurement_expired, control_leads, qualified_lead,
 )
-from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
+from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption, RadarConsumptionView
 from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
 
 
@@ -407,3 +407,36 @@ def test_snapshot_decode_fallback_still_expires_other_coast_and_remembers_loss()
   view = consume_frame(builder_consumer, native)
   assert view.radarObjects == () and builder_consumer.degraded
   assert native.to_bytes() == serialized
+
+
+def test_validated_collection_is_immutable_and_expiry_builds_a_new_collection():
+  predicted, fresh = coast(relevant=True), formal_lead(now_ns=PUBLICATION, evidence={'trackId': 8})
+  native = native_frame(radar_frame(predicted, fresh, display=(predicted, fresh)))
+  consumer = RadarConsumption()
+  boundary = predicted.evidence.positionMonoTime + MAX_PREDICTION_AGE_NS
+  first = consume_frame(consumer, native, now=boundary)
+  objects = control_leads(first)
+  assert len(objects) == 2 and control_leads(first) is objects
+  assert first.leadOne is not first.radarObjects[0]
+  for field in ('radarObjects', 'leadOne', 'fusionActive', '_control_objects'):
+    with pytest.raises(AttributeError):
+      setattr(first, field, None)
+  second = consume_frame(consumer, native, now=boundary + 1)
+  assert [lead.evidence.trackId for lead in control_leads(second)] == [8]
+  assert control_leads(second) is control_leads(second) and control_leads(second) is not objects
+  assert consumer.degraded and consumer.lost_identities == ((SESSION, 7),)
+  assert [lead.evidence.trackId for lead in control_leads(first)] == [7, 8]
+  assert not control_leads(first, 'brake', now_ns=boundary + 250_000_000)
+
+
+@pytest.mark.parametrize('field', ['followQualified', 'stopQualified', 'departureQualified', 'fcwQualified'])
+def test_duplicate_role_conflicts_prevent_installing_a_deduplicated_collection(field):
+  lead = formal_lead(now_ns=PUBLICATION)
+  native = native_frame(radar_frame(lead, display=(lead,)))
+  setattr(native.leadOne.evidence, field, False)
+  consumer = RadarConsumption()
+  view = consume_frame(consumer, native, now=PUBLICATION)
+  assert not isinstance(view, RadarConsumptionView)
+  assert len(view.radarObjects) == 1 and view.leadOne.present
+  assert getattr(view.radarObjects[0].evidence, field) is True
+  assert getattr(view.leadOne.evidence, field) is False

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS, _finite, _integer,
+  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS, _StructSnapshot, _finite, _integer,
   control_leads, lead_identity, qualified_lead,
 )
 
@@ -295,3 +295,78 @@ def test_fresh_edge_caution_never_grants_braking_stopping_departure_or_fcw():
 ])
 def test_edge_caution_keeps_full_source_and_role_validation(field, value):
   assert not qualified_lead(caution_lead(evidence={field: value}), 'caution', now_ns=NOW)
+
+
+def _assert_snapshot_matches_uncached(lead):
+  payload = {**vars(lead), 'evidence': vars(lead.evidence).copy()}
+  snapshot = _StructSnapshot(payload)
+  times = (None, NOW - 1, NOW, NOW + 100_000_000, NOW + 200_000_000, NOW + 200_000_001,
+           NOW + 250_000_000, NOW + 350_000_000, NOW + 350_000_001, True, float(NOW))
+  for now_ns in times:
+    for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw', 'caution', 'invalid'):
+      for probability in (0.0, .95, 1.0, -.1, float('nan')):
+        for active_window in (True, False, 1):
+          kwargs = {'now_ns': now_ns, 'require_active_window': active_window}
+          assert qualified_lead(snapshot, purpose, probability, **kwargs) == qualified_lead(payload, purpose, probability, **kwargs)
+  assert lead_identity(snapshot) == lead_identity(payload)
+  return snapshot
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused', 'vision', 'predicted', 'caution', 'legacy'])
+def test_snapshot_common_facts_never_cache_a_purpose_probability_time_or_window(source):
+  lead = caution_lead(vRel=.5) if source == 'caution' else formal_lead(source=source, vRel=.5)
+  lead.evidence.conflictEnd = .1
+  if source == 'legacy':
+    lead.evidence.version = 0
+  snapshot = _assert_snapshot_matches_uncached(lead)
+  with pytest.raises(AttributeError):
+    snapshot.evidence.positionMonoTime = NOW + 1
+  with pytest.raises(AttributeError):
+    snapshot._facts = None
+
+
+@pytest.mark.parametrize('scope,field,value', [
+  ('lead', 'present', 1), ('lead', 'present', False), ('lead', 'modelProb', True),
+  ('lead', 'modelProb', float('nan')), ('lead', 'modelProb', 1.01),
+  ('lead', 'dRel', float('nan')), ('lead', 'dRel', -1.52), ('lead', 'dRel', 0.0),
+  ('lead', 'aLeadK', .1), ('lead', 'vLead', float('inf')), ('lead', 'vRel', -.1),
+  ('evidence', 'version', True), ('evidence', 'version', 2), ('evidence', 'source', 'invalid'),
+  ('evidence', 'sessionId', ''), ('evidence', 'trackId', 0), ('evidence', 'generation', -1),
+  ('evidence', 'coasting', 1), ('evidence', 'coasting', True), ('evidence', 'accelerationValid', False),
+  ('evidence', 'positionMonoTime', NOW + 1), ('evidence', 'velocityMonoTime', NOW - 350_000_001),
+  ('evidence', 'estimateMonoTime', NOW - 250_000_001), ('evidence', 'modelMonoTime', 0),
+  ('evidence', 'positionValid', False), ('evidence', 'velocityValid', 1),
+  ('evidence', 'positionStd', 0.0), ('evidence', 'velocityStd', float('nan')),
+  ('evidence', 'pathState', 'entering'), ('evidence', 'pathState', 'edge'), ('evidence', 'pathState', 'unknown'),
+  ('evidence', 'pathSource', ''), ('evidence', 'pathOffset', float('nan')),
+  ('evidence', 'conflictStart', -.1), ('evidence', 'conflictEnd', 0.0),
+  ('evidence', 'conflictEnd', .1), ('evidence', 'lateralSpeed', float('inf')),
+  ('evidence', 'brakeQualified', 1), ('evidence', 'cautionQualified', True),
+])
+def test_snapshot_malformed_and_boundary_values_match_the_uncached_path(scope, field, value):
+  lead = formal_lead(vRel=.5)
+  setattr(lead if scope == 'lead' else lead.evidence, field, value)
+  _assert_snapshot_matches_uncached(lead)
+
+
+@pytest.mark.parametrize('distance', [-1.53, -1.52, -.2, 0.0])
+def test_snapshot_close_visual_risk_retains_its_distinct_purpose_gates(distance):
+  _assert_snapshot_matches_uncached(formal_lead(source='vision', dRel=distance, vRel=.5))
+
+
+def test_snapshots_of_the_same_identity_keep_independent_evidence_and_age():
+  fresh = formal_lead(vRel=.5)
+  old = formal_lead(vRel=.5, evidence={'positionMonoTime': NOW - 200_000_001, 'departureQualified': False})
+  snapshots = [_StructSnapshot({**vars(lead), 'evidence': vars(lead.evidence).copy()}) for lead in (fresh, old)]
+  assert lead_identity(snapshots[0]) == lead_identity(snapshots[1])
+  for _ in range(2):
+    assert qualified_lead(snapshots[0], 'brake', now_ns=NOW)
+    assert not qualified_lead(snapshots[1], 'brake', now_ns=NOW)
+    assert qualified_lead(snapshots[0], 'departure', now_ns=NOW)
+    assert not qualified_lead(snapshots[1], 'departure', now_ns=NOW)
+
+
+@pytest.mark.parametrize('value', [Fraction(1, 3), _FloatSubclass(.25), _IntSubclass(1)])
+def test_non_native_snapshot_scalars_keep_the_general_validation_path(value):
+  snapshot = _assert_snapshot_matches_uncached(formal_lead(vLead=value))
+  assert not snapshot._cache_safe and snapshot._facts is None

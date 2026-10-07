@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from openpilot.selfdrive.car.honda_radar_relevance import HORIZON, loss_relevant, remaining_occupancy_window
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, _StructSnapshot, _as_reader, _finite, _integer, _object_key, _read,
+  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, _ControlLeadView, _StructSnapshot, _as_reader, _finite, _integer, _object_key, _read,
   coast_measurement_expired, control_leads, lead_identity, qualified_lead,
 )
 
@@ -25,10 +25,14 @@ _EVIDENCE_FIELDS = (
 
 
 class _AbsentLead:
+  __slots__ = ('_lead',)
   present = False
 
   def __init__(self, lead):
-    self._lead = lead
+    object.__setattr__(self, '_lead', lead)
+
+  def __setattr__(self, field, value):
+    raise AttributeError('consumption views are read-only')
 
   def __getattr__(self, field):
     return getattr(self._lead, field)
@@ -40,17 +44,25 @@ class _AbsentLead:
     return {**self._lead.to_dict(), 'present': False}
 
 
-class RadarConsumptionView:
+class RadarConsumptionView(_ControlLeadView):
+  __slots__ = ('_radar', 'fusionActive', 'fusionRiskUnresolved', 'radarObjects', 'leadOne', 'leadTwo', '_control_objects')
+
   def __init__(self, radar, expired, *, snapshot=False):
-    self._radar = radar
+    object.__setattr__(self, '_radar', radar)
     # This producer claim belongs to the same publication as the object view.
     # Keep it fixed even when a mutable fixture/reader is reused later.
-    self.fusionRiskUnresolved = bool(getattr(radar, 'fusionRiskUnresolved', False))
+    object.__setattr__(self, 'fusionActive', getattr(radar, 'fusionActive', False))
+    object.__setattr__(self, 'fusionRiskUnresolved', bool(getattr(radar, 'fusionRiskUnresolved', False)))
     def view(lead):
       return _StructSnapshot(lead.to_dict()) if snapshot else lead
-    self.radarObjects = tuple(view(lead) for lead in radar.radarObjects if not expired or _object_key(lead) not in expired)
-    self.leadOne = _AbsentLead(radar.leadOne) if expired and _object_key(radar.leadOne) in expired else view(radar.leadOne)
-    self.leadTwo = _AbsentLead(radar.leadTwo) if expired and _object_key(radar.leadTwo) in expired else view(radar.leadTwo)
+    object.__setattr__(self, 'radarObjects', tuple(
+      view(lead) for lead in radar.radarObjects if not expired or _object_key(lead) not in expired))
+    object.__setattr__(self, 'leadOne', _AbsentLead(radar.leadOne) if expired and _object_key(radar.leadOne) in expired else view(radar.leadOne))
+    object.__setattr__(self, 'leadTwo', _AbsentLead(radar.leadTwo) if expired and _object_key(radar.leadTwo) in expired else view(radar.leadTwo))
+    object.__setattr__(self, '_control_objects', None)
+
+  def __setattr__(self, field, value):
+    raise AttributeError('consumption views are read-only')
 
   def __getattr__(self, field):
     return getattr(self._radar, field)
@@ -158,6 +170,11 @@ class RadarConsumption:
     objects = _published_objects(radar, publication_ns)
     if objects is None:
       return publication
+    cache_collection = type(radar) is RadarConsumptionView and all(type(lead) is _StructSnapshot and lead._cache_safe for lead in objects)
+    if cache_collection:
+      # Only fully checked duplicate views can share the first representative
+      # before a purpose is selected. Conflicting publications never get here.
+      object.__setattr__(radar, '_control_objects', objects)
 
     fresh_publication = (now_ns - publication_ns <= MAX_MEASUREMENT_AGE_NS
                          and _integer(getattr(radar, 'mdMonoTime', 0), 1)
@@ -199,4 +216,9 @@ class RadarConsumption:
           self._lost[identity] = _Loss(publication_ns, _read(evidence, 'positionMonoTime'),
                                        _read(evidence, 'velocityMonoTime'))
     self.expired_identities = tuple(identities)
-    return RadarConsumptionView(radar, expired) if expired else radar
+    if not expired:
+      return radar
+    view = RadarConsumptionView(radar, expired)
+    if cache_collection:
+      object.__setattr__(view, '_control_objects', tuple(lead for lead in objects if _object_key(lead) not in expired))
+    return view

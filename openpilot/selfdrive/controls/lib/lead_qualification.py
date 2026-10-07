@@ -19,16 +19,28 @@ MAX_VELOCITY_STD = 20.0
 MIN_VISION_BRAKE_DISTANCE = -1.52  # Camera origin to the front bumper, as in radard.
 PURPOSES = ('follow', 'brake', 'stop', 'departure', 'fcw', 'caution')
 SOURCES = ('vision', 'radar', 'fused', 'predicted')
+_UNREAD = object()
+
+
+class _ControlLeadView:
+  """Marker for a consumer view validated before installing its collection."""
+  __slots__ = ()
 
 
 class _StructSnapshot:
   """Read-only scalar fields from one publication, never cached authority."""
-  __slots__ = ('_values',)
+  __slots__ = ('_values', '_cache_safe', '_facts', '_identity', '_key')
 
   def __init__(self, values):
     object.__setattr__(self, '_values', MappingProxyType({
       key: _StructSnapshot(value) if isinstance(value, dict) else value for key, value in values.items()
     }))
+    object.__setattr__(self, '_cache_safe', all(
+      type(value) in (bool, int, float, str, type(None)) or type(value) is _StructSnapshot and value._cache_safe
+      for value in self._values.values()))
+    object.__setattr__(self, '_facts', None)
+    object.__setattr__(self, '_identity', _UNREAD)
+    object.__setattr__(self, '_key', _UNREAD)
 
   def __setattr__(self, field, value):
     raise AttributeError('publication snapshots are read-only')
@@ -90,11 +102,17 @@ def _integer(value, minimum=0):
 
 def lead_identity(lead):
   """Physical identity, independent of a radar slot's changing generation."""
+  cached = type(lead) is _StructSnapshot and lead._cache_safe
+  if cached and lead._identity is not _UNREAD:
+    return lead._identity
   evidence = _read(lead, 'evidence')
   version = _read(evidence, 'version', 0)
-  if (not _integer(version) or version != 1 or str(_read(evidence, 'source', 'legacy')) not in ('radar', 'fused', 'predicted')):
-    return None
-  return _physical_identity(evidence)
+  identity = None
+  if _integer(version) and version == 1 and str(_read(evidence, 'source', 'legacy')) in ('radar', 'fused', 'predicted'):
+    identity = _physical_identity(evidence)
+  if cached:
+    object.__setattr__(lead, '_identity', identity)
+  return identity
 
 
 def _physical_identity(evidence):
@@ -104,6 +122,94 @@ def _physical_identity(evidence):
   if not isinstance(session, str) or not session or not _integer(track, 1) or not _integer(generation):
     return None
   return session, int(track)
+
+
+def _snapshot_facts(lead):
+  """Decode common immutable facts, without granting any purpose or time."""
+  get = lead._values.get
+  probability = get('modelProb')
+  if get('present', False) is not True or not _finite(probability) or not 0.0 <= probability <= 1.0:
+    return False
+  evidence = get('evidence')
+  fields = evidence._values if type(evidence) is _StructSnapshot else {}
+  read = fields.get
+  version = read('version', 0)
+  if not _integer(version):
+    return False
+  if version == 0:
+    return (0, probability)
+  source = str(read('source', 'legacy'))
+  if version != 1 or source not in SOURCES:
+    return False
+  if source == 'vision':
+    index = read('visionIndex')
+    if not _integer(index) or index not in (0, 1):
+      return False
+  elif lead_identity(lead) is None:
+    return False
+  coasting = read('coasting', False)
+  if not isinstance(coasting, bool) or source == 'predicted' and not coasting:
+    return False
+  estimate, position, velocity, model = (read(field) for field in (
+    'estimateMonoTime', 'positionMonoTime', 'velocityMonoTime', 'modelMonoTime'))
+  if not all(_integer(stamp, 1) for stamp in (estimate, position, velocity, model)):
+    return False
+  age = MAX_PREDICTION_AGE_NS if coasting else MAX_MEASUREMENT_AGE_NS
+  if abs(estimate - position) > age or abs(estimate - velocity) > age:
+    return False
+  earliest = max(estimate, position, velocity, model)
+  latest = min(estimate + MAX_ESTIMATE_AGE_NS, position + age, velocity + age, model + age)
+  if read('positionValid', False) is not True or read('velocityValid', False) is not True:
+    return False
+  p_std, v_std = read('positionStd'), read('velocityStd')
+  if not _finite(p_std) or not _finite(v_std) or not 0.0 < p_std <= MAX_POSITION_STD or not 0.0 < v_std <= MAX_VELOCITY_STD:
+    return False
+  distance, lateral, relative, ground, acceleration = (get(field) for field in ('dRel', 'yRel', 'vRel', 'vLead', 'aLeadK'))
+  if not all(_finite(value) for value in (distance, lateral, relative, ground, acceleration)):
+    return False
+  a_valid = read('accelerationValid', False)
+  if not isinstance(a_valid, bool) or not a_valid and acceleration != 0.0:
+    return False
+  offset, start, end, lateral_speed = (read(field) for field in ('pathOffset', 'conflictStart', 'conflictEnd', 'lateralSpeed'))
+  path_source = read('pathSource', '')
+  if (not all(_finite(value) for value in (offset, start, end, lateral_speed))
+      or not isinstance(path_source, str) or not path_source or not 0.0 <= start < end):
+    return False
+  flags = tuple(read(purpose + 'Qualified', False) for purpose in PURPOSES)
+  caution_exclusive = all(flag is False for flag in flags[:-1])
+  return (1, probability, source, flags, caution_exclusive, coasting, estimate, earliest, latest,
+          distance, relative, ground, str(read('pathState', 'unknown')), end)
+
+
+def _qualified_snapshot(lead, purpose, min_model_prob, now_ns, require_active_window):
+  if purpose not in PURPOSES or not isinstance(require_active_window, bool):
+    return False
+  if not _finite(min_model_prob) or not 0.0 <= min_model_prob <= 1.0:
+    return False
+  facts = lead._facts
+  if facts is None:
+    facts = _snapshot_facts(lead)
+    object.__setattr__(lead, '_facts', facts)
+  if facts is False:
+    return False
+  if facts[0] == 0:
+    return purpose != 'caution' and facts[1] >= min_model_prob
+  _, probability, source, flags, caution_exclusive, coasting, estimate, earliest, latest, distance, relative, ground, path_state, end = facts
+  if flags[PURPOSES.index(purpose)] is not True:
+    return False
+  if purpose == 'caution' and (source not in ('radar', 'fused') or not caution_exclusive):
+    return False
+  if source == 'vision' and probability < min_model_prob or coasting and purpose != 'brake':
+    return False
+  reference = earliest if now_ns is None else now_ns
+  if not earliest <= reference <= latest:
+    return False
+  if distance <= 0.0 and not (source == 'vision' and purpose in ('brake', 'fcw') and MIN_VISION_BRAKE_DISTANCE <= distance):
+    return False
+  path_states = ('edge',) if purpose == 'caution' else ('inPath', 'entering') if purpose in ('brake', 'fcw') else ('inPath',)
+  if path_state not in path_states or require_active_window and (reference - estimate) / 1e9 >= end:
+    return False
+  return purpose != 'departure' or ground > 0.0 and relative > 0.0
 
 
 def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_active_window=True):
@@ -119,6 +225,8 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
   A planner projecting occupancy itself may set ``require_active_window=False``
   to distinguish an expired occupancy window from invalid measurement evidence.
   """
+  if type(lead) is _StructSnapshot and lead._cache_safe and (now_ns is None or type(now_ns) is int):
+    return _qualified_snapshot(lead, purpose, min_model_prob, now_ns, require_active_window)
   if purpose not in PURPOSES or _read(lead, 'present', False) is not True or not isinstance(require_active_window, bool):
     return False
   probability = _read(lead, 'modelProb')
@@ -226,13 +334,19 @@ def coast_measurement_expired(lead, *, publication_ns, now_ns):
 
 
 def _object_key(lead):
+  cached = type(lead) is _StructSnapshot and lead._cache_safe
+  if cached and lead._key is not _UNREAD:
+    return lead._key
   identity = lead_identity(lead)
   if identity is not None:
-    return 'track', *identity
-  evidence = _read(lead, 'evidence')
-  if _read(evidence, 'version', 0) == 1 and str(_read(evidence, 'source', 'legacy')) == 'vision':
-    return 'vision', _read(evidence, 'modelMonoTime'), _read(evidence, 'visionIndex')
-  return None
+    key = ('track', *identity)
+  else:
+    evidence = _read(lead, 'evidence')
+    key = (('vision', _read(evidence, 'modelMonoTime'), _read(evidence, 'visionIndex'))
+           if _read(evidence, 'version', 0) == 1 and str(_read(evidence, 'source', 'legacy')) == 'vision' else None)
+  if cached:
+    object.__setattr__(lead, '_key', key)
+  return key
 
 
 def control_leads(radar_state, purpose=None, min_model_prob=0.95, *, now_ns=None):
@@ -243,6 +357,10 @@ def control_leads(radar_state, purpose=None, min_model_prob=0.95, *, now_ns=None
   position. The producer owns the bounded list; malformed oversize lists remain
   visible to a consumer's explicit input-failure handling, never silently cut.
   """
+  if isinstance(radar_state, _ControlLeadView) and radar_state._control_objects is not None:
+    objects = radar_state._control_objects
+    return objects if purpose is None else tuple(
+      lead for lead in objects if qualified_lead(lead, purpose, min_model_prob, now_ns=now_ns))
   display = (_read(radar_state, 'leadOne'), _read(radar_state, 'leadTwo'))
   candidates = (*tuple(_read(radar_state, 'radarObjects', ())), *display) if _read(radar_state, 'fusionActive', False) is True else display
   result, seen = [], set()
