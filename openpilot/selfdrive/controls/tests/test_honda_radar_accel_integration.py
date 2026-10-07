@@ -12,8 +12,10 @@ import pytest
 from openpilot.cereal import messaging
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
+from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.car.honda_radar_observer_config import ASSIST, SERVICE
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, MotionResponseKind, StopReason
+from openpilot.selfdrive.controls.lib.longcontrol import STARTING_ACCEL_RATE
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
 from openpilot.selfdrive.controls.tests.test_honda_radar_accel_guard import guard_input
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
@@ -143,6 +145,20 @@ def test_runtime_gate_loss_revokes_assist_at_the_next_planner_tick(gate):
     step(planner, control, state, 9, gap=True)
     guard = planner.reference_planner.radar_accel_guard
     assert not guard.qualified and not guard.holding and guard.accel_ceiling is None
+
+
+def test_requested_mode_exit_revokes_sensor_authority_but_owner_bounds_output_rise():
+  with pipeline(measured_accel=0.0) as (planner, control, state):
+    for frame in range(10):
+      _, outputs = step(planner, control, state, frame, gap=frame >= 8)
+    previous = outputs[-1]
+    Params().put('HondaBoschARadarMode', 2, block=True)
+    for frame in range(10, 30):
+      _, outputs = step(planner, control, state, frame, gap=True)
+      assert planner.reference_planner.radar_accel_guard.accel_ceiling is None
+      for output in outputs:
+        assert output - previous <= STARTING_ACCEL_RATE * DT_CTRL + 1e-7
+        previous = output
 
 
 def test_stationary_stop_and_release_eligibility_match_existing_control():

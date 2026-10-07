@@ -73,6 +73,16 @@ def test_stronger_model_braking_wins_over_comfortable_curve_hold():
       assert max(outputs) <= 0.
 
 
+def test_sharp_predicted_curve_keeps_physical_mpc_acceleration_bounds_ordered():
+  with curve_pipeline(speed=30., predicted_lateral=8., current_lateral=1.) as (planner, control, state):
+    for frame in range(12):
+      plan, outputs = step(planner, control, state, frame)
+    assert planner.scc.vision.output_a_target < -3.5
+    assert plan.solverStatus == 0 and plan.motionIntent.valid
+    assert -3.5 <= plan.aTarget < 0.
+    assert all(-3.5 <= output <= 0. for output in outputs)
+
+
 @pytest.mark.parametrize('field', ['prediction', 'current'])
 @pytest.mark.parametrize('invalid', [float('nan'), float('inf')])
 def test_active_invalid_curve_reaches_planner_rejection_instead_of_cruise(field, invalid):
@@ -86,7 +96,10 @@ def test_active_invalid_curve_reaches_planner_rejection_instead_of_cruise(field,
       state['controlsState'].curvature = invalid
     with np.errstate(invalid='ignore'):
       plan, outputs = step(planner, control, state, 8)
-    assert planner.source == LongitudinalPlanSource.sccVision
-    assert not np.isfinite(planner.cruise_target.speed)
+    if field == 'current':
+      assert planner.source == LongitudinalPlanSource.sccVision
+      assert not np.isfinite(planner.cruise_target.speed)
+    # Invalid model trajectories are rejected earlier, before policy update;
+    # their previous finite curve target is not a new actuation permission.
     assert not plan.motionIntent.valid
     assert max(outputs) <= 0.

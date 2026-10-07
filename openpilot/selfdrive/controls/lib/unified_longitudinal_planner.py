@@ -483,7 +483,7 @@ class UnifiedLongitudinalPlanner:
       # The current/predicted geometry still owns necessary deceleration even
       # when another policy supplies the lower speed target. update_targets
       # has already checked the active curve outputs for finite values.
-      maximum_accel = min(maximum_accel, float(vision_curve.output_a_target))
+      maximum_accel = min(maximum_accel, float(np.clip(vision_curve.output_a_target, ACCEL_MIN, ACCEL_MAX)))
     turn_ceiling = self.turn_lead_guard.update(
       now_ns=now_ns, model_ns=state.logMonoTime.get('modelV2'), radar_ns=state.logMonoTime.get('radarState'),
       enabled=healthy and active and not reset and not forced_decel and planner.unified,
