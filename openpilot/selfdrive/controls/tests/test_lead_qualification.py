@@ -12,19 +12,19 @@ NOW = 10_000_000_000
 
 
 def formal_lead(*, now_ns=NOW, source='radar', evidence=None, **changes):
-  evidence_values = dict(
-    version=1, source=source, sessionId='radar-session-a', trackId=7, generation=0,
-    positionMonoTime=now_ns, velocityMonoTime=now_ns, estimateMonoTime=now_ns, modelMonoTime=now_ns,
-    positionStd=.2, velocityStd=.15, positionValid=True, velocityValid=True, accelerationValid=True,
-    followQualified=True, brakeQualified=True, stopQualified=True, departureQualified=True, fcwQualified=True,
-    coasting=source == 'predicted', pathState='inPath', pathOffset=0.0, conflictStart=0.0, conflictEnd=10.0,
-    lateralSpeed=0.0, pathSource='modelPath', visionIndex=0 if source in ('vision', 'fused') else -1, reason='measured',
-  )
+  evidence_values = {
+    'version': 1, 'source': source, 'sessionId': 'radar-session-a', 'trackId': 7, 'generation': 0,
+    'positionMonoTime': now_ns, 'velocityMonoTime': now_ns, 'estimateMonoTime': now_ns, 'modelMonoTime': now_ns,
+    'positionStd': .2, 'velocityStd': .15, 'positionValid': True, 'velocityValid': True, 'accelerationValid': True,
+    'followQualified': True, 'brakeQualified': True, 'stopQualified': True, 'departureQualified': True, 'fcwQualified': True,
+    'coasting': source == 'predicted', 'pathState': 'inPath', 'pathOffset': 0.0, 'conflictStart': 0.0, 'conflictEnd': 10.0,
+    'lateralSpeed': 0.0, 'pathSource': 'modelPath', 'visionIndex': 0 if source in ('vision', 'fused') else -1, 'reason': 'measured',
+  }
   evidence_values.update(evidence or {})
-  values = dict(present=True, dRel=20.0, yRel=0.0, vRel=0.0, vLead=1.0, vLeadK=1.0,
-                aLeadK=0.0, aLeadTau=1.5, modelProb=.99 if source == 'vision' else 0.0,
-                radar=source != 'vision', radarTrackId=-1 if source == 'vision' else 7,
-                evidence=SimpleNamespace(**evidence_values))
+  values = {'present': True, 'dRel': 20.0, 'yRel': 0.0, 'vRel': 0.0, 'vLead': 1.0, 'vLeadK': 1.0,
+                'aLeadK': 0.0, 'aLeadTau': 1.5, 'modelProb': .99 if source == 'vision' else 0.0,
+                'radar': source != 'vision', 'radarTrackId': -1 if source == 'vision' else 7,
+                'evidence': SimpleNamespace(**evidence_values)}
   values.update(changes)
   return SimpleNamespace(**values)
 

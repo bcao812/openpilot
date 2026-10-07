@@ -144,7 +144,7 @@ class ControlPipeline:
     self.state.recv_frame[service] = self.frame + 1
 
   def _model(self, timestamp, speed, visual, acceleration, should_stop):
-    event = messaging.new_message('modelV2', logMonoTime=timestamp)
+    event = messaging.new_message('modelV2', logMonoTime=timestamp, valid=True)
     event.modelV2 = self.model_template
     model = event.modelV2
     model.timestampEof = timestamp
@@ -163,14 +163,14 @@ class ControlPipeline:
     model.action.shouldStop = should_stop
     # Spatial lane samples retain support when a legitimate stop trajectory is
     # too short to describe geometry beyond the stopped ego vehicle.
-    model.laneLines = [dict(x=[float(i * 2) for i in range(33)], y=[y] * 33) for y in (-5.4, -1.8, 1.8, 5.4)]
+    model.laneLines = [{'x': [float(i * 2) for i in range(33)], 'y': [y] * 33} for y in (-5.4, -1.8, 1.8, 5.4)]
     model.laneLineProbs = [0.9] * 4
     model.laneLineStds = [0.15] * 4
-    leads = [dict(prob=.99, x=[target.distance + 1.52] * 6, y=[-target.lateral] * 6,
-                  v=[target.speed] * 6, a=[0.0] * 6, xStd=[1.0] * 6, yStd=[.4] * 6, vStd=[1.0] * 6)
+    leads = [{'prob': .99, 'x': [target.distance + 1.52] * 6, 'y': [-target.lateral] * 6,
+                  'v': [target.speed] * 6, 'a': [0.0] * 6, 'xStd': [1.0] * 6, 'yStd': [.4] * 6, 'vStd': [1.0] * 6}
              for target in visual]
-    absent = dict(prob=0.0, x=[100.0] * 6, y=[0.0] * 6, v=[speed] * 6, a=[0.0] * 6,
-                  xStd=[1.0] * 6, yStd=[.4] * 6, vStd=[1.0] * 6)
+    absent = {'prob': 0.0, 'x': [100.0] * 6, 'y': [0.0] * 6, 'v': [speed] * 6, 'a': [0.0] * 6,
+                  'xStd': [1.0] * 6, 'yStd': [.4] * 6, 'vStd': [1.0] * 6}
     model.leadsV3 = (leads + [absent] * 3)[:3]
     return event
 
@@ -237,13 +237,21 @@ class ControlPipeline:
     identity = (plan.modelMonoTime, plan.aTarget, plan.shouldStop, plan.solverStatus, intent,
                 float(plan.reference.accel), float(plan.reference.constraintAccel), bool(plan.reference.overridden),
                 speeds, accels, action_t)
-    row = dict(frame=frame, time=frame * DT_MDL, source_ns=source_ns, speed=float(speed),
-               target=float(plan.aTarget), stop=bool(plan.shouldStop), reasons=int(plan.motionIntent.reasons),
-               release=bool(plan.motionIntent.releaseAllowed), moving=bool(plan.motionIntent.movingLead),
-               solver=int(plan.solverStatus), dec_mode=self.planner.dec.mode(), radar=state['radarState'].to_dict(),
-               observer_ns=state.logMonoTime[SERVICE], observer_position_ns=int(state[SERVICE].lastPositionMonoTime),
-               sensor_targets=[dict(distance=t.distance, speed=t.speed, lateral=t.lateral, oem_id=t.oem_id) for t in radar],
-               owner=[], can=[])
+    row = {'frame': frame, 'time': frame * DT_MDL, 'source_ns': source_ns, 'speed': float(speed),
+               'target': float(plan.aTarget), 'stop': bool(plan.shouldStop), 'reasons': int(plan.motionIntent.reasons),
+               'release': bool(plan.motionIntent.releaseAllowed), 'moving': bool(plan.motionIntent.movingLead),
+               'solver': int(plan.solverStatus), 'dec_mode': self.planner.dec.mode(), 'radar': state['radarState'].to_dict(),
+               'observer_ns': state.logMonoTime[SERVICE], 'observer_position_ns': int(state[SERVICE].lastPositionMonoTime),
+               'sensor_targets': [{'distance': t.distance, 'speed': t.speed, 'lateral': t.lateral, 'oem_id': t.oem_id} for t in radar],
+               'owner': [], 'can': []}
+    observation = state[SERVICE]
+    row['observer'] = {
+      'active': bool(observation.active), 'reason': str(observation.reason), 'mode': int(observation.mode),
+      'fusion_active': bool(observation.fusion.active), 'fusion_reason': str(observation.fusion.reason),
+      'algorithm': str(observation.fusion.algorithmVersion), 'model_ns': int(observation.fusion.modelMonoTime),
+      'model_eof_ns': int(observation.fusion.modelTimestampEof), 'ego_ns': int(observation.fusion.egoMonoTime),
+      'tracks': len(observation.fusion.tracks), 'model_input_valid': state.valid['modelV2'],
+    }
     for tick in range(5):
       owner_ns = source_ns + 2_000_000 + tick * 10_000_000
       if plant is not None:
@@ -257,9 +265,9 @@ class ControlPipeline:
         plan_time_ns=publication_ns, model_time_ns=plan.modelMonoTime, now_ns=owner_ns,
         plan_valid=bool(plan_event.valid and timing.valid), solver_status=plan.solverStatus,
         braking_plan_valid=True)
-      row['owner'].append(dict(accel=float(output), phase=self.owner.motion_phase.text,
-                               stop=bool(self.owner.resolved_should_stop), constrained=bool(self.owner.motion_input_constrained)))
-      command = messaging.new_message('carControl', logMonoTime=owner_ns)
+      row['owner'].append({'accel': float(output), 'phase': self.owner.motion_phase.text,
+                               'stop': bool(self.owner.resolved_should_stop), 'constrained': bool(self.owner.motion_input_constrained)})
+      command = messaging.new_message('carControl', logMonoTime=owner_ns, valid=True)
       command.carControl.enabled = command.carControl.longActive = engaged
       command.carControl.actuators.accel = float(output)
       command.carControl.actuators.longControlState = self.owner.long_control_state
@@ -273,10 +281,10 @@ class ControlPipeline:
         self.parser.update([(owner_ns + 1_000_000, sends)])
         values = self.parser.vl['ACC_CONTROL']
         self.last_can_accel = float(values['ACCEL_COMMAND']) if effective.longActive else 0.0
-        row['can'].append(dict(accel=float(values['ACCEL_COMMAND']), gas=int(values['GAS_COMMAND']),
-                               brake=bool(values['BRAKE_REQUEST']), stop=bool(values['STANDSTILL']),
-                               release=bool(values['STANDSTILL_RELEASE']), control_on=int(values['CONTROL_ON']),
-                               active=bool(effective.longActive), resume=bool(effective.cruiseControl.resume)))
+        row['can'].append({'accel': float(values['ACCEL_COMMAND']), 'gas': int(values['GAS_COMMAND']),
+                               'brake': bool(values['BRAKE_REQUEST']), 'stop': bool(values['STANDSTILL']),
+                               'release': bool(values['STANDSTILL_RELEASE']), 'control_on': int(values['CONTROL_ON']),
+                               'active': bool(effective.longActive), 'resume': bool(effective.cruiseControl.resume)})
       if plant is not None:
         plant.step(self.last_can_accel)
     assert len(row['can']) in (2, 3)

@@ -44,16 +44,16 @@ def simulate_radar_following(*, dropout=False):
   request_jerk = np.diff(commands) / .02  # Real CAN cadence, not model cadence.
   hold = [row for row in rows if 6.0 <= row['time'] < 8.0 and all(owner['phase'] == 'hold' for owner in row['owner'])]
   departures = [row for row in rows if row['time'] >= 9.0 and row['speed'] > .2]
-  return rows, dict(
-    plant='ideal decoded-ACCEL_COMMAND delay .2 s / response .25 s',
-    minimum_gap=min(row['gap'] for row in rows),
-    final_speed=plant.speed, hold_seconds=len(hold) * .05,
-    departure_delay=departures[0]['time'] - 9.0 if departures else None,
-    maximum_request_jerk=float(np.max(np.abs(request_jerk))),
-    p95_request_jerk=float(np.quantile(np.abs(request_jerk), .95)),
-    solver_failures=sum(row['solver'] != 0 for row in rows),
-    pedal_conflicts=sum(sample['brake'] and sample['gas'] > 0 for row in rows for sample in row['can']),
-  )
+  return rows, {
+    'plant': 'ideal decoded-ACCEL_COMMAND delay .2 s / response .25 s',
+    'minimum_gap': min(row['gap'] for row in rows),
+    'final_speed': plant.speed, 'hold_seconds': len(hold) * .05,
+    'departure_delay': departures[0]['time'] - 9.0 if departures else None,
+    'maximum_request_jerk': float(np.max(np.abs(request_jerk))),
+    'p95_request_jerk': float(np.quantile(np.abs(request_jerk), .95)),
+    'solver_failures': sum(row['solver'] != 0 for row in rows),
+    'pedal_conflicts': sum(sample['brake'] and sample['gas'] > 0 for row in rows for sample in row['can']),
+  }
 
 
 def test_radar_only_closed_loop_stops_and_follows_same_target_departure(record_property):

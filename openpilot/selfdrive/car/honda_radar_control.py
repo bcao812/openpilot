@@ -106,7 +106,7 @@ class _Corridor:
     if not self.points or not self.points[0][0] <= x <= self.points[-1][0]:
       return _Path()
     best = None
-    for (px, py), (qx, qy) in zip(self.points, self.points[1:]):
+    for (px, py), (qx, qy) in zip(self.points, self.points[1:], strict=False):
       dx, dy = qx - px, qy - py
       length_sq = dx * dx + dy * dy
       if length_sq < .01:

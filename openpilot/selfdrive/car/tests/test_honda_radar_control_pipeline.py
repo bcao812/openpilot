@@ -5,6 +5,7 @@ import pytest
 
 from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, SHADOW, ObserverSettings
 from openpilot.selfdrive.car.tests.honda_radar_control_test_support import Target, control_pipeline
+from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 
 
@@ -128,6 +129,10 @@ def test_radar_stop_holds_on_dropout_and_releases_for_same_car_departure(outcome
       target = Target(3.0 + .4 * elapsed**2 if departing else 3.0, .8 * elapsed if departing else 0.0)
       rows.append(pipeline.step(speed=0.0, radar=[target], observer_online=outcome != 'dropout' or frame < 28))
   record(record_property, f'hold_{outcome}', rows)
+  held = rows[27]['radar']['leadOne']
+  assert rows[27]['radar']['fusionHealthy'] and held['present']
+  assert held['evidence']['source'] == 'radar' and held['evidence']['stopQualified']
+  assert held['evidence']['trackId'] > 0
   assert all(owner['phase'] == 'hold' and owner['stop'] for row in rows[20:28] for owner in row['owner'])
   assert any(sample['stop'] and sample['brake'] for row in rows[20:28] for sample in row['can'])
   if outcome == 'dropout':
@@ -166,12 +171,16 @@ def test_scope_exit_cannot_release_radar_hold_before_driver_starts_a_new_engagem
       # Stop selfdriveState updates for 1.2 seconds, then restore them. The
       # source timestamp remains old; the fusion gate itself is not mocked.
       online = scope_exit != 'scope_stale' or frame >= 24
-      row = pipeline.step(speed=0.0, radar=[Target(3.0, 0.0)], scope_online=online)
+      # One speed-estimator excursion is not a departure receipt. It occurs
+      # after each scope gate has actually revoked the radar publication.
+      speed = STOP_SPEED + .05 if frame == 18 else 0.0
+      row = pipeline.step(speed=speed, radar=[Target(3.0, 0.0)], scope_online=online)
       rows.append(row)
       revoked.append(row)
       assert pipeline.planner.reference_planner.radar_held_identity == held_identity
       assert not row['release']
-      assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
+      phases = ('hold', 'approach') if frame == 18 else ('hold',)
+      assert all(owner['phase'] in phases and owner['stop'] for owner in row['owner'])
       assert all(sample['brake'] and sample['stop'] and not sample['release'] and sample['accel'] <= 0.0
                  for sample in row['can'])
     assert any(not row['radar'].get('fusionActive', False) for row in revoked)

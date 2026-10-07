@@ -584,12 +584,18 @@ class LongitudinalMpc:
   def occupancy_nodes(start, end):
     """Cover a finite occupancy interval, including a short inter-node event.
 
-    The preceding shooting node represents an interval with no interior
-    obstacle row. Nothing after the real end is kept as a stationary lead.
-    FCW checks the actual interval, not this conservative discretization.
+    The native obstacle rows exist only at shooting nodes. Both endpoints of
+    each intersected interval are needed: constraining only its first node
+    lets the solver accelerate through a crossing before the next row. This
+    bounded outer cover ends at the first node on/after the real end; it is
+    never a persistent lead. Consumption expiry and FCW use the actual window,
+    not this conservative discretization. The native rows remain soft costs,
+    so their coverage alone is not a continuous collision-freedom proof.
     """
     occupied = (T_IDXS >= start) & (T_IDXS <= end)
-    occupied[:-1] |= (T_IDXS[:-1] < end) & (T_IDXS[1:] >= start)
+    intersects = (T_IDXS[:-1] < end) & (T_IDXS[1:] > start)
+    occupied[:-1] |= intersects
+    occupied[1:] |= intersects
     return occupied
 
   @staticmethod

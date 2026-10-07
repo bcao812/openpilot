@@ -14,7 +14,7 @@ import pytest
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan
 from openpilot.selfdrive.controls.lib.lead_qualification import MAX_CONTROL_OBJECTS
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  COMFORT_STOP_DISTANCE, MODEL_V_REF, MPC_INVALID_INPUT, N, RISK_STOP_DISTANCE, STOP_DISTANCE, T_IDXS,
+  COMFORT_STOP_DISTANCE, CRASH_DISTANCE, MODEL_V_REF, MPC_INVALID_INPUT, N, RISK_STOP_DISTANCE, STOP_DISTANCE, T_IDXS,
   LongitudinalMpc, LongitudinalPlanSource, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, ModelSource, MovingPreference
@@ -73,6 +73,32 @@ def advance(lead, stamp):
   evidence.positionMonoTime = evidence.velocityMonoTime = evidence.estimateMonoTime = evidence.modelMonoTime = stamp
 
 
+def stationary_window_clearance(planner, distance, start, end):
+  """Independent exact cubic-position check over a fixed occupancy interval."""
+  minimum = float('inf')
+  for stage, jerk in enumerate(planner.j_solution):
+    lo, hi = max(start, T_IDXS[stage]) - T_IDXS[stage], min(end, T_IDXS[stage+1]) - T_IDXS[stage]
+    if hi < lo:
+      continue
+    position, velocity, acceleration = planner.x_sol[stage]
+    times = [lo, hi]
+    # Zero ego velocity locates every interior position extremum. Evaluate
+    # the polynomial directly instead of using the production FCW checker.
+    if abs(jerk) < 1e-12:
+      if abs(acceleration) > 1e-12:
+        times.append(-velocity / acceleration)
+    else:
+      discriminant = acceleration**2 - 2.0 * jerk * velocity
+      if discriminant >= 0.0:
+        root = np.sqrt(discriminant)
+        times.extend(((-acceleration - root) / jerk, (-acceleration + root) / jerk))
+    for elapsed in times:
+      if lo <= elapsed <= hi:
+        ego_position = position + velocity * elapsed + acceleration * elapsed**2 / 2.0 + jerk * elapsed**3 / 6.0
+        minimum = min(minimum, float(distance - ego_position))
+  return minimum
+
+
 @pytest.mark.parametrize('lead_speed', [0.0, 4.0])
 def test_new_radar_without_any_visual_confirmation_requests_braking(lead_speed):
   lead = object_lead(distance=30.0, speed=lead_speed, ego_speed=15.0)
@@ -128,7 +154,11 @@ def test_short_crossing_brakes_and_releases_without_a_permanent_rest_limit():
   assert action(planner) < 0.0
   assert planner.rest_recovery_position_limit is None
   assert planner.diagnostic_last_obstacle_summary['sources'][-1] == 'cruise'
-  assert not np.any(planner._fusion_projections[0].occupied[T_IDXS > 2.6])
+  projection = planner._fusion_projections[0]
+  cover_end = T_IDXS[np.searchsorted(T_IDXS, 2.6)]
+  assert projection.conflict_end == 2.6
+  assert projection.occupied[T_IDXS == cover_end][0]
+  assert not np.any(projection.occupied[T_IDXS > cover_end])
   assert planner.v_solution[-1] > stationary.v_solution[-1] + 1.0
 
 
@@ -148,8 +178,11 @@ def test_between_node_occupancy_is_kept_and_fcw_checks_its_real_time():
   assert not np.any((T_IDXS >= 0.7) & (T_IDXS <= 0.85))
   planner = solve(fused_state(crossing))
   projection = planner._fusion_projections[0]
-  assert np.any(projection.occupied)
+  interval = int(np.searchsorted(T_IDXS, 0.7) - 1)
+  assert projection.occupied[interval] and projection.occupied[interval + 1]
+  assert not np.any(projection.occupied[interval + 2:])
   assert action(planner) < 0.0
+  assert stationary_window_clearance(planner, 8.0, 0.7, 0.85) >= CRASH_DISTANCE
   # The independent straight trajectory reaches x=8 inside this unsampled
   # occupancy window. Checking only the native node times would miss it.
   states = np.column_stack((10.0 * T_IDXS, np.full(N+1, 10.0), np.zeros(N+1)))
@@ -221,7 +254,7 @@ def test_natural_occupancy_end_keeps_other_leads_and_the_model_running(age_ns, o
   reference = MpcReference(20.0, typed_model=ModelReferenceEvidence(source, preference, ()))
   now_ns = EPOCH_NS + age_ns
   reference_ns = EPOCH_NS + 100_000_000 if older_initial_state else now_ns
-  arguments = dict(reference=reference, now_ns=now_ns, reference_ns=reference_ns)
+  arguments = {'reference': reference, 'now_ns': now_ns, 'reference_ns': reference_ns}
   baseline = solve(fused_state(front, display=(front,)), **arguments)
   planner = solve(fused_state(front, crossing, display=(front,)), **arguments)
   np.testing.assert_array_equal(planner.params[:, MODEL_V_REF], velocity)

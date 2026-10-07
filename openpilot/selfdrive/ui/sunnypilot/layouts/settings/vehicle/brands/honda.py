@@ -45,9 +45,7 @@ class HondaSettings(BrandSettings):
     )
     self.control = toggle_item_sp(
       lambda: tr('Radar Fusion Control'),
-      description=lambda: tr('Use radar and vision together for following, braking and stop-and-go. '
-                             'Qualified radar targets can constrain driving even without a visual lead. '
-                             'Requires Alpha Longitudinal, Experimental Mode and DEC.'),
+      description=lambda: tr('Enable radar and vision following, braking and stop-and-go. Requires Alpha Longitudinal, Experimental Mode and DEC.'),
       initial_state=self._mode() == CONTROL,
       callback=self._set_control, enabled=lambda: not ui_state.started and self._observing(),
     )
