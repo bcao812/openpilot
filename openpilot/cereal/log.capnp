@@ -734,6 +734,15 @@ struct RadarState @0x9a185389d6fdd05f {
 
   leadOne @3 :LeadData;
   leadTwo @4 :LeadData;
+  radarObjects @14 :List(LeadData);  # all admitted independent objects; not limited to the two display slots
+  fusionActive @15 :Bool;
+  fusionHealthy @16 :Bool;
+  fusionDegraded @17 :Bool;
+  fusionReason @18 :Text;
+  visionLeadOne @19 :LeadData;  # untouched formal vision fallback for runtime scope exit
+  visionLeadTwo @20 :LeadData;
+  fusionClearedTracks @21 :List(UInt64);  # fresh geometry proved exit, never expiry
+  fusionSessionId @22 :Text;
 
   struct LeadData {
     dRel @0 :Float32;  # m from the front bumper of the car
@@ -747,6 +756,7 @@ struct RadarState @0x9a185389d6fdd05f {
     modelProb @13 :Float32;  # vision model lead probability
     radar @14 :Bool;  # true if lead is radar-matched (vs vision-only)
     radarTrackId @15 :Int32 = -1;  # for debugging
+    evidence @16 :Custom.RadarLeadEvidence;
 
     deprecated :group {
       aRel @3 :Float32;

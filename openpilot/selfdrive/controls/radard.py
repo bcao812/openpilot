@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import time
 import numpy as np
 from collections import deque
 from typing import Any
@@ -12,6 +13,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.simple_kalman import KF1D
+from openpilot.selfdrive.car.honda_radar_observer_config import ObserverSettings, SERVICE as HONDA_RADAR_SERVICE, SCOPE_MAX_AGE_NS
 
 from opendbc.car import structs
 from opendbc.car.hyundai.values import HyundaiFlags
@@ -192,7 +194,7 @@ def get_custom_yrel(CP: structs.CarParams, CP_SP: structs.CarParamsSP, lead_dict
 
 
 class RadarD:
-  def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParams, delay: float = 0.0):
+  def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParams, delay: float = 0.0, *, params=None):
     self.CP = CP
     self.CP_SP = CP_SP
 
@@ -209,8 +211,34 @@ class RadarD:
     self.radar_state_valid = False
 
     self.ready = False
+    self.params = params if params is not None else Params()
+    self.radar_settings = ObserverSettings()
+    self.settings_next_ns = 0
+    self.fusion_control = None
+    self.fusion_state = None
+    self.last_long_active = None
 
-  def update(self, sm: messaging.SubMaster, rr: car.RadarData):
+  def control_enabled(self, sm, now_ns):
+    try:
+      mode = self.params.get('HondaBoschARadarMode', return_default=True)
+    except Exception:
+      self.radar_settings = ObserverSettings()
+      return False
+    if mode != self.radar_settings.mode or now_ns >= self.settings_next_ns:
+      self.radar_settings = ObserverSettings.read(self.params)
+      self.settings_next_ns = now_ns + 1_000_000_000
+    if not self.radar_settings.control_requested(self.CP, self.CP_SP):
+      return False
+    for service in ('selfdriveState', 'longitudinalPlanSP'):
+      stamp = sm.logMonoTime.get(service, 0)
+      if (not getattr(sm, 'seen', {}).get(service, False) or not sm.valid.get(service, False)
+          or not 0 < stamp <= now_ns or now_ns - stamp > SCOPE_MAX_AGE_NS):
+        return False
+    dec = sm['longitudinalPlanSP'].dec
+    return bool(sm['selfdriveState'].experimentalMode and dec.enabled and dec.active)
+
+  def update(self, sm: messaging.SubMaster, rr: car.RadarData, *, now_ns=None):
+    now_ns = time.monotonic_ns() if now_ns is None else now_ns
     self.ready = sm.seen['modelV2']
 
     if sm.recv_frame['carState'] != self.last_v_ego_frame:
@@ -238,7 +266,9 @@ class RadarD:
       self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead)
 
     # *** publish radarState ***
-    self.radar_state_valid = sm.all_checks()
+    # Optional Honda inputs do not create a circular primary-health dependency.
+    # The original vision path keeps publishing while perception/DEC starts.
+    self.radar_state_valid = sm.all_checks(['modelV2', 'carState', 'radarTracks'])
     self.radar_state = log.RadarState.new_message()
     self.radar_state.mdMonoTime = sm.logMonoTime['modelV2']
     self.radar_state.radarErrors = rr.errors
@@ -261,6 +291,55 @@ class RadarD:
                                           self.CP, self.CP_SP, low_speed_override=True)
       self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, self.lead_prob_filters[1].x,
                                           self.CP, self.CP_SP, low_speed_override=False)
+    self.radar_state.visionLeadOne = self.radar_state.leadOne
+    self.radar_state.visionLeadTwo = self.radar_state.leadTwo
+    enabled = self.control_enabled(sm, now_ns)
+    if enabled and self.fusion_control is None:
+      from openpilot.selfdrive.car.honda_radar_control import HondaRadarControl
+      self.fusion_control = HondaRadarControl()
+    if self.fusion_control is not None:
+      control_ns = sm.logMonoTime.get('carControl', 0)
+      if (getattr(sm, 'seen', {}).get('carControl', False) and sm.valid.get('carControl', False)
+          and 0 < control_ns <= now_ns and now_ns - control_ns <= 250_000_000):
+        long_active = bool(sm['carControl'].longActive)
+        if self.last_long_active is not None and long_active != self.last_long_active:
+          # Only an observed authority lifecycle boundary clears unresolved
+          # prior-session risks. Missing heartbeats and sensor TTL never do.
+          self.fusion_control.reset()
+        self.last_long_active = long_active
+      observation_ns = sm.logMonoTime.get(HONDA_RADAR_SERVICE, 0)
+      observation_valid = bool(getattr(sm, 'seen', {}).get(HONDA_RADAR_SERVICE, False)
+                               and sm.valid.get(HONDA_RADAR_SERVICE, False))
+      observation = sm[HONDA_RADAR_SERVICE] if observation_ns else None
+      try:
+        result = self.fusion_control.update(
+          now_ns=now_ns, enabled=enabled, observation=observation, observation_ns=observation_ns,
+          observation_valid=observation_valid, model=sm['modelV2'], model_ns=sm.logMonoTime['modelV2'], v_ego=self.v_ego,
+          vision_leads=(self.radar_state.leadOne.to_dict(), self.radar_state.leadTwo.to_dict()),
+        )
+      except Exception:
+        # Keep the original vision publication usable while exposing the
+        # optional producer failure. UNIFIED retains its previous HOLD and
+        # prevents a sensor exception from certifying clear-road acceleration.
+        self.fusion_control = None
+        self.radar_state.fusionHealthy = False
+        self.radar_state.fusionDegraded = enabled
+        self.radar_state.fusionReason = 'controlAdapterError'
+        cloudlog.exception('Honda radar control adapter failed')
+        return
+      self.radar_state.leadOne, self.radar_state.leadTwo = result.leads
+      self.radar_state.radarObjects = result.objects
+      self.radar_state.fusionActive = enabled
+      self.radar_state.fusionHealthy = result.healthy
+      self.radar_state.fusionDegraded = result.degraded
+      self.radar_state.fusionReason = result.reason
+      self.radar_state.fusionClearedTracks = getattr(result, 'cleared', ())
+      self.radar_state.fusionSessionId = getattr(result, 'session_id', '')
+      state = enabled, result.healthy, result.degraded, result.reason
+      if state != self.fusion_state:
+        cloudlog.event('honda_radar_control', enabled=enabled, healthy=result.healthy, degraded=result.degraded,
+                       reason=result.reason, objects=len(result.objects))
+        self.fusion_state = state
 
   def publish(self, pm: messaging.PubMaster):
     assert self.radar_state is not None
@@ -281,18 +360,21 @@ def main() -> None:
 
   # wait for stats about the car to come in from controls
   cloudlog.info("radard is waiting for CarParams")
-  CP = messaging.log_from_bytes(Params().get("CarParams", block=True), car.CarParams)
+  params = Params()
+  CP = messaging.log_from_bytes(params.get("CarParams", block=True), car.CarParams)
   cloudlog.info("radard got CarParams")
 
   cloudlog.info("radard is waiting for CarParamsSP")
-  CP_SP = messaging.log_from_bytes(Params().get("CarParamsSP", block=True), custom.CarParamsSP)
+  CP_SP = messaging.log_from_bytes(params.get("CarParamsSP", block=True), custom.CarParamsSP)
   cloudlog.info("radard got CarParamsSP")
 
   # *** setup messaging
-  sm = messaging.SubMaster(['modelV2', 'carState', 'radarTracks'], poll='modelV2')
+  optional_services = [HONDA_RADAR_SERVICE, 'selfdriveState', 'longitudinalPlanSP', 'carControl']
+  sm = messaging.SubMaster(['modelV2', 'carState', 'radarTracks', *optional_services], poll='modelV2',
+                          ignore_alive=optional_services, ignore_avg_freq=optional_services, ignore_valid=optional_services)
   pm = messaging.PubMaster(['radarState'])
 
-  RD = RadarD(CP, CP_SP, CP.radarDelay)
+  RD = RadarD(CP, CP_SP, CP.radarDelay, params=params)
 
   while 1:
     sm.update()

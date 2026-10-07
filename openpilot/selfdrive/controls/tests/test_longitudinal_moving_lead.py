@@ -1,6 +1,7 @@
 """Shared moving-lead geometry and its current UNIFIED producer/owner contract."""
 
 from copy import deepcopy
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -13,6 +14,34 @@ from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_planner_creep import FRAMES_CAP
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import decoded_commands
+from openpilot.selfdrive.controls.tests.test_lead_qualification import NOW, formal_lead
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused', 'vision'])
+def test_formal_moving_follow_does_not_need_invented_visual_confidence(source):
+  lead = formal_lead(source=source, dRel=7.0, vLead=.8, vRel=-.2)
+  radar = SimpleNamespace(fusionActive=True, radarObjects=[lead], leadOne=lead, leadTwo=SimpleNamespace(present=False))
+  assert has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW)
+  assert not has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW + 200_000_001)
+
+
+def test_distant_stopped_object_does_not_require_all_traffic_to_depart():
+  moving = formal_lead(dRel=7.0, vLead=.8, vRel=-.2)
+  far_stop = formal_lead(dRel=50.0, vLead=0.0, vRel=-1.0, evidence={'trackId': 8})
+  radar = SimpleNamespace(fusionActive=True, radarObjects=[moving, far_stop], leadOne=moving, leadTwo=far_stop)
+  assert has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW)
+  far_stop.dRel = 6.0
+  assert not has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW)
+
+
+def test_near_crossing_risk_vetoes_creep_but_later_occupancy_remains_an_mpc_constraint():
+  moving = formal_lead(dRel=8.0, vLead=1.0, vRel=0.0)
+  crossing = formal_lead(dRel=6.0, vLead=0.0, vRel=-1.0,
+                        evidence={'trackId': 8, 'pathState': 'entering', 'conflictStart': .3, 'conflictEnd': 1.2})
+  radar = SimpleNamespace(fusionActive=True, radarObjects=[moving, crossing], leadOne=moving, leadTwo=SimpleNamespace(present=False))
+  assert not has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW)
+  crossing.evidence.conflictStart, crossing.evidence.conflictEnd = 4.0, 5.0
+  assert has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW)
 
 
 def following_state(v_ego=1.0, *, experimental=True):

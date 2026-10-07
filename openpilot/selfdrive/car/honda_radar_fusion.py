@@ -725,7 +725,9 @@ class HondaRadarFusion:
           'lastInvalidReason': track.last_invalid_reason, 'lastInvalidMonoTime': track.last_invalid_ns,
           'frameIndex': track.frame_index, 'lifecycleRaw': track.lifecycle,
           'previousPositionSeq': track.previous_position_seq, 'previousPositionMonoTime': track.previous_position_ns,
-          'previousDRel': track.previous_x, 'previousYRel': track.previous_y})
+          'previousDRel': track.previous_x, 'previousYRel': track.previous_y,
+          'acceleration': track.acceleration,
+          'accelerationGood': velocity_good and track.acceleration_good})
       if track.active:
         candidates.append((track, mean, covariance, relation, motion, coasting, velocity_good))
     result = []
@@ -885,8 +887,11 @@ class HondaRadarFusion:
       self.reset(clear_ego=now_ns <= self.last_now_ns)
     self.session, self.sequence, self.dropped, self.last_now_ns = session, sequence, dropped, now_ns
     scope = read(body, 'scope', {})
-    enabled = read(body, 'schemaVersion', 0) == 1 and read(body, 'active', False) and all(read(scope, key, False) for key in
-                  ('alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive'))
+    # Mode 4 is a perception producer, not a consumer of the plan it will help
+    # construct. Keep legacy observe/shadow/assist scope exactly as recorded.
+    scope_keys = ('alphaLong', 'experimentalSetting', 'decSetting') if read(body, 'mode', 0) == 4 else (
+      'alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive')
+    enabled = read(body, 'schemaVersion', 0) == 1 and read(body, 'active', False) and all(read(scope, key, False) for key in scope_keys)
     if not enabled or sm is None:
       self.reset()
     elif not all(sm.seen[k] and sm.valid[k] for k in ('modelV2', 'carState')):

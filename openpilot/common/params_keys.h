@@ -242,7 +242,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"VagAvoidEPSLockout", {PERSISTENT | BACKUP, BOOL, "0"}},
 
     {"DynamicExperimentalControl", {PERSISTENT | BACKUP, BOOL, "0"}},
-    {"HondaBoschARadarMode", {PERSISTENT | BACKUP, INT, "0"}},  // 0=off, 1=observe, 2=fusion shadow, 3=bounded positive-acceleration assist
+    {"HondaBoschARadarMode", {PERSISTENT | BACKUP, INT, "0"}},  // 0=off, 1=observe, 2=shadow, 3=acceleration assist, 4=full fusion control
     {"HondaBoschARadarOverlay", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"BlindSpot", {PERSISTENT | BACKUP, BOOL, "0"}},
 

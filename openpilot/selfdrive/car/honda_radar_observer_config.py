@@ -6,7 +6,8 @@ SERVICE = 'hondaRadarObservations'
 OBSERVE = 1
 SHADOW = 2
 ASSIST = 3
-FUSION_MODES = (SHADOW, ASSIST)
+CONTROL = 4
+FUSION_MODES = (SHADOW, ASSIST, CONTROL)
 SCOPE_MAX_AGE_NS = 500_000_000
 
 
@@ -36,6 +37,9 @@ class ObserverSettings:
     # changes its radarUnavailable capability or the existing radarState path.
     return self.mode == ASSIST and self.requested(cp) and not cp_sp.enableGasInterceptor
 
+  def control_requested(self, cp, cp_sp):
+    return self.mode == CONTROL and self.requested(cp) and not cp_sp.enableGasInterceptor
+
 
 def observer_requested(started, params, cp):
   return started and ObserverSettings.read(params).requested(cp)
@@ -50,6 +54,10 @@ def scope_state(cp, cp_sp, settings, sm, now_ns):
            'longActive': bool(sm['carControl'].longActive)}
   if not settings.requested(cp) or cp_sp.enableGasInterceptor:
     return False, 'configuration', scope
+  if settings.control_requested(cp, cp_sp):
+    # Perception must be able to start before DEC has consumed its first lead.
+    # Actual execution scope is checked independently by radard and the planner.
+    return True, 'observing', scope
   for name in ('selfdriveState', 'longitudinalPlanSP'):
     if not sm.seen[name] or not sm.valid[name] or not 0 <= now_ns - sm.logMonoTime[name] <= SCOPE_MAX_AGE_NS:
       return False, 'scopeStale', scope

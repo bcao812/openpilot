@@ -84,6 +84,7 @@ class ControlsExt(ModelStateBase):
     _lead.modelProb = src.modelProb
     _lead.radar = src.radar
     _lead.radarTrackId = src.radarTrackId
+    _lead.evidence = src.evidence
 
   def state_control_ext(self, sm: messaging.SubMaster) -> custom.CarControlSP:
     CC_SP = custom.CarControlSP.new_message()

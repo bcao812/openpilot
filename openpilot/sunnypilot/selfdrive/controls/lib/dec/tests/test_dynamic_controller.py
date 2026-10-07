@@ -1,5 +1,10 @@
+from types import SimpleNamespace
+
+import pytest
+
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
+from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
 
 class MockLeadOne:
   def __init__(self, present=0.0):
@@ -56,6 +61,49 @@ class FakeKalman:
   def get_value(self): return self.value
   def get_confidence(self): return 1.0
   def reset_data(self): pass
+
+
+def fusion_sm(*, model_stop=False):
+  sm = default_sm()
+  lead = formal_lead(vLead=10.0)
+  sm['radarState'] = SimpleNamespace(fusionActive=True, fusionHealthy=True, radarObjects=[lead],
+                                     leadOne=SimpleNamespace(present=False), leadTwo=SimpleNamespace(present=False))
+  sm['modelV2'].position.x = [0.0 if model_stop else float(index) * 10.0 for index in range(33)]
+  return sm
+
+
+@pytest.mark.parametrize('radar_unavailable', [False, True])
+def test_fusion_uses_all_admitted_risks_without_reinterpreting_the_platform_parser(radar_unavailable):
+  cp = mock_cp()
+  cp.radarUnavailable = radar_unavailable
+  controller = DynamicExperimentalController(cp, mock_mpc(), params=MockParams())
+  sm = fusion_sm()
+  controller.update(sm)
+  assert controller._has_lead_filtered
+  assert controller._fusion_risks == tuple(sm['radarState'].radarObjects)
+  assert controller.mode() == 'acc'
+  assert cp.radarUnavailable is radar_unavailable
+
+
+@pytest.mark.parametrize('reason', ['model_stop', 'fcw', 'standstill'])
+def test_fusion_leads_never_mask_model_stop_fcw_or_standstill_mode(reason):
+  cp, mpc = mock_cp(), mock_mpc()
+  controller = DynamicExperimentalController(cp, mpc, params=MockParams())
+  sm = fusion_sm(model_stop=reason == 'model_stop')
+  mpc.crash_cnt = int(reason == 'fcw')
+  sm['carState'].standstill = reason == 'standstill'
+  for _ in range(20):
+    controller.update(sm)
+  assert controller.mode() == 'blended'
+
+
+def test_invalid_formal_radar_object_does_not_create_a_detected_lead():
+  controller = DynamicExperimentalController(mock_cp(), mock_mpc(), params=MockParams())
+  sm = fusion_sm()
+  sm['radarState'].radarObjects[0].evidence.positionMonoTime -= 300_000_000
+  controller.update(sm)
+  assert not controller._has_lead_filtered
+  assert controller._fusion_risks == ()
 
 class TestDynamicExperimentalController(OpenpilotTestCase):
   def test_initial_mode_is_acc(self, mock_cp, mock_mpc):

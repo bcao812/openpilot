@@ -6,6 +6,7 @@ import pytest
 
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
 from openpilot.selfdrive.controls.lib.parking_approach import MAX_POSITION_STD, ParkingApproach, VisionLeadUncertainty
+from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
 
 
 BASE_NS = 10_000_000_000
@@ -30,6 +31,68 @@ def vision_observations(timestamp, *, speed=.6, gaps=(15.0, 20.0), present=(True
     ))
   return (SimpleNamespace(velocity=SimpleNamespace(x=[speed]), leadsV3=models),
           SimpleNamespace(mdMonoTime=timestamp, leadOne=radar_leads[0], leadTwo=radar_leads[1]))
+
+
+def radar_observations(timestamp, *, gap=15.0, radar_std=.2, vision_std=1000.0):
+  model, radar = vision_observations(timestamp, stds=(vision_std, vision_std))
+  model.timestampEof = timestamp
+  radar.fusionActive = True
+  radar.leadOne = formal_lead(now_ns=timestamp, dRel=gap, vLead=0.0, vRel=-.6,
+                              evidence={'positionStd': radar_std})
+  return model, radar
+
+
+def test_radar_parking_uncertainty_uses_radar_measurements_even_when_visual_std_is_unusable():
+  cache = VisionLeadUncertainty()
+  model, radar = radar_observations(BASE_NS, radar_std=.5)
+  result = cache.update(now_ns=BASE_NS, model_ns=BASE_NS, model=model, radar_ns=BASE_NS, radar=radar, valid=True)
+  assert result.qualified and result.reason == 'formal_radar_source'
+  assert result.distance_uncertainty == pytest.approx(1.5)
+  assert result.measurement_ns == BASE_NS
+  assert result.lead_identities == (('radar-session-a', 7), None)
+
+
+@pytest.mark.parametrize('field,value', [('positionStd', 0.0), ('positionStd', float('nan')),
+                                        ('positionStd', 1.01), ('velocityStd', .51), ('positionValid', False)])
+def test_good_visual_precision_cannot_endorse_bad_radar_uncertainty(field, value):
+  cache = VisionLeadUncertainty()
+  model, radar = radar_observations(BASE_NS, vision_std=.1)
+  setattr(radar.leadOne.evidence, field, value)
+  result = cache.update(now_ns=BASE_NS, model_ns=BASE_NS, model=model, radar_ns=BASE_NS, radar=radar, valid=True)
+  assert not result.qualified
+
+
+def test_mixed_radar_and_vision_source_joins_original_hypothesis_after_display_reordering():
+  cache = VisionLeadUncertainty()
+  model, radar = radar_observations(BASE_NS, vision_std=.1)
+  radar.leadTwo = formal_lead(source='vision', now_ns=BASE_NS, dRel=15.0, vLead=0.0, vRel=float32(-.6),
+                              modelProb=.995, evidence={'visionIndex': 0, 'positionStd': .1})
+  result = cache.update(now_ns=BASE_NS, model_ns=BASE_NS, model=model, radar_ns=BASE_NS, radar=radar, valid=True)
+  assert result.qualified
+  assert result.position_std == pytest.approx((.2, .1))
+
+
+def test_continuous_radar_only_approach_can_acquire_compact_geometry():
+  guard, policy = ParkingApproach(), LowSpeedStopDistance()
+  for frame in range(121):
+    now = BASE_NS + frame * STEP_NS
+    model, radar = radar_observations(now, gap=15.0 + .6 * (120 - frame) * .05)
+    uncertainty = guard.uncertainty_cache.update(now_ns=now, model_ns=now, model=model, radar_ns=now, radar=radar, valid=True)
+    policy.update(now_ns=now, source_ns=now, radar_ns=now, speed=.6, radar=radar, permitted=True)
+    decision = guard.update(now_ns=now, source_ns=now, radar_ns=now, speed=.6, measured_accel=0.0,
+                            actuator_delay=.3, radar=radar, qualification=policy.evidence,
+                            uncertainty=uncertainty, permitted=True, allow_activation=True)
+  assert decision.eligible and decision.allow_compact
+  assert decision.uncertainty_reason == 'formal_radar_source'
+  now += STEP_NS
+  model, radar = radar_observations(now, gap=14.97)
+  uncertainty = guard.uncertainty_cache.update(now_ns=now, model_ns=now, model=model, radar_ns=now, radar=radar, valid=True)
+  policy.update(now_ns=now, source_ns=now, radar_ns=now, speed=.6, radar=radar, permitted=True)
+  radar.leadOne.evidence.trackId = 8
+  changed = guard.update(now_ns=now, source_ns=now, radar_ns=now, speed=.6, measured_accel=0.0,
+                         actuator_delay=.3, radar=radar, qualification=policy.evidence,
+                         uncertainty=uncertainty, permitted=True, allow_activation=True)
+  assert not changed.allow_compact and changed.reason == 'changed_lead_identity'
 
 
 def frame_update(guard, policy, frame, *, speed=.6, gaps=(15.0, 20.0), present=(True, False), delay=.3,

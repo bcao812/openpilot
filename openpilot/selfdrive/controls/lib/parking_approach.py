@@ -12,6 +12,7 @@ from numbers import Real
 import struct
 
 from openpilot.common.realtime import DT_MDL
+from openpilot.selfdrive.controls.lib.lead_qualification import lead_identity, qualified_lead
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import (
   LowSpeedStopDistanceEvidence, MAX_SOURCE_GAP_NS, PARKING_START_SPEED,
 )
@@ -28,6 +29,7 @@ MAX_TERMINAL_LEAD_SPEED = 0.5
 # Quality domain and scale multiplier are engineering assumptions, not a
 # calibrated coverage probability or an absolute vision-error bound.
 MAX_POSITION_STD = 1.0
+MAX_PARKING_VELOCITY_STD = 0.5
 POSITION_STD_MULTIPLIER = 3.0
 MODEL_CACHE_CAPACITY = 8
 # Match radard.get_RadarState_from_vision; changing that producer must update
@@ -61,12 +63,19 @@ class ParkingObservationUncertainty:
   now_ns: int | None = None
   radar_ns: int | None = None
   model_ns: int | None = None
+  measurement_ns: int | None = None
   position_std: tuple[float | None, float | None] = (None, None)
+  lead_identities: tuple[tuple | None, tuple | None] = (None, None)
   distance_uncertainty: float | None = None
 
 
 class VisionLeadUncertainty:
-  """Bounded exact-source join; latest model metadata is not a radar stamp."""
+  """Use each consumed source's uncertainty, keeping exact vision joins.
+
+  The historical class name is retained for its existing callers. Radar/fused
+  positions use their formal measurement uncertainty, never a visual xStd from
+  another source or slot.
+  """
 
   def __init__(self):
     self._models = OrderedDict()
@@ -92,7 +101,7 @@ class VisionLeadUncertainty:
       lead = leads[index] if index < len(leads) else None
       values = tuple(_first(getattr(lead, name, ())) for name in ('t', 'x', 'y', 'v', 'a', 'xStd'))
       slots.append(values + (getattr(lead, 'prob', None),))
-    snapshot = (model_speed, tuple(slots))
+    snapshot = (model_speed, tuple(slots), getattr(model, 'timestampEof', model_ns))
     # An identity whose payload changed remains poisoned until expiry.
     if model_ns in self._models and self._models[model_ns] != snapshot:
       self._models[model_ns] = None
@@ -106,23 +115,45 @@ class VisionLeadUncertainty:
     if (not _timestamp(radar_model_ns) or not 0 < radar_model_ns <= radar_ns <= now_ns
         or now_ns - radar_model_ns > MAX_SOURCE_GAP_NS or now_ns - radar_ns > MAX_SOURCE_GAP_NS):
       return replace(result, reason='invalid_radar_model_age')
-    if radar_model_ns not in self._models:
-      return replace(result, reason='unmatched_model_source')
-    matched = self._models[radar_model_ns]
-    if matched is None:
-      return replace(result, reason='mutated_model_source')
-    model_speed, slots = matched
-    if not _finite(model_speed):
-      return replace(result, reason='invalid_model_speed')
     position_std = [None, None]
+    identities = [None, None]
+    measurement_times, model_times, sources = [], [], []
     for index, lead in enumerate((getattr(radar, 'leadOne', None), getattr(radar, 'leadTwo', None))):
       if getattr(lead, 'present', None) is False:
         continue
-      if (getattr(lead, 'present', None) is not True or getattr(lead, 'radar', None) is not False
-          or getattr(lead, 'radarTrackId', None) != -1):
+      if getattr(lead, 'present', None) is not True:
         return replace(result, reason='unmatched_vision_slot')
-      first_t, position, lateral, velocity, acceleration, std, probability = slots[index]
-      if (not all(_finite(value) for value in slots[index]) or first_t != 0.0
+      evidence = getattr(lead, 'evidence', None)
+      formal = getattr(evidence, 'version', 0) == 1
+      source = str(getattr(evidence, 'source', 'legacy'))
+      if formal and source in ('radar', 'fused'):
+        if (not qualified_lead(lead, 'stop', 0.98, now_ns=now_ns)
+            or evidence.estimateMonoTime > radar_ns or evidence.modelMonoTime > radar_ns):
+          return replace(result, reason='unqualified_radar_source')
+        std = evidence.positionStd
+        if not 0.0 < std <= MAX_POSITION_STD or not 0.0 < evidence.velocityStd <= MAX_PARKING_VELOCITY_STD:
+          return replace(result, reason='radar_uncertainty_outside_domain')
+        position_std[index] = float(std)
+        identities[index] = lead_identity(lead)
+        measurement_times.append(min(evidence.positionMonoTime, evidence.velocityMonoTime))
+        model_times.append(evidence.modelMonoTime)
+        sources.append(source)
+        continue
+      if (getattr(lead, 'radar', None) is not False or getattr(lead, 'radarTrackId', None) != -1
+          or (formal and (source != 'vision' or not qualified_lead(lead, 'stop', 0.98, now_ns=now_ns)))):
+        return replace(result, reason='unmatched_vision_slot')
+      source_model_ns = evidence.modelMonoTime if formal else radar_model_ns
+      source_index = evidence.visionIndex if formal else index
+      if source_model_ns not in self._models:
+        return replace(result, reason='unmatched_model_source')
+      matched = self._models[source_model_ns]
+      if matched is None:
+        return replace(result, reason='mutated_model_source')
+      model_speed, source_slots, model_eof = matched
+      if not _finite(model_speed):
+        return replace(result, reason='invalid_model_speed')
+      first_t, position, lateral, velocity, acceleration, std, probability = source_slots[source_index]
+      if (not all(_finite(value) for value in source_slots[source_index]) or first_t != 0.0
           or not 0.98 <= probability <= 1.0):
         return replace(result, reason='invalid_model_lead')
       expected = (_float32(position - VISION_RADAR_OFFSET), _float32(-lateral),
@@ -132,11 +163,19 @@ class VisionLeadUncertainty:
         return replace(result, reason='mismatched_vision_values')
       if not 0.0 < std <= MAX_POSITION_STD:
         return replace(result, reason='position_std_outside_domain')
+      if formal and (evidence.positionMonoTime != model_eof or evidence.velocityMonoTime != model_eof
+                     or _float32(evidence.positionStd) != _float32(std)):
+        return replace(result, reason='mismatched_vision_evidence')
       position_std[index] = float(std)
+      measurement_times.append(evidence.positionMonoTime if formal else source_model_ns)
+      model_times.append(source_model_ns)
+      sources.append('vision')
     present_std = [value for value in position_std if value is not None]
     if not present_std:
       return replace(result, reason='no_present_lead')
-    return replace(result, qualified=True, reason='exact_vision_source', position_std=tuple(position_std),
+    reason = 'exact_vision_source' if all(source == 'vision' for source in sources) else 'formal_radar_source'
+    return replace(result, qualified=True, reason=reason, position_std=tuple(position_std),
+                   model_ns=min(model_times), measurement_ns=min(measurement_times), lead_identities=tuple(identities),
                    distance_uncertainty=max(DISTANCE_UNCERTAINTY, POSITION_STD_MULTIPLIER * max(present_std)))
 
 
@@ -162,6 +201,7 @@ class ParkingApproachDecision:
   uncertainty_qualified: bool = False
   uncertainty_reason: str = 'missing_source'
   uncertainty_model_ns: int | None = None
+  uncertainty_measurement_ns: int | None = None
   position_std: tuple[float | None, float | None] = (None, None)
   distance_uncertainty: float | None = None
   # Compatibility with historical trace records. Geometry-only decisions
@@ -199,6 +239,7 @@ class ParkingApproach:
     if isinstance(uncertainty, ParkingObservationUncertainty):
       decision = replace(decision, uncertainty_qualified=uncertainty.qualified, uncertainty_reason=uncertainty.reason,
                          uncertainty_model_ns=uncertainty.model_ns, position_std=uncertainty.position_std,
+                         uncertainty_measurement_ns=uncertainty.measurement_ns,
                          distance_uncertainty=uncertainty.distance_uncertainty)
     if not permitted:
       self.clear()
@@ -219,6 +260,7 @@ class ParkingApproach:
     if (not isinstance(uncertainty, ParkingObservationUncertainty) or not uncertainty.qualified
         or (uncertainty.now_ns, uncertainty.radar_ns) != (now_ns, radar_ns)
         or not _timestamp(uncertainty.model_ns) or not 0 <= now_ns - uncertainty.model_ns <= MAX_SOURCE_GAP_NS
+        or not _timestamp(uncertainty.measurement_ns) or not 0 <= now_ns - uncertainty.measurement_ns <= MAX_SOURCE_GAP_NS
         or not _finite(uncertainty.distance_uncertainty) or uncertainty.distance_uncertainty < DISTANCE_UNCERTAINTY):
       return self._unavailable(decision, 'uncertainty_unqualified')
     if (not all(_finite(value) for value in (speed, measured_accel, actuator_delay))
@@ -233,6 +275,9 @@ class ParkingApproach:
     leads = (getattr(radar, 'leadOne', None), getattr(radar, 'leadTwo', None))
     if tuple(getattr(lead, 'present', None) for lead in leads) != qualification.present:
       return self._unavailable(decision, 'changed_present_slots')
+    identities = tuple(lead_identity(lead) for lead in leads)
+    if identities != qualification.lead_identities or identities != uncertainty.lead_identities:
+      return self._unavailable(decision, 'changed_lead_identity')
     distances = []
     for index, lead in enumerate(leads):
       if not qualification.present[index]:
@@ -244,7 +289,8 @@ class ParkingApproach:
         return self._unavailable(decision, 'unqualified_lead')
       distances.append((float(values[0]), index))
     raw_gap, limiting_lead = min(distances)
-    observation_age = max(now_ns - source_ns, now_ns - radar_ns, now_ns - uncertainty.model_ns) / 1e9
+    observation_age = max(now_ns - source_ns, now_ns - radar_ns, now_ns - uncertainty.model_ns,
+                          now_ns - uncertainty.measurement_ns) / 1e9
     response_time = float(actuator_delay) + BRAKE_BUILD_TIME + DT_MDL + observation_age
     speed_upper = float(speed) + SPEED_UNCERTAINTY
     response_accel_upper = max(RESPONSE_ACCEL_FLOOR, float(measured_accel))

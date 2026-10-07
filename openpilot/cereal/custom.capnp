@@ -45,7 +45,48 @@ struct IntelligentCruiseButtonManagement {
   }
 }
 
-# Same struct as Log.RadarState.LeadData
+# Source evidence shared by the formal radar publisher and its SP mirror.
+# modelProb remains the model's probability; these fields never replace it.
+struct RadarLeadEvidence {
+  version @0 :UInt16;
+  source @1 :Source;
+  sessionId @2 :Text;
+  trackId @3 :UInt64;
+  generation @4 :UInt64;
+  positionMonoTime @5 :UInt64;
+  velocityMonoTime @6 :UInt64;
+  estimateMonoTime @7 :UInt64;
+  positionStd @8 :Float32;
+  velocityStd @9 :Float32;
+  positionValid @10 :Bool;
+  velocityValid @11 :Bool;
+  accelerationValid @12 :Bool;
+  followQualified @13 :Bool;
+  brakeQualified @14 :Bool;
+  stopQualified @15 :Bool;
+  departureQualified @16 :Bool;
+  fcwQualified @17 :Bool;
+  coasting @18 :Bool;
+  pathState @19 :HondaRadarObservations.PathState;
+  pathOffset @20 :Float32;
+  conflictStart @21 :Float32;  # seconds from estimateMonoTime
+  conflictEnd @22 :Float32;  # finite occupancy interval, not permanent lead presence
+  lateralSpeed @23 :Float32;
+  pathSource @24 :Text;
+  visionIndex @25 :Int16 = -1;
+  reason @26 :Text;
+  modelMonoTime @27 :UInt64;
+
+  enum Source {
+    legacy @0;
+    vision @1;
+    radar @2;
+    fused @3;
+    predicted @4;
+  }
+}
+
+# Same live fields as Log.RadarState.LeadData.
 struct LeadData {
   dRel @0 :Float32;
   yRel @1 :Float32;
@@ -62,6 +103,7 @@ struct LeadData {
   modelProb @13 :Float32;
   radar @14 :Bool;
   radarTrackId @15 :Int32 = -1;
+  evidence @16 :RadarLeadEvidence;
 
   aLeadDEPRECATED @5 :Float32;
 }
@@ -522,6 +564,7 @@ struct HondaRadarObservations {
   rejectedEnvelopes @14 :UInt64;
   backlogCount @15 :UInt64;
   fusion @16 :ShadowFusion;  # telemetry, not lead authority; mode-3 assistance uses an independent bounded consumer
+  mode @17 :UInt8;  # 4 produces perception independently of planner/DEC readiness
 
   struct ShadowFusion {
     version @0 :UInt16;
@@ -607,6 +650,8 @@ struct HondaRadarObservations {
     previousPositionMonoTime @29 :UInt64;
     previousDRel @30 :Float64;
     previousYRel @31 :Float64;
+    acceleration @32 :Float64;
+    accelerationGood @33 :Bool;
   }
 
   struct FusionLead {

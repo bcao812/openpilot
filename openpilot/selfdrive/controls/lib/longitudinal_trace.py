@@ -384,6 +384,11 @@ class LongitudinalTrace:
     for name in ('leadOne', 'leadTwo'):
       for field in LEAD_FIELDS:
         values[name + '_' + field] = optional_value(lambda name=name, field=field: getattr(getattr(state['radarState'], name), field))
+    values['radar_fusion'] = optional_value(lambda: {
+      'active': bool(state['radarState'].fusionActive), 'healthy': bool(state['radarState'].fusionHealthy),
+      'degraded': bool(state['radarState'].fusionDegraded), 'reason': str(state['radarState'].fusionReason),
+      'objects': tuple(lead.to_dict() for lead in state['radarState'].radarObjects),
+    })
     return immutable_value(values)
 
   def _native_detail(self, planner, observation):
@@ -424,6 +429,8 @@ class LongitudinalTrace:
       'solution_status_known': updated,
       'solve_calls': decimal_id(solve_calls), 'reset_calls': decimal_id(resets),
       'reset_known': reset_known, 'resets_this_attempt': int(resets - reset_before) if reset_known else None,
+      'source_object_identity': getattr(mpc, 'source_object_identity', None),
+      'fcw_object_identity': getattr(mpc, 'fcw_object_identity', None),
     })
 
   def finish_attempt(self, planner):

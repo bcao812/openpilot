@@ -13,6 +13,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL, ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
+from openpilot.selfdrive.controls.lib.lead_qualification import control_leads, qualified_lead
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_BRAKE, LEAD_DANGER_FACTOR, REFERENCE_BOUND, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource,
   get_T_FOLLOW, get_safe_obstacle_distance, get_stopped_equivalence_factor,
@@ -56,29 +57,62 @@ def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
 
 
-def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float, *, minimum_gap_base: float = CREEP_FOLLOW_MIN_GAP) -> bool:
+def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float, *, minimum_gap_base: float = CREEP_FOLLOW_MIN_GAP,
+                         now_ns=None) -> bool:
+  leads = control_leads(radar_state)
+  fusion_active = getattr(radar_state, 'fusionActive', False)
   if not (math.isfinite(v_ego) and STOP_SPEED <= v_ego < CREEP_FOLLOW_MAX_SPEED
           and math.isfinite(actuator_delay) and 0.0 <= actuator_delay <= 1.0
           and not isinstance(minimum_gap_base, bool) and math.isfinite(minimum_gap_base)
           and 3.0 <= minimum_gap_base <= CREEP_FOLLOW_MIN_GAP
-          and radar_state.leadOne.present):
+          and leads and (fusion_active or radar_state.leadOne.present)):
     return False
   minimum_gap = minimum_gap_base + v_ego * (actuator_delay + DT_MDL) + v_ego ** 2 / (2.0 * COMFORT_BRAKE)
-  for lead in (radar_state.leadOne, radar_state.leadTwo):
-    if not lead.present:
-      continue
+  followed = leads
+  if fusion_active:
+    following_candidates = [lead for lead in leads if qualified_lead(lead, 'follow', 0.95, now_ns=now_ns)]
+    if not following_candidates:
+      return False
+    # The nearest current in-path car supplies moving-follow evidence. Other
+    # independent objects remain MPC risks; a distant stopped car need not
+    # depart before we can continue following the nearer moving vehicle.
+    followed = (min(following_candidates, key=lambda lead: lead.dRel),)
+  for lead in followed:
+    if not qualified_lead(lead, 'follow', 0.95, now_ns=now_ns):
+      return False
     values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb)
     if not all(math.isfinite(value) for value in values):
       return False
-    if (lead.dRel < minimum_gap or not 0.95 <= lead.modelProb <= 1.0
+    if (lead.dRel < minimum_gap
         or lead.vLead < CREEP_FOLLOW_MIN_LEAD_SPEED or lead.vRel < -CREEP_FOLLOW_MAX_CLOSING_SPEED
         or lead.vLead + min(lead.aLeadK, 0.0) * CREEP_FINISH_T < STOP_SPEED
         or abs(lead.vLead - v_ego - lead.vRel) > CREEP_FOLLOW_MAX_CLOSING_SPEED):
       return False
+  if fusion_active:
+    for lead in leads:
+      if lead is followed[0]:
+        continue
+      if not qualified_lead(lead, 'brake', 0.95, now_ns=now_ns):
+        return False
+      evidence = getattr(lead, 'evidence', None)
+      horizon = CREEP_FINISH_T
+      if getattr(evidence, 'version', 0) == 1:
+        reference = max(evidence.estimateMonoTime, evidence.modelMonoTime, evidence.positionMonoTime,
+                        evidence.velocityMonoTime) if now_ns is None else now_ns
+        age = (reference - evidence.estimateMonoTime) / 1e9
+        horizon = min(horizon, evidence.conflictEnd - age)
+        if evidence.conflictStart - age > horizon:
+          continue
+      # This is only a short creep-veto geometry check. It cannot produce
+      # acceleration or remove the independent obstacle from the MPC.
+      projected_gap = lead.dRel + min(lead.vRel, 0.0) * horizon + 0.5 * min(lead.aLeadK, 0.0) * horizon ** 2
+      if projected_gap < minimum_gap or abs(lead.vLead - v_ego - lead.vRel) > CREEP_FOLLOW_MAX_CLOSING_SPEED:
+        return False
   return True
 
 
-def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuator_delay: float, *, lead_index: int | None = None) -> float:
+def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuator_delay: float, *, lead_index: int | None = None,
+                            now_ns=None) -> float:
   if lead_index is not None and (type(lead_index) is not int or lead_index not in (0, 1)):
     return 0.0
   if not all(math.isfinite(value) for value in (v_ego, a_target, actuator_delay)):
@@ -88,13 +122,12 @@ def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuato
   braking_weight = float(np.interp(a_target, CLOSE_LEAD_STATE_ACCEL_BP, [1.0, 0.0]))
   speed_weight = float(np.interp(v_ego, CLOSE_LEAD_STATE_SPEED_BP, [0.0, 1.0]))
   urgency = 0.0
-  for index, lead in enumerate((radar_state.leadOne, radar_state.leadTwo)):
-    if lead_index is not None and index != lead_index:
-      continue
+  leads = control_leads(radar_state) if lead_index is None else ((radar_state.leadOne, radar_state.leadTwo)[lead_index],)
+  for lead in leads:
     values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb)
-    if not lead.present or not all(math.isfinite(value) for value in values):
+    if not qualified_lead(lead, 'brake', 0.95, now_ns=now_ns) or not all(math.isfinite(value) for value in values):
       continue
-    if (lead.dRel <= 0.0 or not 0.95 <= lead.modelProb <= 1.0 or lead.vLead < -0.5
+    if (lead.dRel <= 0.0 or lead.vLead < -0.5
         or lead.vRel >= -1.0 or abs(lead.vLead - v_ego - lead.vRel) > 1.0):
       continue
     closing_speed = -lead.vRel
@@ -106,7 +139,7 @@ def get_lead_braking_urgency(v_ego: float, a_target: float, radar_state, actuato
   return braking_weight * speed_weight * urgency
 
 
-def get_lead_approach_urgency(v_ego: float, radar_state, actuator_delay: float, *, personality) -> float:
+def get_lead_approach_urgency(v_ego: float, radar_state, actuator_delay: float, *, personality, now_ns=None) -> float:
   """Reduce MPC acceleration smoothing as a confirmed closing lead enters its comfort gap.
 
   This weight has no target-acceleration prerequisite and grants no controller
@@ -128,12 +161,12 @@ def get_lead_approach_urgency(v_ego: float, radar_state, actuator_delay: float, 
   safe_ego_distance = get_safe_obstacle_distance(v_ego, t_follow)
   speed_weight = float(np.interp(v_ego, CLOSE_LEAD_STATE_SPEED_BP, [0.0, 1.0]))
   urgency = 0.0
-  for lead in (radar_state.leadOne, radar_state.leadTwo):
+  for lead in control_leads(radar_state):
     values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb)
-    if not lead.present or not all(isinstance(value, Real) and not isinstance(value, (bool, np.bool_)) and math.isfinite(value)
-                                   for value in values):
+    if (not qualified_lead(lead, 'brake', 0.95, now_ns=now_ns)
+        or not all(isinstance(value, Real) and not isinstance(value, (bool, np.bool_)) and math.isfinite(value) for value in values)):
       continue
-    if (lead.dRel <= 0.0 or not 0.95 <= lead.modelProb <= 1.0 or lead.vLead < -0.5
+    if (lead.dRel <= 0.0 or lead.vLead < -0.5
         or lead.vRel >= -1.0 or abs(lead.vLead - v_ego - lead.vRel) > 1.0):
       continue
     closing_speed = -lead.vRel
@@ -147,7 +180,7 @@ def get_lead_approach_urgency(v_ego: float, radar_state, actuator_delay: float, 
   return speed_weight * urgency
 
 
-def should_stop_for_close_lead(v_ego: float, a_target: float, radar_state, actuator_delay: float, *, a_ego: float) -> bool:
+def should_stop_for_close_lead(v_ego: float, a_target: float, radar_state, actuator_delay: float, *, a_ego: float, now_ns=None) -> bool:
   if not all(math.isfinite(value) for value in (v_ego, a_target, a_ego, actuator_delay)):
     return False
   if not (STOP_SPEED <= v_ego < CLOSE_LEAD_STOP_SPEED and ROLLING_STOP_ACCEL < a_target < CREEP_ACCEL
@@ -162,13 +195,15 @@ def should_stop_for_close_lead(v_ego: float, a_target: float, radar_state, actua
   ramp_time = (max(a_target, min(a_ego, 0.0)) - ROLLING_STOP_ACCEL) / STOPPING_DECEL_RATE
   response_time = actuator_delay + DT_MDL + ramp_time
   stopping_budget = LEAD_STOP_MIN_CLEARANCE + v_ego * response_time + v_ego ** 2 / (-2.0 * ROLLING_STOP_ACCEL)
-  for lead in (radar_state.leadOne, radar_state.leadTwo):
+  for lead in control_leads(radar_state):
     values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.yRel, lead.modelProb)
-    if not lead.present or not all(math.isfinite(value) for value in values):
+    if not qualified_lead(lead, 'stop', 0.98, now_ns=now_ns) or not all(math.isfinite(value) for value in values):
       continue
-    if (0.0 < lead.dRel <= stopping_budget and 0.98 <= lead.modelProb <= 1.0
+    evidence = getattr(lead, 'evidence', None)
+    lateral_offset = evidence.pathOffset if getattr(evidence, 'version', 0) == 1 else lead.yRel
+    if (0.0 < lead.dRel <= stopping_budget
         and abs(lead.vLead) <= STOP_SPEED and lead.vRel < -0.2 and lead.aLeadK <= 0.2
-        and abs(lead.yRel) <= 1.8 and abs(lead.vLead - v_ego - lead.vRel) <= 0.5):
+        and abs(lateral_offset) <= 1.8 and abs(lead.vLead - v_ego - lead.vRel) <= 0.5):
       return True
   return False
 

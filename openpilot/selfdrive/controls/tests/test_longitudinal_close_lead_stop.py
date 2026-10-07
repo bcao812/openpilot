@@ -3,6 +3,7 @@
 from copy import deepcopy
 import json
 import math
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -18,6 +19,18 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, Sto
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_lead_state import closing_state
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import controller, warm_tracking_harness
+from openpilot.selfdrive.controls.tests.test_lead_qualification import NOW, formal_lead
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused'])
+def test_radar_only_stationary_vehicle_can_trigger_close_stop_along_a_turn(source):
+  lead = formal_lead(source=source, dRel=3.0, yRel=4.0, vLead=.1, vRel=-1.2, aLeadK=-.03,
+                     evidence={'pathOffset': .1})
+  radar = SimpleNamespace(fusionActive=True, radarObjects=[lead], leadOne=SimpleNamespace(present=False),
+                           leadTwo=SimpleNamespace(present=False))
+  assert should_stop_for_close_lead(1.3, -.7, radar, .5, a_ego=0.0, now_ns=NOW)
+  lead.evidence.pathState = 'entering'
+  assert not should_stop_for_close_lead(1.3, -.7, radar, .5, a_ego=0.0, now_ns=NOW)
 
 
 def near_stop_state():

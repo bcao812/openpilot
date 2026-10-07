@@ -1,13 +1,16 @@
 """Qualified slow-lead stand-off, separate from dynamic headway and HOLD.
 
 The complete recent-speed window prevents a high-speed approach from acquiring
-the compact target merely by passing through its low-speed tail. Slot history
-checks continuity of observations, not an asserted physical tracking identity.
+the compact target merely by passing through its low-speed tail. Formal fusion
+history follows physical identity across display-slot and sensor-slot changes.
+Legacy observations retain their original slot-continuity contract.
 """
 from collections import deque
 from dataclasses import dataclass
 import math
 from numbers import Real
+
+from openpilot.selfdrive.controls.lib.lead_qualification import lead_identity, qualified_lead
 
 
 DEFAULT_RISK_DISTANCE = 6.0
@@ -35,6 +38,7 @@ class LowSpeedStopDistanceEvidence:
   low_speed_history: bool = False
   present: tuple[bool, bool] = (False, False)
   lead_observations: tuple[tuple | None, tuple | None] = (None, None)
+  lead_identities: tuple[tuple | None, tuple | None] = (None, None)
   lead_fractions: tuple[float, float] = (0.0, 0.0)
   confirmed_approaches: tuple[bool, bool] = (False, False)
   applied_fraction: float = 0.0
@@ -45,22 +49,27 @@ def _distance_profile(speed, low):
   return low + (DEFAULT_RISK_DISTANCE - low) * fraction
 
 
-def _tracked_observation(lead, speed):
-  if not getattr(lead, 'present', False):
+def _tracked_observation(lead, speed, now_ns=None):
+  if not qualified_lead(lead, 'stop', 0.98, now_ns=now_ns):
     return None
   values = tuple(getattr(lead, name, None) for name in ('dRel', 'vRel', 'vLead', 'aLeadK', 'modelProb', 'yRel'))
   if not all(isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value) for value in values):
     return None
   values = tuple(float(value) for value in values)
-  distance, relative_speed, lead_speed, lead_accel, probability, lateral = values
-  if (distance <= 0.0 or not 0.98 <= probability <= 1.0 or abs(lateral) > 1.2
+  distance, relative_speed, lead_speed, _, _, lateral = values
+  evidence = getattr(lead, 'evidence', None)
+  lateral = evidence.pathOffset if getattr(evidence, 'version', 0) == 1 else lateral
+  if (distance <= 0.0 or abs(lateral) > 1.2
       or abs(lead_speed - speed - relative_speed) > 0.5):
     return None
   return values
 
 
-def _observation(lead, speed):
-  values = _tracked_observation(lead, speed)
+def _observation(lead, speed, now_ns=None):
+  values = _tracked_observation(lead, speed, now_ns)
+  evidence = getattr(lead, 'evidence', None)
+  if getattr(evidence, 'version', 0) == 1 and not evidence.accelerationValid:
+    return None
   if values is None or not 0.0 <= values[2] <= 2.0 or not -0.5 <= values[3] <= 0.2:
     return None
   return values
@@ -78,12 +87,30 @@ class LowSpeedStopDistance:
     self._last_radar_ns = None
     self._lead_since = [None, None]
     self._lead_previous = [None, None]
+    self._lead_identities = [None, None]
+    self._lead_position_ns = [None, None]
+    self._lead_estimate_ns = [None, None]
     self._lead_was_present = [False, False]
     self._approach_since = [None, None]
     self._last_approach_ns = [None, None]
     self._fractions = [0.0, 0.0]
     self._applied_fraction = 0.0
     self._source_barrier_ns = source_barrier_ns
+
+  def _follow_identities(self, identities, present):
+    """A display-slot swap does not create two new cars."""
+    old = {identity: index for index, (identity, exists) in enumerate(zip(self._lead_identities, self._lead_was_present, strict=True))
+           if exists and identity is not None}
+    current = [identity for identity, exists in zip(identities, present, strict=True) if exists]
+    if (not current or None in current or len(set(current)) != len(current)
+        or len(old) != sum(self._lead_was_present) or set(current) != set(old)):
+      return
+    absent = iter(index for index, exists in enumerate(self._lead_was_present) if not exists)
+    order = [old[identity] if exists else next(absent) for identity, exists in zip(identities, present, strict=True)]
+    for field in ('_lead_since', '_lead_previous', '_lead_identities', '_lead_position_ns', '_lead_estimate_ns',
+                  '_lead_was_present', '_approach_since', '_last_approach_ns', '_fractions'):
+      values = getattr(self, field)
+      setattr(self, field, [values[index] for index in order])
 
   def update(self, *, now_ns, source_ns, radar_ns, speed, radar, permitted, allow_activation=True):
     speed_valid = isinstance(speed, Real) and not isinstance(speed, bool) and math.isfinite(speed) and speed >= 0.0
@@ -126,21 +153,33 @@ class LowSpeedStopDistance:
       return fallback
     fractions = []
     confirmed_approaches = []
+    identities = [lead_identity(lead) for lead in leads]
+    present = [bool(getattr(lead, 'present', False)) for lead in leads]
+    self._follow_identities(identities, present)
     for i, lead in enumerate(leads):
-      tracked = _tracked_observation(lead, speed)
-      observation = _observation(lead, speed)
+      tracked = _tracked_observation(lead, speed, now_ns)
+      observation = _observation(lead, speed, now_ns)
       previous = self._lead_previous[i]
+      evidence = getattr(lead, 'evidence', None)
+      formal = getattr(evidence, 'version', 0) == 1
+      position_ns = getattr(evidence, 'positionMonoTime', 0) if formal else radar_ns
+      estimate_ns = getattr(evidence, 'estimateMonoTime', 0) if formal else radar_ns
+      measurement_delta = position_ns - self._lead_position_ns[i] if self._lead_position_ns[i] is not None else None
+      estimate_delta = estimate_ns - self._lead_estimate_ns[i] if self._lead_estimate_ns[i] is not None else None
       # Normal lead acceleration or speed outside the parking domain revokes
       # this request, but does not turn a continuously observed car into a lost
       # target. Keep the ego history through ordinary stop-and-go.
-      continuous = tracked is not None and previous is not None and radar_delta is not None
+      continuous = (tracked is not None and previous is not None and radar_delta is not None
+                    and identities[i] == self._lead_identities[i]
+                    and measurement_delta is not None and 0 <= measurement_delta <= MAX_SOURCE_GAP_NS
+                    and estimate_delta is not None and 0 <= estimate_delta <= MAX_SOURCE_GAP_NS)
       if continuous:
-        if radar_delta == 0:
+        if estimate_delta == 0:
           # vRel is an observation from this radar publication, not resampled
           # against a new ego-speed estimate. Other fields must be unchanged.
           continuous = tracked == previous
         else:
-          predicted = previous[0] + 0.5 * (previous[1] + tracked[1]) * radar_delta / 1e9
+          predicted = previous[0] + 0.5 * (previous[1] + tracked[1]) * estimate_delta / 1e9
           continuous = abs(tracked[0] - predicted) <= 0.5 and abs(tracked[5] - previous[5]) <= 0.3
       if self._last_radar_ns is not None and ((self._lead_was_present[i] and not continuous)
                                              or (lead.present and not self._lead_was_present[i])):
@@ -155,12 +194,15 @@ class LowSpeedStopDistance:
         self._lead_since[i] = None
         self._fractions[i] = 0.0
       elif not continuous or self._lead_since[i] is None:
-        self._lead_since[i] = radar_ns
+        self._lead_since[i] = position_ns
         self._fractions[i] = 0.0
       if not continuous:
         self._approach_since[i] = None
         self._last_approach_ns[i] = None
       self._lead_previous[i] = tracked
+      self._lead_identities[i] = identities[i]
+      self._lead_position_ns[i] = position_ns
+      self._lead_estimate_ns[i] = estimate_ns
       # Start reducing the parking target only during an observed stopping
       # approach. A constant slow lead does not ask us to catch up merely
       # because the speed-history timer has become complete.
@@ -169,18 +211,18 @@ class LowSpeedStopDistance:
       if not approaching:
         self._approach_since[i] = None
       elif self._approach_since[i] is None:
-        self._approach_since[i] = radar_ns
+        self._approach_since[i] = position_ns
       approach_since = self._approach_since[i]
       approach_confirmed = (continuous and approach_since is not None
-                            and radar_ns - approach_since >= LEAD_STABLE_NS)
+                            and position_ns - approach_since >= LEAD_STABLE_NS)
       if approach_confirmed:
-        self._last_approach_ns[i] = radar_ns
+        self._last_approach_ns[i] = position_ns
       confirmed_approaches.append(approach_confirmed)
       since = self._lead_since[i]
       if not low_speed_history or not allow_activation or since is None:
         self._fractions[i] = 0.0
-      elif approach_confirmed and radar_delta and radar_ns - since >= LEAD_STABLE_NS:
-        stable_increment = min(radar_delta, radar_ns - since - LEAD_STABLE_NS, radar_ns - approach_since - LEAD_STABLE_NS)
+      elif approach_confirmed and measurement_delta and position_ns - since >= LEAD_STABLE_NS:
+        stable_increment = min(measurement_delta, position_ns - since - LEAD_STABLE_NS, position_ns - approach_since - LEAD_STABLE_NS)
         self._fractions[i] = min(1.0, self._fractions[i] + stable_increment / LEAD_RAMP_NS)
       elif self._last_approach_ns[i] is None or radar_ns - self._last_approach_ns[i] > APPROACH_GRACE_NS:
         self._fractions[i] = 0.0
@@ -193,7 +235,6 @@ class LowSpeedStopDistance:
     # The current native comfort parameter is shared by real leads. Require
     # every present lead to qualify before reducing it, so a good far target
     # cannot shorten the comfort target for a bad/close second observation.
-    present = [bool(getattr(lead, 'present', False)) for lead in leads]
     common_fraction = min((fraction for fraction, exists in zip(fractions, present, strict=True) if exists), default=0.0)
     # Retain ordinary following geometry until the final rolling-stop range.
     # Reducing the stand-off earlier can move the car closer before a cut-in
@@ -209,6 +250,7 @@ class LowSpeedStopDistance:
     self.evidence = LowSpeedStopDistanceEvidence(
       now_ns=now_ns, source_ns=source_ns, radar_ns=radar_ns, low_speed_history=low_speed_history,
       present=tuple(present), lead_observations=tuple(self._lead_previous), lead_fractions=tuple(fractions),
+      lead_identities=tuple(identities),
       confirmed_approaches=tuple(confirmed_approaches), applied_fraction=common_fraction,
     )
     comfort = fallback[0] + common_fraction * (_distance_profile(speed, COMPACT_COMFORT_DISTANCE) - fallback[0])

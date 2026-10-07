@@ -84,7 +84,9 @@ class TestHondaRadarObserver(unittest.TestCase):
       self.assertTrue(observer_requested(True, params, cp))
       params.put('HondaBoschARadarMode', 3, block=True)
       self.assertTrue(observer_requested(True, params, cp))
-      for value in (0, 4, -1):
+      params.put('HondaBoschARadarMode', 4, block=True)
+      self.assertTrue(observer_requested(True, params, cp))
+      for value in (0, 5, -1):
         params.put('HondaBoschARadarMode', value, block=True)
         self.assertFalse(observer_requested(True, params, cp))
       Path(params.get_param_path('HondaBoschARadarMode')).write_bytes(b'bad')

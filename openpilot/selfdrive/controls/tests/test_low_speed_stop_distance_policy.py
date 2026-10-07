@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LOW_SPEED_WINDOW_NS, LowSpeedStopDistance
+from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
 
 
 BASE_NS = 10_000_000_000
@@ -32,6 +33,15 @@ def lead(frame, ego_speed=.3, lead_speed=0.0, initial_distance=150.0, **changes)
 def radar(frame, speed=.3, lead_speed=0.0):
   return SimpleNamespace(leadOne=lead(frame, speed, lead_speed),
                          leadTwo=lead(frame, speed, lead_speed, initial_distance=180.0))
+
+
+def fused_radar(frame):
+  observations = radar(frame)
+  observations.fusionActive = True
+  for index, item in enumerate((observations.leadOne, observations.leadTwo)):
+    item.modelProb = 0.0
+    item.evidence = formal_lead(now_ns=stamp(frame), evidence={'trackId': index + 1}).evidence
+  return observations
 
 
 def update(policy, frame, *, speed=.3, observations=AUTO, now_ns=AUTO,
@@ -62,6 +72,60 @@ def assert_default_low_speed(result):
   comfort, risk = result
   assert comfort == pytest.approx(4.0)
   assert risk == pytest.approx((6.0, 6.0))
+
+
+def test_fresh_radar_identity_can_qualify_compact_stopping_without_vision():
+  policy = LowSpeedStopDistance()
+  for frame in range(113):
+    result = update(policy, frame, observations=fused_radar(frame))
+  assert result[0] == pytest.approx(3.0)
+  assert result[1] == pytest.approx((4.0, 4.0))
+  assert policy.evidence.lead_identities == (('radar-session-a', 1), ('radar-session-a', 2))
+
+
+def test_display_swap_and_oem_slot_generation_change_keep_the_same_cars_history():
+  policy = LowSpeedStopDistance()
+  for frame in range(113):
+    result = update(policy, frame, observations=fused_radar(frame))
+  observations = fused_radar(113)
+  observations.leadOne, observations.leadTwo = observations.leadTwo, observations.leadOne
+  observations.leadOne.evidence.generation = 16
+  observations.leadTwo.evidence.generation = 20
+  migrated = update(policy, 113, observations=observations)
+  assert migrated[0] == pytest.approx(result[0])
+  assert migrated[1] == pytest.approx(result[1])
+  assert policy.evidence.lead_identities == (('radar-session-a', 2), ('radar-session-a', 1))
+
+
+@pytest.mark.parametrize('change', [{'trackId': 50}, {'sessionId': 'restarted-radar'}])
+def test_equal_distance_new_identity_cannot_borrow_the_previous_cars_compact_target(change):
+  policy = LowSpeedStopDistance()
+  for frame in range(113):
+    result = update(policy, frame, observations=fused_radar(frame))
+  assert result[0] == pytest.approx(3.0)
+  for frame in range(113, 135):
+    observations = fused_radar(frame)
+    for field, value in change.items():
+      setattr(observations.leadOne.evidence, field, value)
+    assert_default_low_speed(update(policy, frame, observations=observations))
+
+
+def test_fresh_publications_do_not_advance_confirmation_from_repeated_radar_measurements():
+  policy = LowSpeedStopDistance()
+  for frame in range(105):
+    result = update(policy, frame, observations=fused_radar(frame))
+  assert 3.0 < result[0] < 4.0
+  for frame in range(105, 109):
+    observations = fused_radar(frame)
+    for item in (observations.leadOne, observations.leadTwo):
+      item.evidence.positionMonoTime = item.evidence.velocityMonoTime = stamp(104)
+    current = update(policy, frame, observations=observations)
+    assert current[0] == pytest.approx(result[0])
+    assert current[1] == pytest.approx(result[1])
+  observations = fused_radar(109)
+  for item in (observations.leadOne, observations.leadTwo):
+    item.evidence.positionMonoTime = item.evidence.velocityMonoTime = stamp(104)
+  assert_default_low_speed(update(policy, 109, observations=observations))
 
 
 def estimated_approach_radar(frame, acceleration=-.1):

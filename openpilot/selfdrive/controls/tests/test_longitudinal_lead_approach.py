@@ -22,9 +22,18 @@ from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_motion_response_contract import ordinary_policy as ordinary_policy
 from openpilot.selfdrive.controls.tests.test_mpc_problem_contract import NativeProblemRecorder
+from openpilot.selfdrive.controls.tests.test_lead_qualification import NOW, formal_lead
 
 
 PERSONALITIES = (log.LongitudinalPersonality.aggressive, log.LongitudinalPersonality.standard, log.LongitudinalPersonality.relaxed)
+
+
+def test_radar_only_approach_keeps_response_before_a_negative_target():
+  lead = formal_lead(dRel=54.0, vLead=19.4, vRel=-5.6)
+  radar = SimpleNamespace(fusionActive=True, radarObjects=[lead], leadOne=lead, leadTwo=SimpleNamespace(present=False))
+  assert get_lead_approach_urgency(25.0, radar, .5, personality=PERSONALITIES[1], now_ns=NOW) > 0.0
+  lead.evidence.velocityMonoTime = NOW - 200_000_001
+  assert get_lead_approach_urgency(25.0, radar, .5, personality=PERSONALITIES[1], now_ns=NOW) == 0.0
 
 
 def approach_radar(speed=25.0, gap=54.0, closing=5.6):

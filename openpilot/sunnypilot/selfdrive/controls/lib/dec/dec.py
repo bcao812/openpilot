@@ -11,6 +11,7 @@ from opendbc.car import structs
 from numpy import interp
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
+from openpilot.selfdrive.controls.lib.lead_qualification import control_leads
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.constants import WMACConstants
 from typing import Literal
 
@@ -174,6 +175,8 @@ class DynamicExperimentalController:
     self._has_slow_down = False
     self._has_slowness = False
     self._has_mpc_fcw = False
+    self._fusion_active = False
+    self._fusion_risks = ()
     self._v_ego_kph = 0.0
     self._v_cruise_kph = 0.0
     self._has_standstill = False
@@ -203,7 +206,8 @@ class DynamicExperimentalController:
 
   def _update_calculations(self, sm: messaging.SubMaster) -> None:
     car_state = sm['carState']
-    lead_one = sm['radarState'].leadOne
+    radar_state = sm['radarState']
+    lead_one = radar_state.leadOne
     md = sm['modelV2']
 
     self._v_ego_kph = car_state.vEgo * 3.6
@@ -217,7 +221,17 @@ class DynamicExperimentalController:
       self._standstill_count = max(0, self._standstill_count - 1)
 
     # Lead detection
-    self._lead_filter.add_data(float(lead_one.present))
+    self._fusion_active = getattr(radar_state, 'fusionActive', False) is True
+    self._fusion_risks = ()
+    if self._fusion_active:
+      stamps = getattr(sm, 'logMonoTime', {})
+      now_ns = max((stamps.get(service, 0) for service in ('carState', 'modelV2', 'radarState')), default=0) or None
+      self._fusion_risks = control_leads(radar_state, 'brake', 0.0, now_ns=now_ns)
+      has_lead = bool(self._fusion_risks)
+    else:
+      # Keep the original parser/platform path's presence semantics.
+      has_lead = lead_one.present
+    self._lead_filter.add_data(float(has_lead))
     lead_value = self._lead_filter.get_value() or 0.0
     self._has_lead_filtered = lead_value > WMACConstants.LEAD_PROB
 
@@ -371,6 +385,14 @@ class DynamicExperimentalController:
     # Default: ACC
     self._mode_manager.request_mode('acc', confidence=0.7)
 
+  def _fusion_mode(self) -> None:
+    """Fusion constrains both MPC modes; model stops retain their priority."""
+    if (self._has_mpc_fcw or self._standstill_count > 3 or self._has_slow_down
+        or not self._has_lead_filtered):
+      self._radarless_mode()
+      return
+    self._mode_manager.request_mode('acc', confidence=1.0)
+
   def update(self, sm: messaging.SubMaster) -> None:
     self._read_params()
 
@@ -378,7 +400,9 @@ class DynamicExperimentalController:
 
     self._update_calculations(sm)
 
-    if self._CP.radarUnavailable:
+    if self._fusion_active:
+      self._fusion_mode()
+    elif self._CP.radarUnavailable:
       self._radarless_mode()
     else:
       self._radar_mode()

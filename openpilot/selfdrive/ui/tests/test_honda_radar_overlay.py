@@ -256,6 +256,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       # GPU fonts in this headless fixture.
       settings = honda.HondaSettings.__new__(honda.HondaSettings)
       settings.observer, settings.shadow, settings.assist, settings.overlay = Mock(), Mock(), Mock(), Mock()
+      settings.control = Mock()
       settings._set_assist(True)
       self.assertEqual(params.get('HondaBoschARadarMode', return_default=True), 0)
       settings._set_shadow(True)
@@ -294,6 +295,20 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       self.assertEqual(params.get('HondaBoschARadarMode'), 1)
       settings._set_assist(True)
       self.assertEqual(params.get('HondaBoschARadarMode'), 3)
+      settings._set_control(True)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 4)
+      settings.control.action_item.set_state.assert_called_with(True)
+      settings._set_observer(True)
+      settings._set_assist(False)
+      settings._set_shadow(False)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 4)
+      fake_ui.started = True
+      settings._set_control(False)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 4)
+      fake_ui.started = False
+      settings._set_control(False)
+      self.assertEqual(params.get('HondaBoschARadarMode'), 2)
+      settings._set_assist(True)
       settings._set_observer(False)
       self.assertEqual(params.get('HondaBoschARadarMode'), 0)
       settings.observer.action_item.set_state.assert_called_with(False)

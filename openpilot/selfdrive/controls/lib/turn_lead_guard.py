@@ -7,6 +7,8 @@ empty-road turn cannot establish the following context on its own.
 import math
 from numbers import Real
 
+from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
+
 
 MAX_INPUT_AGE_NS = 250_000_000
 LEAD_HISTORY_NS = 3_000_000_000
@@ -36,7 +38,7 @@ def _timestamp(value):
   return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def _lead_state(lead):
+def _lead_state(lead, now_ns=None):
   present = getattr(lead, 'present', None)
   if not isinstance(present, bool):
     return None
@@ -45,7 +47,8 @@ def _lead_state(lead):
   values = tuple(getattr(lead, field, None) for field in ('dRel', 'vRel', 'vLead', 'aLeadK', 'modelProb', 'yRel'))
   if not all(_finite(value) for value in values) or not 0.0 <= values[4] <= 1.0:
     return None
-  reliable = 0.0 < values[0] <= MAX_LEAD_DISTANCE and values[4] >= MIN_LEAD_PROBABILITY
+  reliable = (0.0 < values[0] <= MAX_LEAD_DISTANCE
+              and qualified_lead(lead, 'follow', MIN_LEAD_PROBABILITY, now_ns=now_ns))
   return True, reliable
 
 
@@ -99,7 +102,8 @@ class TurnLeadGuard:
       self.clear()
       return None
 
-    lead_states = tuple(_lead_state(lead) for lead in (lead_one, lead_two))
+    leads = (lead_one, lead_two)
+    lead_states = tuple(_lead_state(lead, now_ns) for lead in leads)
     if any(state is None for state in lead_states):
       self.clear()
       return None
@@ -124,7 +128,9 @@ class TurnLeadGuard:
     reliable = any(state[1] for state in lead_states)
     if new_radar and reliable:
       # Source time, not repeated consumer ticks, dates the last observation.
-      self._last_reliable_radar_ns = radar_ns
+      self._last_reliable_radar_ns = max(
+        getattr(lead.evidence, 'positionMonoTime', radar_ns) if getattr(getattr(lead, 'evidence', None), 'version', 0) == 1 else radar_ns
+        for lead, state in zip(leads, lead_states, strict=True) if state[1])
 
     released = False
     if self.armed:
@@ -158,9 +164,10 @@ class TurnLeadGuard:
         if not reliable:
           self._reliable_since_ns = None
         elif new_radar:
+          recovery_ns = self._last_reliable_radar_ns
           if self._reliable_since_ns is None:
-            self._reliable_since_ns = radar_ns
-          elif radar_ns - self._reliable_since_ns >= LEAD_RECOVERY_NS:
+            self._reliable_since_ns = recovery_ns
+          elif recovery_ns - self._reliable_since_ns >= LEAD_RECOVERY_NS:
             self.lost = False
             self._reliable_since_ns = None
             released = True

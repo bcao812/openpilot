@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from openpilot.selfdrive.controls.lib.turn_lead_guard import HOLD_ACCEL_MAX, TurnLeadGuard
+from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
 
 
 NS = 1_000_000_000
@@ -42,6 +43,31 @@ class Harness:
       assert self.step(**{slot: lead()}) == 0.0
       assert self.guard.lost == (frame < 4)
     assert self.guard.armed and self.guard.binding
+
+
+def test_fresh_radar_following_survives_visual_dropout_in_a_turn():
+  h = Harness()
+  for frame in range(30):
+    tracked = formal_lead(now_ns=h.now + STEP_NS, vLead=5.0, evidence={'generation': frame})
+    assert h.step(lead_one=tracked) is None
+    assert h.guard.armed and not h.guard.lost
+  assert h.step() == 0.0
+  assert h.guard.lost
+
+
+def test_reissued_radar_measurement_cannot_confirm_turn_recovery():
+  h = Harness()
+  h.lose_lead()
+  source = h.now + STEP_NS
+  for _ in range(4):
+    tracked = formal_lead(now_ns=h.now + STEP_NS, vLead=5.0,
+                          evidence={'positionMonoTime': source, 'velocityMonoTime': source})
+    assert h.step(lead_one=tracked) == 0.0
+    assert h.guard.lost
+  for _ in range(5):
+    tracked = formal_lead(now_ns=h.now + STEP_NS, vLead=5.0)
+    h.step(lead_one=tracked)
+  assert not h.guard.lost
 
 
 def test_empty_road_turn_never_arms_or_limits_acceleration():

@@ -13,6 +13,10 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, PREFERENCE_TIME_S
+from openpilot.selfdrive.controls.lib.lead_qualification import (
+  MAX_CONTROL_OBJECTS, MAX_PREDICTION_AGE_NS, control_leads, lead_identity, qualified_lead,
+)
+from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_MAX_AGE_NS
 
 if __name__ == '__main__':  # generating code
   from acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -90,6 +94,19 @@ class MpcOutcome(Enum):
   REST_REJECTED = 'rejected_rest'
   INPUT_REJECTED = 'rejected_input'
   SOLVER_FAULT = 'solver_fault'
+
+
+@dataclass(frozen=True)
+class LeadProjection:
+  lead: object
+  identity: tuple | None
+  slot: int | None
+  trajectory: np.ndarray
+  raw_trajectory: np.ndarray
+  occupied: np.ndarray
+  conflict_start: float
+  conflict_end: float
+  persistent: bool
 
 
 @dataclass(frozen=True)
@@ -387,6 +404,15 @@ class LongitudinalMpc:
 
     self.last_cloudlog_t = 0
     self.crash_cnt = 0.0
+    self._fusion_fcw_counts = {}
+    self._fusion_fcw_epochs = {}
+    self._fusion_vision_fcw_tracks = {}
+    self._fusion_vision_fcw_sequence = 0
+    self._was_fusion_active = False
+    self.source_object_identity = None
+    self.fcw_object_identity = None
+    self._obstacle_identities = ()
+    self._fusion_projections = ()
     self.solution_status = 0
     self.last_solver_status = 0
     self.failure_reason = ''
@@ -553,6 +579,221 @@ class LongitudinalMpc:
     a_lead = np.clip(a_lead, -10., 5.)
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
+
+  @staticmethod
+  def occupancy_nodes(start, end):
+    """Cover a finite occupancy interval, including a short inter-node event.
+
+    The preceding shooting node represents an interval with no interior
+    obstacle row. Nothing after the real end is kept as a stationary lead.
+    FCW checks the actual interval, not this conservative discretization.
+    """
+    occupied = (T_IDXS >= start) & (T_IDXS <= end)
+    occupied[:-1] |= (T_IDXS[:-1] < end) & (T_IDXS[1:] >= start)
+    return occupied
+
+  @staticmethod
+  def ego_progress_bound(speed, acceleration, timestamp):
+    duration = min(timestamp, speed / -acceleration) if acceleration < 0.0 else timestamp
+    return speed * duration + 0.5 * acceleration * duration**2
+
+  def project_fusion_lead(self, lead, *, slot, reference_ns):
+    evidence = lead.evidence
+    elapsed = 0.0 if reference_ns is None else (reference_ns - evidence.estimateMonoTime) / 1e9
+    if not -REFERENCE_MAX_AGE_NS / 1e9 <= elapsed <= MAX_PREDICTION_AGE_NS / 1e9:
+      raise ValueError('Fusion estimate cannot align with the initial state')
+    a_lead, tau = float(lead.aLeadK), float(lead.aLeadTau)
+    if tau < 0.0:
+      raise ValueError('Invalid lead acceleration decay')
+    # d/v/a share estimateMonoTime. Project this complete hypothesis and
+    # subtract the signed ego displacement to the carState initial epoch.
+    # A fresh camera EOF may follow carState: bounded reverse alignment keeps
+    # that actual epoch instead of replacing it with the consumer clock. The
+    # short interval uses a constant-acceleration ego approximation.
+    decayed_accel = a_lead * np.exp(-tau * elapsed**2 / 2.0)
+    initial_velocity = float(lead.vLead) + 0.5 * (a_lead + decayed_accel) * elapsed
+    if lead.vLead >= 0.0:
+      initial_velocity = max(0.0, initial_velocity)
+    advance = float(lead.vLead) * elapsed + (2.0 * a_lead + decayed_accel) * elapsed**2 / 6.0
+    ego_advance = self.x0[1] * elapsed - 0.5 * self.x0[2] * elapsed**2
+    initial_distance = float(lead.dRel) + advance - ego_advance
+    acceleration = np.clip(a_lead, -10.0, 5.0) * np.exp(-tau * (T_IDXS + elapsed)**2 / 2.0)
+    velocity = initial_velocity + np.cumsum(T_DIFFS * acceleration)
+    # A forward vehicle may stop; a measured approaching vehicle must not be
+    # turned into a stationary one by the legacy nonnegative-speed clamp.
+    if initial_velocity >= 0.0:
+      velocity = np.maximum(velocity, 0.0)
+    raw_position = initial_distance + np.cumsum(T_DIFFS * velocity)
+    raw_trajectory = np.column_stack((raw_position, velocity))
+    nonnegative_velocity = max(0.0, initial_velocity)
+    minimum_distance = (MIN_X_LEAD_FACTOR * (self.x0[1] + nonnegative_velocity)
+                        * (self.x0[1] - nonnegative_velocity) / (-ACCEL_MIN * 2.0))
+    trajectory = raw_trajectory.copy()
+    trajectory[:, 0] += max(0.0, minimum_distance - initial_distance)
+
+    start, end = float(evidence.conflictStart) - elapsed, float(evidence.conflictEnd) - elapsed
+    persistent = (str(evidence.pathState) == 'inPath' and evidence.followQualified
+                  and evidence.conflictStart == 0.0 and evidence.conflictEnd >= MAX_T)
+    # A continuing in-lane track is predicted over this complete horizon.
+    # Finite crossings/coasts keep their original end rather than renewing it.
+    if persistent:
+      start, end = 0.0, MAX_T
+    start = max(0.0, start)
+    occupied = self.occupancy_nodes(start, end) if end > start else np.zeros(N+1, dtype=bool)
+    if not persistent and np.any(occupied):
+      # Discard only geometrically impossible conflicts under the complete
+      # acceleration range, not one guessed ego arrival time. A vehicle that
+      # could still reach the crossing is retained for the joint solve.
+      begin, finish = min(start, MAX_T), min(end, MAX_T)
+      start_x, end_x = np.interp([begin, finish], T_IDXS, raw_position)
+      occupied_positions = np.concatenate(([start_x], raw_position[(T_IDXS >= begin) & (T_IDXS <= finish)], [end_x]))
+      furthest_ego = self.ego_progress_bound(self.x0[1], ACCEL_MAX, finish)
+      nearest_ego = self.ego_progress_bound(self.x0[1], ACCEL_MIN, begin)
+      if (furthest_ego + STOP_DISTANCE < np.min(occupied_positions)
+          or nearest_ego > np.max(occupied_positions) + STOP_DISTANCE):
+        occupied[:] = False
+    if not np.all(np.isfinite([trajectory, raw_trajectory])):
+      raise ValueError('Invalid fusion prediction')
+    return LeadProjection(lead, lead_identity(lead), slot, trajectory, raw_trajectory, occupied, start, end, persistent)
+
+  def fusion_lead_projections(self, radarstate, *, now_ns, reference_ns):
+    raw_objects = radarstate.radarObjects
+    if len(raw_objects) > MAX_CONTROL_OBJECTS:
+      raise ValueError('Too many fusion objects')
+    # The two display slots are views of the object set. A repeated identity
+    # with different geometry cannot choose its preferred copy by list order.
+    signatures = {}
+    for lead in (*raw_objects, radarstate.leadOne, radarstate.leadTwo):
+      if not lead.present:
+        continue
+      evidence = lead.evidence
+      identity = lead_identity(lead)
+      key = ('track', *identity) if identity is not None else ('vision', evidence.modelMonoTime, evidence.visionIndex)
+      signature = (lead.dRel, lead.yRel, lead.vRel, lead.vLead, lead.aLeadK, lead.aLeadTau,
+                   evidence.version, str(evidence.source), evidence.estimateMonoTime, evidence.positionMonoTime,
+                   evidence.velocityMonoTime, evidence.conflictStart, evidence.conflictEnd, evidence.brakeQualified,
+                   evidence.followQualified, evidence.stopQualified, evidence.fcwQualified)
+      if key in signatures and signatures[key] != signature:
+        raise ValueError('Inconsistent fusion identity views')
+      signatures[key] = signature
+    candidates = control_leads(radarstate)
+    if len(candidates) > MAX_CONTROL_OBJECTS:
+      raise ValueError('Too many independent fusion objects')
+    slots = (radarstate.leadOne, radarstate.leadTwo)
+    slot_identities = tuple(lead_identity(lead) for lead in slots)
+    result = []
+    for lead in candidates:
+      if not np.all(np.isfinite([lead.dRel, lead.yRel, lead.vRel, lead.vLead, lead.aLeadK, lead.aLeadTau])):
+        raise ValueError('Nonfinite fusion object')
+      evidence = lead.evidence
+      if (evidence.version != 1 or not np.all(np.isfinite([evidence.conflictStart, evidence.conflictEnd]))
+          or not 0.0 <= evidence.conflictStart < evidence.conflictEnd <= MAX_T):
+        raise ValueError('Invalid fusion object contract')
+      if not qualified_lead(lead, 'brake', 0.0, now_ns=now_ns, require_active_window=False):
+        if evidence.brakeQualified:
+          raise ValueError('Unqualified admitted fusion object')
+        continue
+      # A healthy finite occupancy can expire between its source frame and
+      # this consumption. Remove only that constraint; other leads and model
+      # references remain valid. In particular, an older carState origin
+      # must not reintroduce a crossing that has already cleared by now.
+      consumed_ns = (max(evidence.estimateMonoTime, evidence.modelMonoTime, evidence.positionMonoTime,
+                         evidence.velocityMonoTime) if now_ns is None else now_ns)
+      if (consumed_ns - evidence.estimateMonoTime) / 1e9 >= evidence.conflictEnd:
+        continue
+      identity = lead_identity(lead)
+      slot = slot_identities.index(identity) if identity is not None and identity in slot_identities else None
+      if slot is None and str(evidence.source) == 'vision':
+        for index, display in enumerate(slots):
+          display_evidence = getattr(display, 'evidence', None)
+          if (display.present and display_evidence is not None and display_evidence.version == 1
+              and str(display_evidence.source) == 'vision'
+              and display_evidence.modelMonoTime == evidence.modelMonoTime
+              and display_evidence.visionIndex == evidence.visionIndex):
+            slot = index
+            break
+      result.append(self.project_fusion_lead(lead, slot=slot, reference_ns=reference_ns))
+    return tuple(result)
+
+  @classmethod
+  def collision_in_occupancy(cls, projection, states, jerks):
+    """Check raw geometry over the actual crossing window, between nodes too."""
+    if not np.any(projection.occupied):
+      return False
+    for stage in range(N):
+      start = max(float(T_IDXS[stage]), projection.conflict_start)
+      end = min(float(T_IDXS[stage+1]), projection.conflict_end, 5.0)
+      if end < start or start >= 5.0:
+        continue
+      duration = T_IDXS[stage+1] - T_IDXS[stage]
+      lead_position = projection.raw_trajectory[stage, 0]
+      lead_velocity = (projection.raw_trajectory[stage+1, 0] - lead_position) / duration
+      state, jerk = states[stage], jerks[stage]
+      lo, hi = start - T_IDXS[stage], end - T_IDXS[stage]
+      times = [lo, hi]
+      # Relative velocity is quadratic on a constant-jerk ego segment. Its
+      # roots contain every interior clearance extremum of this interpolation.
+      if abs(jerk) < 1e-12:
+        if abs(state[2]) > 1e-12:
+          times.append((lead_velocity - state[1]) / state[2])
+      else:
+        discriminant = state[2]**2 + 2.0 * jerk * (lead_velocity - state[1])
+        if discriminant >= 0.0:
+          root = np.sqrt(discriminant)
+          times.extend(((-state[2] - root) / jerk, (-state[2] + root) / jerk))
+      for timestamp in times:
+        if lo <= timestamp <= hi:
+          clearance = lead_position + lead_velocity * timestamp - cls.integrate_jerk(state, jerk, timestamp)[0]
+          if clearance < CRASH_DISTANCE:
+            return True
+    return False
+
+  def fusion_fcw_identity(self, projection):
+    if projection.identity is not None:
+      return projection.identity
+    lead, evidence = projection.lead, projection.lead.evidence
+    if str(evidence.source) != 'vision' or lead.modelProb <= 0.9:
+      return None
+    # Vision has no persistent object ID. Preserve its warning capability only
+    # through a short, kinematically compatible continuation of the same slot;
+    # index alone cannot splice collision counts across a new cut-in vehicle.
+    slot, epoch = evidence.visionIndex, evidence.estimateMonoTime
+    previous = self._fusion_vision_fcw_tracks.get(slot)
+    key = None
+    if previous is not None:
+      previous_key, previous_epoch, distance, velocity, relative_velocity, lateral = previous
+      elapsed = (epoch - previous_epoch) / 1e9
+      if (0.0 <= elapsed <= 0.25 and abs(lead.dRel - (distance + relative_velocity * elapsed)) <= 1.0
+          and abs(lead.vLead - velocity) <= 2.0 and abs(lead.yRel - lateral) <= 0.5):
+        key = previous_key
+    if key is None:
+      self._fusion_vision_fcw_sequence += 1
+      key = ('vision_continuation', self._fusion_vision_fcw_sequence)
+    self._fusion_vision_fcw_tracks[slot] = (key, epoch, lead.dRel, lead.vLead, lead.vRel, lead.yRel)
+    return key
+
+  def update_fusion_fcw(self, projections, *, now_ns):
+    counts, epochs = {}, {}
+    vision_slots = set()
+    for projection in projections:
+      lead = projection.lead
+      if not qualified_lead(lead, 'fcw', 0.9, now_ns=now_ns):
+        continue
+      identity = self.fusion_fcw_identity(projection)
+      if str(lead.evidence.source) == 'vision':
+        vision_slots.add(lead.evidence.visionIndex)
+      if identity is None or not self.collision_in_occupancy(projection, self.x_sol, self.j_solution):
+        continue
+      epoch = int(lead.evidence.estimateMonoTime)
+      previous_epoch = self._fusion_fcw_epochs.get(identity)
+      continuous = previous_epoch is not None and 0 <= epoch - previous_epoch <= 250_000_000
+      previous_count = self._fusion_fcw_counts.get(identity, 0) if continuous else 0
+      counts[identity] = previous_count + int(not continuous or epoch > previous_epoch)
+      epochs[identity] = epoch
+    self._fusion_vision_fcw_tracks = {slot: track for slot, track in self._fusion_vision_fcw_tracks.items() if slot in vision_slots}
+    self._fusion_fcw_counts, self._fusion_fcw_epochs = counts, epochs
+    self.fcw_object_identity = max(counts, key=counts.get) if counts else None
+    self.crash_cnt = counts.get(self.fcw_object_identity, 0)
 
   def reference_obstacles(self, reference, t_follow):
     if reference.typed_model is not None and not isinstance(reference.typed_model, ModelReferenceEvidence):
@@ -1141,8 +1382,12 @@ class LongitudinalMpc:
       jerks[stage] = jerk
     return states, jerks
 
-  def set_reference_problem(self, reference, x_obstacles, sources, accel_min, t_follow):
+  def set_reference_problem(self, reference, x_obstacles, sources, accel_min, t_follow, *, lead_slots=None):
     """Install genuine costs and state bounds in this same native problem."""
+    if lead_slots is None:
+      lead_slots = tuple(MPC_SOURCES.index(source) if source in MPC_SOURCES else None for source in sources)
+    if len(lead_slots) != len(sources) or any(slot not in (None, 0, 1) for slot in lead_slots):
+      raise ValueError('Invalid compact lead assignment')
     typed = reference.typed_model if reference is not None else None
     if typed is not None and not isinstance(typed, ModelReferenceEvidence):
       raise ValueError('Invalid typed model reference')
@@ -1165,9 +1410,9 @@ class LongitudinalMpc:
       if not np.all(np.isfinite(lead_factors)) or np.any(lead_factors <= 0.0):
         raise ValueError('Invalid lead danger factor')
       risk_obstacles = x_obstacles.copy()
-      for obstacle_index, source in enumerate(sources):
-        if source in MPC_SOURCES:
-          distance = reference.lead_risk_stop_distances[MPC_SOURCES.index(source)]
+      for obstacle_index, slot in enumerate(lead_slots):
+        if slot is not None:
+          distance = reference.lead_risk_stop_distances[slot]
           risk_obstacles[:, obstacle_index] += lead_factors * (STOP_DISTANCE - distance)
       # min_i(x_i - factor * base_i) is a separate minimum from the raw
       # obstacle and comfort minima. Fold only its base into the native row;
@@ -1176,8 +1421,8 @@ class LongitudinalMpc:
       self.params[:, RISK_STOP_DISTANCE] = np.clip(STOP_DISTANCE - distance_offset / lead_factors, 4.0, STOP_DISTANCE)
     if reference is not None and reference.comfort_stop_distance < STOP_DISTANCE:
       comfort_obstacles = x_obstacles.copy()
-      for obstacle_index, source in enumerate(sources):
-        if source in MPC_SOURCES:
+      for obstacle_index, slot in enumerate(lead_slots):
+        if slot is not None:
           comfort_obstacles[:, obstacle_index] += STOP_DISTANCE - reference.comfort_stop_distance
       comfort_selected = np.argmin(comfort_obstacles, axis=1)
       # Fold the separate comfort minimum into one native cost parameter. The
@@ -1433,8 +1678,12 @@ class LongitudinalMpc:
       self.rest_goal_braking_accel = None
       self.failure_reason = ''
 
-  def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None):
+  def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None, now_ns=None, reference_ns=None):
     self.diagnostic_last_obstacle_summary = None
+    self.source_object_identity = None
+    self.fcw_object_identity = None
+    self._obstacle_identities = ()
+    self._fusion_projections = ()
     self.rest_goal = None
     self.rest_goal_state = 'none'
     self.rest_goal_reason = ''
@@ -1450,12 +1699,58 @@ class LongitudinalMpc:
     if not np.all(np.isfinite(self.x0)):
       self.fail(MPC_INVALID_INPUT)
       return
-    for lead in (radarstate.leadOne, radarstate.leadTwo):
-      if lead.present and not np.all(np.isfinite([lead.dRel, lead.vLead, lead.aLeadK, lead.aLeadTau])):
+    fusion_active = bool(getattr(radarstate, 'fusionActive', False))
+    if fusion_active != getattr(self, '_was_fusion_active', False):
+      self.crash_cnt = 0
+      self._fusion_fcw_counts = {}
+      self._fusion_fcw_epochs = {}
+      self._fusion_vision_fcw_tracks = {}
+    self._was_fusion_active = fusion_active
+    lead_slots = None
+    if fusion_active:
+      try:
+        if any(stamp is not None and (not isinstance(stamp, Integral) or isinstance(stamp, bool) or stamp <= 0)
+               for stamp in (now_ns, reference_ns)):
+          raise ValueError('Invalid fusion clock')
+        if (now_ns is not None and reference_ns is not None
+            and not 0 <= now_ns - reference_ns <= REFERENCE_MAX_AGE_NS):
+          raise ValueError('Fusion initial state is not current at the consumer')
+        with np.errstate(over='ignore', invalid='ignore'):
+          projections = self.fusion_lead_projections(radarstate, now_ns=now_ns, reference_ns=reference_ns)
+        self._fusion_projections = projections
+      except (AttributeError, TypeError, ValueError, FloatingPointError, OverflowError):
         self.fail(MPC_INVALID_INPUT)
         return
-    present_leads = tuple(lead for lead in (radarstate.leadOne, radarstate.leadTwo) if lead.present)
-    if present_leads and all(lead.vLead >= 0.0 for lead in present_leads):
+      present_leads = tuple(projection.lead for projection in projections if np.any(projection.occupied))
+      # The scalar recovery proof freezes a continuously occupied forward
+      # lead. A short crossing must never become a permanent stop-position cap.
+      recovery_leads = tuple(projection for projection in projections if projection.persistent)
+      if recovery_leads and all(projection.raw_trajectory[0, 1] >= 0.0 for projection in recovery_leads):
+        limit = self.x0[0] + min(projection.raw_trajectory[0, 0] for projection in recovery_leads) - CRASH_DISTANCE
+        if limit > self.x0[0]:
+          self.rest_recovery_position_limit = float(limit)
+      obstacles = [np.full(N+1, np.inf), np.full(N+1, np.inf)]
+      sources = [LongitudinalPlanSource.cruise, LongitudinalPlanSource.cruise]
+      lead_slots, identities = [None, None], [None, None]
+      for projection in projections:
+        # A reversing target has no positive forward stopping-distance credit.
+        obstacle = (projection.trajectory[:, 0]
+                    + get_stopped_equivalence_factor(np.maximum(projection.trajectory[:, 1], 0.0)))
+        obstacles.append(np.where(projection.occupied, obstacle, np.inf))
+        sources.append(MPC_SOURCES[projection.slot] if projection.slot is not None else LongitudinalPlanSource.lead0)
+        # Additional objects and finite occupancy never inherit lead0's
+        # separately qualified compact distance merely by sharing its enum.
+        compact_slot = (projection.slot if projection.persistent
+                        and qualified_lead(projection.lead, 'stop', now_ns=now_ns) else None)
+        lead_slots.append(compact_slot)
+        identities.append(projection.identity)
+    else:
+      for lead in (radarstate.leadOne, radarstate.leadTwo):
+        if lead.present and not np.all(np.isfinite([lead.dRel, lead.vLead, lead.aLeadK, lead.aLeadTau])):
+          self.fail(MPC_INVALID_INPUT)
+          return
+      present_leads = tuple(lead for lead in (radarstate.leadOne, radarstate.leadTwo) if lead.present)
+    if not fusion_active and present_leads and all(lead.vLead >= 0.0 for lead in present_leads):
       # Lock the geometry before process_lead clips an impossible close distance
       # upward or adds a moving lead's stopping equivalence. Freezing each lead
       # at its observed position is conservative only for non-reversing leads.
@@ -1464,18 +1759,17 @@ class LongitudinalMpc:
       limit = self.x0[0] + min(lead.dRel for lead in present_leads) - CRASH_DISTANCE
       if limit > self.x0[0]:
         self.rest_recovery_position_limit = float(limit)
-    with np.errstate(over='ignore', invalid='ignore'):
-      lead_xv_0 = self.process_lead(radarstate.leadOne)
-      lead_xv_1 = self.process_lead(radarstate.leadTwo)
+    if not fusion_active:
+      with np.errstate(over='ignore', invalid='ignore'):
+        lead_xv_0 = self.process_lead(radarstate.leadOne)
+        lead_xv_1 = self.process_lead(radarstate.leadTwo)
 
-    # To estimate a safe distance from a moving lead, we calculate how much stopping
-    # distance that lead needs as a minimum. We can add that to the current distance
-    # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
-
-    obstacles = [lead_0_obstacle, lead_1_obstacle]
-    sources = list(MPC_SOURCES)
+      # Add the forward lead's stopping distance to form an equivalent
+      # stationary obstacle. The native solver consumes their tightest row.
+      lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
+      lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+      obstacles = [lead_0_obstacle, lead_1_obstacle]
+      sources = list(MPC_SOURCES)
     accel_min, accel_max = ACCEL_MIN, ACCEL_MAX
     ordinary_continuation = False
     if reference is not None:
@@ -1490,7 +1784,7 @@ class LongitudinalMpc:
         and all(values is None for values in (reference.model_position, reference.model_velocity, reference.model_acceleration))
       )
       for lead_index, lead in enumerate((radarstate.leadOne, radarstate.leadTwo)):
-        if not lead.present:
+        if not fusion_active and not lead.present:
           if ordinary_continuation:
             # Keep P's finite process_lead(None) continuation and distance cost.
             # It is not an observed lead and gets no compact-lead adjustment.
@@ -1499,8 +1793,25 @@ class LongitudinalMpc:
             obstacles[lead_index] = np.full(N+1, np.inf)
       obstacles.extend(reference_obstacles)
       sources.extend(reference_sources)
+      if fusion_active:
+        lead_slots.extend([None] * len(reference_sources))
+        identities.extend([None] * len(reference_sources))
+    if fusion_active:
+      # A released crossing leaves no obstacle. Where there is no explicit
+      # cruise/model goal either, retain the same finite ordinary continuation
+      # used by the old no-lead problem, without inventing an observed vehicle.
+      unsupported = ~np.any(np.isfinite(np.column_stack(obstacles)), axis=1)
+      if np.any(unsupported):
+        continuation = self.process_lead(None)
+        continuation_obstacle = continuation[:, 0] + get_stopped_equivalence_factor(continuation[:, 1])
+        for index in (0, 1):
+          obstacles[index][unsupported] = continuation_obstacle[unsupported]
+      self._obstacle_identities = tuple(identities)
     x_obstacles = np.column_stack(obstacles)
-    self.source = sources[np.argmin(x_obstacles[1 if reference is not None else 0])]
+    selected = int(np.argmin(x_obstacles[1 if reference is not None else 0]))
+    self.source = sources[selected]
+    if fusion_active:
+      self.source_object_identity = self._obstacle_identities[selected]
 
     # Scheduling inspects exactly the parameters that this update will solve.
     self.params[:,0] = accel_min
@@ -1511,7 +1822,7 @@ class LongitudinalMpc:
     self.params[:,5] = LEAD_DANGER_FACTOR
 
     try:
-      self.set_reference_problem(reference, x_obstacles, sources, accel_min, t_follow)
+      self.set_reference_problem(reference, x_obstacles, sources, accel_min, t_follow, lead_slots=lead_slots)
     except (TypeError, ValueError, FloatingPointError):
       self.fail(MPC_INVALID_INPUT)
       return
@@ -1525,7 +1836,14 @@ class LongitudinalMpc:
     if self.solution_status != 0:
       return
     self.check_effective_rest_goal()
-    if (radarstate.leadOne.present and np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
+    if fusion_active:
+      if self.solution_status != 0:
+        self.crash_cnt = 0
+        self._fusion_fcw_counts = {}
+        self._fusion_fcw_epochs = {}
+        return
+      self.update_fusion_fcw(projections, now_ns=now_ns)
+    elif (radarstate.leadOne.present and np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
             radarstate.leadOne.modelProb > 0.9):
       self.crash_cnt += 1
     else:
@@ -1535,7 +1853,7 @@ class LongitudinalMpc:
     """Copy a bounded constraint summary; never rebuild a reference or solve."""
     if not self.diagnostic_obstacles_enabled:
       return
-    if obstacles.shape != (N+1, len(sources)) or not 2 <= len(sources) <= 4:
+    if obstacles.shape != (N+1, len(sources)) or not 2 <= len(sources) <= MAX_CONTROL_OBJECTS + 4:
       raise ValueError("Unexpected obstacle summary shape")
     selected = np.argmin(obstacles, axis=1)
     source_names = {value: name for name, value in LongitudinalPlanSource.schema.enumerants.items()}
@@ -1549,6 +1867,14 @@ class LongitudinalMpc:
       'distances': tuple(float(value) for value in self.params[:,2]),
       'sourceRule': source_rule,
     }
+    if self._obstacle_identities:
+      self.diagnostic_last_obstacle_summary.update(
+        objectIdentities=tuple(self._obstacle_identities[index] for index in selected),
+        objectCount=len(self._fusion_projections),
+        occupancy=tuple((projection.identity, projection.conflict_start, projection.conflict_end,
+                         tuple(bool(value) for value in projection.occupied)) for projection in self._fusion_projections),
+        sourceRule='first_minimum_by_bounded_object_order;extra_object_enum_is_lead0',
+      )
 
   def fail(self, status):
     failed_goal = self.rest_goal

@@ -1,0 +1,172 @@
+"""Formal sensor evidence grants a purpose without inventing visual confidence."""
+from types import SimpleNamespace
+
+import pytest
+
+from openpilot.selfdrive.controls.lib.lead_qualification import (
+  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS, control_leads, lead_identity, qualified_lead,
+)
+
+
+NOW = 10_000_000_000
+
+
+def formal_lead(*, now_ns=NOW, source='radar', evidence=None, **changes):
+  evidence_values = dict(
+    version=1, source=source, sessionId='radar-session-a', trackId=7, generation=0,
+    positionMonoTime=now_ns, velocityMonoTime=now_ns, estimateMonoTime=now_ns, modelMonoTime=now_ns,
+    positionStd=.2, velocityStd=.15, positionValid=True, velocityValid=True, accelerationValid=True,
+    followQualified=True, brakeQualified=True, stopQualified=True, departureQualified=True, fcwQualified=True,
+    coasting=source == 'predicted', pathState='inPath', pathOffset=0.0, conflictStart=0.0, conflictEnd=10.0,
+    lateralSpeed=0.0, pathSource='modelPath', visionIndex=0 if source in ('vision', 'fused') else -1, reason='measured',
+  )
+  evidence_values.update(evidence or {})
+  values = dict(present=True, dRel=20.0, yRel=0.0, vRel=0.0, vLead=1.0, vLeadK=1.0,
+                aLeadK=0.0, aLeadTau=1.5, modelProb=.99 if source == 'vision' else 0.0,
+                radar=source != 'vision', radarTrackId=-1 if source == 'vision' else 7,
+                evidence=SimpleNamespace(**evidence_values))
+  values.update(changes)
+  return SimpleNamespace(**values)
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused'])
+@pytest.mark.parametrize('purpose', ['follow', 'brake', 'stop', 'fcw'])
+def test_qualified_radar_has_control_authority_without_visual_probability(source, purpose):
+  lead = formal_lead(source=source, vLead=0.0, vRel=-.3)
+  assert qualified_lead(lead, purpose, now_ns=NOW)
+  assert lead.modelProb == 0.0
+  assert not qualified_lead(lead, 'departure', now_ns=NOW)
+
+
+@pytest.mark.parametrize('probability,expected', [(0.0, False), (.94, False), (.95, True), (1.0, True)])
+def test_legacy_and_formal_vision_keep_the_callers_probability_gate(probability, expected):
+  for lead in (SimpleNamespace(present=True, modelProb=probability), formal_lead(source='vision', modelProb=probability)):
+    assert qualified_lead(lead, 'follow', now_ns=NOW) is expected
+  assert qualified_lead(SimpleNamespace(present=True, modelProb=probability), 'brake', 0.0) is True
+
+
+@pytest.mark.parametrize('field', ['positionMonoTime', 'velocityMonoTime', 'modelMonoTime'])
+def test_republishing_old_measurements_does_not_refresh_their_control_age(field):
+  lead = formal_lead(evidence={field: NOW - MAX_MEASUREMENT_AGE_NS - 1})
+  assert not qualified_lead(lead, 'brake', now_ns=NOW)
+  assert not qualified_lead(lead, 'brake')
+
+
+@pytest.mark.parametrize('field', ['positionMonoTime', 'velocityMonoTime', 'estimateMonoTime', 'modelMonoTime'])
+@pytest.mark.parametrize('stamp', [0, -1, True, NOW + 1])
+def test_invalid_or_future_times_do_not_inherit_boolean_authority(field, stamp):
+  lead = formal_lead(evidence={field: stamp})
+  assert not qualified_lead(lead, 'brake', now_ns=NOW)
+
+
+def test_model_publication_may_follow_camera_eof_without_a_future_measurement():
+  lead = formal_lead(source='vision', evidence={'modelMonoTime': NOW + 50_000_000})
+  assert qualified_lead(lead, 'follow', now_ns=NOW + 50_000_000)
+  assert qualified_lead(lead, 'follow')
+  assert not qualified_lead(lead, 'follow', now_ns=NOW)
+
+
+def test_new_can_sample_may_be_projected_back_to_the_common_camera_time():
+  lead = formal_lead(evidence={'positionMonoTime': NOW + 20_000_000, 'velocityMonoTime': NOW + 20_000_000,
+                               'modelMonoTime': NOW + 40_000_000})
+  assert qualified_lead(lead, 'brake', now_ns=NOW + 50_000_000)
+  assert qualified_lead(lead, 'brake')
+  assert not qualified_lead(lead, 'brake', now_ns=NOW)
+
+
+@pytest.mark.parametrize('field,value', [
+  ('version', True), ('version', 2), ('source', 'legacy'), ('source', 'invalid'),
+  ('sessionId', ''), ('trackId', 0), ('trackId', True), ('generation', -1),
+  ('positionValid', False), ('velocityValid', False), ('brakeQualified', False),
+  ('positionStd', 0.0), ('positionStd', float('nan')), ('velocityStd', float('inf')),
+  ('pathState', 'unknown'), ('pathState', 'outOfPath'), ('pathSource', ''),
+  ('conflictStart', -.1), ('conflictEnd', 0.0), ('lateralSpeed', float('nan')),
+])
+def test_malformed_evidence_cannot_grant_braking(field, value):
+  assert not qualified_lead(formal_lead(evidence={field: value}), 'brake', now_ns=NOW)
+
+
+@pytest.mark.parametrize('field,value', [
+  ('dRel', 0.0), ('dRel', float('nan')), ('vRel', float('inf')), ('vLead', True),
+  ('yRel', float('nan')), ('aLeadK', float('nan')), ('modelProb', 1.01), ('modelProb', float('nan')),
+])
+def test_nonfinite_or_incoherent_formal_values_are_rejected(field, value):
+  assert not qualified_lead(formal_lead(**{field: value}), 'brake', now_ns=NOW)
+
+
+def test_constant_velocity_prior_is_explicit_and_not_a_measured_acceleration():
+  lead = formal_lead(evidence={'accelerationValid': False})
+  assert qualified_lead(lead, 'brake', now_ns=NOW)
+  lead.aLeadK = .1
+  assert not qualified_lead(lead, 'brake', now_ns=NOW)
+
+
+def test_short_prediction_can_only_retain_braking_from_original_measurement_age():
+  lead = formal_lead(source='predicted', evidence={
+    'positionMonoTime': NOW - MAX_PREDICTION_AGE_NS,
+    'velocityMonoTime': NOW - MAX_PREDICTION_AGE_NS,
+  })
+  assert qualified_lead(lead, 'brake', now_ns=NOW)
+  for purpose in ('follow', 'stop', 'departure', 'fcw'):
+    assert not qualified_lead(lead, purpose, now_ns=NOW)
+  assert not qualified_lead(lead, 'brake', now_ns=NOW + 1)
+
+
+def test_entering_object_only_gets_risk_authority_during_its_occupancy():
+  lead = formal_lead(evidence={'pathState': 'entering', 'conflictStart': .05, 'conflictEnd': .1})
+  assert qualified_lead(lead, 'brake', now_ns=NOW)
+  assert qualified_lead(lead, 'fcw', now_ns=NOW)
+  for purpose in ('follow', 'stop', 'departure'):
+    assert not qualified_lead(lead, purpose, now_ns=NOW)
+  assert not qualified_lead(lead, 'brake', now_ns=NOW + 100_000_000)
+  assert qualified_lead(lead, 'brake', now_ns=NOW + 100_000_000, require_active_window=False)
+  assert not qualified_lead(lead, 'brake', now_ns=NOW + 200_000_001, require_active_window=False)
+
+
+def test_departure_flag_needs_fresh_forward_motion_and_is_not_an_identity_proof():
+  lead = formal_lead(vLead=.8, vRel=.8)
+  assert qualified_lead(lead, 'departure', now_ns=NOW)
+  lead.evidence.departureQualified = False
+  assert not qualified_lead(lead, 'departure', now_ns=NOW)
+  lead.evidence.departureQualified = True
+  lead.vRel = 0.0
+  assert not qualified_lead(lead, 'departure', now_ns=NOW)
+
+
+@pytest.mark.parametrize('distance', [-1.52, -.2, 0.0])
+def test_very_close_visual_cut_in_remains_a_braking_risk_after_bumper_conversion(distance):
+  lead = formal_lead(source='vision', dRel=distance)
+  assert qualified_lead(lead, 'brake', now_ns=NOW)
+  assert qualified_lead(lead, 'fcw', now_ns=NOW)
+  assert not qualified_lead(lead, 'follow', now_ns=NOW)
+  assert not qualified_lead(lead, 'departure', now_ns=NOW)
+  assert not qualified_lead(formal_lead(source='vision', dRel=-1.53), 'brake', now_ns=NOW)
+
+
+def test_physical_identity_survives_slot_generation_but_not_restart_or_new_track():
+  first = formal_lead()
+  migrated = formal_lead(evidence={'generation': 12})
+  restarted = formal_lead(evidence={'sessionId': 'radar-session-b'})
+  different = formal_lead(evidence={'trackId': 8})
+  assert lead_identity(first) == lead_identity(migrated) == ('radar-session-a', 7)
+  assert lead_identity(first) != lead_identity(restarted)
+  assert lead_identity(first) != lead_identity(different)
+  assert lead_identity(formal_lead(source='vision')) is None
+
+
+def test_full_risk_collection_preserves_independent_targets_and_display_fallback():
+  far = formal_lead(dRel=70.0)
+  nearby = formal_lead(dRel=10.0, evidence={'trackId': 8})
+  crossing = formal_lead(dRel=25.0, evidence={'trackId': 9, 'pathState': 'entering'})
+  visual = formal_lead(source='vision', dRel=8.0)
+  radar = SimpleNamespace(fusionActive=True, radarObjects=[far, nearby, crossing, visual], leadOne=far, leadTwo=visual)
+  assert control_leads(radar, 'brake', now_ns=NOW) == (far, nearby, crossing, visual)
+  assert control_leads(radar, 'stop', now_ns=NOW) == (far, nearby, visual)
+  radar.fusionActive = False
+  assert control_leads(radar) == (far, visual)
+
+
+def test_equal_ranges_do_not_merge_distinct_tracks_and_oversize_is_not_silently_cut():
+  leads = [formal_lead(evidence={'trackId': index + 1}) for index in range(MAX_CONTROL_OBJECTS + 1)]
+  radar = SimpleNamespace(fusionActive=True, radarObjects=leads, leadOne=leads[0], leadTwo=leads[1])
+  assert control_leads(radar) == tuple(leads)

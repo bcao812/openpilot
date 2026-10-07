@@ -1,7 +1,8 @@
 """Optional Accord telemetry; no control or sendcan publisher.
 
-Mode 3 also supplies observations to the separately gated acceleration guard.
-The shadow fusion estimates themselves have no lead or braking authority.
+Mode 3 supplies observations to the acceleration guard. Mode 4 supplies the
+formal radar publisher's separately qualified control objects. This process
+never publishes a control command or a formal lead.
 """
 import time
 import uuid
@@ -99,6 +100,7 @@ class HondaRadarObserver:
     msg.logMonoTime = now_ns
     body = getattr(msg, SERVICE)
     body.schemaVersion = 1
+    body.mode = settings.mode
     body.decoderVersion = DECODER_VERSION
     body.sessionId = self.session_id
     body.sequence = self.sequence
@@ -122,7 +124,7 @@ class HondaRadarObserver:
         # Reuse this call's decoder events after the schema validation above.
         # Their measurements are Float64; headers retain the wire-normalized
         # values. No native observation fields need to be read back for fusion.
-        fusion_body = {'schemaVersion': body.schemaVersion, 'sessionId': body.sessionId, 'sequence': body.sequence,
+        fusion_body = {'schemaVersion': body.schemaVersion, 'mode': body.mode, 'sessionId': body.sessionId, 'sequence': body.sequence,
                        'active': body.active, 'counters': body.counters, 'scope': body.scope, 'observations': observations}
         body.fusion = self.fusion.update(fusion_body, fusion_sm, now_ns)
       except Exception:
