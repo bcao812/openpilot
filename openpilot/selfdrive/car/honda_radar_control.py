@@ -185,6 +185,23 @@ class _Corridor:
         segments.append((px, py, (qx - px) / length, (qy - py) / length, length))
     object.__setattr__(self, '_segments', tuple(segments))
 
+  def current_distance_exceeds(self, x, y, limit):
+    """Current disagreement for finite geometry already checked by _points.
+
+    The lane gate only asks whether every segment is farther than its limit.
+    Finding any segment within it settles that question without choosing a
+    signed nearest projection or computing motion along the other segments.
+    """
+    if not self._segments or not self.points[0][0] <= x <= self.points[-1][0]:
+      return False  # No supported current relation, as in relation().
+    for px, py, dx, dy, length in self._segments:
+      rx, ry = x - px, y - py
+      along = rx * dx + ry * dy
+      nearest = min(length, max(0.0, along))
+      if math.hypot(rx - nearest * dx, ry - nearest * dy) <= limit:
+        return False
+    return True
+
   def relation(self, x, y, vx, vy, horizon=HORIZON, half_width=OVERLAP_HALF_WIDTH):
     if not self.points:
       return _Path()
@@ -355,12 +372,8 @@ def _corridors(model):
     center = (lx + rx) * .5, (ly + ry) * .5
     # A lane change/turn whose actual planned path disagrees with the lane
     # center cannot extend that path using a different lane's distant geometry.
-    if path.points:
-      # Only the current offset/unknown result is consumed here. Preserve the
-      # full finite-polyline projection without computing future occupancy.
-      comparison = path.relation(*center, 0.0, 0.0, horizon=0.0)
-      if comparison.state != 'unknown' and abs(comparison.offset) > .75:
-        return path, lane
+    if path.current_distance_exceeds(*center, .75):
+      return path, lane
     centers.append(center)
   return path, _Corridor(tuple(centers), 'laneLines')
 

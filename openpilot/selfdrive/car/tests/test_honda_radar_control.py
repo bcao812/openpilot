@@ -83,12 +83,16 @@ def test_static_lane_comparison_preserves_consumed_full_relation_fields(points):
   # agreement threshold, without replacing the polyline with its tangent.
   for x, y in points:
     samples.extend((x, y + offset) for offset in (-2.0, -.750000001, -.75, 0.0, .75, .750000001, 2.0))
+    samples.extend((x, y + offset) for offset in (math.nextafter(.75, 0.0), math.nextafter(.75, math.inf)))
     samples.extend(((math.nextafter(x, -math.inf), y), (math.nextafter(x, math.inf), y)))
   for x, y in samples:
     full = corridor.relation(x, y, 0.0, 0.0)
     current = corridor.relation(x, y, 0.0, 0.0, horizon=0.0)
     # These are exactly the fields the lane/path disagreement gate consumes.
     assert (current.state == 'unknown', current.offset) == (full.state == 'unknown', full.offset), (points, x, y)
+    for limit in (0.0, .75, SWEPT_HALF_WIDTH, 2.0):
+      expected = full.state != 'unknown' and abs(full.offset) > limit
+      assert corridor.current_distance_exceeds(x, y, limit) is expected, (points, x, y, limit)
 
 
 @pytest.mark.parametrize('curve', [False, True])
@@ -101,13 +105,12 @@ def test_static_lane_projection_preserves_corridor_admission(monkeypatch, curve,
     line['x'] = list(model['position']['x'])
     line['y'] = [y + offset + width for y in model['position']['y']]
   current = _corridors(model)
-  relation = _Corridor.relation
 
-  def full_relation(self, *args, **kwargs):
-    kwargs['horizon'] = HORIZON
-    return relation(self, *args, **kwargs)
+  def full_relation_disagrees(self, x, y, limit):
+    result = self.relation(x, y, 0.0, 0.0)
+    return result.state != 'unknown' and abs(result.offset) > limit
 
-  monkeypatch.setattr(_Corridor, 'relation', full_relation)
+  monkeypatch.setattr(_Corridor, 'current_distance_exceeds', full_relation_disagrees)
   assert current == _corridors(model)
   if not curve:
     assert bool(current[1].points) is (abs(offset) <= .75)
