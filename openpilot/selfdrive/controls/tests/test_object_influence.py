@@ -42,7 +42,7 @@ def receipt(records, *, phase='track', resolved_stop=False, constrained=False, *
   for key, value in changes.items():
     if key.startswith('plan_') and key not in ('plan_ns', 'plan_valid'):
       setattr(plan, key[5:], value)
-    elif key.startswith('owner_'):
+    elif key.startswith('owner_') and key != 'owner_tracking':
       setattr(owner, key[6:], value)
     elif key.startswith('car_'):
       setattr(car, key[4:], value)

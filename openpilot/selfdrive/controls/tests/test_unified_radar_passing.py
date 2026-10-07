@@ -126,7 +126,7 @@ def test_independent_final_braking_or_uncertainty_vetoes_passing_before_native_s
   if blocker == 'negative_model':
     assert planner.reference_planner.model_reference_mode == 'action_capped_absolute'
     assert reference.typed_model is None and reference.model_velocity is None
-    assert planner.output_a_target <= -.7
+    assert planner.output_a_target <= state['modelV2'].action.desiredAcceleration
   if blocker == 'cruise_history_brake':
     assert planner.reference_planner.cruise_response._previous_accel is None or planner.reference_planner.cruise_response._previous_accel < 0.0
   if blocker == 'short_preview':

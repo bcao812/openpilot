@@ -132,8 +132,16 @@ def test_real_numeric_pid_owner_acknowledges_adopted_departure_during_brake_rele
   assert motion.objectInfluences[0].kind == 'release'
 
 
-def physical_braking_consumer(*, include_influence=True):
+def physical_braking_consumer(*, include_influence=True, warm_transport=True):
   consumer = ControlsHarness()
+  if warm_transport:
+    # The independent braking envelope requires the real per-service
+    # frequency receipt, even though this general harness ignores frequency
+    # in all_checks(). Establish 100 Hz control / 20 Hz plan transport first.
+    for frame in range(10):
+      consumer.step(new_plan=frame % 5 == 0)
+    assert consumer.control.sm.freq_ok['carState']
+    assert consumer.control.sm.freq_ok['longitudinalPlan']
   consumer.events['longitudinalPlan'].valid = False
   consumer.plan.solverStatus = -6
   consumer.plan.aTarget = -3.5
@@ -143,6 +151,15 @@ def physical_braking_consumer(*, include_influence=True):
   if include_influence:
     consumer.plan.objectInfluences = [dict(object_record('braking', 1.0), version=2)]
   return consumer
+
+
+def test_cold_transport_cannot_acknowledge_a_physical_brake_before_owner_adoption():
+  consumer = physical_braking_consumer(warm_transport=False)
+  command, motion = consumer.step()
+  assert not consumer.control.sm.freq_ok['longitudinalPlan']
+  assert consumer.control.LoC.motion_supervisor.degraded_braking_accel is None
+  assert command.actuators.accel == pytest.approx(-0.2)
+  assert not motion.objectInfluences
 
 
 def test_independent_physical_brake_receipt_survives_invalid_main_plan_without_changing_actuation():
@@ -173,6 +190,10 @@ def test_physical_brake_receipt_does_not_bypass_owner_or_current_message_qualifi
   consumer = physical_braking_consumer()
   _, motion = consumer.step()
   assert motion.objectInfluences
+  # Keep the accepted plan at 20 Hz so each following rejection exercises its
+  # intended cause, not an accidental 100 Hz plan-frequency violation.
+  for _ in range(4):
+    assert consumer.step(new_plan=False)[1].objectInfluences
   if case == 'manual':
     consumer.car_state.gasPressed = True
   elif case == 'bad_braking_contract':
