@@ -103,7 +103,8 @@ class HondaRadarObserver:
     body.radarBus = self.decoder.bus
     body.lastRadarFrameMonoTime = self.decoder.last_frame_ns
     body.lastPositionMonoTime = self.decoder.last_position_ns
-    body.observations = self.decoder.drain()
+    observations = self.decoder.drain()
+    body.observations = observations
     body.counters = self.decoder.counts
     body.scope = scope
     body.calibrated = False
@@ -114,7 +115,12 @@ class HondaRadarObserver:
       try:
         if self.fusion_input_error or self.fusion is None:
           raise ValueError('Invalid shadow input since the previous publication')
-        body.fusion = self.fusion.update(body, fusion_sm, now_ns)
+        # Reuse this call's decoder events after the schema validation above.
+        # Their measurements are Float64; headers retain the wire-normalized
+        # values. No native observation fields need to be read back for fusion.
+        fusion_body = {'schemaVersion': body.schemaVersion, 'sessionId': body.sessionId, 'sequence': body.sequence,
+                       'active': body.active, 'counters': body.counters, 'scope': body.scope, 'observations': observations}
+        body.fusion = self.fusion.update(fusion_body, fusion_sm, now_ns)
       except Exception:
         # A shadow calculation failure must not interrupt raw observation or
         # leave a previously computed candidate apparently current.

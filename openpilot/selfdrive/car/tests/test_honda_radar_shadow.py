@@ -1,10 +1,14 @@
 """Native schema, observer boundary and isolated process tests for shadow fusion."""
+from collections import deque
+from itertools import permutations
 import os
 import subprocess
 import sys
 import time
 import unittest
 from unittest.mock import Mock, patch
+
+import numpy as np
 
 from openpilot.cereal import messaging
 from openpilot.common.params import Params
@@ -39,6 +43,22 @@ def fusion_state(t):
   sm.seen = dict.fromkeys(sm, True)
   sm.logMonoTime = dict.fromkeys(sm, t)
   return sm
+
+
+def exact_fusion_state(value):
+  if isinstance(value, np.ndarray):
+    return value.dtype.str, value.shape, value.tobytes(), value.flags.writeable
+  if isinstance(value, float):
+    return value.hex()
+  if isinstance(value, dict):
+    return {key: exact_fusion_state(item) for key, item in value.items()}
+  if isinstance(value, deque):
+    return 'deque', value.maxlen, tuple(exact_fusion_state(item) for item in value)
+  if isinstance(value, (list, tuple)):
+    return type(value).__name__, tuple(exact_fusion_state(item) for item in value)
+  if hasattr(value, '__dict__'):
+    return exact_fusion_state(vars(value))
+  return value
 
 
 class TestHondaRadarShadow(unittest.TestCase):
@@ -107,6 +127,79 @@ class TestHondaRadarShadow(unittest.TestCase):
       self.assertEqual(decoded.fusion.leads[0].state, 'fused')
       self.assertGreater(decoded.fusion.leads[0].distanceWeight, 0)
 
+  def test_decoder_events_match_wire_fusion_outputs_and_internal_state(self):
+    # Only events emitted by the real decoder qualify for the direct view.
+    # Arbitrary sparse dictionaries are not equivalent to native zero defaults.
+    scans = [scan_frames(index=frame % 16, life=1 + 2 * frame, velocity=864) for frame in range(12)]
+    streams = {
+      'continuous': [(frame * STEP, frames) for frame, frames in enumerate(scans)],
+      'late_aux': [(0, scans[0][:4]), (30_000_000, scans[0][4:]), (STEP, scans[1]), (2 * STEP, scans[2])],
+      'incomplete': [(0, scans[0][:3]), (4 * STEP, []), (5 * STEP, scans[5])],
+      'expired': [(0, scans[0]), (4 * STEP, []), (5 * STEP, scans[5])],
+      'invalid_geometry': [(0, scans[0]), (STEP, scan_frames(index=1, life=3, distance=0, velocity=864)), (2 * STEP, scans[2])],
+      'invalid_velocity': [(0, scans[0]), (STEP, scan_frames(index=1, life=3, velocity=2047)), (2 * STEP, scans[2])],
+      'conflicting_frame': [(0, scans[0]),
+                            (STEP, scans[1] + scan_frames(index=1, life=3, distance=1001, velocity=864)[:1]),
+                            (2 * STEP, scans[2])],
+      'duplicate': [(0, scans[0] + scans[0]), (STEP, scans[1]), (2 * STEP, scans[2])],
+      'migration': [(frame * STEP, scan_frames(slot=frame % 3, index=frame, life=1 + 2 * frame, oem_id=7, velocity=864))
+                    for frame in range(8)] + [(9 * STEP, [])],
+      'plateau_and_wrap': [(frame * STEP, scan_frames(slot=frame % 2, index=(14 + frame) % 16, life=4094, oem_id=7, velocity=864))
+                           for frame in range(8)],
+      'slot_conflict': [(0, scan_frames(oem_id=7, velocity=864)),
+                        (STEP, scan_frames(index=1, life=3, oem_id=7, velocity=864) +
+                         scan_frames(slot=1, index=1, life=3, oem_id=7, velocity=864)),
+                        (2 * STEP, scan_frames(slot=1, index=2, life=5, oem_id=7, velocity=864))],
+      'reassignment': [(0, scan_frames(oem_id=7, velocity=864)),
+                       (STEP, scan_frames(index=1, life=3, oem_id=8, velocity=864)),
+                       (2 * STEP, scan_frames(index=2, life=5, oem_id=8, velocity=864))],
+      'no_radar': [(0, []), (STEP, [])],
+    }
+    for order in permutations(range(5)):
+      streams[f'order_{order}'] = [(0, [scans[0][part] for part in order])]
+    reasons = set()
+    for dec in ('acc', 'blended'):
+      for name, steps in streams.items():
+        with self.subTest(dec=dec, stream=name):
+          observer = HondaRadarObserver(*configuration(), session_id='decoder-view-test')
+          wire_fusion = HondaRadarFusion()
+          for offset, frames in steps:
+            t = START + offset
+            sm = fusion_state(t)
+            sm['longitudinalPlanSP'].dec.state = dec
+            before = {key: value.to_dict() for key, value in sm.items()}
+            # The observer retains ego history on nonpublication ticks too.
+            wire_fusion.record_inputs(sm, t + 1)
+            msg = observer.update([can_message(t, frames)] if frames else [], sm, SHADOW_SETTINGS, t + 1, sm)
+            if msg is not None:
+              decoded = messaging.log_from_bytes(msg.to_bytes()).hondaRadarObservations
+              expected = wire_fusion.update(decoded, sm, t + 1)
+              actual = decoded.fusion.to_dict()
+              del actual['processingTimeNs'], expected['processingTimeNs']
+              self.assertEqual(exact_fusion_state(actual), exact_fusion_state(expected), (name, offset))
+              self.assertFalse(decoded.fusion.calibrated or decoded.fusion.controlAllowed)
+              reasons.update(event.reason for event in decoded.observations)
+            self.assertEqual(exact_fusion_state(observer.fusion), exact_fusion_state(wire_fusion), (name, offset))
+            self.assertEqual({key: value.to_dict() for key, value in sm.items()}, before)
+          if name == 'migration':
+            self.assertEqual(observer.fusion.tracks[7].slot, 1)
+    self.assertTrue({'positionOnly', 'uncalibrated', 'incomplete', 'expired', 'invalidGeometry',
+                     'invalidVelocity', 'conflictingFrame'}.issubset(reasons), reasons)
+
+  def test_decoder_schema_rejection_precedes_fusion(self):
+    observer = HondaRadarObserver(*configuration())
+    drain = observer.decoder.drain
+    def malformed_events():
+      events = drain()
+      events[0]['notAnObservationField'] = 1
+      return events
+    sm = fusion_state(START)
+    with patch.object(observer.decoder, 'drain', side_effect=malformed_events), \
+         patch.object(HondaRadarFusion, 'update') as calculate, \
+         self.assertRaisesRegex(AttributeError, 'notAnObservationField'):
+      observer.update([can_message(START, scan_frames())], sm, SHADOW_SETTINGS, START + 1, sm)
+    calculate.assert_not_called()
+
   def test_each_scope_flag_clears_candidates(self):
     for key in ('alpha', 'experimental', 'dec', 'experimentalActive', 'decEnabled', 'decActive'):
       observer = HondaRadarObserver(*configuration())
@@ -143,6 +236,9 @@ class TestHondaRadarShadow(unittest.TestCase):
     self.assertEqual(msg.hondaRadarObservations.fusion.leads[0].distanceWeight, 0)
 
   def test_input_calculation_serialization_and_init_failures_preserve_raw_log(self):
+    baseline = HondaRadarObserver(*configuration())
+    expected = baseline.update([can_message(START, scan_frames())], state(START), SETTINGS, START + 1)
+    expected_observations = expected.hondaRadarObservations.to_dict()['observations']
     for method, result in (('record_inputs', RuntimeError('fixture input')), ('update', RuntimeError('fixture compute')),
                            ('update', {'notAField': 1}), ('__init__', RuntimeError('fixture import/init'))):
       observer = HondaRadarObserver(*configuration())
@@ -151,6 +247,7 @@ class TestHondaRadarShadow(unittest.TestCase):
         sm = fusion_state(START)
         msg = observer.update([can_message(START, scan_frames())], sm, SHADOW_SETTINGS, START + 1, sm)
       value = messaging.log_from_bytes(msg.to_bytes()).hondaRadarObservations
+      self.assertEqual(value.to_dict()['observations'], expected_observations)
       self.assertTrue(value.observations[-1].positionValid)
       self.assertTrue(value.active)
       self.assertFalse(value.fusion.active or value.fusion.controlAllowed)
@@ -162,6 +259,30 @@ class TestHondaRadarShadow(unittest.TestCase):
       msg = observer.update([can_message(t, scan_frames(index=1, life=3))], sm, SHADOW_SETTINGS, t + 1, sm)
       self.assertTrue(msg.hondaRadarObservations.fusion.active)
       self.assertEqual(msg.hondaRadarObservations.fusion.tracks[0].observations, 1)
+
+  def test_fusion_failure_retracts_existing_state_before_recovery(self):
+    observer = HondaRadarObserver(*configuration())
+    for frame in range(4):
+      t = START + frame * STEP
+      sm = fusion_state(t)
+      observer.update([can_message(t, scan_frames(index=frame, life=1 + 2 * frame, velocity=864))],
+                      sm, SHADOW_SETTINGS, t + 1, sm)
+    self.assertTrue(observer.fusion.tracks and observer.fusion.bindings and observer.fusion.history.samples)
+    t = START + 4 * STEP
+    sm = fusion_state(t)
+    with patch.object(observer.fusion, 'update', side_effect=RuntimeError('fixture existing candidate')), \
+         patch('openpilot.common.swaglog.cloudlog.exception'):
+      msg = observer.update([can_message(t, scan_frames(index=4, life=9, velocity=864))], sm, SHADOW_SETTINGS, t + 1, sm)
+    value = messaging.log_from_bytes(msg.to_bytes()).hondaRadarObservations
+    self.assertTrue(value.observations[-1].positionValid)
+    self.assertEqual(value.fusion.reason, 'fusionError')
+    self.assertFalse(value.fusion.tracks or value.fusion.leads or value.fusion.controlAllowed)
+    self.assertFalse(observer.fusion.tracks or observer.fusion.bindings or observer.fusion.history.samples)
+    t += STEP
+    sm = fusion_state(t)
+    msg = observer.update([can_message(t, scan_frames(index=5, life=11, velocity=864))], sm, SHADOW_SETTINGS, t + 1, sm)
+    self.assertEqual(msg.hondaRadarObservations.fusion.tracks[0].observations, 1)
+    self.assertEqual(msg.hondaRadarObservations.fusion.leads[0].distanceWeight, 0)
 
   def test_shadow_process_receives_model_and_can_in_private_ipc(self):
     with OpenpilotPrefix():
