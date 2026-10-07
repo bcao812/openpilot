@@ -427,6 +427,9 @@ def test_validated_collection_is_immutable_and_expiry_builds_a_new_collection():
   assert consumer.degraded and consumer.lost_identities == ((SESSION, 7),)
   assert [lead.evidence.trackId for lead in control_leads(first)] == [7, 8]
   assert not control_leads(first, 'brake', now_ns=boundary + 250_000_000)
+  native.fusionActive = False
+  assert first.fusionActive and first.to_dict()['fusionActive']
+  assert control_leads(first) is objects
 
 
 @pytest.mark.parametrize('field', ['followQualified', 'stopQualified', 'departureQualified', 'fcwQualified'])

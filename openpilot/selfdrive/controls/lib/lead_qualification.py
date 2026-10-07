@@ -36,8 +36,9 @@ class _StructSnapshot:
       key: _StructSnapshot(value) if isinstance(value, dict) else value for key, value in values.items()
     }))
     object.__setattr__(self, '_cache_safe', all(
-      type(value) in (bool, int, float, str, type(None)) or type(value) is _StructSnapshot and value._cache_safe
-      for value in self._values.values()))
+      type(key) is str and (type(value) in (bool, int, float, str, type(None))
+                           or type(value) is _StructSnapshot and value._cache_safe)
+      for key, value in self._values.items()))
     object.__setattr__(self, '_facts', None)
     object.__setattr__(self, '_identity', _UNREAD)
     object.__setattr__(self, '_key', _UNREAD)

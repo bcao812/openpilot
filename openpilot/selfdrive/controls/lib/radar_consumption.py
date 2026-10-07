@@ -73,7 +73,7 @@ class RadarConsumptionView(_ControlLeadView):
   def to_dict(self):
     return {**self._radar.to_dict(), 'radarObjects': [lead.to_dict() for lead in self.radarObjects],
             'leadOne': self.leadOne.to_dict(), 'leadTwo': self.leadTwo.to_dict(),
-            'fusionRiskUnresolved': self.fusionRiskUnresolved}
+            'fusionActive': self.fusionActive, 'fusionRiskUnresolved': self.fusionRiskUnresolved}
 
 
 @dataclass(frozen=True)
