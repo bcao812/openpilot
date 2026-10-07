@@ -20,6 +20,7 @@ MIN_VISION_BRAKE_DISTANCE = -1.52  # Camera origin to the front bumper, as in ra
 PURPOSES = ('follow', 'brake', 'stop', 'departure', 'fcw', 'caution')
 SOURCES = ('vision', 'radar', 'fused', 'predicted')
 _UNREAD = object()
+_SCALAR_TYPES = (bool, int, float, str, type(None))
 
 
 class _ControlLeadView:
@@ -32,13 +33,15 @@ class _StructSnapshot:
   __slots__ = ('_values', '_cache_safe', '_facts', '_identity', '_key')
 
   def __init__(self, values):
-    object.__setattr__(self, '_values', MappingProxyType({
-      key: _StructSnapshot(value) if isinstance(value, dict) else value for key, value in values.items()
-    }))
-    object.__setattr__(self, '_cache_safe', all(
-      type(key) is str and (type(value) in (bool, int, float, str, type(None))
-                           or type(value) is _StructSnapshot and value._cache_safe)
-      for key, value in self._values.items()))
+    frozen, cache_safe = {}, True
+    for key, value in values.items():
+      if isinstance(value, dict):
+        value = _StructSnapshot(value)
+      frozen[key] = value
+      cache_safe = cache_safe and type(key) is str and (type(value) in _SCALAR_TYPES
+                                                      or type(value) is _StructSnapshot and value._cache_safe)
+    object.__setattr__(self, '_values', MappingProxyType(frozen))
+    object.__setattr__(self, '_cache_safe', cache_safe)
     object.__setattr__(self, '_facts', None)
     object.__setattr__(self, '_identity', _UNREAD)
     object.__setattr__(self, '_key', _UNREAD)

@@ -88,8 +88,11 @@ def _published_objects(radar, publication_ns):
   raw = tuple(radar.radarObjects)
   if len(raw) > MAX_CONTROL_OBJECTS:
     return None
-  signatures = {}
+  signatures, objects = {}, []
+  collect_snapshots = type(radar) is RadarConsumptionView
   for lead in (*raw, radar.leadOne, radar.leadTwo):
+    scalar_snapshot = type(lead) is _StructSnapshot and lead._cache_safe
+    collect_snapshots = collect_snapshots and scalar_snapshot
     if _read(lead, 'present') is not True:
       continue
     evidence = _read(lead, 'evidence')
@@ -102,13 +105,23 @@ def _published_objects(radar, publication_ns):
     key = _object_key(lead)
     if key is None:
       return None
-    signature = (tuple(_read(lead, field) for field in _LEAD_FIELDS),
-                 tuple(_read(evidence, field) for field in _EVIDENCE_FIELDS),
-                 str(_read(evidence, 'source')), str(_read(evidence, 'pathState')))
-    if key in signatures and signatures[key] != signature:
-      return None
+    if scalar_snapshot and type(evidence) is _StructSnapshot:
+      # These are the same fields/defaults as _read, already captured once.
+      signature = (tuple(map(lead._values.get, _LEAD_FIELDS)), tuple(map(evidence._values.get, _EVIDENCE_FIELDS)),
+                   str(evidence.get('source')), str(evidence.get('pathState')))
+    else:
+      collect_snapshots = False
+      signature = (tuple(_read(lead, field) for field in _LEAD_FIELDS),
+                   tuple(_read(evidence, field) for field in _EVIDENCE_FIELDS),
+                   str(_read(evidence, 'source')), str(_read(evidence, 'pathState')))
+    if key in signatures:
+      if signatures[key] != signature:
+        return None
+    else:
+      objects.append(lead)
     signatures[key] = signature
-  objects = control_leads(radar)
+  # Install representatives only after every raw/display view was checked.
+  objects = tuple(objects) if collect_snapshots and radar.fusionActive is True else control_leads(radar)
   return objects if len(objects) <= MAX_CONTROL_OBJECTS else None
 
 
@@ -138,6 +151,12 @@ class RadarConsumption:
     self._lost = {}
     self._overflow_loss = False
     self.expired_identities = ()
+    self.clear_publication()
+
+  def clear_publication(self):
+    """Discard this tick's optional display reuse, without changing losses."""
+    self.publication_view = None
+    self.publication_ns = None
 
   @property
   def degraded(self):
@@ -149,6 +168,7 @@ class RadarConsumption:
 
   def update(self, radar, *, publication_ns, now_ns, speed, retain_losses=True):
     self.expired_identities = ()
+    self.clear_publication()
     radar = _as_reader(radar)
     if (getattr(radar, 'fusionActive', False) is not True or not _integer(publication_ns, 1)
         or not _integer(now_ns, 1) or publication_ns > now_ns or not _finite(speed) or speed < 0.0):
@@ -216,6 +236,8 @@ class RadarConsumption:
           self._lost[identity] = _Loss(publication_ns, _read(evidence, 'positionMonoTime'),
                                        _read(evidence, 'velocityMonoTime'))
     self.expired_identities = tuple(identities)
+    if cache_collection:
+      self.publication_view, self.publication_ns = radar, publication_ns
     if not expired:
       return radar
     view = RadarConsumptionView(radar, expired)

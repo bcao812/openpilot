@@ -309,6 +309,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.observation = PlannerObservation.create(CP, CP_SP, enabled=diagnostics)
     self.observation_attempt = None
     self.observation_result = None
+    self._radar_publication = None
     self.longitudinal_mode = resolve_longitudinal_mode(CP, CP_SP)
     self.unified = self.longitudinal_mode == LongitudinalMode.UNIFIED
     self.motion_enabled = self.unified
@@ -342,6 +343,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # recorded consumer time explicitly; input timestamps cannot date themselves.
     if now_ns is None:
       now_ns = time.monotonic_ns()
+    self._radar_publication = None
     self.observation_result = None
     self.observation_attempt = observe(self.observation, "begin", self, sm, now_ns=now_ns, passive_version=PASSIVE_PITCH_VERSION)
     observe_trace(self.trace, "begin_attempt", self, sm)
@@ -416,7 +418,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.update_passive_state(sm, now_ns=now_ns)
       observe(self.observation, "record_analysis", self.observation_attempt, passiveCompleted=True)
     if self.unified:
+      consumption = self.reference_planner.radar_consumption
+      consumption.clear_publication()
       self.reference_planner.update(sm, now_ns=now_ns)
+      view = consumption.publication_view
+      source = sm['radarState']
+      if (self.reference_planner.fusion_admitted and view is not None and view._radar is source
+          and consumption.publication_ns == sm.logMonoTime.get('radarState')):
+        # Keep the complete publication for display attribution: an expired
+        # coast may still identify an actually retained HOLD barrier. Readers
+        # must be the exact update input; mutable builders keep the old path.
+        self._radar_publication = (source, consumption.publication_ns, sm.logMonoTime.get('modelV2'), view)
       return
     return self._update_legacy_reference(sm)
 
@@ -646,6 +658,14 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if self.trace is not None:
       observe_trace(self.trace, "finish", self, candidates, is_e2e)
 
+  def _radar_for_publish(self, sm):
+    source = sm['radarState']
+    publication = getattr(self, '_radar_publication', None)
+    if (publication is not None and source is publication[0]
+        and sm.logMonoTime.get('radarState') == publication[1] and sm.logMonoTime.get('modelV2') == publication[2]):
+      return publication[3]
+    return source
+
   def publish(self, sm, pm):
     plan_send = messaging.new_message('longitudinalPlan', logMonoTime=time.monotonic_ns())
 
@@ -683,8 +703,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                           or evidence is not None and (evidence.no_forward or evidence.has_rest_intent)
                           or ref.e2e_allowed and sm['modelV2'].action.shouldStop)
       try:
+        radar = self._radar_for_publish(sm)
         longitudinalPlan.objectInfluences = plan_object_influences(
-          sm['radarState'], active_identities=getattr(self.mpc, 'object_influence_identities', ()),
+          radar, active_identities=getattr(self.mpc, 'object_influence_identities', ()),
           now_ns=int(plan_send.logMonoTime), permitted=bool(plan_send.valid and intent.valid and intent.ready and not ref.standby),
           fusion_admitted=ref.fusion_admitted,
           reference_accepted=bool(not ref.reference_overridden and abs(self.output_a_target - ref.reference_accel) < 1e-6
@@ -697,7 +718,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         mitigation = getattr(ref, 'mitigation_object_evidence', ())
         if mitigation and all(isinstance(proof, FiniteRiskEvidence) for proof in mitigation):
           longitudinalPlan.objectInfluences = mitigation_plan_object_influences(
-            sm['radarState'], mitigation,
+            radar, mitigation,
             selected=bool(ref.fusion_admitted and not plan_send.valid and self.mpc.solution_status != 0 and intent.is_braking_valid()),
             now_ns=int(plan_send.logMonoTime), consumed_ns=int(longitudinalPlan.reference.producerMonoTime),
             reference_ns=int(longitudinalPlan.reference.referenceMonoTime),

@@ -443,3 +443,45 @@ def test_duplicate_role_conflicts_prevent_installing_a_deduplicated_collection(f
   assert len(view.radarObjects) == 1 and view.leadOne.present
   assert getattr(view.radarObjects[0].evidence, field) is True
   assert getattr(view.leadOne.evidence, field) is False
+
+
+def test_complete_publication_reuse_keeps_expired_hold_attribution_and_loss():
+  from openpilot.selfdrive.controls.tests.test_object_influence import plan_records
+
+  native = native_frame(radar_frame(coast(relevant=True)))
+  raw = native.as_reader()
+  consumer = RadarConsumption()
+  consumed = consume_frame(consumer, raw)
+  publication = consumer.publication_view
+  assert publication is not None and publication._radar is raw and consumer.publication_ns == PUBLICATION
+  assert not consumed.radarObjects and len(publication.radarObjects) == 1
+  assert consumer.degraded and consumer.lost_identities == ((SESSION, 7),)
+  kwargs = {'now_ns': CONSUMPTION, 'reference_accepted': False, 'held_identity': (SESSION, 7), 'target_accel': 0.0}
+  raw_records = plan_records(raw, **kwargs)
+  assert raw_records and raw_records[0]['kind'] == 'hold'
+  assert plan_records(publication, **kwargs) == raw_records
+  assert not plan_records(consumed, **kwargs)
+  consumer.clear_publication()
+  assert consumer.publication_view is None and consumer.publication_ns is None
+  assert consumer.degraded and consumer.lost_identities == ((SESSION, 7),)
+
+
+@pytest.mark.parametrize('defect', ['role_conflict', 'inactive', 'invalid_speed', 'undecodable_absent'])
+def test_publication_reuse_is_cleared_before_each_invalid_or_unoptimized_input(defect):
+  lead = formal_lead(now_ns=PUBLICATION)
+  native = native_frame(radar_frame(lead, display=(lead,)))
+  consumer = RadarConsumption()
+  consume_frame(consumer, native.as_reader(), now=PUBLICATION)
+  assert consumer.publication_view is not None
+  speed = 10.0
+  if defect == 'role_conflict':
+    native.leadOne.evidence.followQualified = False
+  elif defect == 'inactive':
+    native.fusionActive = False
+  elif defect == 'invalid_speed':
+    speed = float('nan')
+  else:
+    native.leadTwo.evidence.version = 0
+    native.leadTwo.evidence.sessionId = b'\xff'
+  consume_frame(consumer, native.as_reader(), now=PUBLICATION, speed=speed)
+  assert consumer.publication_view is None and consumer.publication_ns is None

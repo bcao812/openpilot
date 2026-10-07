@@ -9,6 +9,7 @@ from openpilot.common.params import Params
 from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, SHADOW
 from openpilot.selfdrive.controls.lib.lead_qualification import control_leads
 from openpilot.selfdrive.controls.lib.longitudinal_planner import has_safe_moving_lead
+from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumptionView
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import has_departing_lead
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import CapturingPublisher
@@ -35,6 +36,57 @@ def state_at(frame, *, speed=1.0, now=CONSUMPTION, publication=PUBLICATION, targ
   state.logMonoTime['radarState'] = publication
   state['modelV2'].timestampEof = now
   return state
+
+
+def publication_reuse_fixture(*, reader=True):
+  primary = formal_lead(now_ns=PUBLICATION, dRel=40.0, vLead=5.5, vLeadK=5.5, vRel=.5)
+  state = state_at(radar_frame(primary, display=(primary,)), speed=5.0)
+  if reader:
+    state['radarState'] = state['radarState'].as_reader()
+  planner = enabled_planner(5.0)
+  with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
+    planner.update(state, now_ns=CONSUMPTION)
+  return planner, state
+
+
+def test_publish_reuses_the_exact_tick_reader_without_changing_display_records():
+  planner, state = publication_reuse_fixture()
+  source = planner._radar_for_publish(state)
+  assert isinstance(source, RadarConsumptionView)
+  assert source is planner.reference_planner.radar_consumption.publication_view
+  records = []
+  for cached in (True, False):
+    if not cached:
+      planner._radar_publication = None
+    publisher = CapturingPublisher()
+    with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
+      planner.publish(state, publisher)
+    records.append(publisher.messages['longitudinalPlan'].longitudinalPlan.to_dict())
+  assert records[0] == records[1]
+
+
+@pytest.mark.parametrize('changed', ['source', 'radar_epoch', 'model_epoch', 'next_attempt'])
+def test_publisher_does_not_reuse_a_view_for_another_input_or_attempt(changed):
+  planner, state = publication_reuse_fixture()
+  assert isinstance(planner._radar_for_publish(state), RadarConsumptionView)
+  if changed == 'source':
+    state['radarState'] = state['radarState'].as_builder().as_reader()
+  elif changed == 'radar_epoch':
+    state.logMonoTime['radarState'] += 1
+  elif changed == 'model_epoch':
+    state.logMonoTime['modelV2'] += 1
+  else:
+    with patch.object(planner.reference_planner, 'update', side_effect=RuntimeError('failed attempt')):
+      with pytest.raises(RuntimeError, match='failed attempt'):
+        planner.update(state, now_ns=CONSUMPTION + 50_000_000)
+    assert planner.reference_planner.radar_consumption.publication_view is None
+  assert planner._radar_for_publish(state) is state['radarState']
+
+
+def test_mutable_builder_keeps_the_original_publication_path():
+  planner, state = publication_reuse_fixture(reader=False)
+  assert planner.reference_planner.radar_consumption.publication_view is not None
+  assert planner._radar_for_publish(state) is state['radarState']
 
 
 @pytest.mark.parametrize('speed', [0.0, 1.0])
