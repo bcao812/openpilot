@@ -31,7 +31,7 @@ EPOCH_NS = 10_000_000_000
 
 
 def object_lead(track=1, *, distance=30.0, speed=0.0, ego_speed=10.0, acceleration=0.0,
-                source='radar', start=0.0, end=10.0, path='inPath', persistent=True, epoch=EPOCH_NS):
+                source='radar', start=0.0, end=10.0, path='inPath', persistent=True, epoch=EPOCH_NS, physical_window=None):
   evidence = SimpleNamespace(
     version=1, source=source, sessionId='radar-test' if source != 'vision' else '', trackId=track,
     generation=0, positionMonoTime=epoch, velocityMonoTime=epoch, estimateMonoTime=epoch,
@@ -40,6 +40,9 @@ def object_lead(track=1, *, distance=30.0, speed=0.0, ego_speed=10.0, accelerati
     departureQualified=persistent, fcwQualified=True, coasting=False, pathState=path,
     pathOffset=0.0, conflictStart=start, conflictEnd=end, lateralSpeed=0.0 if persistent else 3.0,
     pathSource='model', visionIndex=0 if source == 'vision' else -1,
+    physicalConflictValid=physical_window is not None,
+    physicalConflictStart=0.0 if physical_window is None else physical_window[0],
+    physicalConflictEnd=0.0 if physical_window is None else physical_window[1],
   )
   return SimpleNamespace(present=True, dRel=distance, yRel=0.0, vRel=speed-ego_speed, vLead=speed,
                          vLeadK=speed, aLeadK=acceleration, aLeadTau=1.5,
@@ -290,7 +293,7 @@ def test_early_crossing_preserves_feasible_low_speed_brake_release_before_rest()
 
 
 def test_impossible_finite_conflict_reports_failure_and_reset_removes_its_native_bounds():
-  crossing = object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False)
+  crossing = object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False, physical_window=(0.02, 0.10))
   planner = LongitudinalMpc()
   recorder = NativeProblemRecorder(planner.solver)
   planner.solver = recorder
@@ -320,8 +323,10 @@ def test_impossible_finite_conflict_reports_failure_and_reset_removes_its_native
 
 
 @pytest.mark.parametrize('source', ['radar', 'fused'])
-def test_fresh_physically_unavoidable_conflict_preserves_mitigation_evidence_through_failure(source):
-  crossing = object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False, source=source)
+@pytest.mark.parametrize('physical_start', [0.0, 0.02])
+def test_fresh_physically_unavoidable_conflict_preserves_mitigation_evidence_through_failure(source, physical_start):
+  crossing = object_lead(distance=0.8, start=0.0, end=0.35, path='entering', persistent=False, source=source,
+                         physical_window=(physical_start, 0.10))
   planner = LongitudinalMpc()
   planner.set_cur_state(10.0, 0.0)
   planner.set_weights(prev_accel_constraint=False)
@@ -334,15 +339,161 @@ def test_fresh_physically_unavoidable_conflict_preserves_mitigation_evidence_thr
   assert evidence.estimate_ns == evidence.position_ns == evidence.velocity_ns == EPOCH_NS
   assert evidence.entry_ego_upper_position < evidence.entry_object_position + CRASH_DISTANCE
   assert evidence.proof_object_position - evidence.proof_ego_lower_position < CRASH_DISTANCE
-  assert evidence.conflict_start_s <= evidence.proof_time_s <= min(1.0, evidence.conflict_end_s)
+  assert evidence.conflict_start_s == physical_start and evidence.conflict_end_s == 0.10
+  assert evidence.conflict_start_s <= evidence.proof_time_s <= evidence.conflict_end_s
   assert planner.object_influence_identities == ()  # Failed-plan UI adoption is a separate owner receipt.
   planner.reset()
   assert planner.finite_risk_braking_accel is None and planner.finite_risk_evidence == ()
 
 
+@pytest.mark.parametrize('field,value', [
+  pytest.param('physicalConflictValid', ..., id='missing-validity'),
+  pytest.param('physicalConflictStart', ..., id='missing-start'),
+  pytest.param('physicalConflictEnd', ..., id='missing-end'),
+  pytest.param('physicalConflictValid', False, id='false-validity'),
+  pytest.param('physicalConflictValid', 1, id='integer-validity'),
+  pytest.param('physicalConflictValid', 'true', id='string-validity'),
+  pytest.param('physicalConflictValid', np.bool_(True), id='numpy-validity'),
+  pytest.param('physicalConflictValid', None, id='null-validity'),
+  pytest.param('physicalConflictStart', False, id='boolean-start'),
+  pytest.param('physicalConflictEnd', True, id='boolean-end'),
+  pytest.param('physicalConflictStart', '0.02', id='string-start'),
+  pytest.param('physicalConflictEnd', '0.10', id='string-end'),
+  pytest.param('physicalConflictStart', None, id='null-start'),
+  pytest.param('physicalConflictEnd', None, id='null-end'),
+  pytest.param('physicalConflictStart', float('nan'), id='nan-start'),
+  pytest.param('physicalConflictEnd', float('nan'), id='nan-end'),
+  pytest.param('physicalConflictStart', float('-inf'), id='infinite-start'),
+  pytest.param('physicalConflictEnd', float('inf'), id='infinite-end'),
+  pytest.param('physicalConflictStart', 10**400, id='overflowing-start'),
+  pytest.param('physicalConflictStart', -0.01, id='start-outside-ordinary-window'),
+  pytest.param('physicalConflictEnd', 2.01, id='end-outside-ordinary-window'),
+  pytest.param('physicalConflictStart', 0.10, id='empty-physical-window'),
+  pytest.param('physicalConflictEnd', 0.01, id='reversed-physical-window'),
+])
+def test_mitigation_requires_explicit_valid_physical_window_at_consumption(field, value):
+  crossing = object_lead(distance=0.8, start=0.0, end=2.0, path='entering', persistent=False, physical_window=(0.02, 0.10))
+  state = fused_state(crossing)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  planner._fusion_projections = planner.fusion_lead_projections(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.prove_finite_physical_risk(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  if value is ...:
+    delattr(crossing.evidence, field)
+  else:
+    setattr(crossing.evidence, field, value)
+  assert planner.prove_finite_physical_risk(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS) == ()
+  assert planner.diagnostic_solve_calls == 0  # Evidence validation does not depend on a numerical solve.
+
+
+def test_lateral_exit_padding_cannot_prove_a_physical_emergency():
+  crossing = object_lead(distance=6.0, ego_speed=15.0, start=0.0, end=0.47, path='entering', persistent=False,
+                         physical_window=(0.0, 0.22))
+  crossing.evidence.lateralSpeed = 5.0
+  # Raw 1.10 m lateral occupancy ends at 0.22 s; padding lasts until 0.47 s.
+  # The earliest ego arrival intersects only that padded tail.
+  assert 15.0 * 0.22 + 0.5 * ACCEL_MAX * 0.22**2 < 6.0 - CRASH_DISTANCE
+  assert 15.0 * 0.47 + 0.5 * ACCEL_MIN * 0.47**2 > 6.0 - CRASH_DISTANCE
+  planner = LongitudinalMpc()
+  planner.set_cur_state(15.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+  planner.update(fused_state(crossing), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.solution_status != 0 and planner.diagnostic_occupancy_bounds
+  assert planner.finite_risk_braking_accel is None and planner.finite_risk_evidence == ()
+
+
+@pytest.mark.parametrize('acceleration', [5.0, -5.0, 1e-12, -1e-12])
+def test_nonzero_lead_acceleration_needs_its_own_physical_geometry_for_mitigation(acceleration):
+  crossing = object_lead(distance=0.8, speed=5.0, start=0.0, end=0.20, path='entering', persistent=False,
+                         acceleration=acceleration, physical_window=(0.0, 0.20))
+  state = fused_state(crossing)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  planner._fusion_projections = planner.fusion_lead_projections(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert len(planner._fusion_projections) == 1 and np.any(planner._fusion_projections[0].occupied)
+  assert planner._fusion_projections[0].lead.aLeadK == acceleration  # Ordinary MPC keeps the qualified measurement.
+  assert planner.prove_finite_physical_risk(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS) == ()
+
+
+def test_cv_only_mitigation_would_discard_a_credible_positive_acceleration_escape():
+  crossing = object_lead(distance=8.0, speed=5.0, ego_speed=15.0, start=0.0, end=1.0, path='entering', persistent=False,
+                         physical_window=(0.0, 1.0))
+  state = fused_state(crossing)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(15.0, 0.0)
+  planner._fusion_projections = planner.fusion_lead_projections(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.prove_finite_physical_risk(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  crossing.aLeadK = 5.0
+  planner._fusion_projections = planner.fusion_lead_projections(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  projection, = planner._fusion_projections
+  stage_ends = np.minimum(T_IDXS[1:], 1.0)
+  lead_velocities = np.diff(projection.raw_trajectory[:, 0]) / np.diff(T_IDXS)
+  # The ideal full-brake gap decreases throughout [0, 1], yet ends over 2 m:
+  # substituting CV would instead yield -0.25 m and falsely prove urgency.
+  assert np.all(lead_velocities[T_IDXS[:-1] < 1.0] - 15.0 - ACCEL_MIN * stage_ends[T_IDXS[:-1] < 1.0] < 0.0)
+  assert np.interp(1.0, T_IDXS, projection.raw_trajectory[:, 0]) - (15.0 + 0.5 * ACCEL_MIN) > 2.0
+  assert planner.prove_finite_physical_risk(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS) == ()
+
+
+@pytest.mark.parametrize('reference_offset_ns', [0, 100_000_000, 150_000_000])
+def test_expired_physical_window_does_not_inherit_live_padding(reference_offset_ns):
+  crossing = object_lead(distance=2.0, start=0.0, end=0.35, path='entering', persistent=False, physical_window=(0.0, 0.10))
+  state = fused_state(crossing)
+  now_ns, reference_ns = EPOCH_NS + 150_000_000, EPOCH_NS + reference_offset_ns
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  planner._fusion_projections = planner.fusion_lead_projections(state, now_ns=now_ns, reference_ns=reference_ns)
+  assert len(planner._fusion_projections) == 1 and np.any(planner._fusion_projections[0].occupied)
+  assert planner.prove_finite_physical_risk(state, now_ns=now_ns, reference_ns=reference_ns) == ()
+
+
+@pytest.mark.parametrize('distance,physical_window', [(14.0, (0.8, 1.5)), (18.0, (1.1, 1.6))])
+def test_later_physical_collision_does_not_extend_the_mitigation_horizon(distance, physical_window):
+  crossing = object_lead(distance=distance, ego_speed=15.0, start=0.0, end=2.0, path='entering', persistent=False,
+                         physical_window=physical_window)
+  state = fused_state(crossing)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(15.0, 0.0)
+  planner._fusion_projections = planner.fusion_lead_projections(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert np.any(planner._fusion_projections[0].occupied)
+  assert planner.prove_finite_physical_risk(state, now_ns=EPOCH_NS, reference_ns=EPOCH_NS) == ()
+
+
+@pytest.mark.parametrize('reference_offset_ns,consume_offset_ns', [(-50_000_000, 10_000_000),
+                                                                 (50_000_000, 70_000_000),
+                                                                 (-50_000_000, 80_000_000)])
+@pytest.mark.parametrize('physical_end', [0.15, 1.5])
+def test_physical_proof_preserves_source_window_and_limits_the_actual_proof_time(reference_offset_ns, consume_offset_ns, physical_end):
+  crossing = object_lead(distance=0.8, start=0.0, end=2.0, path='entering', persistent=False, physical_window=(0.02, physical_end))
+  state = fused_state(crossing)
+  now_ns, reference_ns = EPOCH_NS + consume_offset_ns, EPOCH_NS + reference_offset_ns
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  planner._fusion_projections = planner.fusion_lead_projections(state, now_ns=now_ns, reference_ns=reference_ns)
+  evidence, = planner.prove_finite_physical_risk(state, now_ns=now_ns, reference_ns=reference_ns)
+  assert evidence.conflict_start_s == pytest.approx(0.02 - reference_offset_ns / 1e9)
+  assert evidence.conflict_end_s == pytest.approx(physical_end - reference_offset_ns / 1e9)
+  consumed_age = (now_ns - reference_ns) / 1e9
+  assert max(consumed_age, evidence.conflict_start_s) <= evidence.proof_time_s <= min(consumed_age + 1.0, evidence.conflict_end_s)
+  assert evidence.entry_ego_upper_position < evidence.entry_object_position + CRASH_DISTANCE
+  assert evidence.proof_object_position - evidence.proof_ego_lower_position < CRASH_DISTANCE
+
+
+@pytest.mark.parametrize('field,value', [('physicalConflictValid', False), ('physicalConflictStart', 0.03), ('physicalConflictEnd', 0.09)])
+def test_same_object_cannot_publish_inconsistent_physical_windows_in_its_display_view(field, value):
+  crossing = object_lead(distance=0.8, start=0.0, end=0.35, path='entering', persistent=False, physical_window=(0.02, 0.10))
+  display = deepcopy(crossing)
+  setattr(display.evidence, field, value)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  planner.update(fused_state(crossing, display=(display,)), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.solution_status == MPC_INVALID_INPUT and planner.diagnostic_solve_calls == 0
+  assert planner.finite_risk_braking_accel is None and planner.finite_risk_evidence == ()
+
+
 @pytest.mark.parametrize('case', ['coasting', 'stale', 'bad_input', 'caution', 'visual', 'degraded', 'late_passing', 'conservative_envelope'])
 def test_solver_failure_alone_never_grants_finite_risk_emergency_braking(case):
-  crossing = object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False)
+  crossing = object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False, physical_window=(0.02, 0.10))
   state = fused_state(crossing)
   now_ns = reference_ns = EPOCH_NS
   if case == 'coasting':
@@ -355,16 +506,18 @@ def test_solver_failure_alone_never_grants_finite_risk_emergency_braking(case):
     crossing.evidence.pathState, crossing.evidence.cautionQualified = 'edge', True
     crossing.evidence.brakeQualified = crossing.evidence.fcwQualified = False
   elif case == 'visual':
-    state = fused_state(object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False, source='vision'))
+    state = fused_state(object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False, source='vision',
+                                   physical_window=(0.02, 0.10)))
   elif case == 'degraded':
     state.fusionDegraded = True
   elif case == 'late_passing':
-    state = fused_state(object_lead(distance=5.0, start=4.0, end=6.0, path='entering', persistent=False))
+    state = fused_state(object_lead(distance=5.0, start=4.0, end=6.0, path='entering', persistent=False, physical_window=(4.0, 6.0)))
   else:
     # The conservative stage-end/min-object-position row can be infeasible
     # although the real faster target maintains a positive gap throughout.
     # That software envelope is not a proof of an unavoidable physical risk.
-    state = fused_state(object_lead(distance=0.8, speed=12.0, start=0.0, end=0.10, path='entering', persistent=False))
+    state = fused_state(object_lead(distance=0.8, speed=12.0, start=0.0, end=0.10, path='entering', persistent=False,
+                                   physical_window=(0.0, 0.10)))
   planner = LongitudinalMpc()
   planner.set_cur_state(10.0, 0.0)
   planner.set_weights(prev_accel_constraint=False)
@@ -375,7 +528,7 @@ def test_solver_failure_alone_never_grants_finite_risk_emergency_braking(case):
 
 
 def test_numeric_failure_without_physical_proof_has_no_emergency_braking_evidence(monkeypatch):
-  crossing = object_lead(distance=8.0, start=0.7, end=0.85, path='entering', persistent=False)
+  crossing = object_lead(distance=8.0, start=0.7, end=0.85, path='entering', persistent=False, physical_window=(0.7, 0.85))
   planner = LongitudinalMpc()
   planner.set_cur_state(10.0, 0.0)
   planner.set_weights(prev_accel_constraint=False)

@@ -84,6 +84,7 @@ def synthetic_control_lead(index, stamp, source='radar'):
   predicted = source == 'predicted'
   entering = index == 3 and not predicted
   edge = index == 4 and physical and not predicted
+  physical_conflict = physical and not predicted and not edge
   evidence = {
     'version': 1, 'source': source, 'sessionId': 'native-logger-control' if physical else '',
     'trackId': (1 << 40) + sample if physical else 0, 'generation': (1 << 41) + sample if physical else 0,
@@ -94,6 +95,11 @@ def synthetic_control_lead(index, stamp, source='radar'):
     'followQualified': not (entering or predicted or edge), 'brakeQualified': not edge,
     'stopQualified': not (entering or predicted or edge), 'departureQualified': not (entering or predicted or edge),
     'fcwQualified': not (predicted or edge), 'coasting': predicted, 'cautionQualified': edge,
+    # Non-Float32 fractions catch truncation of the independent Float64
+    # physical interval through native logging and the carControlSP mirror.
+    'physicalConflictValid': physical_conflict,
+    'physicalConflictStart': .275123456789123 if physical_conflict and entering else 0.0,
+    'physicalConflictEnd': 1.23456789012345 + sample / 128 if physical_conflict else 0.0,
     'pathState': 'edge' if edge else 'entering' if entering else 'inPath',
     'pathOffset': 2.125 if edge else 2.25 if entering else -.125,
     'conflictStart': .125 if entering else 0.0, 'conflictEnd': .25 if predicted else 1.75 if entering else 10.0,

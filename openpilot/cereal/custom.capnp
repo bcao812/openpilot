@@ -77,6 +77,12 @@ struct RadarLeadEvidence {
   reason @26 :Text;
   modelMonoTime @27 :UInt64;
   cautionQualified @28 :Bool;  # edge occupancy may only withdraw positive acceleration
+  # Unpadded, single continuous 1.10 m point-sweep interval under the current
+  # motion hypothesis. No quality/spatial extension, coast or synthetic path.
+  # Independent mitigation evidence only; this does not change ordinary roles.
+  physicalConflictValid @29 :Bool = false;
+  physicalConflictStart @30 :Float64;  # seconds from estimateMonoTime
+  physicalConflictEnd @31 :Float64;
 
   enum Source {
     legacy @0;

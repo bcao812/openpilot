@@ -93,6 +93,7 @@ def test_pilot_sample_9_uses_actual_publication_and_consumer_clocks():
 @pytest.mark.parametrize('defect', [
   'already_expired', 'future_model', 'future_measurement', 'old_model', 'old_estimate', 'invalid_position',
   'nonfinite_velocity', 'invalid_decay', 'unqualified', 'bad_window', 'not_coast', 'different_display', 'different_generation',
+  'different_physical_valid', 'different_physical_start', 'different_physical_end',
 ])
 def test_bad_or_already_stale_publication_is_not_hidden_by_expiry(defect):
   predicted = coast()
@@ -123,6 +124,12 @@ def test_bad_or_already_stale_publication_is_not_hidden_by_expiry(defect):
     raw.leadOne = deepcopy(predicted)
     if defect == 'different_display':
       raw.leadOne.dRel += 1.0
+    elif defect == 'different_physical_valid':
+      raw.leadOne.evidence.physicalConflictValid = True
+    elif defect == 'different_physical_start':
+      raw.leadOne.evidence.physicalConflictStart = 0.1
+    elif defect == 'different_physical_end':
+      raw.leadOne.evidence.physicalConflictEnd = 0.2
     else:
       raw.leadOne.evidence.generation += 1
   consumer = RadarConsumption()

@@ -188,6 +188,21 @@ def mitigation_plan_object_influences(radar_state, proofs, *, selected, now_ns, 
     if not all(_integer(stamp := _read(proof, field), 1) and stamp == _read(evidence, wire_field)
                and 0 <= now_ns - stamp <= lease for field, wire_field, lease in clocks):
       continue
+    raw_start, raw_end = _read(evidence, 'physicalConflictStart'), _read(evidence, 'physicalConflictEnd')
+    proof_start, proof_end, proof_time = (_read(proof, field) for field in ('conflict_start_s', 'conflict_end_s', 'proof_time_s'))
+    if (_read(evidence, 'physicalConflictValid', False) is not True
+        or not all(_finite(value) for value in (raw_start, raw_end, proof_start, proof_end, proof_time))
+        or not 0.0 <= raw_start < raw_end):
+      continue
+    # Bind the complete unpadded physical window, using exactly the MPC's
+    # epoch conversion. Its search interval may be clipped to the current
+    # time / imminent horizon; those clipped or padded bounds are not the
+    # source window and cannot be substituted here. An aligned start may be
+    # negative when the physical overlap began before the reference epoch.
+    offset = (reference_ns - _read(proof, 'estimate_ns')) / 1e9
+    if (proof_start != raw_start - offset or proof_end != raw_end - offset
+        or not proof_start <= proof_time <= proof_end):
+      continue
     record = _identity_record(lead, _read(proof, 'model_ns'), -1)
     if record is not None:
       result.append(dict(record, version=MITIGATION_INFLUENCE_VERSION, kind='braking', strength=1.0))

@@ -123,6 +123,24 @@ class _Path:
   observed_out: bool = False
   confirmed: bool = False
   authority_reason: str = ''
+  physical_valid: bool = False
+  physical_start: float = 0.0
+  physical_end: float = 0.0
+
+
+def _without_physical_conflict(path):
+  return replace(path, physical_valid=False, physical_start=0.0, physical_end=0.0)
+
+
+def _merge_raw_intervals(intervals):
+  """Merge only actual overlap/touching; timing margins cannot bridge a gap."""
+  merged = []
+  for start, end in sorted(intervals):
+    if merged and start <= merged[-1][1]:
+      merged[-1] = merged[-1][0], max(merged[-1][1], end)
+    else:
+      merged.append((start, end))
+  return merged
 
 
 def _clip_band(interval, position, velocity, lower, upper):
@@ -207,6 +225,10 @@ class _Corridor:
         intervals.append(interval)
     if not intervals:
       return _Path('outOfPath', offset, rate, source=self.source) if current_supported else _Path()
+    # Save the original geometric union before timing padding and merging.
+    # Reversing padding later is not equivalent: clipping at t=0 loses the
+    # original entry, and overlapping margins can conceal a real clear gap.
+    physical_intervals = _merge_raw_intervals(intervals)
     # At most 65 analytic intervals (32 strips plus 33 vertices). Merge their
     # short timing margins; a single message window uses the conservative
     # envelope of any remaining disjoint intervals. A gap in that envelope
@@ -220,7 +242,11 @@ class _Corridor:
         merged.append((start, end))
     start, end = merged[0][0], merged[-1][1]
     spatial_limit = support[1] < horizon and end >= support[1] - 1e-6
-    return _Path('inPath' if inside else 'entering', offset, rate, start, end, self.source, len(merged) == 1, spatial_limit)
+    physical_valid = (half_width == SWEPT_HALF_WIDTH and not spatial_limit and len(physical_intervals) == 1
+                      and physical_intervals[0][0] < physical_intervals[0][1])
+    physical_start, physical_end = physical_intervals[0] if physical_valid else (0.0, 0.0)
+    return _Path('inPath' if inside else 'entering', offset, rate, start, end, self.source, len(merged) == 1, spatial_limit,
+                 physical_valid=physical_valid, physical_start=physical_start, physical_end=physical_end)
 
 
 def _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_variance, velocity_valid, half_width=SWEPT_HALF_WIDTH):
@@ -245,12 +271,13 @@ def _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_varianc
       # Reaching the quality/spatial bound is not a predicted clearing event.
       # Keep a currently occupied object through the MPC horizon; a subsequent
       # measured OUT can clear it even when lateral velocity remains untrusted.
-      return _Path('inPath', prediction.offset, prediction.rate, 0.0, HORIZON, prediction.source,
-                   prediction.continuous, horizon < HORIZON or prediction.prediction_limited)
+      limited = horizon < HORIZON or prediction.prediction_limited
+      occupied = replace(prediction, start=0.0, end=HORIZON, prediction_limited=limited)
+      return _without_physical_conflict(occupied) if limited else occupied
     if prediction.state == 'entering' and prediction.end > prediction.start:
       limited = prediction.prediction_limited or prediction.end >= horizon - 1e-6 and horizon < HORIZON
-      return _Path('entering', prediction.offset, prediction.rate, prediction.start,
-                   HORIZON if limited else prediction.end, prediction.source, prediction.continuous, limited)
+      entering = replace(prediction, end=HORIZON if limited else prediction.end, prediction_limited=limited)
+      return _without_physical_conflict(entering) if limited else entering
     if prediction.state == 'outOfPath':
       # A mean trajectory that intersects only beyond its quality bound is an
       # unknown future candidate, not a qualified entry. Current geometry can
@@ -280,14 +307,14 @@ def _object_path(corridors, x, y, vx, vy, position_variance, velocity_variance, 
     # confirmed visual body occupancy), leave after measured 2 m occupancy is
     # gone. Every extension still requires this same fresh track and valid
     # current geometry; losing vision alone is not an object disappearance.
-    return replace(outer, confirmed=True, authority_reason='confirmedOccupancyHysteresis')
+    return _without_physical_conflict(replace(outer, confirmed=True, authority_reason='confirmedOccupancyHysteresis'))
   if inner.state == 'entering':
     # Publish its actual future INNER interval now, so the MPC can anticipate
     # entry. Outer current overlap must never invent inner occupancy at t=0.
     return inner
   if outer.state in ('inPath', 'entering'):
-    return replace(outer, state='edge', confirmed=False, observed_out=inner.state == 'outOfPath',
-                   authority_reason='edgeInnerUnknown' if inner.state == 'unknown' else 'edgePossibleBodyOverlap')
+    return _without_physical_conflict(replace(outer, state='edge', confirmed=False, observed_out=inner.state == 'outOfPath',
+                                              authority_reason='edgeInnerUnknown' if inner.state == 'unknown' else 'edgePossibleBodyOverlap'))
   return outer if confirmed else inner
 
 
@@ -447,6 +474,7 @@ class HondaRadarControl:
             'followQualified': True, 'brakeQualified': True, 'stopQualified': strong,
             'departureQualified': strong and lead['vLeadK'] > .5, 'fcwQualified': lead['modelProb'] > .9,
             'cautionQualified': False,
+            'physicalConflictValid': False, 'physicalConflictStart': 0.0, 'physicalConflictEnd': 0.0,
             'coasting': False, 'pathState': 'inPath', 'pathOffset': 0.0, 'conflictStart': 0.0, 'conflictEnd': HORIZON,
             'lateralSpeed': 0.0, 'pathSource': 'visionLead', 'visionIndex': index, 'reason': 'vision',
           }
@@ -486,7 +514,7 @@ class HondaRadarControl:
     offset = path.offset + path.rate * dt
     half_width = OVERLAP_HALF_WIDTH if path.confirmed else SWEPT_HALF_WIDTH
     state = 'inPath' if abs(offset) <= half_width else 'entering'
-    return replace(path, state=state, offset=offset, start=start, end=end, source='previousPath')
+    return _without_physical_conflict(replace(path, state=state, offset=offset, start=start, end=end, source='previousPath'))
 
   def _make_lead(self, memory, path, eof, model_ns, speed, *, vision=None, vision_index=-1, predicted=False, reason='radar'):
     probability = float(vision['modelProb']) if vision is not None else 0.0
@@ -505,6 +533,10 @@ class HondaRadarControl:
     if path.authority_reason:
       reason += '+' + path.authority_reason
     acceleration_valid = memory.acceleration_good and not predicted
+    physical_valid = (path.physical_valid is True and not predicted and not caution and not path.prediction_limited
+                      and memory.path_ns == eof and memory.epoch_ns == eof
+                      and _finite(path.physical_start, path.physical_end)
+                      and 0.0 <= path.physical_start < path.physical_end <= HORIZON)
     return {
       'dRel': float(memory.x), 'yRel': float(memory.y), 'vRel': float(memory.vx - speed),
       'vLead': float(memory.vx), 'vLeadK': float(memory.vx), 'aLeadK': 0.0 if predicted else float(memory.acceleration),
@@ -521,6 +553,9 @@ class HondaRadarControl:
         'departureQualified': enduring and not predicted and memory.vx > .5,
         'fcwQualified': not caution and not predicted and memory.position_variance <= 2.25 and memory.velocity_variance <= 6.25,
         'cautionQualified': caution and not predicted,
+        'physicalConflictValid': physical_valid,
+        'physicalConflictStart': float(path.physical_start) if physical_valid else 0.0,
+        'physicalConflictEnd': float(path.physical_end) if physical_valid else 0.0,
         'coasting': predicted, 'pathState': path.state, 'pathOffset': path.offset,
         'conflictStart': path.start, 'conflictEnd': path.end, 'lateralSpeed': path.rate,
         'pathSource': path.source, 'visionIndex': vision_index, 'reason': reason,
@@ -548,6 +583,7 @@ class HondaRadarControl:
       path = old_window
     if path.state not in ('inPath', 'entering'):
       return None
+    path = _without_physical_conflict(path)
     # A coast cannot stretch a crossing's previously observed clearing time.
     if old_window.end > 0:
       path = replace(path, start=max(path.start, old_window.start), end=min(path.end, old_window.end),
@@ -738,7 +774,8 @@ class HondaRadarControl:
           # An unusable roadside velocity is not a sensor-wide control fault.
           position_path = next((relation for corridor in corridors
                                 if (relation := corridor.relation(px, py, 0.0, 0.0, half_width=SWEPT_HALF_WIDTH)).state != 'unknown'), _Path())
-          degraded |= previous is not None and previous.accepted is not None or position_path.state == 'inPath'
+          prior_risk = previous is not None and previous.accepted is not None and previous.relevant
+          degraded |= prior_risk or position_path.state == 'inPath'
           continue
       # A borrowed component must also drive alignment of position over the
       # same interval; otherwise d and v would describe different trajectories.

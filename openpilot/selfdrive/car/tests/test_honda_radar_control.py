@@ -97,6 +97,32 @@ def test_new_immature_radar_waits_for_observer_maturity_not_visual_confirmation(
     assert bool(result.objects) is (frame == 2)
 
 
+@pytest.mark.parametrize('previous_distance,previous_lateral,current_lateral,expected_degraded', [
+  (40.0, 1.6, 4.0, False),  # A roadside caution never had an independent braking obligation.
+  (40.0, 1.6, 0.0, True),  # The same object can acquire a new current in-path obligation.
+  (20.0, 0.0, 4.0, True),  # Bad velocity alone cannot clear a previously relevant obstacle.
+  (80.0, 0.0, 0.0, True),  # A current in-path object still needs a usable motion component.
+  (None, None, 0.0, True),  # No previous object is required for this current-position guard.
+])
+def test_bad_velocity_only_degrades_for_a_prior_risk_or_current_path_object(
+    previous_distance, previous_lateral, current_lateral, expected_degraded):
+  controller = HondaRadarControl()
+  if previous_distance is not None:
+    first = controller.update(**scene(tracks=[radar(distance=previous_distance, lateral=previous_lateral)]))
+    assert first.healthy and not first.degraded
+    assert len(first.objects) == 1
+    assert controller._tracks[1].relevant is (previous_distance == 20.0)
+  # Beyond the old velocity's coast deadline, with independent fresh
+  # positions but no qualified raw, visual, or position-derived velocity.
+  for frame in (7, 8):
+    current = radar(frame, distance=40.0, lateral=current_lateral, velocityGood=False, velocityVariance=5.0)
+    result = controller.update(**scene(frame, tracks=[current]))
+    assert result.healthy and result.degraded is expected_degraded
+    assert not result.objects and not result.cleared
+  if previous_distance != 20.0:
+    assert not controller._lost_tracks
+
+
 def test_same_identity_replaces_dva_with_radar_without_weighting():
   visual = vision(distance=23.0, speed=12.0, acceleration=.6)
   result = HondaRadarControl().update(**scene(tracks=[radar(distance=20.0, speed=8.0, acceleration=-1.2)],

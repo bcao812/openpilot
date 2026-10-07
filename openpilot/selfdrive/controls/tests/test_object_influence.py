@@ -204,8 +204,11 @@ def mitigation_fixture():
   evidence.estimateMonoTime = evidence.positionMonoTime = evidence.velocityMonoTime = NOW
   evidence.brakeQualified = evidence.fcwQualified = True
   evidence.coasting = False
+  evidence.physicalConflictValid = True
+  evidence.physicalConflictStart, evidence.physicalConflictEnd = 0.02, 0.10
   proof = NS(identity=('session-a', 3), source='fused', consumed_ns=NOW, reference_ns=NOW,
-             estimate_ns=NOW, position_ns=NOW, velocity_ns=NOW, model_ns=NOW, braking_accel=-3.5)
+             estimate_ns=NOW, position_ns=NOW, velocity_ns=NOW, model_ns=NOW, braking_accel=-3.5,
+             conflict_start_s=0.02, conflict_end_s=0.10, proof_time_s=0.08)
   kwargs = {'selected': True, 'now_ns': NOW, 'consumed_ns': NOW, 'reference_ns': NOW, 'target_accel': -3.5, 'braking_accel': -3.5, 'accel_min': -3.5}
   return radar(item), proof, kwargs
 
@@ -266,6 +269,61 @@ def test_mitigation_display_requires_fresh_measurements_and_not_coasting_or_caut
       evidence.cautionQualified = True
       evidence.brakeQualified = evidence.fcwQualified = False
     assert not mitigation_plan_object_influences(state, (proof,), **kwargs)
+
+
+@pytest.mark.parametrize('changes', [{'physicalConflictValid': False}, {'physicalConflictValid': 1},
+                                     {'physicalConflictStart': float('nan')}, {'physicalConflictEnd': float('inf')},
+                                     {'physicalConflictStart': -0.01}, {'physicalConflictStart': 0.10},
+                                     {'physicalConflictEnd': 0.01}])
+def test_mitigation_requires_an_explicit_valid_ordered_raw_physical_window(changes):
+  state, proof, kwargs = mitigation_fixture()
+  for field, value in changes.items():
+    setattr(state.leadOne.evidence, field, value)
+  assert not mitigation_plan_object_influences(state, (proof,), **kwargs)
+
+
+def test_missing_physical_window_authority_does_not_inherit_from_old_object_fields():
+  state, proof, kwargs = mitigation_fixture()
+  del state.leadOne.evidence.physicalConflictValid
+  assert not mitigation_plan_object_influences(state, (proof,), **kwargs)
+
+
+@pytest.mark.parametrize('field,value', [('physicalConflictStart', 0.01), ('physicalConflictEnd', 0.11)])
+def test_matching_identity_and_source_times_do_not_reuse_a_proof_after_its_raw_window_changes(field, value):
+  state, proof, kwargs = mitigation_fixture()
+  setattr(state.leadOne.evidence, field, value)
+  assert not mitigation_plan_object_influences(state, (proof,), **kwargs)
+
+
+def test_mitigation_source_binding_uses_full_physical_window_not_padded_or_search_bounds():
+  state, proof, kwargs = mitigation_fixture()
+  state.leadOne.evidence.physicalConflictEnd = proof.conflict_end_s = 2.5
+  assert mitigation_plan_object_influences(state, (proof,), **kwargs)
+  proof.conflict_end_s = 1.0  # A one-second search cutoff is not the source's full endpoint.
+  assert not mitigation_plan_object_influences(state, (proof,), **kwargs)
+  proof.conflict_start_s, proof.conflict_end_s = -0.33, 2.85  # Nor is the padded planning envelope.
+  assert not mitigation_plan_object_influences(state, (proof,), **kwargs)
+
+
+def test_physical_window_binding_preserves_reference_epoch_alignment_and_negative_aligned_start():
+  state, proof, kwargs = mitigation_fixture()
+  state.leadOne.evidence.estimateMonoTime = proof.estimate_ns = NOW - 100_000_000
+  proof.reference_ns = kwargs['reference_ns'] = NOW - 50_000_000
+  state.leadOne.evidence.physicalConflictEnd = 0.4
+  offset = (proof.reference_ns - proof.estimate_ns) / 1e9
+  proof.conflict_start_s = state.leadOne.evidence.physicalConflictStart - offset
+  proof.conflict_end_s = state.leadOne.evidence.physicalConflictEnd - offset
+  assert proof.conflict_start_s < 0.0
+  assert mitigation_plan_object_influences(state, (proof,), **kwargs)
+  proof.conflict_start_s = 0.0  # Dropping its pre-reference history changes the source window.
+  assert not mitigation_plan_object_influences(state, (proof,), **kwargs)
+
+
+@pytest.mark.parametrize('timestamp', [float('nan'), -0.1, 0.11])
+def test_proof_time_must_belong_to_the_same_physical_window(timestamp):
+  state, proof, kwargs = mitigation_fixture()
+  proof.proof_time_s = timestamp
+  assert not mitigation_plan_object_influences(state, (proof,), **kwargs)
 
 
 @pytest.mark.parametrize('changes', [{'braking_plan_valid': False}, {'key_inputs_valid': False}, {'long_active': False},

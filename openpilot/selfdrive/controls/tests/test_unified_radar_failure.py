@@ -38,7 +38,7 @@ def failure_request(kind):
     objects = []
     if kind in ('imminent', 'stale'):
       lead = object_lead(7, distance=.8, ego_speed=10.0, start=.02, end=.10,
-                         path='entering', persistent=False, epoch=stamp)
+                         path='entering', persistent=False, epoch=stamp, physical_window=(.02, .10))
       lead.radar, lead.radarTrackId = True, 7
       if kind == 'stale':
         lead.evidence.positionMonoTime -= 500_000_000

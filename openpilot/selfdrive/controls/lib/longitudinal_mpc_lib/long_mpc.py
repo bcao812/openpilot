@@ -749,7 +749,9 @@ class LongitudinalMpc:
       signature = (lead.dRel, lead.yRel, lead.vRel, lead.vLead, lead.aLeadK, lead.aLeadTau,
                    evidence.version, str(evidence.source), evidence.estimateMonoTime, evidence.positionMonoTime,
                    evidence.velocityMonoTime, evidence.conflictStart, evidence.conflictEnd, evidence.brakeQualified,
-                   evidence.followQualified, evidence.stopQualified, evidence.fcwQualified)
+                   evidence.followQualified, evidence.stopQualified, evidence.fcwQualified,
+                   getattr(evidence, 'physicalConflictValid', False), getattr(evidence, 'physicalConflictStart', 0.0),
+                   getattr(evidence, 'physicalConflictEnd', 0.0))
       if key in signatures and signatures[key] != signature:
         raise ValueError('Inconsistent fusion identity views')
       signatures[key] = signature
@@ -855,13 +857,35 @@ class LongitudinalMpc:
     proven = []
     for projection in self._fusion_projections:
       lead, evidence = projection.lead, projection.lead.evidence
+      # Physical occupancy was certified for constant-velocity x/y motion.
+      # Nonzero lead acceleration changes both longitudinal clearance and,
+      # on a bend, entry/exit geometry. It needs its own physical window;
+      # comparing two x trajectories against the CV window is insufficient.
       if (projection.persistent or projection.pass_before or not np.any(projection.occupied)
           or projection.identity is None or str(evidence.source) not in ('radar', 'fused') or evidence.coasting
+          or getattr(evidence, 'physicalConflictValid', False) is not True or lead.aLeadK != 0.0
           or not qualified_lead(lead, 'brake', 0.0, now_ns=now_ns)
           or not qualified_lead(lead, 'fcw', 0.0, now_ns=now_ns)):
         continue
-      entry = max(consumed_age, projection.conflict_start)
-      end = min(MAX_T, projection.conflict_end, consumed_age + FINITE_RISK_HORIZON)
+      physical_start = getattr(evidence, 'physicalConflictStart', None)
+      physical_end = getattr(evidence, 'physicalConflictEnd', None)
+      if not all(isinstance(value, Real) and not isinstance(value, bool) for value in (physical_start, physical_end)):
+        continue
+      try:
+        physical_start, physical_end = float(physical_start), float(physical_end)
+      except (OverflowError, ValueError):
+        continue
+      if (not np.all(np.isfinite([physical_start, physical_end]))
+          or not evidence.conflictStart <= physical_start < physical_end <= evidence.conflictEnd):
+        continue
+      # The ordinary window may include padding, hysteresis or an envelope
+      # across separate crossings. Only the producer's explicit physical
+      # subwindow can prove urgent risk, on the same epoch as raw geometry.
+      elapsed = (reference_ns - evidence.estimateMonoTime) / 1e9
+      physical_start -= elapsed
+      physical_end -= elapsed
+      entry = max(consumed_age, physical_start)
+      end = min(MAX_T, physical_end, consumed_age + FINITE_RISK_HORIZON)
       if end <= entry:
         continue
       object_at_entry = float(np.interp(entry, T_IDXS, projection.raw_trajectory[:, 0]))
@@ -882,7 +906,7 @@ class LongitudinalMpc:
             identity=projection.identity, source=str(evidence.source), consumed_ns=int(now_ns), reference_ns=int(reference_ns),
             estimate_ns=int(evidence.estimateMonoTime), position_ns=int(evidence.positionMonoTime), velocity_ns=int(evidence.velocityMonoTime),
             model_ns=int(evidence.modelMonoTime),
-            conflict_start_s=projection.conflict_start, conflict_end_s=projection.conflict_end, proof_time_s=float(timestamp),
+            conflict_start_s=physical_start, conflict_end_s=physical_end, proof_time_s=float(timestamp),
             entry_object_position=object_at_entry, entry_ego_upper_position=float(ego_upper_at_entry),
             proof_object_position=object_position, proof_ego_lower_position=float(ego_lower),
           ))

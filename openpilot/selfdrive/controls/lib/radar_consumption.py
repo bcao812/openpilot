@@ -20,6 +20,7 @@ _EVIDENCE_FIELDS = (
   'modelMonoTime', 'positionStd', 'velocityStd', 'positionValid', 'velocityValid', 'accelerationValid',
   'followQualified', 'brakeQualified', 'stopQualified', 'departureQualified', 'fcwQualified', 'cautionQualified', 'coasting',
   'pathOffset', 'conflictStart', 'conflictEnd', 'lateralSpeed', 'pathSource', 'visionIndex', 'reason',
+  'physicalConflictValid', 'physicalConflictStart', 'physicalConflictEnd',
 )
 
 
