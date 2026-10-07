@@ -350,3 +350,52 @@ def test_snapshotting_does_not_allocate_absent_builder_evidence():
   consume_frame(RadarConsumption(), native, now=PUBLICATION)
   assert not native.leadOne._has('evidence') and not native.leadTwo._has('evidence')
   assert native.to_dict() == before and native.to_bytes() == serialized
+
+
+@pytest.mark.parametrize('defect', ['absent_unknown_enum', 'absent_bad_utf8', 'nan_probability_bad_utf8'])
+def test_unread_malformed_wire_fields_do_not_add_a_snapshot_exception(defect):
+  from openpilot.cereal import log
+
+  native = native_frame(radar_frame())
+  native.leadOne.evidence.version = 0
+  if defect == 'absent_unknown_enum':
+    native.leadOne.evidence.source = 65535
+  else:
+    native.leadOne.evidence.sessionId = b'\xff'
+  if defect == 'nan_probability_bad_utf8':
+    native.leadOne.present, native.leadOne.modelProb = True, float('nan')
+  serialized = native.to_bytes()
+  native.clear_write_flag()
+  consumer = RadarConsumption()
+  with log.RadarState.from_bytes(serialized) as reader:
+    view = consume_frame(consumer, reader, now=PUBLICATION)
+    assert view is reader
+    assert view.leadOne.present is (defect == 'nan_probability_bad_utf8')
+    assert consumer.expired_identities == () and not consumer.degraded
+  # The fallback must also remain observational when given a builder.
+  builder_view = consume_frame(consumer, native, now=PUBLICATION)
+  assert builder_view.leadOne.present is (defect == 'nan_probability_bad_utf8')
+  assert not native.leadTwo._has('evidence')
+  assert native.to_bytes() == serialized
+
+
+def test_snapshot_decode_fallback_still_expires_other_coast_and_remembers_loss():
+  from openpilot.cereal import log
+
+  predicted = coast(relevant=True)
+  native = native_frame(radar_frame(predicted, display=(SimpleNamespace(present=False), predicted)))
+  native.leadOne.evidence.version = 0
+  native.leadOne.evidence.sessionId = b'\xff'
+  serialized = native.to_bytes()
+  native.clear_write_flag()
+  consumer = RadarConsumption()
+  with log.RadarState.from_bytes(serialized) as reader:
+    view = consume_frame(consumer, reader)
+    assert view.radarObjects == () and not view.leadOne.present and not view.leadTwo.present
+    assert consumer.expired_identities == ((SESSION, 7),)
+    assert consumer.degraded and consumer.lost_identities == ((SESSION, 7),)
+    assert len(reader.radarObjects) == 1 and reader.leadTwo.present
+  builder_consumer = RadarConsumption()
+  view = consume_frame(builder_consumer, native)
+  assert view.radarObjects == () and builder_consumer.degraded
+  assert native.to_bytes() == serialized

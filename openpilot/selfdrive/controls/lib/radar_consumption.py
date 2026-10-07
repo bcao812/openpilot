@@ -148,7 +148,13 @@ class RadarConsumption:
       # Each raw view is copied separately before conflict validation. Equal
       # identities must not conceal differing slots. Only field values are
       # shared by subsequent consumers; age/purpose gates still run each time.
-      radar = RadarConsumptionView(radar, (), snapshot=True)
+      try:
+        radar = RadarConsumptionView(radar, (), snapshot=True)
+      except (RuntimeError, UnicodeError):
+        # Eager conversion can decode fields that the original validation
+        # short-circuits (for example an absent lead's invalid enum/text).
+        # Preserve that validation order, including expiry of other objects.
+        radar = publication
     objects = _published_objects(radar, publication_ns)
     if objects is None:
       return publication
