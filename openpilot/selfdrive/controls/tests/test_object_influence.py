@@ -3,8 +3,8 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from openpilot.selfdrive.controls.lib.object_influence import (FOLLOW_STRENGTH, accepted_object_influences,
-                                                              influence_identity, plan_object_influences)
+from openpilot.selfdrive.controls.lib.object_influence import (FOLLOW_STRENGTH, accepted_mitigation_influences, accepted_object_influences,
+                                                              influence_identity, mitigation_plan_object_influences, plan_object_influences)
 
 
 NOW = 2_000_000_000
@@ -48,6 +48,7 @@ def receipt(records, *, phase='track', resolved_stop=False, constrained=False, *
       setattr(car, key[4:], value)
     else:
       kwargs[key] = value
+  kwargs.setdefault('owner_tracking', owner.long_control_state == 'pid')
   return accepted_object_influences(plan, owner, car, **kwargs)
 
 
@@ -138,6 +139,7 @@ def test_owner_phase_and_real_command_must_adopt_the_claimed_kind():
   assert not receipt([record('follow')], phase='approach', resolved_stop=True)
   assert not receipt([record('release')])
   assert not receipt([record('follow')], phase='off')
+  assert not receipt([record('follow')], owner_tracking=1)
 
 
 @pytest.mark.parametrize('mutation', [{'version': 0}, {'version': True}, {'strength': float('nan')}, {'strength': 1.01},
@@ -194,3 +196,93 @@ def test_caution_receipt_cannot_claim_a_stop_release_or_strong_braking_effect():
   assert not receipt([caution], plan_aTarget=-1.0, output_accel=-1.0)
   assert not receipt([caution], plan_aTarget=0.0, output_accel=0.1)
   assert not receipt([record('caution', strength=0.9)], plan_aTarget=0.0, output_accel=0.0)
+
+
+def mitigation_fixture():
+  item = lead(3, source='fused', index=1)
+  evidence = item.evidence
+  evidence.estimateMonoTime = evidence.positionMonoTime = evidence.velocityMonoTime = NOW
+  evidence.brakeQualified = evidence.fcwQualified = True
+  evidence.coasting = False
+  proof = NS(identity=('session-a', 3), source='fused', consumed_ns=NOW, reference_ns=NOW,
+             estimate_ns=NOW, position_ns=NOW, velocity_ns=NOW, model_ns=NOW, braking_accel=-3.5)
+  kwargs = {'selected': True, 'now_ns': NOW, 'consumed_ns': NOW, 'reference_ns': NOW, 'target_accel': -3.5, 'braking_accel': -3.5, 'accel_min': -3.5}
+  return radar(item), proof, kwargs
+
+
+def mitigation_receipt(records, **changes):
+  intent = NS(valid=False, ready=True, brakingValid=True, brakingAccel=-3.5, allowCreep=False, movingLead=False, releaseAllowed=False)
+  plan = NS(objectInfluences=records, modelMonoTime=NOW, solverStatus=-6, aTarget=-3.5, motionIntent=intent)
+  supervisor = NS(degraded_braking_accel=-3.5, _last_braking_plan_time_ns=NOW, _last_braking_model_time_ns=NOW)
+  owner = NS(unified=True, motion_input_constrained=True, motion_phase=NS(text='track'), motion_supervisor=supervisor)
+  car = NS(canValid=True, gasPressed=False, brakePressed=False)
+  kwargs = {'long_active': True, 'braking_plan_valid': True, 'key_inputs_valid': True, 'key_input_times': (NOW,) * 3,
+                'plan_ns': NOW, 'now_ns': NOW, 'output_accel': -3.5, 'accel_min': -3.5}
+  for key, value in changes.items():
+    if key.startswith('intent_'):
+      setattr(intent, key[7:], value)
+    elif key.startswith('supervisor_'):
+      setattr(supervisor, key[11:], value)
+    elif key.startswith('car_'):
+      setattr(car, key[4:], value)
+    elif key.startswith('plan_') and key != 'plan_ns':
+      setattr(plan, key[5:], value)
+    else:
+      kwargs[key] = value
+  return accepted_mitigation_influences(plan, owner, car, **kwargs)
+
+
+def test_only_selected_current_physical_mitigation_mints_v2_and_preserves_fused_identity():
+  state, proof, kwargs = mitigation_fixture()
+  records = mitigation_plan_object_influences(state, (proof,), **kwargs)
+  assert len(records) == 1
+  assert records[0] == {'version': 2, 'sessionId': 'session-a', 'trackId': 3, 'modelMonoTime': NOW,
+                            'visionIndex': 1, 'kind': 'braking', 'strength': 1.0}
+  assert mitigation_receipt(records) == records
+  assert not receipt(records)  # Normal v1 receipt never relabels failed plans.
+  assert not mitigation_plan_object_influences(state, (), **kwargs)
+  assert not mitigation_plan_object_influences(state, (proof,), **dict(kwargs, selected=False))
+  assert not mitigation_plan_object_influences(state, (proof,), **dict(kwargs, target_accel=-0.5))
+
+
+@pytest.mark.parametrize('field,value', [('consumed_ns', NOW - 1), ('reference_ns', NOW - 1), ('position_ns', NOW - 1),
+                                         ('velocity_ns', NOW - 1), ('estimate_ns', NOW - 1), ('model_ns', NOW - 1),
+                                         ('source', 'predicted'), ('identity', ('restarted', 3)), ('braking_accel', -0.5)])
+def test_mitigation_proof_cannot_be_reused_from_another_tick_source_or_request(field, value):
+  state, proof, kwargs = mitigation_fixture()
+  setattr(proof, field, value)
+  assert not mitigation_plan_object_influences(state, (proof,), **kwargs)
+
+
+def test_mitigation_display_requires_fresh_measurements_and_not_coasting_or_caution():
+  for case in ('old_position', 'coasting', 'caution'):
+    state, proof, kwargs = mitigation_fixture()
+    evidence = state.leadOne.evidence
+    if case == 'old_position':
+      evidence.positionMonoTime = proof.position_ns = NOW - 200_000_001
+    elif case == 'coasting':
+      evidence.coasting = True
+    else:
+      evidence.cautionQualified = True
+      evidence.brakeQualified = evidence.fcwQualified = False
+    assert not mitigation_plan_object_influences(state, (proof,), **kwargs)
+
+
+@pytest.mark.parametrize('changes', [{'braking_plan_valid': False}, {'key_inputs_valid': False}, {'long_active': False},
+                                     {'key_input_times': (NOW, NOW, NOW - 250_000_001)}, {'now_ns': NOW + 250_000_001},
+                                     {'intent_valid': True}, {'intent_brakingValid': False}, {'intent_brakingAccel': -0.5},
+                                     {'intent_releaseAllowed': True}, {'intent_allowCreep': True}, {'plan_solverStatus': 0},
+                                     {'supervisor_degraded_braking_accel': -0.5}, {'supervisor__last_braking_plan_time_ns': NOW - 1},
+                                     {'supervisor__last_braking_model_time_ns': NOW - 1}, {'output_accel': -0.5},
+                                     {'car_gasPressed': True}, {'car_brakePressed': True}, {'car_canValid': False}])
+def test_maximum_mitigation_color_requires_exact_owner_consumption_and_current_critical_inputs(changes):
+  item = dict(record(strength=1.0), version=2)
+  assert not mitigation_receipt([item], **changes)
+
+
+@pytest.mark.parametrize('changes', [{'version': 1}, {'strength': 0.5}, {'kind': 'hold'},
+                                     {'sessionId': '', 'trackId': 0, 'modelMonoTime': NOW, 'visionIndex': 0}])
+def test_generic_fault_or_visual_only_evidence_never_gets_v2_receipt(changes):
+  item = dict(record(strength=1.0), version=2)
+  item.update(changes)
+  assert not mitigation_receipt([item])

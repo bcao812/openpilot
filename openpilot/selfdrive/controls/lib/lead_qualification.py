@@ -84,7 +84,9 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
   if not _integer(version):
     return False
   if version == 0:
-    return probability >= min_model_prob
+    # Legacy probability retains only its original five purposes. A visual
+    # compatibility slot has no physical identity or edge-caution evidence.
+    return purpose != 'caution' and probability >= min_model_prob
   if version != 1:
     return False
   source = str(_read(evidence, 'source', 'legacy'))

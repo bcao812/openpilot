@@ -58,24 +58,26 @@ def accepted_influences(sm, now_ns):
   controls, command, car, selfdrive = (sm[name] for name in services)
   motion = _read(controls, 'motionState')
   plan_ns = _read(motion, 'planMonoTime', 0)
+  phase = str(_read(motion, 'phase', 'off'))
   if (_read(command, 'longActive', False) is not True or _read(command, 'enabled', False) is not True
       or _read(selfdrive, 'enabled', False) is not True
       or _read(car, 'gasPressed', False) or _read(car, 'brakePressed', False)
       or _read(motion, 'enabled', False) is not True or _read(motion, 'planningMode', -1) != UNIFIED_MODE
-      or _read(motion, 'degraded', False) or _read(motion, 'waitingForFreshInput', False)
-      or str(_read(motion, 'phase', 'off')) not in ('track', 'approach', 'hold', 'release')
+      or phase not in ('track', 'approach', 'hold', 'release')
       or not _fresh(plan_ns, now_ns) or plan_ns > stamps['controlsState']
       or _read(controls, 'longitudinalPlanMonoTime', 0) != plan_ns):
     return ()
   items = _read(motion, 'objectInfluences', ())
   if len(items) > MAX_INFLUENCES:
     return ()
+  ordinary_allowed = not (_read(motion, 'degraded', False) or _read(motion, 'waitingForFreshInput', False))
   accepted = []
   for item in items:
+    version = _read(item, 'version', 0)
     session, track = _read(item, 'sessionId', ''), _read(item, 'trackId', 0)
     model_ns, vision_index = _read(item, 'modelMonoTime', 0), _read(item, 'visionIndex', -1)
     kind, strength = str(_read(item, 'kind', '')), _read(item, 'strength', 0.0)
-    if (_read(item, 'version', 0) != 1 or kind not in KINDS
+    if (not _integer(version) or version not in (1, 2) or kind not in KINDS
         or not isinstance(strength, Real) or isinstance(strength, bool) or not math.isfinite(strength)
         or not 0.0 < strength <= 1.0 or not isinstance(session, str) or len(session) > 64
         or kind == 'caution' and not math.isclose(strength, 0.15, rel_tol=0.0, abs_tol=1e-6)
@@ -83,6 +85,14 @@ def accepted_influences(sm, now_ns):
       continue
     radar_identity = bool(session) and track > 0
     visual_identity = not session and track == 0 and vision_index in (0, 1) and model_ns > 0
+    if version == 1 and not ordinary_allowed:
+      continue
+    # Version 2 is the owner's explicit receipt for adopted physical-risk
+    # mitigation during a constrained/failed plan. Generic fallback braking
+    # and version-1 candidates cannot acquire this exception in the UI.
+    if version == 2 and not (radar_identity and kind == 'braking' and strength == 1.0
+                             and phase in ('track', 'approach', 'hold')):
+      continue
     if radar_identity or visual_identity:
       accepted.append(ObjectInfluence(session, int(track), int(model_ns), int(vision_index), kind, float(strength)))
   return tuple(accepted)

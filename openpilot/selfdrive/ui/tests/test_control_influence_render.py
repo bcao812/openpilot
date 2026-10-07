@@ -89,11 +89,71 @@ class TestControlInfluenceRendering(HeadlessUITestCase):
       deep = circles.call_args.args[-1]
       self.assertEqual((deep.r, deep.g, deep.b), influence_rgb(1.0))
       self.assertEqual(project.call_count, 1)
+      motion = sm['controlsState'].motionState
+      motion.degraded, motion.waitingForFreshInput = True, True
+      motion.objectInfluences[0].version = 2
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      mitigation = circles.call_args.args[-1]
+      self.assertEqual((mitigation.r, mitigation.g, mitigation.b), (195, 20, 35))
+      motion.objectInfluences[0].version = 1
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      unaccepted = circles.call_args.args[-1]
+      self.assertEqual((unaccepted.r, unaccepted.g, unaccepted.b), (255, 215, 0))
+      motion.objectInfluences[0].version = 2
       sm['carState'].gasPressed = True
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       reset = circles.call_args.args[-1]
       self.assertEqual((reset.r, reset.g, reset.b), (255, 215, 0))
       self.assertEqual(project.call_count, 1)
+
+  def test_native_physical_mitigation_receipt_only_colors_the_adopted_target(self):
+    from openpilot.selfdrive.ui.sunnypilot.onroad import chevron_metrics as renderer
+
+    ui = SimpleNamespace(chevron_metrics=renderer.ChevronOptions.DISTANCE_ONLY, is_metric=True)
+    vehicles = [SimpleNamespace(chevron=[(250.0, 150.0), (260.0, 170.0)]), SimpleNamespace(chevron=[])]
+    cases = (
+      ('adopted', {}, (195, 20, 35)), ('ordinary_fault', {'version': 1}, (255, 255, 255)),
+      ('no_physical_identity', {'sessionId': '', 'trackId': 0}, (255, 255, 255)),
+      ('wrong_strength', {'strength': 0.6}, (255, 255, 255)), ('not_braking', {'kind': 'hold'}, (255, 255, 255)),
+      ('expired', {}, (255, 255, 255)), ('gas_override', {}, (255, 255, 255)), ('brake_override', {}, (255, 255, 255)),
+      ('wrong_plan', {}, (255, 255, 255)),
+    )
+    with patch.object(renderer, 'ui_state', ui), patch.object(renderer.gui_app, 'font', return_value=object()), \
+         patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
+         patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(90, 40)), \
+         patch.object(rl, 'draw_text_ex') as text:
+      metrics = renderer.ChevronMetrics()
+      metrics._lead_status_alpha = 1.0
+      for case, changes, expected in cases:
+        with self.subTest(case=case):
+          sm = executing_state()
+          radar = sm['radarState']
+          radar.leadOne = {'present': True, 'dRel': 24.0, 'vRel': 0.0,
+                           'evidence': {'version': 1, 'source': 'fused', 'sessionId': 'fixture', 'trackId': 42,
+                                        'modelMonoTime': START, 'visionIndex': 0}}
+          motion = sm['controlsState'].motionState
+          motion.degraded, motion.waitingForFreshInput = True, True
+          record = motion.objectInfluences[0]
+          record.version, record.strength = 2, 1.0
+          for field, value in changes.items():
+            setattr(record, field, value)
+          if case == 'expired':
+            sm.logMonoTime['controlsState'] = START - 200_000_001
+          elif case == 'gas_override':
+            sm['carState'].gasPressed = True
+          elif case == 'brake_override':
+            sm['carState'].brakePressed = True
+          elif case == 'wrong_plan':
+            motion.planMonoTime = START - 1
+          wire = messaging.new_message('controlsState')
+          wire.valid, wire.logMonoTime, wire.controlsState = True, sm.logMonoTime['controlsState'], sm['controlsState']
+          sm['controlsState'] = messaging.log_from_bytes(wire.to_bytes()).controlsState
+          text.reset_mock()
+          metrics.draw_lead_status(sm, radar, rl.Rectangle(0, 0, 1280, 720), vehicles)
+          foreground = [call.args for call in text.call_args_list if call.args[-1].r != 0]
+          self.assertEqual(len(foreground), 1)
+          color = foreground[0][-1]
+          self.assertEqual((color.r, color.g, color.b), expected)
 
   def test_formal_lead_distance_uses_same_identity_color_and_expires(self):
     from openpilot.selfdrive.ui.sunnypilot.onroad import chevron_metrics as renderer

@@ -14,10 +14,10 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL, ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
-from openpilot.selfdrive.controls.lib.object_influence import plan_object_influences
+from openpilot.selfdrive.controls.lib.object_influence import mitigation_plan_object_influences, plan_object_influences
 from openpilot.selfdrive.controls.lib.lead_qualification import _read, control_leads, qualified_lead
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  COMFORT_BRAKE, LEAD_DANGER_FACTOR, REFERENCE_BOUND, STOP_DISTANCE, LongitudinalMpc, LongitudinalPlanSource,
+  COMFORT_BRAKE, LEAD_DANGER_FACTOR, REFERENCE_BOUND, STOP_DISTANCE, FiniteRiskEvidence, LongitudinalMpc, LongitudinalPlanSource,
   get_T_FOLLOW, get_safe_obstacle_distance, get_stopped_equivalence_factor,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
@@ -693,6 +693,15 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
           caution_identities=getattr(ref, 'caution_object_identities', ()) if getattr(ref, 'caution_accel_limited', False) else (),
           standstill=bool(sm['carState'].standstill), target_accel=float(self.output_a_target), accel_min=ACCEL_MIN, accel_max=ACCEL_MAX,
         )
+        mitigation = getattr(ref, 'mitigation_object_evidence', ())
+        if mitigation and all(isinstance(proof, FiniteRiskEvidence) for proof in mitigation):
+          longitudinalPlan.objectInfluences = mitigation_plan_object_influences(
+            sm['radarState'], mitigation,
+            selected=bool(ref.fusion_admitted and not plan_send.valid and self.mpc.solution_status != 0 and intent.is_braking_valid()),
+            now_ns=int(plan_send.logMonoTime), consumed_ns=int(longitudinalPlan.reference.producerMonoTime),
+            reference_ns=int(longitudinalPlan.reference.referenceMonoTime),
+            target_accel=float(self.output_a_target), braking_accel=intent.braking_accel, accel_min=ACCEL_MIN,
+          )
       except (AttributeError, TypeError, ValueError, OverflowError):
         # A display-only record cannot interrupt plan publication.
         longitudinalPlan.objectInfluences = []

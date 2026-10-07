@@ -1,6 +1,7 @@
 import pytest
 
 from openpilot.cereal import custom, log
+from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.object_influence import plan_object_influences
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness
 
@@ -97,6 +98,87 @@ def test_edge_caution_wire_defaults_and_actual_owner_zero_ceiling_receipt():
   command, motion = consumer.step()
   assert motion.phase == 'track' and not motion.resolvedStop
   assert command.actuators.accel == 0.0
+  assert consumer.control.LoC.long_control_state == LongCtrlState.pid
   assert len(motion.objectInfluences) == 1
   assert motion.objectInfluences[0].kind == 'caution'
   assert motion.objectInfluences[0].strength == pytest.approx(0.15)
+
+
+def test_real_numeric_pid_owner_acknowledges_following_without_a_braking_request():
+  consumer = ControlsHarness()
+  consumer.plan.aTarget = 0.2
+  consumer.plan.objectInfluences = [object_record('follow', 0.15)]
+  command, motion = consumer.step()
+  assert motion.phase == 'track' and not motion.resolvedStop
+  assert consumer.control.LoC.long_control_state == LongCtrlState.pid
+  assert command.actuators.accel > 0.0
+  assert len(motion.objectInfluences) == 1
+  assert motion.objectInfluences[0].kind == 'follow'
+
+
+def test_real_numeric_pid_owner_acknowledges_adopted_departure_during_brake_release():
+  consumer = ControlsHarness()
+  consumer.hold()
+  consumer.car_state.cruiseState.standstill = False
+  consumer.plan.motionIntent.reasons = 0
+  consumer.plan.motionIntent.releaseAllowed = True
+  consumer.plan.aTarget = 0.5
+  consumer.plan.objectInfluences = [object_record('release')]
+  command, motion = consumer.step()
+  assert motion.phase == 'release' and not motion.resolvedStop
+  assert consumer.control.LoC.long_control_state == LongCtrlState.pid
+  assert command.actuators.accel > -2.0
+  assert len(motion.objectInfluences) == 1
+  assert motion.objectInfluences[0].kind == 'release'
+
+
+def physical_braking_consumer(*, include_influence=True):
+  consumer = ControlsHarness()
+  consumer.events['longitudinalPlan'].valid = False
+  consumer.plan.solverStatus = -6
+  consumer.plan.aTarget = -3.5
+  consumer.plan.motionIntent.valid = False
+  consumer.plan.motionIntent.brakingValid = True
+  consumer.plan.motionIntent.brakingAccel = -3.5
+  if include_influence:
+    consumer.plan.objectInfluences = [dict(object_record('braking', 1.0), version=2)]
+  return consumer
+
+
+def test_independent_physical_brake_receipt_survives_invalid_main_plan_without_changing_actuation():
+  observed, baseline = physical_braking_consumer(), physical_braking_consumer(include_influence=False)
+  command, motion = observed.step()
+  baseline_command, baseline_motion = baseline.step()
+  assert command.to_dict() == baseline_command.to_dict()
+  assert command.longActive and command.actuators.accel == -3.5
+  assert motion.degraded and baseline_motion.degraded
+  assert observed.control.LoC.motion_supervisor.degraded_braking_accel == -3.5
+  assert len(motion.objectInfluences) == 1
+  assert motion.objectInfluences[0].version == 2
+  assert motion.objectInfluences[0].kind == 'braking'
+  assert motion.objectInfluences[0].strength == 1.0
+  assert not baseline_motion.objectInfluences
+
+
+def test_generic_fault_with_old_normal_object_evidence_is_not_physical_mitigation():
+  consumer = physical_braking_consumer(include_influence=False)
+  consumer.plan.objectInfluences = [object_record('braking', 1.0)]
+  command, motion = consumer.step()
+  assert motion.degraded and command.actuators.accel == -3.5
+  assert not motion.objectInfluences
+
+
+@pytest.mark.parametrize('case', ['manual', 'bad_braking_contract', 'bad_key_message', 'expired_plan'])
+def test_physical_brake_receipt_does_not_bypass_owner_or_current_message_qualification(case):
+  consumer = physical_braking_consumer()
+  _, motion = consumer.step()
+  assert motion.objectInfluences
+  if case == 'manual':
+    consumer.car_state.gasPressed = True
+  elif case == 'bad_braking_contract':
+    consumer.plan.motionIntent.brakingValid = False
+  elif case == 'bad_key_message':
+    consumer.events['modelV2'].valid = False
+  kwargs = {'new_plan': False, 'now_ns': consumer.now_ns + 260_000_000} if case == 'expired_plan' else {}
+  _, motion = consumer.step(**kwargs)
+  assert not motion.objectInfluences

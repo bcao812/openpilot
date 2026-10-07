@@ -99,8 +99,9 @@ def test_current_owner_receipt_can_color_old_layout_pure_visual_lead():
 
 @pytest.mark.parametrize('service', ('controlsState', 'carControl', 'carState', 'selfdriveState'))
 @pytest.mark.parametrize('fault', ('invalid', 'stale', 'future'))
-def test_invalid_stale_or_future_execution_messages_cannot_keep_red(service, fault):
-  sm = state()
+@pytest.mark.parametrize('version', (1, 2))
+def test_invalid_stale_or_future_execution_messages_cannot_keep_red(service, fault, version):
+  sm = state(influence(version=version, strength=1.0))
   if fault == 'invalid':
     sm.valid[service] = False
   elif fault == 'stale':
@@ -114,8 +115,9 @@ def test_invalid_stale_or_future_execution_messages_cannot_keep_red(service, fau
   ('carControl', 'longActive', False), ('carControl', 'enabled', False), ('selfdriveState', 'enabled', False),
   ('carState', 'gasPressed', True), ('carState', 'brakePressed', True),
 ))
-def test_disengagement_and_driver_override_remove_control_coloring(service, field, value):
-  sm = state()
+@pytest.mark.parametrize('version', (1, 2))
+def test_disengagement_and_driver_override_remove_control_coloring(service, field, value, version):
+  sm = state(influence(version=version, strength=1.0))
   sm[service][field] = value
   assert accepted_influences(sm, NOW) == ()
 
@@ -128,6 +130,43 @@ def test_disengagement_and_driver_override_remove_control_coloring(service, fiel
 def test_old_modes_and_unaccepted_owner_state_do_not_color(changes):
   sm = state()
   sm['controlsState']['motionState'].update(changes)
+  assert accepted_influences(sm, NOW) == ()
+
+
+@pytest.mark.parametrize('changes', ({'degraded': True}, {'waitingForFreshInput': True},
+                                    {'degraded': True, 'waitingForFreshInput': True}))
+def test_only_explicit_owner_adopted_physical_mitigation_survives_constrained_motion(changes):
+  sm = state(influence(version=2, strength=1.0), influence(trackId=63, strength=1.0))
+  sm['controlsState']['motionState'].update(changes)
+  items = accepted_influences(sm, NOW)
+  assert [(item.track_id, item.strength) for item in items] == [(42, 1.0)]
+  assert influence_rgb(lead_influence_strength(lead(), items)) == (195, 20, 35)
+  assert lead_influence_strength(lead(trackId=63), items) == 0.0
+  assert lead_influence_strength(lead(source='vision', sessionId='', trackId=0), items) == 1.0
+  sm['longitudinalPlan'] = {'objectInfluences': [influence(version=2, strength=1.0)]}
+  sm['controlsState']['motionState']['objectInfluences'] = []
+  assert accepted_influences(sm, NOW) == ()
+
+
+@pytest.mark.parametrize('changes', (
+  {'version': 1}, {'version': 3}, {'sessionId': ''}, {'trackId': 0}, {'sessionId': '', 'trackId': 0},
+  {'strength': 0.6}, {'kind': 'follow'}, {'kind': 'hold'}, {'kind': 'release'}, {'kind': 'caution'},
+))
+def test_constrained_motion_cannot_turn_an_ordinary_or_unidentified_record_deep_red(changes):
+  record = influence(version=2, strength=1.0)
+  record.update(changes)
+  sm = state(record)
+  sm['controlsState']['motionState'].update(degraded=True, waitingForFreshInput=True)
+  assert accepted_influences(sm, NOW) == ()
+
+
+@pytest.mark.parametrize('changes', (
+  {'enabled': False}, {'planningMode': 0}, {'planningMode': 1}, {'phase': 'off'}, {'phase': 'release'},
+  {'planMonoTime': 0}, {'planMonoTime': NOW + 1}, {'planMonoTime': PLAN + 1},
+))
+def test_physical_mitigation_receipt_keeps_mode_phase_and_plan_identity_gates(changes):
+  sm = state(influence(version=2, strength=1.0))
+  sm['controlsState']['motionState'].update(degraded=True, **changes)
   assert accepted_influences(sm, NOW) == ()
 
 

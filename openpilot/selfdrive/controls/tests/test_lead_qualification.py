@@ -45,6 +45,17 @@ def test_legacy_and_formal_vision_keep_the_callers_probability_gate(probability,
   assert qualified_lead(SimpleNamespace(present=True, modelProb=probability), 'brake', 0.0) is True
 
 
+@pytest.mark.parametrize('probability', [0.0, .95, .99, 1.0])
+def test_legacy_probability_cannot_grant_the_new_caution_purpose(probability):
+  lead = SimpleNamespace(present=True, modelProb=probability)
+  assert not qualified_lead(lead, 'caution', 0.0)
+  assert not qualified_lead(lead, 'caution', .95, now_ns=NOW)
+  for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw'):
+    assert qualified_lead(lead, purpose, .95, now_ns=NOW) is (probability >= .95)
+  lead.evidence = SimpleNamespace(version=0, cautionQualified=True, pathState='edge')
+  assert not qualified_lead(lead, 'caution', 0.0, now_ns=NOW)
+
+
 @pytest.mark.parametrize('formal', [False, True])
 def test_native_cereal_builder_reads_preserve_dict_and_serialized_message(formal):
   from openpilot.cereal import log
@@ -68,6 +79,7 @@ def test_native_cereal_builder_reads_preserve_dict_and_serialized_message(formal
   radar.clear_write_flag()
 
   assert qualified_lead(lead, 'brake', now_ns=NOW)
+  assert not qualified_lead(lead, 'caution', 0.0, now_ns=NOW)
   assert lead_identity(lead) == (('radar-session-a', 7) if formal else None)
   assert len(control_leads(radar, 'brake', now_ns=NOW)) == 1
 

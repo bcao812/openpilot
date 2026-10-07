@@ -82,6 +82,13 @@ REST_STATE_TOL = 1e-3
 # Keep numerical constraint residuals separate from the existing geometric
 # clearance. The exact post-solve check still requires CRASH_DISTANCE.
 OCCUPANCY_POSITION_BUFFER = 1e-3
+# Admission for re-integrating unchanged native jerk, not a final constraint
+# tolerance: at most 10 nm per position defect AND cumulative position change.
+# This is 100,000 times smaller than the separate 1 mm geometry buffer.
+OCCUPANCY_POSITION_REINTEGRATION_LIMIT = 1e-8
+# Only a separately proven, fresh near-term physical conflict can retain
+# mitigation authority through a solver failure. This is not an FCW horizon.
+FINITE_RISK_HORIZON = 1.0
 # A numerical repair requires observed residuals this small. This is not the
 # native QP request tolerance, nor a change to the physical rest acceptance box.
 QP_FEASIBILITY_TOL = 1e-9
@@ -123,6 +130,26 @@ class OccupancyBound:
 
 
 @dataclass(frozen=True)
+class FiniteRiskEvidence:
+  identity: tuple[str, int]
+  source: str
+  consumed_ns: int
+  reference_ns: int
+  estimate_ns: int
+  position_ns: int
+  velocity_ns: int
+  model_ns: int
+  conflict_start_s: float
+  conflict_end_s: float
+  proof_time_s: float
+  entry_object_position: float
+  entry_ego_upper_position: float
+  proof_object_position: float
+  proof_ego_lower_position: float
+  braking_accel: float = ACCEL_MIN
+
+
+@dataclass(frozen=True)
 class MpcReference:
   # None omits only the cruise-speed goal. Bounds and any compatible model
   # goal remain checked; typed model references still require a cruise goal.
@@ -138,6 +165,10 @@ class MpcReference:
   # The UNIFIED producer may schedule a witnessed later stop. Direct mathematical
   # callers keep the original source-goal contract unless they explicitly opt in.
   allow_future_rest_reschedule: bool = False
+  # Passing changes which side of a timed obstacle is safe. It is admitted
+  # only by a caller that has brought independent final braking limits into
+  # this same reference; a later arbitrary min(accel) is not conservative.
+  allow_passing: bool = False
   # These explicit targets apply only to real leads. Virtual cruise/model
   # obstacles retain STOP_DISTANCE, as do callers that omit these fields.
   # Qualification for a compact stationary gap belongs to the producer.
@@ -145,6 +176,8 @@ class MpcReference:
   lead_risk_stop_distances: tuple[float, float] = (STOP_DISTANCE, STOP_DISTANCE)
 
   def __post_init__(self):
+    if type(self.allow_passing) is not bool:
+      raise ValueError('Invalid finite occupancy passing authorization')
     if (not isinstance(self.comfort_stop_distance, Real) or isinstance(self.comfort_stop_distance, (bool, np.bool_))
         or not 3.0 <= self.comfort_stop_distance <= STOP_DISTANCE or not np.isfinite(float(self.comfort_stop_distance))):
       raise ValueError('Invalid comfort stop distance')
@@ -442,11 +475,15 @@ class LongitudinalMpc:
     self._occupancy_bounds = (None,) * N
     self._native_occupancy_bounds_active = False
     self.diagnostic_occupancy_bounds = ()
+    self.diagnostic_occupancy_projection = None
     self._passing_witness = None
     self._passing_speed_limit = None
     self.diagnostic_passing = None
     self.object_influence_identities = ()
     self._influence_problem = None
+    self._finite_risk_candidates = ()
+    self.finite_risk_evidence = ()
+    self.finite_risk_braking_accel = None
     self.solution_status = 0
     self.last_solver_status = 0
     self.failure_reason = ''
@@ -729,6 +766,12 @@ class LongitudinalMpc:
       if (evidence.version != 1 or not np.all(np.isfinite([evidence.conflictStart, evidence.conflictEnd]))
           or not 0.0 <= evidence.conflictStart < evidence.conflictEnd <= MAX_T):
         raise ValueError('Invalid fusion object contract')
+      if str(evidence.pathState) == 'edge' or getattr(evidence, 'cautionQualified', False):
+        if not qualified_lead(lead, 'caution', 0.0, now_ns=now_ns, require_active_window=False):
+          raise ValueError('Invalid edge caution object')
+        # This evidence can bound a positive final request in UNIFIED, but
+        # grants no MPC obstacle, stop, following or FCW authority.
+        continue
       if not qualified_lead(lead, 'brake', 0.0, now_ns=now_ns, require_active_window=False):
         if evidence.brakeQualified:
           raise ValueError('Unqualified admitted fusion object')
@@ -794,6 +837,58 @@ class LongitudinalMpc:
     minimum, maximum = cls.occupancy_clearance_extrema(projection, states, jerks, horizon=5.0)
     return maximum > -STOP_DISTANCE if projection.pass_before else minimum < CRASH_DISTANCE
 
+  def prove_finite_physical_risk(self, radarstate, *, now_ns, reference_ns):
+    """Prove an imminent conflict in qualified longitudinal point geometry.
+
+    Instant ACCEL_MAX is an optimistic bound for getting ahead before entry;
+    instant ACCEL_MIN is an optimistic bound for staying behind. Excluding
+    both even with these wider physical freedoms does not depend on a QP
+    iterate or our conservative occupancy envelope. The resulting request is
+    impact mitigation, never a claim that this collision has been avoided.
+    """
+    if (not getattr(radarstate, 'fusionHealthy', False) or getattr(radarstate, 'fusionDegraded', False)
+        or not all(isinstance(stamp, Integral) and not isinstance(stamp, bool) and stamp > 0 for stamp in (now_ns, reference_ns))
+        or not 0 <= now_ns - reference_ns <= REFERENCE_MAX_AGE_NS
+        or self.x0[0] != 0.0 or self.x0[1] <= 0.0 or not ACCEL_MIN <= self.x0[2] <= ACCEL_MAX):
+      return ()
+    consumed_age = (now_ns - reference_ns) / 1e9
+    proven = []
+    for projection in self._fusion_projections:
+      lead, evidence = projection.lead, projection.lead.evidence
+      if (projection.persistent or projection.pass_before or not np.any(projection.occupied)
+          or projection.identity is None or str(evidence.source) not in ('radar', 'fused') or evidence.coasting
+          or not qualified_lead(lead, 'brake', 0.0, now_ns=now_ns)
+          or not qualified_lead(lead, 'fcw', 0.0, now_ns=now_ns)):
+        continue
+      entry = max(consumed_age, projection.conflict_start)
+      end = min(MAX_T, projection.conflict_end, consumed_age + FINITE_RISK_HORIZON)
+      if end <= entry:
+        continue
+      object_at_entry = float(np.interp(entry, T_IDXS, projection.raw_trajectory[:, 0]))
+      ego_upper_at_entry = self.ego_progress_bound(self.x0[1], ACCEL_MAX, entry)
+      if ego_upper_at_entry >= object_at_entry + CRASH_DISTANCE - QP_FEASIBILITY_TOL:
+        continue  # Some physically possible trajectory could already pass safely.
+      times = [entry, end, *T_IDXS[(T_IDXS > entry) & (T_IDXS < end)]]
+      for stage, duration in enumerate(np.diff(T_IDXS)):
+        lead_velocity = (projection.raw_trajectory[stage+1, 0] - projection.raw_trajectory[stage, 0]) / duration
+        extremum = (lead_velocity - self.x0[1]) / ACCEL_MIN
+        if max(entry, T_IDXS[stage]) < extremum < min(end, T_IDXS[stage+1], -self.x0[1] / ACCEL_MIN):
+          times.append(float(extremum))
+      for timestamp in sorted(set(times)):
+        object_position = float(np.interp(timestamp, T_IDXS, projection.raw_trajectory[:, 0]))
+        ego_lower = self.ego_progress_bound(self.x0[1], ACCEL_MIN, float(timestamp))
+        if object_position - ego_lower < CRASH_DISTANCE - QP_FEASIBILITY_TOL:
+          proven.append(FiniteRiskEvidence(
+            identity=projection.identity, source=str(evidence.source), consumed_ns=int(now_ns), reference_ns=int(reference_ns),
+            estimate_ns=int(evidence.estimateMonoTime), position_ns=int(evidence.positionMonoTime), velocity_ns=int(evidence.velocityMonoTime),
+            model_ns=int(evidence.modelMonoTime),
+            conflict_start_s=projection.conflict_start, conflict_end_s=projection.conflict_end, proof_time_s=float(timestamp),
+            entry_object_position=object_at_entry, entry_ego_upper_position=float(ego_upper_at_entry),
+            proof_object_position=object_position, proof_ego_lower_position=float(ego_lower),
+          ))
+          break
+    return tuple(sorted(proven, key=lambda item: (item.proof_time_s, item.identity)))
+
   def select_occupancy_branches(self, projections, reference):
     """Admit a single non-accelerating passing witness, never race a crossing.
 
@@ -803,7 +898,7 @@ class LongitudinalMpc:
     contradict each other. Independent model braking/stop goals veto it.
     """
     finite = tuple(p for p in projections if not p.persistent and np.any(p.occupied))
-    if not finite or reference is None or self.x0[1] <= 0.0:
+    if not finite or reference is None or not reference.allow_passing or self.x0[1] <= 0.0:
       return projections
     if (reference.typed_model is not None or any(value is not None for value in (
         reference.model_position, reference.model_velocity, reference.model_acceleration))):
@@ -858,6 +953,11 @@ class LongitudinalMpc:
     if not any(p.pass_before for p in choices):
       return projections
     speed_limit = float(np.max(states[:, 1]))
+    if reference.cruise_speed is not None:
+      cruise = np.broadcast_to(np.asarray(reference.cruise_speed, dtype=float), (N+1,))
+      if not np.all(np.isfinite(cruise)) or np.any(cruise < speed_limit):
+        self.diagnostic_passing = {'accepted': False, 'reason': 'cruise_below_passing_witness_speed'}
+        return projections
     bounds = self.finite_occupancy_bounds(tuple(choices), passing_speed_limit=speed_limit, witness=states, witness_jerks=jerks)
     if bounds is None:
       self.diagnostic_passing = {'accepted': False, 'reason': 'shared_witness_has_no_bounded_corridor'}
@@ -985,12 +1085,62 @@ class LongitudinalMpc:
         if (maximum > -STOP_DISTANCE if projection.pass_before else minimum < CRASH_DISTANCE):
           return 'finite_occupancy_clearance_violated'
     if self._passing_speed_limit is not None:
+      if np.any(states[1:, 2] > tolerance):
+        return 'finite_occupancy_passing_acceleration_positive'
       if np.any(states[:, 1] > self._passing_speed_limit + tolerance):
         return 'finite_occupancy_passing_speed_exceeded'
       for stage, jerk in enumerate(jerks):
         row, control = self.occupancy_speed_row(stage)
         if row @ states[stage] + control * jerk > self._passing_speed_limit + tolerance:
           return 'finite_occupancy_passing_speed_exceeded'
+    return ''
+
+  def reintegrate_occupancy_precision(self):
+    """Reconcile tiny native position defects with unchanged control and x0.
+
+    A successful native solve is required. No state is clipped and jerk never
+    changes. The candidate must satisfy every installed box/general row plus
+    the original 1e-9 dynamics and exact occupancy-geometry checks. Larger
+    residuals, and all failed native solves, remain explicit failures.
+    """
+    if not any(self._occupancy_bounds):
+      return ''
+    if self.solution_status != 0 or self.diagnostic_last_solver_return != 0:
+      return 'finite_occupancy_reintegration_requires_native_success'
+    raw_states, jerks = self.x_sol, self.u_sol[:, 0]
+    defects = self.trajectory_dynamics_defects(raw_states, jerks)
+    maximum_defect = np.maximum(np.max(np.abs(defects), axis=0), np.abs(raw_states[0] - self.x0))
+    if np.max(maximum_defect) <= QP_FEASIBILITY_TOL:
+      return ''
+    budget = np.array([OCCUPANCY_POSITION_REINTEGRATION_LIMIT, QP_FEASIBILITY_TOL, QP_FEASIBILITY_TOL])
+    diagnostic = {'applied': False, 'maximumNativeDynamicsDefect': maximum_defect.tolist(),
+                  'maximumStateCorrectionBudget': budget.tolist(), 'maximumJerkCorrection': 0.0}
+    self.diagnostic_occupancy_projection = diagnostic
+    if not np.all(np.isfinite(maximum_defect)) or np.any(maximum_defect > budget):
+      return 'finite_occupancy_dynamics_residual_exceeded'
+    states = np.empty_like(raw_states)
+    states[0] = self.x0
+    for stage, duration in enumerate(np.diff(T_IDXS)):
+      states[stage+1] = self.integrate_jerk(states[stage], jerks[stage], duration)
+    correction = np.max(np.abs(states - raw_states), axis=0)
+    diagnostic['maximumStateCorrection'] = correction.tolist()
+    if not np.all(np.isfinite(states)) or np.any(correction > budget):
+      return 'finite_occupancy_reintegration_budget_exceeded'
+    lower, upper = self.diagnostic_reference_bounds
+    violation = float(max(0.0, np.max(lower[1:] - states[1:, 1:]), np.max(states[1:, 1:] - upper[1:])))
+    for stage, (C, D, row_lower, row_upper) in enumerate(self._rest_constraint_buffers):
+      value = C @ states[stage] + D[:, 0] * jerks[stage]
+      violation = max(violation, float(np.max(row_lower - value)), float(np.max(value - row_upper)))
+    diagnostic['maximumCorrectedConstraintViolation'] = violation
+    if violation > QP_FEASIBILITY_TOL:
+      return 'finite_occupancy_reintegration_constraints_violated'
+    if (failure := self.occupancy_trajectory_error(states, jerks, tolerance=QP_FEASIBILITY_TOL)):
+      return failure
+    self.x_sol[:] = states
+    # run() established views of x_sol. Keep reference history aligned with
+    # the same accepted trajectory, as in the existing rest precision repair.
+    self.a_prev = np.interp(T_IDXS + self.dt, T_IDXS, self.a_solution)
+    diagnostic['applied'] = True
     return ''
 
   def fusion_fcw_identity(self, projection):
@@ -1043,6 +1193,8 @@ class LongitudinalMpc:
   @staticmethod
   def lead_influence_token(lead, *, model_ns=0, slot=None):
     """Frame-scoped visual identity is separate from physical radar identity."""
+    if lead is not None and hasattr(lead, 'as_reader'):
+      lead = lead.as_reader()
     if lead is None or not lead.present:
       return None
     identity = lead_identity(lead)
@@ -1958,6 +2110,11 @@ class LongitudinalMpc:
       upper[1:, 1] = np.minimum(upper[1:, 1], self.params[1:, 1])
       if self._passing_speed_limit is not None:
         upper[1:, 0] = np.minimum(upper[1:, 0], self._passing_speed_limit)
+        # A speed ceiling alone permits braking and then accelerating again.
+        # Passing is a release of existing a0, never a new positive-accel
+        # maneuver. Linear a(t) and nonpositive future nodes certify the
+        # complete horizon after the first interval; the measured a0 is fixed.
+        upper[1:, 1] = np.minimum(upper[1:, 1], 0.0)
     if self._passing_witness is not None:
       # This dynamically consistent feasible branch witness is a warm start,
       # not a substituted solution. There is still exactly one native solve.
@@ -2043,6 +2200,10 @@ class LongitudinalMpc:
       self.failure_reason = ''
 
   def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None, now_ns=None, reference_ns=None):
+    # Reading an unset struct through a capnp builder allocates it. MPC and
+    # UI attribution observe the exact incoming message; they never edit it.
+    if hasattr(radarstate, 'as_reader'):
+      radarstate = radarstate.as_reader()
     self.diagnostic_last_obstacle_summary = None
     self.source_object_identity = None
     self.fcw_object_identity = None
@@ -2050,11 +2211,15 @@ class LongitudinalMpc:
     self._fusion_projections = ()
     self._occupancy_bounds = (None,) * N
     self.diagnostic_occupancy_bounds = ()
+    self.diagnostic_occupancy_projection = None
     self._passing_witness = None
     self._passing_speed_limit = None
     self.diagnostic_passing = None
     self.object_influence_identities = ()
     self._influence_problem = None
+    self._finite_risk_candidates = ()
+    self.finite_risk_evidence = ()
+    self.finite_risk_braking_accel = None
     self.rest_goal = None
     self.rest_goal_state = 'none'
     self.rest_goal_reason = ''
@@ -2210,6 +2375,8 @@ class LongitudinalMpc:
     except (TypeError, ValueError, FloatingPointError):
       self.fail(MPC_INVALID_INPUT)
       return
+    if fusion_active:
+      self._finite_risk_candidates = self.prove_finite_physical_risk(radarstate, now_ns=now_ns, reference_ns=reference_ns)
 
     try:
       self.observe_obstacles(x_obstacles, sources, ordinary_continuation=ordinary_continuation)
@@ -2218,6 +2385,10 @@ class LongitudinalMpc:
 
     self.run()
     if self.solution_status != 0:
+      return
+    if fusion_active and (failure := self.reintegrate_occupancy_precision()):
+      self.fail(MPC_OCCUPANCY_UNSATISFIED)
+      self.failure_reason = failure
       return
     self.check_effective_rest_goal()
     if fusion_active:
@@ -2270,7 +2441,9 @@ class LongitudinalMpc:
     effective_node = self.effective_rest_node
     goal_diagnostic = self.diagnostic_rest_goal
     occupancy_diagnostic = self.diagnostic_occupancy_bounds
+    occupancy_projection = self.diagnostic_occupancy_projection
     passing_diagnostic = self.diagnostic_passing
+    finite_risk = self._finite_risk_candidates if status != MPC_INVALID_INPUT else ()
     solve_time = self.solve_time
     last_cloudlog_t = self.last_cloudlog_t
     timestamp = time.monotonic()
@@ -2284,7 +2457,11 @@ class LongitudinalMpc:
                            MPC_SOLVER_ERROR: 'solver_exception',
                            MPC_OCCUPANCY_UNSATISFIED: 'finite_occupancy_unsatisfied'}.get(status, 'solver_status')
     self.diagnostic_occupancy_bounds = occupancy_diagnostic
+    self.diagnostic_occupancy_projection = occupancy_projection
     self.diagnostic_passing = passing_diagnostic
+    if finite_risk:
+      self.finite_risk_evidence = finite_risk
+      self.finite_risk_braking_accel = ACCEL_MIN
     if occupancy_diagnostic and status > 0:
       self.failure_reason = 'finite_occupancy_solver_failure'
     if failed_goal is not None:

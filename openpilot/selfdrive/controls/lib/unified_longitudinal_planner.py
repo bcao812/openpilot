@@ -16,7 +16,7 @@ from openpilot.selfdrive.controls.lib.cruise_response import (
   CRUISE_COAST_BP, CRUISE_COAST_MIN_SPEED, CRUISE_COAST_MAX_SPEED_ERROR, CRUISE_COAST_RISK_ACCEL,
   CruiseResponse,
 )
-from openpilot.selfdrive.controls.lib.drive_helpers import (CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED,
+from openpilot.selfdrive.controls.lib.drive_helpers import (CLOSE_LEAD_STOP_SPEED, CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED,
                                                           get_departure_accel_from_plan, should_stop)
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.honda_radar_accel_guard import HondaRadarAccelGuard
@@ -203,6 +203,7 @@ class UnifiedLongitudinalPlanner:
     self.radar_consumption = RadarConsumption()
     self.caution_accel_limited = False
     self.caution_object_identities = ()
+    self.mitigation_object_evidence = ()
     self.fusion_admitted = False
     self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
     self.model_reference_adapter = ModelReferenceAdapter()
@@ -229,6 +230,7 @@ class UnifiedLongitudinalPlanner:
     self.radar_accel_limited = False
     self.caution_accel_limited = False
     self.caution_object_identities = ()
+    self.mitigation_object_evidence = ()
     self.stop_distance_policy.clear()
     self.parking_approach.clear()
     self.parking_policy_distances = None
@@ -268,6 +270,16 @@ class UnifiedLongitudinalPlanner:
     model_request = state['modelV2'].action.desiredAcceleration
     if self.e2e_allowed and self.model_reference_mode != 'invalid' and math.isfinite(model_request):
       request = min(request, model_request)
+    finite_braking = getattr(planner.mpc, 'finite_risk_braking_accel', None)
+    finite_evidence = getattr(planner.mpc, 'finite_risk_evidence', ())
+    if (finite_braking is not None and math.isfinite(finite_braking) and ACCEL_MIN <= finite_braking < request
+        and finite_evidence and all(getattr(proof, 'consumed_ns', None) == self._radar_update_ns for proof in finite_evidence)):
+      # This is a separately proved fresh, imminent physical risk. A generic
+      # solver error or an expired/caution-only object grants no such request.
+      # The failed plan stays invalid and carries only the existing braking
+      # envelope; this limits damage without claiming collision avoidance.
+      request = float(finite_braking)
+      self.mitigation_object_evidence = tuple(finite_evidence)
     request = float(np.clip(request, ACCEL_MIN, ACCEL_MAX))
     raw_kind = self.describe_motion_reference(state)
     evidence_goal = self.model_evidence.rest_goal if self.model_evidence is not None else None
@@ -278,7 +290,7 @@ class UnifiedLongitudinalPlanner:
                                          rest_goal_rejected=goal_rejected, producer_instance_ns=self.producer_instance_ns)
     planner.output_a_target = request
     self.constraint_accel = request
-    if self.e2e_allowed and self.model_reference_mode != 'invalid' and model_request <= min(previous, MPC_FAILURE_ACCEL):
+    if self.e2e_allowed and self.model_reference_mode != 'invalid' and model_request <= request:
       self.constraint_source = LongitudinalPlanSource.e2e
     planner._observe(constraintKnown=True, constraintAccel=request, modelAdmissionKnown=True,
                      e2eAllowed=bool(self.e2e_allowed))
@@ -405,26 +417,34 @@ class UnifiedLongitudinalPlanner:
       and self.radar_settings.control_requested(self.planner.CP, self.planner.CP_SP)
       and state['selfdriveState'].experimentalMode and self.planner.dec.enabled()
     )
+    if not self.fusion_admitted:
+      if not getattr(radar, 'fusionActive', False):
+        return state
+      # Scope exit is a pure sensor fallback. It does not require the vehicle
+      # inputs used only by active consumption/loss tracking, or rewrite them.
+      fallback = log.RadarState.new_message()
+      fallback.mdMonoTime, fallback.radarErrors = radar.mdMonoTime, radar.radarErrors
+      fallback.leadOne, fallback.leadTwo = radar.visionLeadOne, radar.visionLeadTwo
+      fallback.fusionReason = 'consumerScopeExit'
+      return RadarInputView(state, fallback)
+    reset = self.reset_radar_consumption_for_driver(state)
+    if getattr(radar, 'fusionActive', False):
+      if state.valid.get('radarState', False) and state.all_checks(service_list=['radarState']):
+        radar = self.radar_consumption.update(
+          radar, publication_ns=state.logMonoTime.get('radarState'), now_ns=now_ns,
+          speed=state['carState'].vEgo, retain_losses=not reset,
+        )
+      return RadarInputView(state, radar)
+    return state
+
+  def reset_radar_consumption_for_driver(self, state):
     car, control = state['carState'], state['carControl']
     reset = (state['controlsState'].longControlState == LongCtrlState.off or car.vCruise == V_CRUISE_UNSET
              or not (state['selfdriveState'].enabled and control.enabled and control.longActive)
              or car.gasPressed or car.brakePressed or control.cruiseControl.override)
     if reset:
       self.radar_consumption.clear()
-    if getattr(radar, 'fusionActive', False) and self.fusion_admitted:
-      if state.valid.get('radarState', False) and state.all_checks(service_list=['radarState']):
-        radar = self.radar_consumption.update(
-          radar, publication_ns=state.logMonoTime.get('radarState'), now_ns=now_ns,
-          speed=car.vEgo, retain_losses=not reset,
-        )
-      return RadarInputView(state, radar)
-    if not getattr(radar, 'fusionActive', False) or self.fusion_admitted:
-      return state
-    fallback = log.RadarState.new_message()
-    fallback.mdMonoTime, fallback.radarErrors = radar.mdMonoTime, radar.radarErrors
-    fallback.leadOne, fallback.leadTwo = radar.visionLeadOne, radar.visionLeadTwo
-    fallback.fusionReason = 'consumerScopeExit'
-    return RadarInputView(state, fallback)
+    return reset
 
   def radar_accel_ceiling(self, state, *, now_ns, permitted, speed):
     self.refresh_radar_settings(now_ns)
@@ -473,7 +493,12 @@ class UnifiedLongitudinalPlanner:
   def update(self, state, *, now_ns):
     self.caution_accel_limited = False
     self.caution_object_identities = ()
+    self.mitigation_object_evidence = ()
     state = self.radar_input_state(state, now_ns)
+    if not self.fusion_admitted:
+      # Full planner updates still observe the driver lifecycle after a scope
+      # exit; a sensor-only fallback call need not fabricate car/control data.
+      self.reset_radar_consumption_for_driver(state)
     self._radar_update_ns = now_ns
     planner = self.planner
     self.model_reference_mode = 'not_admitted'
@@ -618,7 +643,7 @@ class UnifiedLongitudinalPlanner:
       # producer's explicit fresh identity/path evidence, never a cap timer.
       maximum_accel = min(maximum_accel, 0.0)
     caution_identities = ()
-    if self.fusion_admitted and healthy and active and not reset and maximum_accel > 0.0:
+    if self.fusion_admitted and healthy and active and not reset:
       caution_identities = tuple(
         lead_identity(lead) for lead in control_leads(radar, 'caution', 0.0, now_ns=now_ns)
         if lead.vRel < 0.0 and lead.dRel / -lead.vRel <= 2.0
@@ -734,10 +759,36 @@ class UnifiedLongitudinalPlanner:
       # executed stopping trajectory. Scalar/model/owner arbitration is unchanged.
       comfort_distance, lead_risk_distances = low_speed_follow_distance(speed), (STOP_DISTANCE, STOP_DISTANCE)
     self.parking_mpc_distances = (comfort_distance, lead_risk_distances)
+    # A passing branch has a position LOWER bound: independently applying
+    # stronger braking after the solve could turn passing into a collision.
+    # Authorize only the no-final-braking domain. Native passing constrains
+    # every future a node to <= 0; our actual request is linear interpolation
+    # of those nodes after the initial a0-release interval, not a velocity
+    # inverse. Every final independent cap below is >= 0, so it cannot weaken
+    # that accepted request (apart from the MPC's 1e-9 numerical tolerance).
+    passing_model_compatible = (not self.e2e_allowed and evidence is None
+                                or ordinary_model_motion and evidence.unknown is None)
+    passing_speed = initial_speed + max(initial_accel, 0.0) * float(T_IDXS[1]) / 2.0
+    allow_passing = bool(
+      self.fusion_admitted and getattr(radar, 'fusionActive', False)
+      and healthy and active and not reset and not forced_decel and not car_state.standstill
+      # The existing low-speed stop/creep owner can add stopping effort after
+      # planning. It keeps priority throughout its established < 2 m/s domain.
+      and speed >= CLOSE_LEAD_STOP_SPEED
+      and state['controlsState'].longControlState == LongCtrlState.pid
+      and motion.enabled and motion.phase == 'track' and not motion.resolvedStop
+      and self.radar_held_identity is None and not fusion_degraded and not caution_identities
+      and not self.turn_lead_guard.lost and turn_ceiling is None and radar_ceiling is None
+      and policy.source == LongitudinalPlanSourceSP.cruise and cruise_speed >= passing_speed
+      and not model.action.shouldStop and model.action.desiredAcceleration >= 0.0
+      and passing_model_compatible and model_position is model_velocity is model_acceleration is None
+      and maximum_accel >= 0.0 and cruise_ceiling >= 0.0 and delay + DT_MDL >= T_IDXS[1]
+    )
     reference = MpcReference(
       cruise_speed=None if native_cruise_external else cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
       typed_model=None if ordinary_model_motion else self.model_evidence, allow_future_rest_reschedule=True,
+      allow_passing=allow_passing,
       comfort_stop_distance=comfort_distance, lead_risk_stop_distances=lead_risk_distances,
     )
     urgency = 0.0

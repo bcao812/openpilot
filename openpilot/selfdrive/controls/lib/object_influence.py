@@ -8,10 +8,11 @@ No helper in this module can change a plan, an owner, or an acceleration.
 import math
 from numbers import Integral, Real
 
-from openpilot.selfdrive.controls.lib.lead_qualification import MAX_CONTROL_OBJECTS, _read, control_leads, lead_identity
+from openpilot.selfdrive.controls.lib.lead_qualification import MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, _read, control_leads, lead_identity
 
 
 INFLUENCE_VERSION = 1
+MITIGATION_INFLUENCE_VERSION = 2
 INFLUENCE_LEASE_NS = 250_000_000
 FOLLOW_STRENGTH = 0.15
 KINDS = ('follow', 'braking', 'hold', 'release', 'caution')
@@ -145,8 +146,110 @@ def plan_object_influences(radar_state, *, active_identities, now_ns, permitted,
           for identity, kind in selected.items()]
 
 
+def mitigation_plan_object_influences(radar_state, proofs, *, selected, now_ns, consumed_ns, reference_ns,
+                                      target_accel, braking_accel, accel_min):
+  """Describe the separately proved physical brake that won a failed plan.
+
+  The caller supplies only the current MPC's typed FiniteRiskEvidence retained
+  by the final arbitration. This function verifies its provenance against the
+  current physical object; it neither repeats that proof nor interprets a
+  solver error as evidence about an obstacle.
+  """
+  if (selected is not True or not proofs or len(proofs) > MAX_CONTROL_OBJECTS
+      or not all(_integer(value, 1) for value in (now_ns, consumed_ns, reference_ns))
+      or not 0 <= now_ns - consumed_ns <= INFLUENCE_LEASE_NS
+      or not 0 <= consumed_ns - reference_ns <= INFLUENCE_LEASE_NS
+      or not all(_finite(value) for value in (target_accel, braking_accel, accel_min))
+      or not target_accel == braking_accel == accel_min < 0.0):
+    return []
+  radar = _reader(radar_state)
+  if _read(radar, 'fusionActive', False) is not True:
+    return []
+  leads = control_leads(radar)
+  if len(leads) > MAX_CONTROL_OBJECTS:
+    return []
+  physical = {lead_identity(lead): lead for lead in leads if lead_identity(lead) is not None}
+  result, seen = [], set()
+  for proof in proofs:
+    identity, source = _read(proof, 'identity'), _read(proof, 'source')
+    if (not isinstance(identity, tuple) or len(identity) != 2 or identity in seen or identity not in physical
+        or source not in ('radar', 'fused') or _read(proof, 'consumed_ns') != consumed_ns
+        or _read(proof, 'reference_ns') != reference_ns or _read(proof, 'braking_accel') != accel_min):
+      continue
+    lead = physical[identity]
+    evidence = _read(lead, 'evidence')
+    if (str(_read(evidence, 'source', '')) != source or _read(evidence, 'coasting', False)
+        or _read(evidence, 'brakeQualified', False) is not True or _read(evidence, 'fcwQualified', False) is not True):
+      continue
+    clocks = (('position_ns', 'positionMonoTime', MAX_MEASUREMENT_AGE_NS),
+              ('velocity_ns', 'velocityMonoTime', MAX_MEASUREMENT_AGE_NS),
+              ('estimate_ns', 'estimateMonoTime', INFLUENCE_LEASE_NS),
+              ('model_ns', 'modelMonoTime', INFLUENCE_LEASE_NS))
+    if not all(_integer(stamp := _read(proof, field), 1) and stamp == _read(evidence, wire_field)
+               and 0 <= now_ns - stamp <= lease for field, wire_field, lease in clocks):
+      continue
+    record = _identity_record(lead, _read(proof, 'model_ns'), -1)
+    if record is not None:
+      result.append(dict(record, version=MITIGATION_INFLUENCE_VERSION, kind='braking', strength=1.0))
+      seen.add(identity)
+  return result
+
+
+def accepted_mitigation_influences(plan, owner, car_state, *, long_active, braking_plan_valid, key_inputs_valid,
+                                   key_input_times, plan_ns, now_ns, output_accel, accel_min):
+  """Acknowledge only actual adoption of the independent physical brake.
+
+  Unlike normal v1 attribution, the main plan remains invalid. A v2 record,
+  fresh transport, the owner's matching braking-only consumption receipt and
+  its actual maximum brake request are all required. Generic degraded braking
+  cannot produce or inherit this receipt.
+  """
+  if (long_active is not True or braking_plan_valid is not True or key_inputs_valid is not True
+      or not _read(owner, 'unified', False) or not _read(owner, 'motion_input_constrained', False)
+      or _read(car_state, 'canValid', False) is not True
+      or _read(car_state, 'gasPressed', False) or _read(car_state, 'brakePressed', False)
+      or not _integer(plan_ns, 1) or not _integer(now_ns, 1)
+      or not 0 <= now_ns - plan_ns <= INFLUENCE_LEASE_NS
+      or len(key_input_times) != 3
+      or not all(_integer(stamp, 1) and 0 <= now_ns - stamp <= INFLUENCE_LEASE_NS for stamp in key_input_times)
+      or not _finite(accel_min) or accel_min >= 0.0 or not _finite(output_accel)
+      or abs(output_accel - accel_min) > 1e-6):
+    return []
+  plan = _reader(plan)
+  intent, supervisor = _read(plan, 'motionIntent'), _read(owner, 'motion_supervisor')
+  phase = _read(phase_value := _read(owner, 'motion_phase'), 'text', phase_value)
+  model_ns, status = _read(plan, 'modelMonoTime', 0), _read(plan, 'solverStatus', 0)
+  if (phase not in ('track', 'approach', 'hold') or not isinstance(status, Integral) or isinstance(status, bool) or status == 0
+      or not _integer(model_ns, 1) or not 0 <= now_ns - model_ns <= INFLUENCE_LEASE_NS
+      or _read(intent, 'valid', True) is not False or _read(intent, 'ready', False) is not True
+      or _read(intent, 'brakingValid', False) is not True or _read(intent, 'allowCreep', True)
+      or _read(intent, 'movingLead', True) or _read(intent, 'releaseAllowed', True)
+      or _read(plan, 'aTarget') != accel_min or _read(intent, 'brakingAccel') != accel_min
+      or _read(supervisor, 'degraded_braking_accel') != accel_min
+      or _read(supervisor, '_last_braking_plan_time_ns') != plan_ns
+      or _read(supervisor, '_last_braking_model_time_ns') != model_ns):
+    return []
+  records = _read(plan, 'objectInfluences', ())
+  if len(records) > MAX_CONTROL_OBJECTS:
+    return []
+  result, seen = [], set()
+  for record in records:
+    identity = influence_identity(record)
+    if (not _integer(_read(record, 'version')) or _read(record, 'version') != MITIGATION_INFLUENCE_VERSION
+        or identity is None or len(identity) != 2 or identity in seen
+        or str(_read(record, 'kind', '')) != 'braking' or _read(record, 'strength') != 1.0):
+      continue
+    model, index = _read(record, 'modelMonoTime', 0), _read(record, 'visionIndex', -1)
+    has_vision = _integer(model, 1) and 0 <= now_ns - model <= INFLUENCE_LEASE_NS and _integer(index) and index in (0, 1)
+    result.append({'version': MITIGATION_INFLUENCE_VERSION, 'sessionId': identity[0], 'trackId': identity[1],
+                   'modelMonoTime': int(model) if has_vision else 0, 'visionIndex': int(index) if has_vision else -1,
+                   'kind': 'braking', 'strength': 1.0})
+    seen.add(identity)
+  return result
+
+
 def accepted_object_influences(plan, owner, car_state, *, long_active, plan_valid, plan_ns, now_ns, output_accel,
-                               independent_stop=False):
+                               owner_tracking, independent_stop=False):
   """Acknowledge the owner's actual same-tick adoption, clearing all others.
 
   This is called after LongControl.update and output validation. Inactive,
@@ -172,7 +275,10 @@ def accepted_object_influences(plan, owner, car_state, *, long_active, plan_vali
   phase_value = _read(owner, 'motion_phase')
   phase = _read(phase_value, 'text', phase_value)
   resolved_stop = _read(owner, 'resolved_should_stop', False)
-  tracking = str(_read(owner, 'long_control_state', 'off')) == 'pid'
+  # LongControl stores the schema's numeric enum constant, while received
+  # Cap'n Proto fields render as enum names. The process boundary compares
+  # against the actual schema enum and passes that read-only fact explicitly.
+  tracking = owner_tracking is True
   target = _read(plan, 'aTarget')
   if phase not in ('track', 'approach', 'hold', 'release') or not _finite(target):
     return []

@@ -19,6 +19,7 @@ from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
+from opendbc.car.interfaces import ACCEL_MIN
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, clip_curvature, get_departure_accel_from_plan
@@ -31,7 +32,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent, StopReason
-from openpilot.selfdrive.controls.lib.object_influence import accepted_object_influences
+from openpilot.selfdrive.controls.lib.object_influence import accepted_mitigation_influences, accepted_object_influences
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer
 from openpilot.selfdrive.modeld.constants import LAT_SMOOTH_SECONDS, ModelConstants
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
@@ -341,9 +342,16 @@ class Controls(ControlsExt):
       self._object_influence_receipt = accepted_object_influences(
         long_plan, self.LoC, CS, long_active=bool(CC.longActive), plan_valid=motion_input.get('plan_valid', False),
         plan_ns=int(self.sm.logMonoTime['longitudinalPlan']), now_ns=now_ns, output_accel=float(actuators.accel),
+        owner_tracking=self.LoC.long_control_state == car.CarControl.Actuators.LongControlState.pid,
         independent_stop=bool(self.LoC.motion_reasons & (StopReason.E2E | StopReason.CRUISE | StopReason.FORCE_DECEL
                                                         | StopReason.CREEP | StopReason.INVALID)),
       )
+      self._object_influence_receipt.extend(accepted_mitigation_influences(
+        long_plan, self.LoC, CS, long_active=bool(CC.longActive), braking_plan_valid=motion_input.get('braking_plan_valid', False),
+        key_inputs_valid=bool(self.sm.all_checks(['carState', 'modelV2', 'selfdriveState'])),
+        key_input_times=tuple(int(self.sm.logMonoTime[service]) for service in ('carState', 'modelV2', 'selfdriveState')),
+        plan_ns=int(self.sm.logMonoTime['longitudinalPlan']), now_ns=now_ns, output_accel=float(actuators.accel), accel_min=ACCEL_MIN,
+      ))
     except (AttributeError, TypeError, ValueError, OverflowError):
       # Receipt failure only removes a display annotation; it cannot affect
       # the completed owner decision or its command.

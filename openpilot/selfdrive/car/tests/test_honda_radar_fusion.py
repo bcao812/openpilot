@@ -1356,10 +1356,17 @@ class TestHondaRadarFusion(unittest.TestCase):
         for frame in range(4):
           advance(fusion, frame, [observation(frame, velocity=False)], probability=0)
         track = fusion.tracks[7]
+        # Prepare the controlled covariance at a new model epoch. Reusing the
+        # last publication's now_ns would correctly reset the entire producer.
+        epoch = START + 4 * STEP
+        self.assertTrue(track.advance(epoch, fusion.history))
         track.covariance = np.diag([.125, lateral_position, .0625, lateral_velocity])
-        stamp = track.position_ns + offset
+        stamp = epoch + offset
         _, expected = track.project(stamp, fusion.history)
+        resets = fusion.counts['resets']
         out = fusion.update(body(4, []), Inputs(stamp, probability=0), stamp + 1)
+        self.assertEqual(out['counters']['resets'], resets)
+        self.assertIs(fusion.tracks[7], track)
         snapshot = out['tracks'][0]
         self.assertEqual(snapshot['lateralPositionVariance'], expected[1, 1])
         self.assertEqual(snapshot['lateralVelocityVariance'], expected[3, 3])
@@ -1412,11 +1419,17 @@ class TestHondaRadarFusion(unittest.TestCase):
           for frame in range(3):
             advance(fusion, frame, probability=0)
           track = fusion.tracks[7]
+          stamp = START + 3 * STEP
+          self.assertTrue(track.advance(stamp, fusion.history))
+          # Inject at the new epoch so process noise cannot replace the
+          # requested invalid covariance, and chronology cannot cause a reset.
           track.covariance = np.diag([.25, .5, 1.0, 2.0])
           track.covariance[axis, axis] = value
-          stamp = track.position_ns
+          resets = fusion.counts['resets']
           with np.errstate(invalid='ignore'):
             out = fusion.update(body(3, []), Inputs(stamp, probability=0), stamp + 1)
+          self.assertEqual(out['counters']['resets'], resets)
+          self.assertIs(fusion.tracks[7], track)
           if math.isfinite(value):
             self.assertTrue(out['tracks'][0]['active'])
             self.assertFalse(out['tracks'][0]['lateralVelocityValid'])
