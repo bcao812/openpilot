@@ -22,7 +22,7 @@ from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
-from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, SERVICE, ObserverSettings
+from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, ObserverSettings
 from openpilot.selfdrive.car.longitudinal_authority import restrict_longitudinal_authority
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import can_message, scan_frames
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_departure_accel_from_plan
@@ -90,17 +90,16 @@ class IdealPlant:
 
 
 @contextmanager
-def control_pipeline(*, speed=10.0, cruise=18.0, mode=CONTROL):
+def control_pipeline(*, speed=10.0, cruise=18.0):
   with OpenpilotPrefix():
     params = Params()
-    params.put('HondaBoschARadarMode', mode, block=True)
     for name in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
       params.put_bool(name, True, block=True)
-    yield ControlPipeline(params, speed, cruise, mode)
+    yield ControlPipeline(params, speed, cruise)
 
 
 class ControlPipeline:
-  def __init__(self, params, speed, cruise, mode):
+  def __init__(self, params, speed, cruise):
     self.params = params
     self.planner, self.extension = make_planner(speed=speed)
     self.owner = LongControl(self.planner.CP, self.extension)
@@ -108,7 +107,7 @@ class ControlPipeline:
     self.reference_consumer = ReferenceTimingConsumer()
     self.observer = HondaRadarObserver(self.planner.CP, self.extension, session_id='active-radar-pipeline')
     self.radard = RadarD(self.planner.CP, self.extension, params=params)
-    self.settings = ObserverSettings(mode, True, True, True)
+    self.settings = ObserverSettings(True, True, True)
     dbc = DBC[self.planner.CP.carFingerprint][Bus.pt]
     self.controller = CarController({Bus.pt: dbc}, self.planner.CP, self.extension)
     self.can_bus = CanBus(self.planner.CP)

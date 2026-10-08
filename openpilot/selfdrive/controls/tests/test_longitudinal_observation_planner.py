@@ -12,6 +12,7 @@ from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR
 from openpilot.cereal import messaging
 from openpilot.common.longitudinal_logging import CHECK_FLAGS, LOGGING_MARKERS, PLANNER_INPUTS
+from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
@@ -23,6 +24,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPl
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.controls.lib.parking_approach import ParkingApproach, VisionLeadUncertainty
+from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
+from openpilot.selfdrive.controls.lib.turn_lead_guard import TurnLeadGuard
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -51,7 +54,11 @@ def snapshot_value(value):
     return ('ndarray', value.dtype.str, value.shape, value.flags.writeable, value.tolist())
   if is_dataclass(value):
     return (type(value).__qualname__, {field.name: snapshot_value(getattr(value, field.name)) for field in fields(value)})
-  if isinstance(value, (ParkingApproach, VisionLeadUncertainty)):
+  if isinstance(value, Params):
+    # The backing store is the dependency; copying a native handle only creates
+    # an unequal Python identity. Loaded policy values remain in radar_settings.
+    return (type(value).__qualname__, value.get_param_path())
+  if isinstance(value, (ParkingApproach, VisionLeadUncertainty, RadarConsumption, TurnLeadGuard)):
     return (type(value).__qualname__, snapshot_value(vars(value)))
   if isinstance(value, OrderedDict):
     # The vision cache evicts its oldest entry; ordering is control state too.

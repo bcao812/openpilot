@@ -1,8 +1,7 @@
 """Optional Accord telemetry; no control or sendcan publisher.
 
-Mode 3 supplies observations to the acceleration guard. Mode 4 supplies the
-formal radar publisher's separately qualified control objects. This process
-never publishes a control command or a formal lead.
+Supplies the formal radar publisher's separately qualified control objects.
+This process never publishes a control command or a formal lead.
 """
 import time
 import uuid
@@ -11,7 +10,7 @@ from opendbc.car.honda.bosch_a_radar import BoschARadarObserver, MAX_AGE_NS
 from opendbc.car.honda.hondacan import CanBus
 from openpilot.cereal import messaging
 from openpilot.common.realtime import drop_realtime, set_core_affinity
-from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, FUSION_MODES, ObserverSettings, scope_state
+from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, SERVICE, ObserverSettings, scope_state
 
 PUBLISH_PERIOD_NS = 50_000_000
 HEARTBEAT_NS = 1_000_000_000
@@ -39,7 +38,6 @@ class HondaRadarObserver:
     self.active = False
     self.sequence = 0
     self.last_publish_ns = 0
-    self.last_reason = ''
     self.rejected_envelopes = 0
     self.backlog_count = 0
     self.processing_ns = 0
@@ -57,15 +55,11 @@ class HondaRadarObserver:
 
   def update(self, envelopes, sm, settings, now_ns, fusion_sm=None):
     started_ns = time.monotonic_ns()
-    active, reason, scope = scope_state(self.cp, self.cp_sp, settings, sm, now_ns)
+    active, reason, scope = scope_state(self.cp, self.cp_sp, settings, sm)
     if active != self.active:
       self.decoder.reset()
     self.active = active
-    if settings.mode not in FUSION_MODES:
-      self.fusion = None
-      self.fusion_input_error = False
-    elif self.fusion is None:
-      # The observation-only path has no extra model subscription or filter.
+    if self.fusion is None:
       try:
         from openpilot.selfdrive.car.honda_radar_fusion import HondaRadarFusion
         self.fusion = HondaRadarFusion()
@@ -92,15 +86,13 @@ class HondaRadarObserver:
     self.processing_ns += time.monotonic_ns() - started_ns
     if now_ns - self.last_publish_ns < PUBLISH_PERIOD_NS:
       return None
-    if settings.mode not in FUSION_MODES and not self.decoder.events and reason == self.last_reason and now_ns - self.last_publish_ns < HEARTBEAT_NS:
-      return None
     self.sequence += 1
     msg = messaging.new_message(SERVICE)
     msg.valid = True  # telemetry validity; sensor/scope validity is carried inside
     msg.logMonoTime = now_ns
     body = getattr(msg, SERVICE)
     body.schemaVersion = 1
-    body.mode = settings.mode
+    body.mode = CONTROL
     body.decoderVersion = DECODER_VERSION
     body.sessionId = self.session_id
     body.sequence = self.sequence
@@ -117,25 +109,24 @@ class HondaRadarObserver:
     body.processingTimeNs = self.processing_ns
     body.rejectedEnvelopes = self.rejected_envelopes
     body.backlogCount = self.backlog_count
-    if settings.mode in FUSION_MODES:
-      try:
-        if self.fusion_input_error or self.fusion is None:
-          raise ValueError('Invalid shadow input since the previous publication')
-        # Reuse this call's decoder events after the schema validation above.
-        # Their measurements are Float64; headers retain the wire-normalized
-        # values. No native observation fields need to be read back for fusion.
-        fusion_body = {'schemaVersion': body.schemaVersion, 'mode': body.mode, 'sessionId': body.sessionId, 'sequence': body.sequence,
-                       'active': body.active, 'counters': body.counters, 'scope': body.scope, 'observations': observations}
-        body.fusion = self.fusion.update(fusion_body, fusion_sm, now_ns)
-      except Exception:
-        # A shadow calculation failure must not interrupt raw observation or
-        # leave a previously computed candidate apparently current.
-        self._fusion_failed(now_ns)
-        body.fusion = {'version': 1, 'enabled': True, 'active': False, 'calibrated': False, 'controlAllowed': False,
-                           'reason': 'fusionError', 'tracks': [], 'leads': []}
-      self.fusion_input_error = False
+    try:
+      if self.fusion_input_error or self.fusion is None:
+        raise ValueError('Invalid fusion input since the previous publication')
+      # Reuse this call's decoder events after the schema validation above.
+      # Their measurements are Float64; headers retain the wire-normalized
+      # values. No native observation fields need to be read back for fusion.
+      fusion_body = {'schemaVersion': body.schemaVersion, 'mode': body.mode, 'sessionId': body.sessionId, 'sequence': body.sequence,
+                     'active': body.active, 'counters': body.counters, 'scope': body.scope, 'observations': observations}
+      body.fusion = self.fusion.update(fusion_body, fusion_sm, now_ns)
+    except Exception:
+      # A fusion calculation failure must not interrupt raw observation or
+      # leave a previously computed candidate apparently current.
+      self._fusion_failed(now_ns)
+      body.fusion = {'version': 1, 'enabled': True, 'active': False, 'calibrated': False, 'controlAllowed': False,
+                    'reason': 'fusionError', 'tracks': [], 'leads': []}
+    self.fusion_input_error = False
     self.processing_ns = 0
-    self.last_publish_ns, self.last_reason = now_ns, reason
+    self.last_publish_ns = now_ns
     return msg
 
 
@@ -151,11 +142,11 @@ def main():
        custom.CarParamsSP.from_bytes(params.get('CarParamsSP', block=True)) as cp_sp:
     observer = HondaRadarObserver(cp, cp_sp)
     sm = messaging.SubMaster(['selfdriveState', 'longitudinalPlanSP', 'carControl'])
+    fusion_sm = messaging.SubMaster(['carState', 'modelV2'])
     pm = messaging.PubMaster([SERVICE])
     can_sock = messaging.sub_sock('can', timeout=20)
     settings = ObserverSettings.read(params)
     next_settings_ns = 0
-    fusion_sm = None
     while True:
       # Bound each drain: a busy CAN producer cannot starve scope checks or expiry.
       envelopes = []
@@ -174,12 +165,7 @@ def main():
       if now_ns >= next_settings_ns:
         settings = ObserverSettings.read(params)
         next_settings_ns = now_ns + HEARTBEAT_NS
-      if settings.mode in FUSION_MODES:
-        if fusion_sm is None:
-          fusion_sm = messaging.SubMaster(['carState', 'modelV2'])
-        fusion_sm.update(0)
-      else:
-        fusion_sm = None
+      fusion_sm.update(0)
       # Model/carState may have arrived during the settings/subscriber reads.
       # Validate their source times against a clock taken after those reads.
       now_ns = time.monotonic_ns()

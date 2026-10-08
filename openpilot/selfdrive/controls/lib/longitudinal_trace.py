@@ -341,7 +341,7 @@ class LongitudinalTrace:
       self.disabled_attempts += 1
       return
     try:
-      motion_enabled = getattr(planner, 'motion_enabled', planner.unified)
+      motion_enabled = planner.unified
       self.schema = MOTION_TRACE_SCHEMA if motion_enabled else TRACE_SCHEMA
       self.fields = UNIFIED_TRACE_FIELDS if motion_enabled else TRACE_FIELDS
       inputs = optional_value(lambda: capture_inputs(state, PLANNER_INPUTS))

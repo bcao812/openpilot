@@ -1,4 +1,4 @@
-"""Native schema, observer boundary and isolated process tests for shadow fusion."""
+"""Native schema, observer boundary and isolated process tests for radar fusion."""
 from collections import deque
 from itertools import permutations
 import os
@@ -18,7 +18,6 @@ from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
 from openpilot.selfdrive.car.honda_radar_observer_config import ObserverSettings, SERVICE
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import START, SETTINGS, can_message, configuration, scan_frames, state
 
-SHADOW_SETTINGS = ObserverSettings(2, True, True, True)
 STEP = 66_000_000
 
 
@@ -66,7 +65,7 @@ class TestHondaRadarShadow(unittest.TestCase):
     from openpilot.selfdrive.car import honda_radar_observer as runtime
     cp, cp_sp = configuration()
     params = Mock()
-    values = {'CarParams': cp.to_bytes(), 'CarParamsSP': cp_sp.to_bytes(), 'HondaBoschARadarMode': 2}
+    values = {'CarParams': cp.to_bytes(), 'CarParamsSP': cp_sp.to_bytes()}
     params.get.side_effect = lambda key, **_: values[key]
     params.get_bool.return_value = True
     clock = [START]
@@ -97,7 +96,7 @@ class TestHondaRadarShadow(unittest.TestCase):
       observer = HondaRadarObserver(*configuration())
       sm = fusion_state(START)
       sm['modelV2'].leadsV3[0].x = [x] * 6
-      msg = observer.update([], sm, SHADOW_SETTINGS, START + 1, sm)
+      msg = observer.update([], sm, SETTINGS, START + 1, sm)
       candidate = msg.hondaRadarObservations.fusion.leads[0]
       original = get_RadarState_from_vision(sm['modelV2'].leadsV3[0], sm['carState'].vEgo,
                                            sm['modelV2'].velocity.x[0], sm['modelV2'].leadsV3[0].prob)
@@ -106,7 +105,7 @@ class TestHondaRadarShadow(unittest.TestCase):
       self.assertEqual(candidate.aLead, original['aLeadK'])
       self.assertEqual(candidate.distanceWeight, 0)
 
-  def test_shadow_wire_roundtrip_and_both_dec_modes(self):
+  def test_fusion_wire_roundtrip_and_both_dec_modes(self):
     for dec in ('acc', 'blended'):
       observer = HondaRadarObserver(*configuration(), session_id='shadow-test')
       for frame in range(12):
@@ -115,7 +114,7 @@ class TestHondaRadarShadow(unittest.TestCase):
         sm['longitudinalPlanSP'].dec.state = dec
         before = {key: value.to_dict() for key, value in sm.items()}
         msg = observer.update([can_message(t, scan_frames(index=frame % 16, life=1 + 2 * frame, velocity=864))],
-                              sm, SHADOW_SETTINGS, t + 1, sm)
+                              sm, SETTINGS, t + 1, sm)
         decoded = messaging.log_from_bytes(msg.to_bytes()).hondaRadarObservations
         self.assertEqual({key: value.to_dict() for key, value in sm.items()}, before)
         self.assertTrue(decoded.fusion.active)
@@ -170,7 +169,7 @@ class TestHondaRadarShadow(unittest.TestCase):
             before = {key: value.to_dict() for key, value in sm.items()}
             # The observer retains ego history on nonpublication ticks too.
             wire_fusion.record_inputs(sm, t + 1)
-            msg = observer.update([can_message(t, frames)] if frames else [], sm, SHADOW_SETTINGS, t + 1, sm)
+            msg = observer.update([can_message(t, frames)] if frames else [], sm, SETTINGS, t + 1, sm)
             if msg is not None:
               decoded = messaging.log_from_bytes(msg.to_bytes()).hondaRadarObservations
               expected = wire_fusion.update(decoded, sm, t + 1)
@@ -197,41 +196,36 @@ class TestHondaRadarShadow(unittest.TestCase):
     with patch.object(observer.decoder, 'drain', side_effect=malformed_events), \
          patch.object(HondaRadarFusion, 'update') as calculate, \
          self.assertRaisesRegex(AttributeError, 'notAnObservationField'):
-      observer.update([can_message(START, scan_frames())], sm, SHADOW_SETTINGS, START + 1, sm)
+      observer.update([can_message(START, scan_frames())], sm, SETTINGS, START + 1, sm)
     calculate.assert_not_called()
 
-  def test_each_scope_flag_clears_candidates(self):
-    for key in ('alpha', 'experimental', 'dec', 'experimentalActive', 'decEnabled', 'decActive'):
+  def test_each_configuration_gate_clears_candidates(self):
+    for key in ('alpha', 'experimental', 'dec'):
       observer = HondaRadarObserver(*configuration())
       sm = fusion_state(START)
-      observer.update([can_message(START, scan_frames())], sm, SHADOW_SETTINGS, START + 1, sm)
+      observer.update([can_message(START, scan_frames())], sm, SETTINGS, START + 1, sm)
       t = START + STEP
       sm = fusion_state(t)
-      values = {'mode': 2, 'alpha': True, 'experimental': True, 'dec': True}
-      if key in values:
-        values[key] = False
-      elif key == 'experimentalActive':
-        sm['selfdriveState'].experimentalMode = False
-      else:
-        setattr(sm['longitudinalPlanSP'].dec, 'enabled' if key == 'decEnabled' else 'active', False)
+      values = {'alpha': True, 'experimental': True, 'dec': True}
+      values[key] = False
       msg = observer.update([], sm, ObserverSettings(**values), t + 1, sm)
       self.assertFalse(msg.hondaRadarObservations.fusion.active, key)
       self.assertFalse(msg.hondaRadarObservations.fusion.tracks, key)
       self.assertFalse(msg.hondaRadarObservations.fusion.leads, key)
 
-  def test_observe_payload_and_disable_reenable_do_not_reuse_confirmation(self):
+  def test_configuration_exit_and_reentry_do_not_reuse_confirmation(self):
     observer = HondaRadarObserver(*configuration())
     for frame in range(8):
       t = START + frame * STEP
       sm = fusion_state(t)
-      observer.update([can_message(t, scan_frames(index=frame, life=1 + 2 * frame))], sm, SHADOW_SETTINGS, t + 1, sm)
+      observer.update([can_message(t, scan_frames(index=frame, life=1 + 2 * frame))], sm, SETTINGS, t + 1, sm)
     t += STEP
-    msg = observer.update([can_message(t, scan_frames(index=8, life=17))], state(t), SETTINGS, t)
-    self.assertNotIn('fusion', msg.hondaRadarObservations.to_dict())
-    self.assertIsNone(observer.fusion)
+    msg = observer.update([can_message(t, scan_frames(index=8, life=17))], state(t), ObserverSettings(), t)
+    self.assertFalse(msg.hondaRadarObservations.active or msg.hondaRadarObservations.fusion.active)
+    self.assertFalse(observer.fusion.tracks)
     t += STEP
     sm = fusion_state(t)
-    msg = observer.update([can_message(t, scan_frames(index=10, life=21))], sm, SHADOW_SETTINGS, t + 1, sm)
+    msg = observer.update([can_message(t, scan_frames(index=10, life=21))], sm, SETTINGS, t + 1, sm)
     self.assertEqual(msg.hondaRadarObservations.fusion.tracks[0].observations, 1)
     self.assertEqual(msg.hondaRadarObservations.fusion.leads[0].distanceWeight, 0)
 
@@ -245,7 +239,7 @@ class TestHondaRadarShadow(unittest.TestCase):
       kwargs = {'side_effect': result} if isinstance(result, Exception) else {'return_value': result}
       with patch.object(HondaRadarFusion, method, **kwargs), patch('openpilot.common.swaglog.cloudlog.exception'):
         sm = fusion_state(START)
-        msg = observer.update([can_message(START, scan_frames())], sm, SHADOW_SETTINGS, START + 1, sm)
+        msg = observer.update([can_message(START, scan_frames())], sm, SETTINGS, START + 1, sm)
       value = messaging.log_from_bytes(msg.to_bytes()).hondaRadarObservations
       self.assertEqual(value.to_dict()['observations'], expected_observations)
       self.assertTrue(value.observations[-1].positionValid)
@@ -256,7 +250,7 @@ class TestHondaRadarShadow(unittest.TestCase):
       # A good subsequent input can recover without restarting raw telemetry.
       t = START + STEP
       sm = fusion_state(t)
-      msg = observer.update([can_message(t, scan_frames(index=1, life=3))], sm, SHADOW_SETTINGS, t + 1, sm)
+      msg = observer.update([can_message(t, scan_frames(index=1, life=3))], sm, SETTINGS, t + 1, sm)
       self.assertTrue(msg.hondaRadarObservations.fusion.active)
       self.assertEqual(msg.hondaRadarObservations.fusion.tracks[0].observations, 1)
 
@@ -266,13 +260,13 @@ class TestHondaRadarShadow(unittest.TestCase):
       t = START + frame * STEP
       sm = fusion_state(t)
       observer.update([can_message(t, scan_frames(index=frame, life=1 + 2 * frame, velocity=864))],
-                      sm, SHADOW_SETTINGS, t + 1, sm)
+                      sm, SETTINGS, t + 1, sm)
     self.assertTrue(observer.fusion.tracks and observer.fusion.bindings and observer.fusion.history.samples)
     t = START + 4 * STEP
     sm = fusion_state(t)
     with patch.object(observer.fusion, 'update', side_effect=RuntimeError('fixture existing candidate')), \
          patch('openpilot.common.swaglog.cloudlog.exception'):
-      msg = observer.update([can_message(t, scan_frames(index=4, life=9, velocity=864))], sm, SHADOW_SETTINGS, t + 1, sm)
+      msg = observer.update([can_message(t, scan_frames(index=4, life=9, velocity=864))], sm, SETTINGS, t + 1, sm)
     value = messaging.log_from_bytes(msg.to_bytes()).hondaRadarObservations
     self.assertTrue(value.observations[-1].positionValid)
     self.assertEqual(value.fusion.reason, 'fusionError')
@@ -280,17 +274,16 @@ class TestHondaRadarShadow(unittest.TestCase):
     self.assertFalse(observer.fusion.tracks or observer.fusion.bindings or observer.fusion.history.samples)
     t += STEP
     sm = fusion_state(t)
-    msg = observer.update([can_message(t, scan_frames(index=5, life=11, velocity=864))], sm, SHADOW_SETTINGS, t + 1, sm)
+    msg = observer.update([can_message(t, scan_frames(index=5, life=11, velocity=864))], sm, SETTINGS, t + 1, sm)
     self.assertEqual(msg.hondaRadarObservations.fusion.tracks[0].observations, 1)
     self.assertEqual(msg.hondaRadarObservations.fusion.leads[0].distanceWeight, 0)
 
-  def test_shadow_process_receives_model_and_can_in_private_ipc(self):
+  def test_fusion_process_receives_model_and_can_in_private_ipc(self):
     with OpenpilotPrefix():
       params = Params()
       cp, cp_sp = configuration()
       params.put('CarParams', cp.to_bytes(), block=True)
       params.put('CarParamsSP', cp_sp.to_bytes(), block=True)
-      params.put('HondaBoschARadarMode', 2, block=True)
       for key in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
         params.put_bool(key, True, block=True)
       services = ['can', 'selfdriveState', 'longitudinalPlanSP', 'carControl', 'carState', 'modelV2']

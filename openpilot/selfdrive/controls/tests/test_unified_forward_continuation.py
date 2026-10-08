@@ -73,11 +73,11 @@ def solution(planner, profile, *, initial_speed=0.02):
   planner.mpc.solution_status = 0
 
 
-def context(monkeypatch, *, warm=True, raw_forward=True):
+def context(monkeypatch, *, warm=True, raw_forward=True, diagnostics=None):
   # execution_state already declares measured and executed +0.18 acceleration.
   # Seed that same cruise history instead of mixing an executing session with
   # a cold zero response that legitimately contributes its own stop reason.
-  planner, _ = make_planner(speed=0.02, initial_accel=0.18)
+  planner, _ = make_planner(speed=0.02, initial_accel=0.18, diagnostics=diagnostics)
   state = execution_state(raw_forward=raw_forward)
   planner._execution_test_consumer = ReferenceTimingConsumer()
   monkeypatch.setattr(planner.mpc, 'update', lambda *args, **kwargs: None)
@@ -364,7 +364,7 @@ def test_generic_legacy_platforms_do_not_construct_a_unified_continuation_owner(
 
 @pytest.mark.parametrize('mode', [LongitudinalMode.LEGACY, LongitudinalMode.SUPERVISED])
 def test_wrong_owner_wire_mode_revokes_continuation_and_preserves_consumers_hold(monkeypatch, mode):
-  planner, state = context(monkeypatch)
+  planner, state = context(monkeypatch, diagnostics=True)
   planner.update(state, now_ns=execution_time(planner, state, 1))
   assert not planner.output_should_stop
   assert planner.reference_planner._forward_execution_instance_ns > 0

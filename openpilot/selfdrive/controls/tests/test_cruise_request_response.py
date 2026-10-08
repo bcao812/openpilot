@@ -24,7 +24,7 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import (
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import UnifiedLongitudinalPlanner
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, decoded_commands
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
-from openpilot.selfdrive.controls.tests.test_cruise_coast_response import learned_harness, pure_intent
+from openpilot.selfdrive.controls.tests.test_cruise_coast_response import feedback_intent, learned_harness
 from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarness
 
 
@@ -114,7 +114,7 @@ def test_accepted_request_executes_without_integral_then_returns_to_the_original
   harness.step(command, request_intent())
   assert harness.control.pid.i == 0.0
   for _ in range(80):
-    harness.step(sign * 0.3, pure_intent())
+    harness.step(sign * 0.3, feedback_intent(sign))
   assert sign * harness.control.pid.i > 0.03
 
 

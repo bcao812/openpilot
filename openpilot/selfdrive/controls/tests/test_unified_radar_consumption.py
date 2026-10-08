@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 from openpilot.common.params import Params
-from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, SHADOW
 from openpilot.selfdrive.controls.lib.lead_qualification import control_leads
 from openpilot.selfdrive.controls.lib.longitudinal_planner import has_safe_moving_lead
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
@@ -25,7 +24,6 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 
 def enabled_planner(speed):
   params = Params()
-  params.put('HondaBoschARadarMode', CONTROL, block=True)
   for name in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
     params.put_bool(name, True, block=True)
   return make_planner(speed=speed)[0]
@@ -368,7 +366,7 @@ def test_pending_stop_receipts_have_inclusive_age_and_count_bounds_and_cannot_cr
   assert not ref._radar_stop_pending and ref.radar_held_identity is None
 
 
-@pytest.mark.parametrize('scope', ['mode', 'dec', 'experimental', 'driver_exit'])
+@pytest.mark.parametrize('scope', ['alpha', 'dec', 'experimental', 'driver_exit'])
 def test_configuration_exit_disables_new_claims_without_releasing_an_acknowledged_hold(scope):
   planner = enabled_planner(0.0)
   ref = planner.reference_planner
@@ -378,8 +376,8 @@ def test_configuration_exit_disables_new_claims_without_releasing_an_acknowledge
   assert ref.radar_held_identity == (SESSION, 7)
   now = CONSUMPTION + 50_000_000
   state = state_at(radar_frame(publication=now), speed=0.0, now=now, publication=now)
-  if scope == 'mode':
-    Params().put('HondaBoschARadarMode', SHADOW, block=True)
+  if scope == 'alpha':
+    Params().put_bool('AlphaLongitudinalEnabled', False, block=True)
   elif scope == 'experimental':
     state['selfdriveState'].experimentalMode = False
   elif scope == 'driver_exit':
@@ -470,9 +468,9 @@ def test_scope_exit_clears_only_producer_claim_while_retained_consumer_risk_need
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
     planner.update(state, now_ns=CONSUMPTION)
     assert planner.reference_planner.radar_risk_unresolved
-    Params().put('HondaBoschARadarMode', SHADOW, block=True)
     now = CONSUMPTION + 100_000_000
     state = state_at(radar_frame(publication=now, risk_unresolved=True), now=now, publication=now)
+    state['selfdriveState'].experimentalMode = False
     planner.update(state, now_ns=now)
     assert not planner.reference_planner.fusion_admitted
     assert planner.reference_planner.radar_risk_unresolved is consumer_loss
@@ -541,10 +539,9 @@ def test_invalid_radar_transport_cannot_clear_a_consumption_loss():
 
 def test_scope_exit_sensor_view_requires_no_car_or_control_inputs():
   planner = enabled_planner(10.0)
-  Params().put('HondaBoschARadarMode', SHADOW, block=True)
   published = native_frame(radar_frame(formal_lead(now_ns=PUBLICATION)))
   published.visionLeadOne = {'present': True, 'modelProb': .99, 'dRel': 20.0, 'vRel': -10.0, 'vLead': 0.0}
-  inputs = {'radarState': published, 'selfdriveState': SimpleNamespace(experimentalMode=True)}
+  inputs = {'radarState': published, 'selfdriveState': SimpleNamespace(experimentalMode=False)}
   before, serialized = published.to_dict(), published.to_bytes()
   published.clear_write_flag()
   with patch.object(planner.dec, 'enabled', return_value=True):
@@ -554,19 +551,19 @@ def test_scope_exit_sensor_view_requires_no_car_or_control_inputs():
   assert published.to_dict() == before and published.to_bytes() == serialized
 
 
-@pytest.mark.parametrize('fallback', ['mode4_startup', 'shadow_vision'])
+@pytest.mark.parametrize('fallback', ['fusion_startup', 'scope_exit'])
 def test_legacy_vision_in_startup_or_scope_fallback_cannot_be_treated_as_edge(fallback):
   planner = enabled_planner(10.0)
-  frame = radar_frame(publication=PUBLICATION, degraded=fallback == 'mode4_startup')
+  frame = radar_frame(publication=PUBLICATION, degraded=fallback == 'fusion_startup')
   state = state_at(frame, speed=10.0, target=20.0)
   legacy = {'present': True, 'modelProb': .99, 'dRel': 20.0, 'vRel': -10.0,
             'vLead': 0.0, 'vLeadK': 0.0, 'aLeadK': 0.0, 'aLeadTau': 1.5}
   state['radarState'].leadOne = legacy
   state['radarState'].visionLeadOne = legacy
-  if fallback == 'mode4_startup':
+  if fallback == 'fusion_startup':
     state['radarState'].fusionActive = False
   else:
-    Params().put('HondaBoschARadarMode', SHADOW, block=True)
+    state['selfdriveState'].experimentalMode = False
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
     sensor_view = planner.reference_planner.radar_input_state(state, CONSUMPTION)['radarState']
     assert not control_leads(sensor_view, 'caution', 0.0, now_ns=CONSUMPTION)

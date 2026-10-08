@@ -72,12 +72,13 @@ def braking_state(v_ego=1.3, active=True, gas_pressed=False, brake_pressed=False
   return state
 
 
-def make_planner(speed=20.0, *, platform=CAR.HONDA_ACCORD, stock=False, interceptor=False, trace=None, initial_accel=0.0):
+def make_planner(speed=20.0, *, platform=CAR.HONDA_ACCORD, stock=False, interceptor=False, trace=None, initial_accel=0.0,
+                 diagnostics=None):
   params = CarInterface.get_non_essential_params(platform)
   params.openpilotLongitudinalControl = not stock
   extension = CarInterface.get_non_essential_params_sp(params, platform)
   extension.enableGasInterceptor = interceptor
-  return LongitudinalPlanner(params, extension, init_v=speed, init_a=initial_accel, trace=trace), extension
+  return LongitudinalPlanner(params, extension, init_v=speed, init_a=initial_accel, trace=trace, diagnostics=diagnostics), extension
 
 
 def make_state(speed=20.0, target=22.0, experimental=False):

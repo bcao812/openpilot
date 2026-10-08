@@ -222,14 +222,11 @@ class RadarD:
     # Unavailable feedback revokes current execution scope, but does not
     # establish a driver/configuration exit or clear an old obstacle.
     self.control_scope_unavailable = True
-    try:
-      mode = self.params.get('HondaBoschARadarMode', return_default=True)
-    except Exception:
-      self.radar_settings = ObserverSettings()
-      return False
-    if mode != self.radar_settings.mode or now_ns >= self.settings_next_ns:
+    if now_ns >= self.settings_next_ns:
       self.radar_settings = ObserverSettings.read(self.params)
       self.settings_next_ns = now_ns + 1_000_000_000
+    if not self.radar_settings.available:
+      return False
     if not self.radar_settings.control_requested(self.CP, self.CP_SP):
       self.control_scope_unavailable = False
       return False

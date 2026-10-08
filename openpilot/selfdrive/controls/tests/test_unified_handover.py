@@ -20,16 +20,19 @@ ACCEL_LIMITS = (CarControllerParams.BOSCH_ACCEL_MIN, CarControllerParams.BOSCH_A
 
 
 def test_unified_selects_one_owner_and_never_runs_legacy_reference():
-  planner, controller = make_planner_owner()
-  assert planner.longitudinal_mode == LongitudinalMode.UNIFIED
-  assert planner.motion_enabled and planner.unified
-  assert controller.longitudinal_mode == LongitudinalMode.UNIFIED
-  state = make_handover_state()
-  with patch.object(planner, '_update_legacy_reference', side_effect=AssertionError('Legacy reference executed')), \
-       patch.object(planner.mpc, 'update', wraps=planner.mpc.update) as update:
-    for frame in range(5):
-      consume(planner, controller, state, frame)
-      assert all(not hasattr(planner, attribute) for attribute in LEGACY_OWNER_FIELDS)
+  with patch('openpilot.selfdrive.controls.lib.legacy_longitudinal_planner.initialize_legacy_reference',
+             side_effect=AssertionError('Legacy reference initialized')), \
+       patch('openpilot.selfdrive.controls.lib.legacy_longitudinal_planner.update_legacy_reference',
+             side_effect=AssertionError('Legacy reference executed')):
+    planner, controller = make_planner_owner()
+    assert planner.longitudinal_mode == LongitudinalMode.UNIFIED
+    assert planner.unified
+    assert controller.longitudinal_mode == LongitudinalMode.UNIFIED
+    state = make_handover_state()
+    with patch.object(planner.mpc, 'update', wraps=planner.mpc.update) as update:
+      for frame in range(5):
+        consume(planner, controller, state, frame)
+        assert all(not hasattr(planner, attribute) for attribute in LEGACY_OWNER_FIELDS)
   assert update.call_count == 5
   assert all(call.kwargs.get('reference') is not None for call in update.call_args_list)
   assert planner.motion_intent.valid

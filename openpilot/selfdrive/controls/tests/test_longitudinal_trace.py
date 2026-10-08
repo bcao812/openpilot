@@ -37,8 +37,8 @@ def update_scalar_planner(planner, state, a_cruise=-0.23, a_mpc=1.0, e2e=False):
     instance.cruise_target = CruiseTarget(instance.source, v_cruise, a_ego)
     return instance.cruise_target
 
-  with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_cruise_accel', return_value=a_cruise), \
-       patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_accel_from_plan', return_value=a_mpc), \
+  with patch('openpilot.selfdrive.controls.lib.legacy_longitudinal_planner.get_cruise_accel', return_value=a_cruise), \
+       patch('openpilot.selfdrive.controls.lib.legacy_longitudinal_planner.get_accel_from_plan', return_value=a_mpc), \
        patch.object(LongitudinalPlanner, 'is_e2e', return_value=e2e), \
        patch.object(LongitudinalPlannerSP, 'update_targets', new=update_targets):
     planner.update(state)

@@ -12,6 +12,7 @@ import numpy as np
 from opendbc.car.honda.bosch_a_radar import BoschARadarObserver
 from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
 from openpilot.selfdrive.car.honda_radar_fusion import Binding, Ego, EgoHistory, HondaRadarFusion, MAX_TRACKS, Track, _finite_median, finite, path_relation, read
+from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL
 
 START = 10_000_000_000
 STEP = 66_000_000
@@ -51,7 +52,7 @@ def source_observation(timestamp, sequence, index, lifecycle, generation=1, **kw
 
 
 def body(frame, observations, **overrides):
-  value = {'schemaVersion': 1, 'sessionId': 'fusion-test', 'sequence': frame + 1, 'active': True, 'observations': observations,
+  value = {'schemaVersion': 1, 'mode': CONTROL, 'sessionId': 'fusion-test', 'sequence': frame + 1, 'active': True, 'observations': observations,
                'scope': dict.fromkeys(('alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive'), True),
                'counters': {'dropped': 0}}
   value.update(overrides)
@@ -1746,7 +1747,7 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertFalse(out['calibrated'])
 
   def test_missing_future_and_stale_dependencies_clear_candidates(self):
-    for kind in ('modelStale', 'egoStale', 'futureCamera', 'inputsInvalid', 'scopeInactive', 'schemaUnknown', 'badEgo', 'badYaw'):
+    for kind in ('modelStale', 'egoStale', 'futureCamera', 'inputsInvalid', 'scopeInactive', 'schemaUnknown', 'retiredMode', 'badEgo', 'badYaw'):
       with self.subTest(kind=kind):
         fusion = HondaRadarFusion()
         for frame in range(5):
@@ -1763,7 +1764,9 @@ class TestHondaRadarFusion(unittest.TestCase):
         elif kind == 'inputsInvalid':
           sm.valid['modelV2'] = False
         elif kind == 'scopeInactive':
-          packet['scope']['decActive'] = False
+          packet['scope']['decSetting'] = False
+        elif kind == 'retiredMode':
+          packet['mode'] = 2  # Historical shadow packets are not current control inputs.
         elif kind == 'badEgo':
           sm['carState'].vEgo = float('nan')
         elif kind == 'badYaw':

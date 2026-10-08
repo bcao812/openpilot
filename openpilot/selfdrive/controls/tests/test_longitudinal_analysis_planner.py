@@ -286,11 +286,11 @@ def test_malformed_terminal_speed_cannot_grant_departure_or_escape_observation_i
   for planner in (enabled, disabled):
     planner.mpc.v_solution = velocity
     planner.output_a_target = 0.1
-    planner.observation_attempt = planner.observation.begin(planner, state, now_ns=1_005_000_000, passive_version=1)
+    planner.observation_attempt = observe(planner.observation, 'begin', planner, state, now_ns=1_005_000_000, passive_version=1)
     forward = reference_requests_departure(velocity, planner.mpc.a_solution, planner.mpc.j_solution)
     assert not forward
     observe(planner.observation, 'departure', planner.observation_attempt, forward, velocity, False, False, False, False)
-    planner.observation_result = planner.observation.finish(planner.observation_attempt, planner, True)
+    planner.observation_result = observe(planner.observation, 'finish', planner.observation_attempt, planner, True)
   assert enabled.motion_intent == disabled.motion_intent
   assert enabled.output_a_target == disabled.output_a_target == 0.1
   observed = diagnostics(enabled, state)

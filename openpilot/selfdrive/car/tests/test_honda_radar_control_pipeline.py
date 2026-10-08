@@ -1,10 +1,11 @@
 """CAN-origin regressions for active radar fusion and its execution boundary."""
 import json
+from unittest.mock import Mock
 
 import pytest
 
 from openpilot.cereal import messaging
-from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, SERVICE, SHADOW, SCOPE_MAX_AGE_NS, ObserverSettings
+from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, SCOPE_MAX_AGE_NS, ObserverSettings
 from openpilot.selfdrive.car.tests import honda_radar_control_test_support as pipeline_support
 from openpilot.selfdrive.car.tests.honda_radar_control_test_support import Target, control_pipeline
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
@@ -140,15 +141,15 @@ def establish_prior_object_hold(pipeline):
 @pytest.mark.parametrize('lead_speed', [0.0, 4.0], ids=['new_stationary', 'new_moving'])
 def test_never_seen_by_vision_radar_target_changes_real_honda_braking(lead_speed, record_property):
   arms = {}
-  for mode in (SHADOW, CONTROL):
-    with control_pipeline(mode=mode) as pipeline:
+  for in_path in (False, True):
+    with control_pipeline() as pipeline:
       rows = []
       for frame in range(36):
         distance = 36.0 + (lead_speed - 10.0) * frame * .05
-        rows.append(pipeline.step(speed=10.0, radar=[Target(distance, lead_speed)]))
-      arms[mode] = rows
-      record(record_property, f'radar_only_mode_{mode}', rows)
-  baseline, candidate = arms[SHADOW], arms[CONTROL]
+        rows.append(pipeline.step(speed=10.0, radar=[Target(distance, lead_speed, lateral=0.0 if in_path else 7.0)]))
+      arms[in_path] = rows
+      record(record_property, f'radar_only_in_path_{in_path}', rows)
+  baseline, candidate = arms[False], arms[True]
   assert not any(row['radar']['leadOne']['present'] for row in baseline)
   admitted = [row for row in candidate if any(obj['evidence']['source'] == 'radar' for obj in objects(row))]
   assert admitted and admitted[0]['time'] <= .35
@@ -365,7 +366,7 @@ def test_established_radar_hold_survives_dropout_and_releases_for_same_car_depar
                for row in rows[28:] for sample in row['can'])
 
 
-@pytest.mark.parametrize('scope_exit', ['mode_to_shadow', 'dec_disabled', 'scope_stale'])
+@pytest.mark.parametrize('scope_exit', ['experimental_disabled', 'dec_disabled', 'scope_stale'])
 def test_scope_exit_cannot_release_radar_hold_before_driver_starts_a_new_engagement(scope_exit, record_property):
   """Configuration/transport loss cannot release an explicitly established hold."""
   rows = []
@@ -374,8 +375,8 @@ def test_scope_exit_cannot_release_radar_hold_before_driver_starts_a_new_engagem
       rows.append(pipeline.step(speed=0.0, radar=[Target(3.0, 0.0)]))
     assert all(owner['phase'] == 'hold' and owner['stop'] for row in rows[20:] for owner in row['owner'])
     held_identity = establish_prior_object_hold(pipeline)
-    if scope_exit == 'mode_to_shadow':
-      pipeline.params.put('HondaBoschARadarMode', SHADOW, block=True)
+    if scope_exit == 'experimental_disabled':
+      pipeline.params.put_bool('ExperimentalMode', False, block=True)
     elif scope_exit == 'dec_disabled':
       pipeline.params.put_bool('DynamicExperimentalControl', False, block=True)
     pipeline.settings = ObserverSettings.read(pipeline.params)
@@ -403,7 +404,7 @@ def test_scope_exit_cannot_release_radar_hold_before_driver_starts_a_new_engagem
     # A real driver disengagement is a separate lifecycle, unlike a missing
     # sensor or DEC publication. Give the next engagement fresh healthy scans
     # of an independent out-of-path target, with no old blocking vehicle.
-    pipeline.params.put('HondaBoschARadarMode', CONTROL, block=True)
+    pipeline.params.put_bool('ExperimentalMode', True, block=True)
     pipeline.params.put_bool('DynamicExperimentalControl', True, block=True)
     pipeline.settings = ObserverSettings.read(pipeline.params)
     side_target = Target(20.0, 0.0, lateral=7.0, slot=1, oem_id=2)
@@ -449,7 +450,8 @@ def test_radar_cannot_cancel_model_stop_or_driver_authority(intervention, record
   ('sp_stale', False, True), ('sp_future', False, True), ('sp_unseen', False, True),
   ('selfdrive_stale', False, True), ('selfdrive_invalid', False, True),
   ('selfdrive_invalid_experimental_off', False, True), ('experimental_off', False, False),
-  ('experimental_off_bad_sp', False, False), ('dec_off', False, False), ('mode_shadow', False, False),
+  ('experimental_off_bad_sp', False, False), ('dec_off', False, False), ('configuration_exit', False, False),
+  ('configuration_unavailable', False, True),
 ])
 def test_scope_feedback_failure_is_distinct_from_an_explicit_exit(scope, enabled, unavailable):
   with control_pipeline() as pipeline:
@@ -477,8 +479,11 @@ def test_scope_feedback_failure_is_distinct_from_an_explicit_exit(scope, enabled
       state.valid['selfdriveState'] = False
     if scope in ('experimental_off', 'experimental_off_bad_sp', 'selfdrive_invalid_experimental_off'):
       state['selfdriveState'].experimentalMode = False
-    if scope == 'mode_shadow':
-      pipeline.params.put('HondaBoschARadarMode', SHADOW, block=True)
+    if scope == 'configuration_exit':
+      pipeline.params.put_bool('ExperimentalMode', False, block=True)
+    if scope == 'configuration_unavailable':
+      pipeline.radard.params = Mock()
+      pipeline.radard.params.get_bool.side_effect = OSError('unavailable settings fixture')
     assert pipeline.radard.control_enabled(state, now) is enabled
     assert pipeline.radard.control_scope_unavailable is unavailable
 
@@ -529,10 +534,11 @@ def test_feedback_gap_preserves_real_radar_hold_and_perception_loss_history(feed
     rows.append(row)
     assert row['radar']['fusionActive'] and row['radar']['fusionRiskUnresolved']
     assert set(adapter._lost_tracks) == retained and not row['release']
-    # A fresh explicit mode change is a different lifecycle boundary.
-    pipeline.params.put('HondaBoschARadarMode', SHADOW, block=True)
-    row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
-    rows.append(row)
+    # A fresh explicit configuration exit is a different lifecycle boundary.
+    pipeline.params.put_bool('ExperimentalMode', False, block=True)
+    for _ in range(21):  # allow the ordinary one-second settings refresh
+      row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
+      rows.append(row)
     assert not row['radar']['fusionActive'] and not row['radar']['fusionRiskUnresolved']
     assert not adapter._lost_tracks
   record(record_property, f'scope_feedback_{feedback_fault}', rows)

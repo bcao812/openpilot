@@ -76,6 +76,7 @@ class TestControlInfluenceRendering(HeadlessUITestCase):
     ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, params=params, active_bundle=False)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
+         patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)), \
          patch.object(renderer, 'project_radar_point', wraps=project_radar_point) as project, \
          patch.object(rl, 'draw_circle_v') as circles, patch.object(rl, 'draw_text_ex') as text:
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))

@@ -3,9 +3,8 @@
 The producer tests use a native trajectory with an injected diagnostic source
 and sampled target. They test admission of deliberately ambiguous source labels,
 not physical lead avoidance or uniqueness of MPC attribution.
-PURE remains an explicitly injected wire/consumer compatibility contract.
-An ordinary native continuation has no numeric cruise goal and cannot certify
-PURE merely because its diagnostic source is named cruise.
+PURE retains its historical wire value for decoding, but cannot grant current
+response authority. Native continuation cannot infer permission from a source label.
 """
 
 from dataclasses import replace
@@ -31,8 +30,8 @@ INSTANCE_NS = 1_000_000_000
 
 
 @pytest.mark.parametrize('kind', list(MotionResponseKind))
-def test_response_permission_survives_real_wire_roundtrip(kind):
-  """Explicit compatibility input; this does not prove producer reachability."""
+def test_response_wire_roundtrip_preserves_values_and_rejects_retired_kind(kind):
+  """Historical wire values remain decodable without becoming accepted requests."""
   planner = SimpleNamespace(longitudinal_mode=LongitudinalMode.UNIFIED)
   producer = UnifiedLongitudinalPlanner(planner)
   planner.motion_intent = MotionIntent(response_kind=int(kind), producer_instance_ns=INSTANCE_NS)
@@ -42,7 +41,7 @@ def test_response_permission_survives_real_wire_roundtrip(kind):
   with log.LongitudinalPlan.from_bytes(message.to_bytes()) as decoded:
     assert decoded.motionIntent.responseKind == kind
     assert MotionIntent.from_message(decoded.motionIntent) == planner.motion_intent
-    assert MotionIntent.from_message(decoded.motionIntent).is_valid()
+    assert MotionIntent.from_message(decoded.motionIntent).is_valid() == (kind != MotionResponseKind.PURE_CRUISE)
 
 
 @pytest.mark.parametrize('changes', [
@@ -84,8 +83,8 @@ def test_absolute_target_contract_preserves_raw_reference_facts_without_granting
     assert MotionIntent.from_message(decoded.motionIntent).is_valid()
 
 
-@pytest.mark.parametrize('reference', [MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD])
-def test_raw_model_facts_cannot_acquire_pure_cruise_positive_response(reference):
+@pytest.mark.parametrize('reference', list(MotionReferenceKind))
+def test_retired_pure_cruise_never_acquires_response_authority(reference):
   intent = MotionIntent(response_kind=int(MotionResponseKind.PURE_CRUISE), reference_kind=int(reference),
                         producer_instance_ns=INSTANCE_NS)
   assert not intent.is_valid()

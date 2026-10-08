@@ -108,7 +108,7 @@ def test_planner_only_replay_rejects_motion_runtime_without_consumer_ack(monkeyp
   segment.mkdir()
   (segment / 'rlog.zst').touch()
   monkeypatch.setattr(replay_longitudinal_regressions, 'route_metadata', lambda paths: (None, None, 0.0))
-  monkeypatch.setattr(replay_longitudinal_regressions, 'LongitudinalPlanner', lambda *arguments: SimpleNamespace(motion_enabled=True))
+  monkeypatch.setattr(replay_longitudinal_regressions, 'LongitudinalPlanner', lambda *arguments: SimpleNamespace(unified=True))
   with pytest.raises(ValueError, match='no motion-consumer ACK'):
     replay_longitudinal_regressions.replay(tmp_path, 'test-route', 0.0, 1.0)
 

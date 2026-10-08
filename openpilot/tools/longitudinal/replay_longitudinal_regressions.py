@@ -141,7 +141,7 @@ def replay(logs, route, start, end):
     raise ValueError('Completed local route including segment zero is required')
   params, params_sp, origin = route_metadata(paths)
   planner = LongitudinalPlanner(params, params_sp)
-  if getattr(planner, 'motion_enabled', False):
+  if getattr(planner, 'unified', False):
     raise ValueError('Planner-only replay has no motion-consumer ACK or exact input clock; ' +
                      'use replay_pedal_switches with --unified for this runtime')
   current = {}
