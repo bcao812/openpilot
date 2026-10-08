@@ -133,6 +133,8 @@ class LeadData:
   modelProb: float = auto_field()
   radar: bool = auto_field()
   radarTrackId: int = auto_field()
+  # Preserve the complete RadarLeadEvidence metadata from the wire schema.
+  evidence: dict[str, object] = field(default_factory=dict)
 
   aLeadDEPRECATED: float = auto_field()
 
