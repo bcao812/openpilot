@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, SERVICE, SHADOW, ObserverSettings
+from openpilot.cereal import messaging
+from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, SERVICE, SHADOW, SCOPE_MAX_AGE_NS, ObserverSettings
 from openpilot.selfdrive.car.tests import honda_radar_control_test_support as pipeline_support
 from openpilot.selfdrive.car.tests.honda_radar_control_test_support import Target, control_pipeline
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
@@ -319,3 +320,98 @@ def test_radar_cannot_cancel_model_stop_or_driver_authority(intervention, record
     assert all(not sample['active'] and not sample['resume'] and not sample['release']
                and not sample['brake'] and sample['accel'] == 0.0
                for row in rows[24:] for sample in row['can'])
+
+
+@pytest.mark.parametrize('scope,enabled,unavailable', [
+  ('enabled', True, False), ('sp_invalid', False, True), ('sp_invalid_dec_off', False, True),
+  ('sp_stale', False, True), ('sp_future', False, True), ('sp_unseen', False, True),
+  ('selfdrive_stale', False, True), ('selfdrive_invalid', False, True),
+  ('selfdrive_invalid_experimental_off', False, True), ('experimental_off', False, False),
+  ('experimental_off_bad_sp', False, False), ('dec_off', False, False), ('mode_shadow', False, False),
+])
+def test_scope_feedback_failure_is_distinct_from_an_explicit_exit(scope, enabled, unavailable):
+  with control_pipeline() as pipeline:
+    state = pipeline.state
+    now = pipeline_support.START_NS
+    feedback = messaging.new_message('longitudinalPlanSP').longitudinalPlanSP
+    feedback.dec.enabled = feedback.dec.active = True
+    state['longitudinalPlanSP'] = feedback
+    for service in ('selfdriveState', 'longitudinalPlanSP'):
+      state.valid[service] = state.seen[service] = True
+      state.logMonoTime[service] = now
+    if scope in ('sp_invalid', 'sp_invalid_dec_off', 'experimental_off_bad_sp'):
+      state.valid['longitudinalPlanSP'] = False
+    if scope in ('sp_invalid_dec_off', 'dec_off'):
+      feedback.dec.enabled = feedback.dec.active = False
+    if scope == 'sp_stale':
+      state.logMonoTime['longitudinalPlanSP'] -= SCOPE_MAX_AGE_NS + 1
+    if scope == 'sp_future':
+      state.logMonoTime['longitudinalPlanSP'] += 1
+    if scope == 'sp_unseen':
+      state.seen['longitudinalPlanSP'] = False
+    if scope == 'selfdrive_stale':
+      state.logMonoTime['selfdriveState'] -= SCOPE_MAX_AGE_NS + 1
+    if scope in ('selfdrive_invalid', 'selfdrive_invalid_experimental_off'):
+      state.valid['selfdriveState'] = False
+    if scope in ('experimental_off', 'experimental_off_bad_sp', 'selfdrive_invalid_experimental_off'):
+      state['selfdriveState'].experimentalMode = False
+    if scope == 'mode_shadow':
+      pipeline.params.put('HondaBoschARadarMode', SHADOW, block=True)
+    assert pipeline.radard.control_enabled(state, now) is enabled
+    assert pipeline.radard.control_scope_unavailable is unavailable
+
+
+@pytest.mark.parametrize('feedback_fault', ['invalid', 'invalid_dec_off', 'stale', 'future', 'unseen'])
+def test_feedback_gap_preserves_real_radar_hold_and_perception_loss_history(feedback_fault, record_property):
+  """An invalid SP packet cannot fabricate removal of an adopted obstacle."""
+  rows = []
+  with control_pipeline(speed=0.0) as pipeline:
+    for _ in range(28):
+      rows.append(pipeline.step(speed=0.0, radar=[Target(3.0, 0.0)]))
+    held = pipeline.planner.reference_planner.radar_held_identity
+    assert held is not None
+    assert all(owner['phase'] == 'hold' and owner['stop'] for owner in rows[-1]['owner'])
+    for _ in range(10):
+      rows.append(pipeline.step(speed=0.0, observer_online=False))
+    adapter = pipeline.radard.fusion_control
+    retained = set(adapter._lost_tracks)
+    assert retained and held in retained and rows[-1]['radar']['fusionRiskUnresolved']
+    for _ in range(12):
+      state = pipeline.state
+      if feedback_fault in ('invalid', 'invalid_dec_off'):
+        state.valid['longitudinalPlanSP'] = False
+      if feedback_fault == 'invalid_dec_off':
+        feedback = state['longitudinalPlanSP'].as_builder()
+        feedback.dec.enabled = feedback.dec.active = False
+        state['longitudinalPlanSP'] = feedback.as_reader()
+      if feedback_fault == 'stale':
+        state.logMonoTime['longitudinalPlanSP'] -= SCOPE_MAX_AGE_NS + 1
+      if feedback_fault == 'future':
+        state.logMonoTime['longitudinalPlanSP'] += 1_000_000_000
+      if feedback_fault == 'unseen':
+        state.seen['longitudinalPlanSP'] = False
+      # A different, healthy visual lead remains available, but it cannot
+      # prove departure of the previously adopted stopped radar vehicle.
+      row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
+      rows.append(row)
+      assert pipeline.radard.fusion_control is adapter and set(adapter._lost_tracks) == retained
+      assert not row['radar']['fusionActive'] and row['radar']['fusionReason'] == 'controlScopeUnavailable'
+      assert row['radar']['fusionRiskUnresolved'] and row['radar'].get('radarObjects', []) == []
+      assert row['radar']['leadOne'] == row['radar']['visionLeadOne'] and row['radar']['leadOne']['present']
+      assert pipeline.planner.reference_planner.radar_held_identity == held
+      assert not row['release']
+      assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
+      assert all(sample['brake'] and not sample['release'] and sample['accel'] <= 0.0 for sample in row['can'])
+    # A successful new plan alone is not a fresh measurement of the lost
+    # obstacle. Normal sensing recovery must still resolve its identity.
+    row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
+    rows.append(row)
+    assert row['radar']['fusionActive'] and row['radar']['fusionRiskUnresolved']
+    assert set(adapter._lost_tracks) == retained and not row['release']
+    # A fresh explicit mode change is a different lifecycle boundary.
+    pipeline.params.put('HondaBoschARadarMode', SHADOW, block=True)
+    row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
+    rows.append(row)
+    assert not row['radar']['fusionActive'] and not row['radar']['fusionRiskUnresolved']
+    assert not adapter._lost_tracks
+  record(record_property, f'scope_feedback_{feedback_fault}', rows)

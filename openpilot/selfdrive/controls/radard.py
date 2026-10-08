@@ -217,8 +217,12 @@ class RadarD:
     self.fusion_control = None
     self.fusion_state = None
     self.last_long_active = None
+    self.control_scope_unavailable = False
 
   def control_enabled(self, sm, now_ns):
+    # Unavailable feedback revokes current execution scope, but does not
+    # establish a driver/configuration exit or clear an old obstacle.
+    self.control_scope_unavailable = True
     try:
       mode = self.params.get('HondaBoschARadarMode', return_default=True)
     except Exception:
@@ -228,13 +232,18 @@ class RadarD:
       self.radar_settings = ObserverSettings.read(self.params)
       self.settings_next_ns = now_ns + 1_000_000_000
     if not self.radar_settings.control_requested(self.CP, self.CP_SP):
+      self.control_scope_unavailable = False
       return False
     for service in ('selfdriveState', 'longitudinalPlanSP'):
       stamp = sm.logMonoTime.get(service, 0)
       if (not getattr(sm, 'seen', {}).get(service, False) or not sm.valid.get(service, False)
           or not 0 < stamp <= now_ns or now_ns - stamp > SCOPE_MAX_AGE_NS):
         return False
+      if service == 'selfdriveState' and not sm[service].experimentalMode:
+        self.control_scope_unavailable = False
+        return False
     dec = sm['longitudinalPlanSP'].dec
+    self.control_scope_unavailable = False
     return bool(sm['selfdriveState'].experimentalMode and dec.enabled and dec.active)
 
   def update(self, sm: messaging.SubMaster, rr: car.RadarData, *, now_ns=None):
@@ -307,6 +316,23 @@ class RadarD:
           # prior-session risks. Missing heartbeats and sensor TTL never do.
           self.fusion_control.reset()
         self.last_long_active = long_active
+      if not enabled and self.control_scope_unavailable:
+        # SP.valid also reflects the preceding MPC result. Its failure or a
+        # missing feedback packet must not reset the perception adapter and
+        # masquerade as clear-road evidence. The independent observer keeps
+        # running; retain adapter history until fresh input or an explicit
+        # authority/configuration boundary resolves it.
+        # Publish the original visual leads during this scope gap. These
+        # diagnostics preserve perception history; they do not establish that
+        # an object ever controlled the car or grant any new radar authority.
+        # Existing obstacle-specific braking/HOLD belongs to its consumer.
+        self.radar_state.fusionActive = False
+        self.radar_state.fusionHealthy = False
+        self.radar_state.fusionDegraded = True
+        self.radar_state.fusionRiskUnresolved = bool(self.fusion_control._unresolved_loss or self.fusion_control._lost_tracks)
+        self.radar_state.fusionSessionId = self.fusion_control._session
+        self.radar_state.fusionReason = 'controlScopeUnavailable'
+        return
       observation_ns = sm.logMonoTime.get(HONDA_RADAR_SERVICE, 0)
       observation_valid = bool(getattr(sm, 'seen', {}).get(HONDA_RADAR_SERVICE, False)
                                and sm.valid.get(HONDA_RADAR_SERVICE, False))

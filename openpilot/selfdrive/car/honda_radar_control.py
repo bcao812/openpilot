@@ -939,7 +939,7 @@ class HondaRadarControl:
     leads, objects = self._select(remaining + radar_objects)
     self._cleared = {key: stamp for key, stamp in self._cleared.items() if key in touched and _fresh(stamp, now_ns)}
     # A valid observation with no targets is healthy sensor transport. It does
-    # not erase an unresolved loss of a previously controlling object. A fresh
+    # not erase an unresolved loss of a previously admitted object. A fresh
     # unrelated farther obstacle cannot prove that the lost near one cleared.
     if visual_recoveries and not fault and not self._unresolved_loss and not self._lost_tracks:
       unresolved = any(memory.relevant and identifier not in visual_recoveries
