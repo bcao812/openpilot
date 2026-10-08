@@ -15,8 +15,7 @@ class HondaSettings(BrandSettings):
     super().__init__()
     self.overlay = toggle_item_sp(
       lambda: tr('Radar Target Labels'),
-      description=lambda: tr('Show radar detections with longitudinal distance in meters to the right. '
-                             'Radar-camera alignment is uncalibrated.'),
+      description=lambda: tr('Show radar detections with longitudinal distance in meters to the right. Radar-camera alignment is uncalibrated.'),
       initial_state=ui_state.params.get_bool('HondaBoschARadarOverlay'),
       callback=self._set_overlay, enabled=lambda: not ui_state.started,
     )

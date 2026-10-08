@@ -18,7 +18,8 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 from openpilot.selfdrive.controls.lib.object_influence import mitigation_plan_object_influences, plan_object_influences
 from openpilot.selfdrive.controls.lib.lead_qualification import _read, control_leads, qualified_lead
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  COMFORT_BRAKE, LEAD_DANGER_FACTOR, REFERENCE_BOUND, STOP_DISTANCE, FiniteRiskEvidence, LongitudinalMpc, LongitudinalPlanSource,
+  COMFORT_BRAKE, LEAD_DANGER_FACTOR, REFERENCE_BOUND, STOP_DISTANCE, FiniteRiskEvidence, LongitudinalMpc,
+  LongitudinalPlanSource as LongitudinalPlanSource,
   get_T_FOLLOW, get_safe_obstacle_distance, get_stopped_equivalence_factor,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_observation import PlannerObservation, observe_trace
