@@ -505,7 +505,7 @@ def test_finite_path_end_is_unknown_future_space_not_proof_of_departure():
   assert 'lateralPredictionLimited' in evidence(result)['reason']
 
 
-@pytest.mark.parametrize('lateral', [-1.7, -1.6, 1.6, 1.7])
+@pytest.mark.parametrize('lateral', [-1.7, -1.6, -1.250001, 1.250001, 1.6, 1.7])
 def test_new_outer_only_stationary_object_is_caution_without_stop_or_fcw(lateral):
   from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
   result = HondaRadarControl().update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=lateral)], ego=4.0))
@@ -517,14 +517,22 @@ def test_new_outer_only_stationary_object_is_caution_without_stop_or_fcw(lateral
   assert claim['pathState'] == 'edge' and claim['cautionQualified']
   assert qualified_lead(target, 'caution', now_ns=START + 2_000_000)
   assert all(not claim[purpose + 'Qualified'] for purpose in ('brake', 'follow', 'stop', 'departure', 'fcw'))
+  assert not claim['physicalConflictValid']
+  assert claim['physicalConflictStart'] == claim['physicalConflictEnd'] == 0.0
   assert 'edgePossibleBodyOverlap' in claim['reason']
 
 
-def test_new_inner_stationary_radar_is_a_full_obstacle_without_vision():
-  result = HondaRadarControl().update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=1.0)], ego=4.0))
+@pytest.mark.parametrize('lateral', [-1.25, -1.20, -1.0, 1.0, 1.20, 1.25])
+def test_new_inner_stationary_radar_is_a_full_obstacle_without_vision(lateral):
+  # The 2.20 m ego body plus .15 m per-side margin includes both 1.25 m
+  # boundaries and the newly covered 1.20 m reflections on either side.
+  result = HondaRadarControl().update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=lateral)], ego=4.0))
   assert result.leads[0]['present'] and evidence(result)['source'] == 'radar'
-  assert all(evidence(result)[purpose + 'Qualified'] for purpose in ('brake', 'follow', 'stop', 'fcw'))
-  assert not evidence(result)['cautionQualified']
+  claim = evidence(result)
+  assert claim['pathState'] == 'inPath' and claim['physicalConflictValid']
+  assert claim['physicalConflictStart'] == 0.0 and claim['physicalConflictEnd'] == HORIZON
+  assert all(claim[purpose + 'Qualified'] for purpose in ('brake', 'follow', 'stop', 'fcw'))
+  assert not claim['cautionQualified'] and not claim['departureQualified']
 
 
 def test_outer_cut_in_is_sent_now_with_its_future_inner_occupancy():

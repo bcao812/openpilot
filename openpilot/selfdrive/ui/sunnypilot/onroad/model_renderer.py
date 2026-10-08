@@ -16,7 +16,7 @@ class ModelRendererSP:
   def __init__(self):
     self.rainbow_path = RainbowPath()
     self.chevron_metrics = ChevronMetrics()
-    self._width_filter = FirstOrderFilter(0.9, 0.1, 1 / gui_app.target_fps)
+    self._width_filter = FirstOrderFilter(0.95, 0.1, 1 / gui_app.target_fps)
 
   @property
   def _lateral_active(self) -> bool:
@@ -28,5 +28,5 @@ class ModelRendererSP:
     return ui_state.status in (UIStatus.ENGAGED, UIStatus.LAT_ONLY)
 
   def _get_path_half_width(self) -> float:
-    target = 0.9 if self._lateral_active else 0.40
+    target = 0.95 if self._lateral_active else 0.40
     return self._width_filter.update(target)

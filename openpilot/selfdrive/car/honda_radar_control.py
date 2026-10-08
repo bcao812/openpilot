@@ -31,7 +31,7 @@ RADAR_TO_CAMERA = 1.52
 # Keep possible body overlap as a candidate, but grant new hard-constraint
 # authority only for the measured point entering the ego's swept footprint.
 OVERLAP_HALF_WIDTH = 2.0
-SWEPT_HALF_WIDTH = 1.10  # .95 m ego half-width + .15 m geometric margin
+SWEPT_HALF_WIDTH = 1.25  # 1.10 m ego half-width + .15 m geometric margin
 LANE_SUPPORT_M = 60.0
 LANE_MIN_PROB = .65
 LANE_MAX_STD = .5
@@ -321,7 +321,7 @@ def _object_path(corridors, x, y, vx, vy, position_variance, velocity_variance, 
   outer = _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_variance, velocity_valid,
                            half_width=OVERLAP_HALF_WIDTH)
   if confirmed and outer.state == 'inPath':
-    # Geometric hysteresis: enter at a measured 1.10 m sweep (or independently
+    # Geometric hysteresis: enter at a measured 1.25 m sweep (or independently
     # confirmed visual body occupancy), leave after measured 2 m occupancy is
     # gone. Every extension still requires this same fresh track and valid
     # current geometry; losing vision alone is not an object disappearance.

@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from openpilot.cereal import messaging
+from openpilot.selfdrive.car.honda_radar_control import SWEPT_HALF_WIDTH
 from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, SCOPE_MAX_AGE_NS, ObserverSettings
 from openpilot.selfdrive.car.tests import honda_radar_control_test_support as pipeline_support
 from openpilot.selfdrive.car.tests.honda_radar_control_test_support import Target, control_pipeline
@@ -30,7 +31,7 @@ def confirmed_offset_target(pipeline):
   # keeps this physical identity and its independently confirmed body history.
   rows.extend(pipeline.step(speed=8.0, radar=[target]) for _ in range(24))
   memory = pipeline.radard.fusion_control._tracks[identity[1]]
-  assert memory.path.confirmed and 1.1 < abs(memory.path.offset) < 2.0
+  assert memory.path.confirmed and SWEPT_HALF_WIDTH < abs(memory.path.offset) < 2.0
   current = next(lead for lead in objects(rows[-1]) if lead['evidence']['trackId'] == identity[1])
   assert current['evidence']['source'] == 'radar' and current['modelProb'] == 0.0
   assert current['evidence']['brakeQualified'] and current['evidence']['pathState'] == 'inPath'

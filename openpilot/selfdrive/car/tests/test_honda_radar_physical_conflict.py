@@ -16,7 +16,7 @@ def assert_no_physical(claim):
   assert claim['physicalConflictStart'] == claim['physicalConflictEnd'] == 0.0
 
 
-@pytest.mark.parametrize('lateral_speed,end', [(5.0, .22), (11.0, .1)])
+@pytest.mark.parametrize('lateral_speed,end', [(5.0, .25), (11.0, 1.25 / 11.0)])
 def test_current_short_sweep_publishes_original_window_not_reverse_padding(lateral_speed, end):
   result = HondaRadarControl().update(**scene(ego=15.0, tracks=[
     radar(distance=6.0, speed=0.0, lateral_speed=lateral_speed),
@@ -30,9 +30,9 @@ def test_current_short_sweep_publishes_original_window_not_reverse_padding(later
   assert claim['brakeQualified'] and claim['fcwQualified']
   assert not claim['followQualified'] and not claim['stopQualified']
   assert claim['estimateMonoTime'] == START
-  if end == .1:
-    # An attempted inverse erosion would produce [.15, .10], losing this
-    # valid short interval. It must be saved before the t=0 clipping occurs.
+  if end < .15:
+    # An attempted inverse erosion starts at .15 s, after this valid short
+    # interval ends. It must be saved before the t=0 clipping occurs.
     assert claim['conflictStart'] + .15 > claim['conflictEnd'] - .25
 
 
@@ -52,7 +52,7 @@ def test_padding_cannot_join_disjoint_raw_intervals_into_physical_evidence():
   corridor = _Corridor(((0.0, 0.0), (10.0, 0.0), (12.0, 3.0), (14.0, 0.0), (24.0, 0.0)), 'modelPath')
   path = corridor.relation(1.0, 0.0, 10.0, 0.0, horizon=2.0, half_width=SWEPT_HALF_WIDTH)
   # At x=12, y=0 the distance from either sloping segment is 6/sqrt(13),
-  # outside the actual 1.10 m sweep. The .15/.25 timing margins fill that gap.
+  # outside the actual 1.25 m sweep. The .15/.25 timing margins fill that gap.
   assert 6.0 / math.sqrt(13.0) > SWEPT_HALF_WIDTH
   assert path.continuous and path.start == 0.0 and path.end == 2.0
   assert not path.physical_valid and path.physical_start == path.physical_end == 0.0
@@ -96,7 +96,7 @@ def test_only_current_inner_sweep_can_supply_physical_evidence():
   first = controller.update(**scene(tracks=[radar(speed=0.0)]))
   assert evidence(first)['physicalConflictValid']
   # The same track retains ordinary authority through the existing 2 m exit
-  # hysteresis, but its current reflection lies outside the 1.10 m point sweep.
+  # hysteresis, but its current reflection lies outside the 1.25 m point sweep.
   second = controller.update(**scene(1, tracks=[radar(1, speed=0.0, lateral=1.6)]))
   claim = evidence(second)
   assert claim['followQualified'] and claim['stopQualified'] and claim['fcwQualified']
@@ -156,10 +156,10 @@ def test_fresh_migrated_track_recomputes_the_window_at_its_new_estimate_epoch():
   assert old['trackId'] == new['trackId'] == 1 and new['generation'] == 0
   assert old['physicalConflictValid'] and new['physicalConflictValid']
   assert new['estimateMonoTime'] == START + STEP
-  assert old['physicalConflictEnd'] == pytest.approx(.22)
+  assert old['physicalConflictEnd'] == pytest.approx(.25)
   assert new['physicalConflictEnd'] == pytest.approx((SWEPT_HALF_WIDTH - .33) / 5.0)
   assert new['physicalConflictEnd'] < old['physicalConflictEnd']
-  assert new['estimateMonoTime'] + round(new['physicalConflictEnd'] * 1e9) == START + 220_000_000
+  assert new['estimateMonoTime'] + round(new['physicalConflictEnd'] * 1e9) == START + 250_000_000
 
 
 def test_physical_window_is_double_precision_and_old_schema_defaults_do_not_grant_it():
