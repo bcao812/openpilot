@@ -161,6 +161,83 @@ def test_radar_only_remains_authoritative_beyond_former_visual_gap_timeout():
     assert evidence(result)['positionMonoTime'] == START + frame * STEP
 
 
+def test_latest_fresh_geometry_survives_coast_without_renewing_components_or_purposes():
+  # Adapter message contract, not a vehicle/plant calibration. The planner can
+  # miss the latest fresh publication while the producer has still seen it.
+  controller = HondaRadarControl()
+  assert evidence(controller.update(**scene()))['followGeometryMonoTime'] == START
+  fresh = evidence(controller.update(**scene(1)))
+  assert fresh['followGeometryMonoTime'] == START + STEP
+  for frame in (2, 3):
+    claim = evidence(controller.update(**scene(frame, tracks=[])))
+    assert claim['followGeometryMonoTime'] == fresh['estimateMonoTime']
+    assert claim['estimateMonoTime'] == START + frame * STEP
+    for field in ('sessionId', 'trackId', 'generation', 'positionMonoTime', 'velocityMonoTime'):
+      assert claim[field] == fresh[field]
+    assert claim['coasting'] and claim['brakeQualified']
+    assert not any(claim[field] for field in ('followQualified', 'stopQualified', 'departureQualified',
+                                             'fcwQualified', 'accelerationValid', 'physicalConflictValid'))
+
+
+@pytest.mark.parametrize('change', ['opposing', 'disjoint', 'finite', 'entering', 'out'])
+def test_new_fresh_geometry_revocation_cannot_recover_an_older_follow_epoch(change):
+  # Three successive producer frames exercise revocation with real path
+  # calculation. They assert no frequency or likelihood of these transitions.
+  controller = HondaRadarControl()
+  initial, revised, coast = scene(), scene(1), scene(2, tracks=[])
+  if change == 'opposing':
+    initial = scene(tracks=[radar(distance=90.0)])
+    revised = scene(1, tracks=[radar(1, distance=90.0, speed=-3.0)])
+  elif change == 'disjoint':
+    initial = scene(tracks=[radar(distance=1.0, speed=4.0)])
+    revised = scene(1, tracks=[radar(1, distance=1.0, speed=4.0)])
+    revised['model']['position'] = {'x': [1.52, 11.52, 21.52, 31.52, 51.52],
+                                   'y': [0.0, 0.0, -10.0, 0.0, 0.0]}
+  elif change == 'finite':
+    revised = scene(1, tracks=[radar(1, lateral_speed=2.0)])
+  elif change == 'entering':
+    initial = scene(tracks=[radar(distance=5.0, speed=5.0, lateral=3.0)])
+    initial['model']['position']['y'] = [-3.0] * 33
+    revised = scene(1, tracks=[radar(1, distance=5.0, speed=5.0, lateral=3.0)])
+    revised['model']['position'] = {'x': [1.52, 11.52, 21.52], 'y': [0.0, 0.0, -10.0]}
+  else:
+    revised['model']['position']['y'] = [-4.0] * 33
+  coast['model']['position'] = copy.deepcopy(revised['model']['position'])
+  original = evidence(controller.update(**initial))
+  assert original['followQualified'] and original['followGeometryMonoTime'] == START
+  current = controller.update(**revised)
+  if change == 'out':
+    assert not current.objects and current.cleared == (1,)
+  else:
+    assert current.objects
+    claim = evidence(current)
+    assert claim['generation'] == original['generation'] and claim['positionMonoTime'] == START + STEP
+    assert not claim['coasting'] and not claim['followQualified']
+    assert claim['followGeometryMonoTime'] == 0
+  predicted = controller.update(**coast)
+  assert bool(predicted.objects) is (change != 'out')
+  assert all(lead['evidence']['followGeometryMonoTime'] == 0 for lead in predicted.objects)
+
+
+@pytest.mark.parametrize('changes', [
+  {'followGeometryMonoTime': None}, {'followGeometryMonoTime': 0}, {'followGeometryMonoTime': True},
+  {'followGeometryMonoTime': START - 1}, {'followGeometryMonoTime': START + 2 * STEP},
+  {'sessionId': 'different-session'}, {'trackId': 2}, {'generation': 2},
+  {'positionMonoTime': START - 1}, {'velocityMonoTime': START - 1}, {'estimateMonoTime': START - 1},
+])
+def test_coast_cannot_invent_geometry_from_missing_or_mismatched_provenance(changes):
+  # Corrupted internal evidence is a contract boundary, not a sensor model.
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  accepted = controller._tracks[1].accepted['evidence']
+  accepted.update(changes)
+  if changes.get('followGeometryMonoTime', 0) is None:
+    accepted.pop('followGeometryMonoTime')
+  coast = controller.update(**scene(1, tracks=[]))
+  assert coast.objects and evidence(coast)['coasting']
+  assert evidence(coast)['followGeometryMonoTime'] == 0
+
+
 def test_new_immature_radar_waits_for_observer_maturity_not_visual_confirmation():
   controller = HondaRadarControl()
   for frame in range(3):
@@ -626,8 +703,12 @@ def test_position_new_velocity_old_cannot_renew_velocity_authority():
   result = controller.update(**values)
   assert evidence(result)['source'] == 'predicted' and evidence(result)['velocityMonoTime'] == START
   assert evidence(result)['brakeQualified'] and not evidence(result)['departureQualified']
+  assert evidence(result)['followGeometryMonoTime'] == 0
   assert result.objects[0]['aLeadK'] == 0.0
   assert qualified_lead(result.objects[0], 'brake', now_ns=values['now_ns'])
+  coast = controller.update(**scene(5, tracks=[]))
+  assert coast.objects and evidence(coast)['coasting']
+  assert evidence(coast)['followGeometryMonoTime'] == 0
   values = scene(6, tracks=[radar(6, velocityMonoTime=START, velocityGood=False, observations=3,
                                 previousPositionMonoTime=0, previousPositionSeq=0)])
   result = controller.update(**values)

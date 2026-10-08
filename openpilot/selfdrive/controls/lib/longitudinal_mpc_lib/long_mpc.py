@@ -767,7 +767,7 @@ class LongitudinalMpc:
                    evidence.followQualified, evidence.stopQualified, evidence.fcwQualified,
                    evidence.generation, evidence.coasting, str(evidence.pathState), evidence.pathSource, evidence.lateralSpeed,
                    getattr(evidence, 'physicalConflictValid', False), getattr(evidence, 'physicalConflictStart', 0.0),
-                   getattr(evidence, 'physicalConflictEnd', 0.0))
+                   getattr(evidence, 'physicalConflictEnd', 0.0), getattr(evidence, 'followGeometryMonoTime', 0))
       if key in signatures and signatures[key] != signature:
         raise ValueError('Inconsistent fusion identity views')
       signatures[key] = signature
@@ -821,13 +821,17 @@ class LongitudinalMpc:
       # next map; invalid inputs and solver resets clear it through reset().
       explicit_clock = now_ns is not None and reference_ns is not None
       measured = (evidence.generation, evidence.positionMonoTime, evidence.velocityMonoTime)
+      geometry_ns = getattr(evidence, 'followGeometryMonoTime', 0)
+      geometry_known = (isinstance(geometry_ns, Integral) and not isinstance(geometry_ns, bool)
+                        and 0 < geometry_ns <= evidence.estimateMonoTime)
       ordered = previous is None or (consumed_ns >= previous[4] and evidence.estimateMonoTime >= previous[3]
                                      and evidence.positionMonoTime >= previous[1] and evidence.velocityMonoTime >= previous[2])
       if (explicit_clock and identity is not None and ordered and projection.persistent and not evidence.coasting
           and str(evidence.source) in ('radar', 'fused') and qualified_lead(lead, 'follow', 0.0, now_ns=now_ns)):
         next_follow_geometry[identity] = (*measured, evidence.estimateMonoTime, consumed_ns)
-      elif (explicit_clock and identity is not None and previous is not None and measured == previous[:3]
-            and consumed_ns >= previous[4] and 0 <= evidence.estimateMonoTime - previous[3] <= MAX_PREDICTION_AGE_NS
+      elif (explicit_clock and identity is not None and previous is not None and measured[0] == previous[0] and ordered
+            and geometry_known and geometry_ns >= previous[3]
+            and 0 <= evidence.estimateMonoTime - previous[3] <= MAX_PREDICTION_AGE_NS
             and 0 <= consumed_ns - previous[3] <= MAX_PREDICTION_AGE_NS
             and str(evidence.source) == 'predicted' and evidence.coasting
             and str(evidence.pathState) == 'inPath' and evidence.conflictStart == 0.0 and evidence.conflictEnd == MAX_T):
@@ -835,11 +839,15 @@ class LongitudinalMpc:
         # 10 s on a coast; retain the original fresh absolute horizon rather
         # than extending it at each estimate. A newly finite exit never uses
         # this branch. The input keeps every brake-only qualification flag.
+        # A fresh publication can be superseded by a coast before this planner
+        # reads either. Newer same-generation measurements may therefore
+        # advance the source watermark when the producer certifies its latest
+        # fresh geometry too, but never advance this observed fresh horizon.
         end = min(projection.conflict_end, MAX_T, MAX_T - (reference_ns - previous[3]) / 1e9)
         if end > projection.conflict_start:
           projection = replace(projection, persistent=True, conflict_end=end,
                                occupied=self.occupancy_nodes(projection.conflict_start, end))
-          next_follow_geometry[identity] = (*previous[:4], consumed_ns)
+          next_follow_geometry[identity] = (*measured, previous[3], consumed_ns)
       result.append(projection)
     self._fusion_follow_geometry = next_follow_geometry
     return tuple(result)

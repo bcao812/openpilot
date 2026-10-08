@@ -21,6 +21,7 @@ _EVIDENCE_FIELDS = (
   'followQualified', 'brakeQualified', 'stopQualified', 'departureQualified', 'fcwQualified', 'cautionQualified', 'coasting',
   'pathOffset', 'conflictStart', 'conflictEnd', 'lateralSpeed', 'pathSource', 'visionIndex', 'reason',
   'physicalConflictValid', 'physicalConflictStart', 'physicalConflictEnd',
+  'followGeometryMonoTime',
 )
 
 

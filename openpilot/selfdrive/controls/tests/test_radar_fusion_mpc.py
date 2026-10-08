@@ -44,6 +44,7 @@ def object_lead(track=1, *, distance=30.0, speed=0.0, ego_speed=10.0, accelerati
     physicalConflictValid=physical_window is not None,
     physicalConflictStart=0.0 if physical_window is None else physical_window[0],
     physicalConflictEnd=0.0 if physical_window is None else physical_window[1],
+    followGeometryMonoTime=epoch if persistent and source in ('radar', 'fused') else 0,
   )
   return SimpleNamespace(present=True, dRel=distance, yRel=0.0, vRel=speed-ego_speed, vLead=speed,
                          vLeadK=speed, aLeadK=acceleration, aLeadTau=1.5,
@@ -81,6 +82,7 @@ def action(planner):
 def advance(lead, stamp):
   evidence = lead.evidence
   evidence.positionMonoTime = evidence.velocityMonoTime = evidence.estimateMonoTime = evidence.modelMonoTime = stamp
+  evidence.followGeometryMonoTime = stamp if not evidence.coasting and evidence.followQualified and evidence.source in ('radar', 'fused') else 0
 
 
 def coast_from(lead, stamp):
@@ -88,6 +90,11 @@ def coast_from(lead, stamp):
   coast.dRel += coast.vRel * (stamp - coast.evidence.estimateMonoTime) / 1e9
   coast.aLeadK, coast.aLeadTau = 0.0, 0.3
   evidence = coast.evidence
+  # This helper starts from the producer's latest accepted fresh object,
+  # which may be newer than the last fresh publication the MPC consumed.
+  evidence.followGeometryMonoTime = (lead.evidence.estimateMonoTime
+                                    if lead.evidence.followQualified and not lead.evidence.coasting
+                                    and lead.evidence.source in ('radar', 'fused') else 0)
   evidence.source, evidence.coasting, evidence.accelerationValid = 'predicted', True, False
   evidence.estimateMonoTime = evidence.modelMonoTime = stamp
   evidence.followQualified = evidence.stopQualified = evidence.departureQualified = evidence.fcwQualified = False
@@ -130,24 +137,36 @@ def test_known_following_coast_preserves_braking_without_new_authority(distance,
     assert np.min(coast_planner.a_solution[1:]) <= -3.0
 
 
-@pytest.mark.parametrize('change', ['unseen', 'generation', 'session', 'track', 'position', 'velocity', 'finite_exit', 'entering'])
+@pytest.mark.parametrize('change', [
+  'unseen', 'generation', 'session', 'track', 'position', 'velocity',
+  'position_watermark', 'velocity_watermark', 'finite_exit', 'entering',
+])
 def test_follow_geometry_never_softens_unknown_or_changed_coast(change):
   lead = object_lead(distance=20.0, speed=5.0)
   planner = LongitudinalMpc()
   planner.set_cur_state(10.0, 0.0)
   if change != 'unseen':
     planner.fusion_lead_projections(fused_state(lead), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  if change in ('position_watermark', 'velocity_watermark'):
+    # An intermediate accepted producer fresh is deliberately not fed to MPC.
+    producer_fresh = deepcopy(lead)
+    producer_fresh.dRel += producer_fresh.vRel * .02
+    advance(producer_fresh, EPOCH_NS + 20_000_000)
+    earlier = coast_from(producer_fresh, EPOCH_NS + 25_000_000)
+    projection, = planner.fusion_lead_projections(fused_state(earlier), now_ns=EPOCH_NS + 25_000_000,
+                                                  reference_ns=EPOCH_NS + 25_000_000)
+    assert projection.persistent
   stamp = EPOCH_NS + 50_000_000
-  coast = coast_from(lead, stamp)
+  coast = coast_from(producer_fresh if change in ('position_watermark', 'velocity_watermark') else lead, stamp)
   if change == 'generation':
     coast.evidence.generation += 1
   elif change == 'session':
     coast.evidence.sessionId += '-new'
   elif change == 'track':
     coast.evidence.trackId += 1
-  elif change == 'position':
+  elif change in ('position', 'position_watermark'):
     coast.evidence.positionMonoTime -= 1
-  elif change == 'velocity':
+  elif change in ('velocity', 'velocity_watermark'):
     coast.evidence.velocityMonoTime -= 1
   elif change == 'finite_exit':
     coast.evidence.conflictEnd = 9.95
@@ -157,6 +176,24 @@ def test_follow_geometry_never_softens_unknown_or_changed_coast(change):
   assert not projection.persistent
   assert any(bound is not None for bound in planner.finite_occupancy_bounds((projection,)))
   assert planner._fusion_follow_geometry == {}
+
+
+@pytest.mark.parametrize('proof', ['missing', 'zero', 'future', 'float'])
+def test_follow_geometry_coast_requires_current_explicit_producer_proof(proof):
+  lead = object_lead(distance=20.0, speed=5.0)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  planner.fusion_lead_projections(fused_state(lead), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  stamp = EPOCH_NS + 50_000_000
+  coast = coast_from(lead, stamp)
+  if proof == 'missing':
+    del coast.evidence.followGeometryMonoTime
+  else:
+    coast.evidence.followGeometryMonoTime = {'zero': 0, 'future': stamp + 1, 'float': float(EPOCH_NS)}[proof]
+  assert qualified_lead(coast, 'brake', 0.0, now_ns=stamp)
+  projection, = planner.fusion_lead_projections(fused_state(coast), now_ns=stamp, reference_ns=stamp)
+  assert not projection.persistent and planner._fusion_follow_geometry == {}
+  assert any(bound is not None for bound in planner.finite_occupancy_bounds((projection,)))
 
 
 @pytest.mark.parametrize('interruption', ['absent', 'out', 'reset', 'finite_fresh', 'clock_reversal'])
@@ -187,25 +224,46 @@ def test_follow_geometry_is_not_recovered_after_its_continuity_is_revoked(interr
   assert not projection.persistent and planner._fusion_follow_geometry == {}
 
 
-def test_follow_geometry_keeps_all_objects_and_never_renews_its_fresh_horizon():
+@pytest.mark.parametrize('new_measurements', [False, True], ids=['same_source', 'newer_coast_source'])
+def test_follow_geometry_keeps_all_objects_and_never_renews_its_fresh_horizon(new_measurements):
   lead = object_lead(distance=20.0, speed=5.0)
   crossing = object_lead(2, distance=15.0, speed=0.0, start=0.5, end=1.2, path='entering', persistent=False)
   planner = LongitudinalMpc()
   planner.set_cur_state(10.0, 0.0)
   planner.fusion_lead_projections(fused_state(lead, crossing), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
-  for offset in (50_000_000, 100_000_000, 300_000_000):
+  for offset in (50_000_000, 100_000_000, 300_000_000, 350_000_000):
     stamp = EPOCH_NS + offset
     next_crossing = deepcopy(crossing)
     advance(next_crossing, stamp)
-    projections = planner.fusion_lead_projections(fused_state(coast_from(lead, stamp), next_crossing), now_ns=stamp, reference_ns=stamp)
+    producer_fresh = lead
+    if new_measurements:
+      # Synthetic boundary fixture, not road data: the producer accepted this
+      # fresh before the coast, but the MPC never received that publication.
+      producer_fresh = deepcopy(lead)
+      producer_fresh.dRel += producer_fresh.vRel * (stamp - 10_000_000 - EPOCH_NS) / 1e9
+      advance(producer_fresh, stamp - 10_000_000)
+    coast = coast_from(producer_fresh, stamp)
+    assert coast.evidence.followGeometryMonoTime == producer_fresh.evidence.estimateMonoTime
+    projections = planner.fusion_lead_projections(fused_state(coast, next_crossing), now_ns=stamp, reference_ns=stamp)
     assert len(projections) == 2
     follow, finite = projections
     assert follow.identity == ('radar-test', 1) and finite.identity == ('radar-test', 2)
     assert follow.persistent and follow.conflict_end == 10.0-offset/1e9
     assert not finite.persistent and any(bound is not None for bound in planner.finite_occupancy_bounds(projections))
   stamp = EPOCH_NS + 350_000_001
-  with pytest.raises(ValueError, match='Unqualified admitted'):
-    planner.fusion_lead_projections(fused_state(coast_from(lead, stamp)), now_ns=stamp, reference_ns=stamp)
+  if new_measurements:
+    producer_fresh = deepcopy(lead)
+    producer_fresh.dRel += producer_fresh.vRel * (stamp - 10_000_000 - EPOCH_NS) / 1e9
+    advance(producer_fresh, stamp - 10_000_000)
+    coast = coast_from(producer_fresh, stamp)
+    assert qualified_lead(coast, 'brake', 0.0, now_ns=stamp)
+    projection, = planner.fusion_lead_projections(fused_state(coast), now_ns=stamp, reference_ns=stamp)
+    assert not projection.persistent and planner._fusion_follow_geometry == {}
+    assert any(bound is not None for bound in planner.finite_occupancy_bounds((projection,)))
+  else:
+    coast = coast_from(lead, stamp)
+    with pytest.raises(ValueError, match='Unqualified admitted'):
+      planner.fusion_lead_projections(fused_state(coast), now_ns=stamp, reference_ns=stamp)
 
 
 def test_conflicting_coast_generation_views_invalidate_follow_geometry():
@@ -221,30 +279,48 @@ def test_conflicting_coast_generation_views_invalidate_follow_geometry():
   assert planner.diagnostic_solve_calls == solves and planner.object_influence_identities == ()
 
 
-def test_recorded_track57_fresh_geometry_survives_slot_reassignment_coast():
+@pytest.mark.parametrize('fresh_delivered', [True, False], ids=['fresh_delivered_control', 'fresh_overwritten_recorded_order'])
+def test_recorded_track57_fresh_geometry_survives_slot_reassignment_coast(fresh_delivered):
   # ed7d1f7 full89: fusion_degradation.samples[8], frames 3511/3512;
   # failure_diagnostics frames 3513/3514. Identity, clocks, position/speed and
   # windows are saved there. Compact fresh memory omitted aLeadK, so these
   # two setup frames use a declared zero-acceleration hypothesis; this is a
   # geometry-transition regression, not a replay of the missing fresh fields.
+  # ce092bb0 route-01-summary: plan 3512 precedes fresh radar 3512; coast
+  # 3513 overwrites it before the next plan. The delivered arm is deliberately
+  # a counterfactual control. Setup ego/reference fields are the saved producer
+  # samples, not a reconstruction of the planner's unavailable setup inputs.
+  # The new producer proof is derived from the saved latest fresh EOF; that
+  # field did not exist in the old log and is not presented as recorded wire.
   planner = LongitudinalMpc()
   session = 'e48bcdb9f5e7427196849f7be202bc9f'
-  for estimate, measurement, model, publication, reference, distance, speed, ego, acceleration, rate in (
+  plan_3512, fresh_3512, coast_publication, plan_3513 = 199263337058, 199270828412, 199307354089, 199313753568
+  assert 199220664037 < plan_3512 < fresh_3512 < coast_publication < plan_3513
+  for index, (estimate, measurement, model, publication, reference, distance, speed, ego, acceleration, rate) in enumerate((
     (199161575308, 199176107110, 199204260183, 199220664037, 199216790808,
      2.868521163319816, 10.042173635095105, 16.72817039489746, 0.18555878102779388, -0.05716469660830151),
     (199211575829, 199235791485, 199254899454, 199270828412, 199267106589,
      2.5880764259541107, 10.010508823782994, 16.71938133239746, 0.02808774635195732, -0.03496408699392124),
-  ):
+  )):
     lead = object_lead(57, distance=float(np.float32(distance)), speed=float(np.float32(speed)), ego_speed=ego, epoch=estimate)
     lead.evidence.sessionId, lead.evidence.generation = session, 128
     lead.evidence.positionMonoTime = lead.evidence.velocityMonoTime = measurement
     lead.evidence.modelMonoTime, lead.evidence.lateralSpeed = model, rate
     lead.evidence.pathSource = 'modelPath'
+    if index == 1 and not fresh_delivered:
+      continue  # The producer saw this source sample; this planner did not.
     planner.set_cur_state(ego, acceleration)
     planner.set_weights(prev_accel_constraint=False)
-    planner.update(fused_state(lead, display=(lead,)), reference=MpcReference(20.0), now_ns=publication, reference_ns=reference)
+    consumed = publication if fresh_delivered else plan_3512
+    planner.update(fused_state(lead, display=(lead,)), reference=MpcReference(20.0), now_ns=consumed, reference_ns=reference)
     assert planner.solution_status == 0 and planner._fusion_projections[0].persistent
+    fresh_anchor = estimate
+  remembered = planner._fusion_follow_geometry[(session, 57)]
+  assert remembered[1:3] == ((199235791485, 199235791485) if fresh_delivered else (199176107110, 199176107110))
   coast = coast_from(lead, 199261579735)
+  assert coast.evidence.followGeometryMonoTime == 199211575829
+  if not fresh_delivered:
+    assert fresh_anchor == 199161575308 < coast.evidence.followGeometryMonoTime
   coast.dRel, coast.yRel, coast.vRel = 2.2505342960357666, -0.8906638026237488, -6.711284160614014
   coast.vLead = coast.vLeadK = 10.010696411132812
   coast.aLeadTau = 0.30000001192092896
@@ -252,18 +328,22 @@ def test_recorded_track57_fresh_geometry_survives_slot_reassignment_coast():
   coast.evidence.pathOffset, coast.evidence.lateralSpeed = -0.9212847948074341, -0.04149603471159935
   coast.evidence.positionStd, coast.evidence.velocityStd = 0.24600131809711456, 0.8504881262779236
   before = deepcopy(vars(coast))
-  for publication, reference, ego, acceleration in (
+  for plan_ns, reference, ego, acceleration in (
     (199313753568, 199307159714, 16.721981048583984, 0.05395398288965225),
     (199362946693, 199357071537, 16.74215316772461, 0.17761588096618652),
   ):
     planner.set_cur_state(ego, acceleration)
     planner.set_weights(prev_accel_constraint=False)
-    planner.update(fused_state(coast, display=(coast,)), reference=MpcReference(20.0), now_ns=publication, reference_ns=reference)
+    assert coast_publication < plan_ns
+    planner.update(fused_state(coast, display=(coast,)), reference=MpcReference(20.0), now_ns=plan_ns, reference_ns=reference)
     assert planner.solution_status == planner.last_solver_status == 0 and planner.previous_solution_valid
     projection, = planner._fusion_projections
     assert projection.persistent and not any(planner._occupancy_bounds)
-    assert projection.conflict_end == 10.0 - (reference-199211575829)/1e9
+    assert projection.conflict_end == 10.0 - (reference-fresh_anchor)/1e9
+    remembered = planner._fusion_follow_geometry[(session, 57)]
+    assert remembered[1:4] == (199235791485, 199235791485, fresh_anchor)
     assert vars(coast) == before and coast.evidence.conflictEnd == 10.0
+    assert all(not qualified_lead(coast, purpose, 0.0, now_ns=plan_ns) for purpose in ('follow', 'stop', 'departure', 'fcw'))
     assert planner.rest_recovery_position_limit is None and planner.fcw_object_identity is None
     assert action(planner) <= -1.0 and np.min(planner.a_solution[1:]) <= -3.0
 

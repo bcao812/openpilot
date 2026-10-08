@@ -488,6 +488,7 @@ class HondaRadarControl:
             'positionMonoTime': eof, 'velocityMonoTime': eof, 'estimateMonoTime': eof, 'modelMonoTime': model_ns,
             'positionStd': sx, 'velocityStd': sv, 'positionValid': True, 'velocityValid': True, 'accelerationValid': True,
             'followQualified': True, 'brakeQualified': True, 'stopQualified': strong,
+            'followGeometryMonoTime': 0,
             'departureQualified': strong and lead['vLeadK'] > .5, 'fcwQualified': lead['modelProb'] > .9,
             'cautionQualified': False,
             'physicalConflictValid': False, 'physicalConflictStart': 0.0, 'physicalConflictEnd': 0.0,
@@ -532,7 +533,8 @@ class HondaRadarControl:
     state = 'inPath' if abs(offset) <= half_width else 'entering'
     return _without_physical_conflict(replace(path, state=state, offset=offset, start=start, end=end, source='previousPath'))
 
-  def _make_lead(self, memory, path, eof, model_ns, speed, *, vision=None, vision_index=-1, predicted=False, reason='radar'):
+  def _make_lead(self, memory, path, eof, model_ns, speed, *, vision=None, vision_index=-1, predicted=False, reason='radar',
+                 follow_geometry_ns=0):
     probability = float(vision['modelProb']) if vision is not None else 0.0
     # Near-zero negative ground speed remains a measured quantity. Consumers
     # may bound their motion model, but it must not erase this physical object.
@@ -565,6 +567,9 @@ class HondaRadarControl:
         'estimateMonoTime': eof, 'modelMonoTime': model_ns, 'positionStd': math.sqrt(max(.01, memory.position_variance)),
         'velocityStd': math.sqrt(max(.01, memory.velocity_variance)), 'positionValid': True, 'velocityValid': True,
         'accelerationValid': acceleration_valid, 'followQualified': enduring and not predicted,
+        # The old epoch describes geometry only. Predicted objects retain all
+        # their existing restricted purpose flags and raw component stamps.
+        'followGeometryMonoTime': (follow_geometry_ns if predicted else eof) if enduring else 0,
         'brakeQualified': not caution, 'stopQualified': enduring and not predicted,
         'departureQualified': enduring and not predicted and memory.vx > .5,
         'fcwQualified': not caution and not predicted and memory.position_variance <= 2.25 and memory.velocity_variance <= 6.25,
@@ -613,7 +618,22 @@ class HondaRadarControl:
                         memory.velocity_variance + 4 * dt, memory.path, memory.path_ns,
                         lateral_position_variance=lateral_position_variance, lateral_velocity_variance=lateral_velocity_variance,
                         lateral_velocity_valid=memory.lateral_velocity_valid)
-    return self._make_lead(projected, path, eof, model_ns, speed, predicted=True, reason=reason)
+    accepted = memory.accepted['evidence']
+    geometry_ns = accepted.get('followGeometryMonoTime', 0)
+    # Carry only the latest actually observed follow geometry of these exact
+    # components. An intervening predicted/revoked estimate cannot borrow an
+    # older fresh epoch, even if the track/generation happens to be unchanged.
+    if not (accepted.get('coasting') is False and accepted.get('followQualified') is True
+            and accepted.get('source') in ('radar', 'fused')
+            and accepted.get('sessionId') == self._session
+            and accepted.get('trackId') == memory.track_id and accepted.get('generation') == memory.generation
+            and accepted.get('positionMonoTime') == memory.position_ns and accepted.get('velocityMonoTime') == memory.velocity_ns
+            and _integer(geometry_ns) and 0 < geometry_ns <= eof
+            and geometry_ns == accepted.get('estimateMonoTime') == memory.epoch_ns
+            and 0.0 <= path.start <= 1e-6):
+      geometry_ns = 0
+    return self._make_lead(projected, path, eof, model_ns, speed, predicted=True, reason=reason,
+                           follow_geometry_ns=geometry_ns)
 
   @staticmethod
   def _select(objects):

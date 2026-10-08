@@ -83,6 +83,10 @@ struct RadarLeadEvidence {
   physicalConflictValid @29 :Bool = false;
   physicalConflictStart @30 :Float64;  # seconds from estimateMonoTime
   physicalConflictEnd @31 :Float64;
+  # Latest fresh estimate that confirmed continuous following geometry for
+  # these same identity/generation/measurement sources. A coast may copy it
+  # only while that geometry still holds; it never grants following authority.
+  followGeometryMonoTime @32 :UInt64;
 
   enum Source {
     legacy @0;
