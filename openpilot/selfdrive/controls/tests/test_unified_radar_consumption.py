@@ -151,6 +151,8 @@ def test_unified_expiry_matches_the_surviving_collection_without_changing_origin
 
 def test_loss_of_an_already_adopted_hold_target_does_not_release_that_hold():
   planner = enabled_planner(1.0)
+  # This component starts with an established object barrier. Acquisition and
+  # actual braking are verified by the rolling owner/CAN pipeline below.
   planner.reference_planner.radar_held_identity = (SESSION, 7)
   raw = radar_frame(coast(relevant=True))
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
@@ -168,7 +170,8 @@ def test_loss_of_an_already_adopted_hold_target_does_not_release_that_hold():
         planner.publish(state, publisher)
       assert publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
       assert planner.reference_planner.radar_held_identity == (SESSION, 7)
-      assert planner.output_a_target <= 0.0
+      # A positive planner target is not permission for the owner to release.
+      assert not publisher.messages['longitudinalPlan'].longitudinalPlan.motionIntent.releaseAllowed
       assert not planner.motion_intent.moving_lead and not planner.motion_intent.release_allowed
     state['carState'].gasPressed = True
     planner.update(state, now_ns=now + 1_000_000)
@@ -245,7 +248,7 @@ def radar_stop_acknowledgement(planner, *, track=7, producer=PUBLICATION, now=CO
 
 
 @pytest.mark.parametrize('defect', [
-  'none', 'approach', 'missing_candidate', 'wrong_source', 'wrong_producer', 'wrong_instance', 'unconsumed',
+  'none', 'approach', 'mpc_only', 'missing_candidate', 'wrong_source', 'wrong_producer', 'wrong_instance', 'unconsumed',
   'stale_feedback', 'degraded', 'waiting', 'not_stopping', 'unresolved', 'independent_stop', 'positive_accel',
 ])
 def test_only_matching_executed_object_stop_receipt_can_create_an_identity_hold(defect):
@@ -257,6 +260,8 @@ def test_only_matching_executed_object_stop_receipt_can_create_an_identity_hold(
   now = CONSUMPTION
   if defect == 'approach':
     motion.phase = 'approach'
+  elif defect == 'mpc_only':
+    motion.reasons = int(StopReason.MPC)
   elif defect == 'wrong_source':
     motion.referenceSourceMonoTime += 1
   elif defect == 'wrong_producer':
@@ -280,7 +285,7 @@ def test_only_matching_executed_object_stop_receipt_can_create_an_identity_hold(
   elif defect == 'positive_accel':
     state['carControl'].actuators.accel = .1
   ref.adopt_executed_radar_stop(state, now_ns=now)
-  assert ref.radar_held_identity == ((SESSION, 7) if defect in ('none', 'approach') else None)
+  assert ref.radar_held_identity == ((SESSION, 7) if defect in ('none', 'approach', 'mpc_only') else None)
   assert ref._radar_stop_candidate is None
 
 
@@ -404,8 +409,11 @@ def test_rolling_radar_stop_is_adopted_by_real_owner_before_dropout_preserves_th
       row = pipeline.step(speed=plant.speed, accel=plant.accel, radar=[Target(distance, lead_speed)], plant=plant)
       candidate = ref._radar_stop_candidate
       if candidate is not None and row['speed'] > .2:
-        assert row['reasons'] & int(StopReason.CLOSE_LEAD)
+        assert row['reasons'] & int(StopReason.MPC | StopReason.CLOSE_LEAD)
+        assert candidate[0] == pipeline.planner.mpc.source_object_identity
         assert candidate[0] in pipeline.planner.mpc.object_influence_identities
+        assert not ref.reference_overridden
+        assert ref.model_evidence is None or not (ref.model_evidence.no_forward or ref.model_evidence.has_rest_intent)
         assert any(owner['phase'] == 'approach' and owner['stop'] and owner['accel'] <= 0.0 for owner in row['owner'])
         rolling_identity = candidate[0]
       if rolling_identity is not None and ref.radar_held_identity == rolling_identity:

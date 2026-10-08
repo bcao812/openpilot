@@ -490,7 +490,7 @@ class UnifiedLongitudinalPlanner:
     if (not all(isinstance(stamp, int) and not isinstance(stamp, bool) and producer_ns < stamp <= now_ns
                 and now_ns - stamp <= 250_000_000 for stamp in (control_ns, controls_ns))
         or not motion.enabled or motion.phase not in ('approach', 'hold') or not motion.resolvedStop
-        or motion.degraded or motion.waitingForFreshInput or not motion.reasons & int(StopReason.CLOSE_LEAD)
+        or motion.degraded or motion.waitingForFreshInput or not motion.reasons & int(StopReason.MPC | StopReason.CLOSE_LEAD)
         or not math.isfinite(control.actuators.accel) or control.actuators.accel > 0.0
         or motion.referenceTimingVersion != REFERENCE_TIMING_VERSION or not motion.referenceTimingValid
         or motion.referenceProducerInstanceMonoTime != instance_ns
@@ -1150,15 +1150,17 @@ class UnifiedLongitudinalPlanner:
         # deliberately covers only the existing urgency subset.
         response_kind = MotionResponseKind.LEAD_BRAKING
     self.radar_release_identity = self.radar_held_identity if release_allowed and lead_departure else None
-    # An object may propose an identity barrier only when it actually owns
-    # this close-lead stop. A red light, cruise stop or mere low-speed radar
-    # detection does not assign that stop to an unrelated physical vehicle.
+    # An object may propose an identity barrier only when it owns the MPC or
+    # close-lead stop. The owner can still be braking toward that stop while
+    # the delay-compensated planner target is positive; its matching receipt,
+    # not this target's sign, proves that the stop was actually adopted.
+    # Independent model/cruise stops and mere detections cannot claim it.
     primary = radar.leadOne
     primary_identity = lead_identity(primary)
     independent_stop = reasons & (StopReason.E2E | StopReason.CRUISE | StopReason.FORCE_DECEL)
     if (active and healthy and self.fusion_admitted and not reset and not forced_decel and not independent_stop
         and not model_stop_evidence
-        and reasons & StopReason.CLOSE_LEAD and not self.reference_overridden and output <= 0.0
+        and reasons & (StopReason.MPC | StopReason.CLOSE_LEAD) and not self.reference_overridden
         and primary_identity is not None and primary_identity == planner.mpc.source_object_identity
         and primary_identity in planner.mpc.object_influence_identities
         and qualified_lead(primary, 'stop', 0.98, now_ns=now_ns) and primary.vLead < STOP_SPEED):

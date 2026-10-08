@@ -19,6 +19,29 @@ def record(record_property, name, rows):
   record_property(name, json.dumps(rows, separators=(',', ':'), allow_nan=False))
 
 
+def establish_prior_object_hold(pipeline):
+  """Explicit lifecycle-test premise, paired with the actual owner receipt.
+
+  These stationary fixtures test an already established barrier, not how the
+  car attributed its original stop. Rolling acquisition is verified separately
+  by the unchanged ideal-plant trajectory and its real MPC/owner/CAN chain.
+  """
+  state, ref = pipeline.state, pipeline.planner.reference_planner
+  evidence = state['radarState'].leadOne.evidence
+  identity = (evidence.sessionId, int(evidence.trackId))
+  assert state['radarState'].leadOne.present and evidence.stopQualified
+  motion = state['controlsState'].motionState
+  assert motion.phase == 'hold' and motion.resolvedStop
+  assert motion.reasons & int(StopReason.MPC | StopReason.CLOSE_LEAD)
+  assert motion.referenceTimingValid and not motion.degraded and not motion.waitingForFreshInput
+  assert state['carControl'].actuators.accel <= 0.0
+  ref._radar_stop_candidate = (identity, int(motion.referenceSourceMonoTime), int(motion.referenceProducerMonoTime),
+                              int(motion.referenceProducerInstanceMonoTime))
+  ref.adopt_executed_radar_stop(state, now_ns=max(state.logMonoTime['carControl'], state.logMonoTime['controlsState']))
+  assert ref.radar_held_identity == identity
+  return identity
+
+
 @pytest.mark.parametrize('lead_speed', [0.0, 4.0], ids=['new_stationary', 'new_moving'])
 def test_never_seen_by_vision_radar_target_changes_real_honda_braking(lead_speed, record_property):
   arms = {}
@@ -74,7 +97,7 @@ def test_same_car_uses_radar_motion_and_brakes_through_long_visual_gap(record_pr
 
 @pytest.mark.parametrize('recovery', ['same_identity', 'missing_aux', 'different_oem'])
 def test_saturation_reacquisition_clears_only_the_proven_identity_loss(recovery, monkeypatch, record_property):
-  """A fresh CAN recovery must clear the old barrier without losing its lead."""
+  """Fresh CAN recovery clears only its identity's diagnostic loss history."""
   rows = []
   with control_pipeline() as pipeline:
     original_scan = pipeline_support.scan_frames
@@ -119,7 +142,9 @@ def test_saturation_reacquisition_clears_only_the_proven_identity_loss(recovery,
   assert position['raw']['lifecycleRaw'] == 4094 and not position['velocityValid']
   unresolved = rows[25:26] if recovery == 'same_identity' else rows[25:]
   for row in unresolved:
-    assert row['radar']['fusionRiskUnresolved'] and not row['release']
+    # The old identity has no fresh following/departure authority. Its loss
+    # history does not revoke the independent healthy model's permissions.
+    assert row['radar']['fusionRiskUnresolved']
     for track in row['fusion_tracks']:
       if track['trackId'] == identity[1]:
         assert not track['active'] and not track['velocityGood']
@@ -209,7 +234,8 @@ def test_third_entering_object_brakes_while_two_distant_visual_leads_remain(reco
 
 
 @pytest.mark.parametrize('outcome', ['dropout', 'departure'])
-def test_radar_stop_holds_on_dropout_and_releases_for_same_car_departure(outcome, record_property):
+def test_established_radar_hold_survives_dropout_and_releases_for_same_car_departure(outcome, record_property):
+  """Dropout/departure lifecycle after an explicitly established object hold."""
   rows = []
   with control_pipeline(speed=0.0) as pipeline:
     for frame in range(100):
@@ -217,6 +243,8 @@ def test_radar_stop_holds_on_dropout_and_releases_for_same_car_departure(outcome
       departing = outcome == 'departure' and frame >= 28
       target = Target(3.0 + .4 * elapsed**2 if departing else 3.0, .8 * elapsed if departing else 0.0)
       rows.append(pipeline.step(speed=0.0, radar=[target], observer_online=outcome != 'dropout' or frame < 28))
+      if frame == 27:
+        establish_prior_object_hold(pipeline)
   record(record_property, f'hold_{outcome}', rows)
   held = rows[27]['radar']['leadOne']
   assert rows[27]['radar']['fusionHealthy'] and held['present']
@@ -244,14 +272,13 @@ def test_radar_stop_holds_on_dropout_and_releases_for_same_car_departure(outcome
 
 @pytest.mark.parametrize('scope_exit', ['mode_to_shadow', 'dec_disabled', 'scope_stale'])
 def test_scope_exit_cannot_release_radar_hold_before_driver_starts_a_new_engagement(scope_exit, record_property):
-  """Configuration/transport loss cannot turn the stopped obstacle into clear road."""
+  """Configuration/transport loss cannot release an explicitly established hold."""
   rows = []
   with control_pipeline(speed=0.0) as pipeline:
     for _ in range(28):
       rows.append(pipeline.step(speed=0.0, radar=[Target(3.0, 0.0)]))
     assert all(owner['phase'] == 'hold' and owner['stop'] for row in rows[20:] for owner in row['owner'])
-    held_identity = pipeline.planner.reference_planner.radar_held_identity
-    assert held_identity is not None
+    held_identity = establish_prior_object_hold(pipeline)
     if scope_exit == 'mode_to_shadow':
       pipeline.params.put('HondaBoschARadarMode', SHADOW, block=True)
     elif scope_exit == 'dec_disabled':
@@ -363,13 +390,12 @@ def test_scope_feedback_failure_is_distinct_from_an_explicit_exit(scope, enabled
 
 @pytest.mark.parametrize('feedback_fault', ['invalid', 'invalid_dec_off', 'stale', 'future', 'unseen'])
 def test_feedback_gap_preserves_real_radar_hold_and_perception_loss_history(feedback_fault, record_property):
-  """An invalid SP packet cannot fabricate removal of an adopted obstacle."""
+  """Invalid SP cannot remove the explicitly established object-hold premise."""
   rows = []
   with control_pipeline(speed=0.0) as pipeline:
     for _ in range(28):
       rows.append(pipeline.step(speed=0.0, radar=[Target(3.0, 0.0)]))
-    held = pipeline.planner.reference_planner.radar_held_identity
-    assert held is not None
+    held = establish_prior_object_hold(pipeline)
     assert all(owner['phase'] == 'hold' and owner['stop'] for owner in rows[-1]['owner'])
     for _ in range(10):
       rows.append(pipeline.step(speed=0.0, observer_online=False))
