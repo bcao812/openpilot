@@ -13,7 +13,7 @@ from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
-from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, ObserverSettings, SERVICE
+from openpilot.selfdrive.car.honda_radar_observer_config import ObserverSettings, SERVICE
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import can_message, configuration, scan_frames
 from openpilot.selfdrive.car.tests.test_honda_radar_shadow import fusion_state
 from openpilot.selfdrive.controls.lib.lead_qualification import MAX_CONTROL_OBJECTS
@@ -203,7 +203,7 @@ class TestHondaRadarLogger(unittest.TestCase):
         frames = [frame for slot in range(16) for frame in scan_frames(slot=slot)]
         sm = fusion_state(now)
         observation = HondaRadarObserver(*configuration(), session_id='native-logger').update(
-          [can_message(now, frames)], sm, ObserverSettings(CONTROL, True, True, True), now + 1, sm)
+          [can_message(now, frames)], sm, ObserverSettings(True, True, True), now + 1, sm)
         self.assertEqual(observation.hondaRadarObservations.mode, 4)
         self.assertTrue(observation.hondaRadarObservations.fusion.active)
         self.assertEqual(len(observation.hondaRadarObservations.fusion.tracks), 16)

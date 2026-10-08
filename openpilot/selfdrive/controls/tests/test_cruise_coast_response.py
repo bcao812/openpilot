@@ -42,8 +42,11 @@ def coast_intent(**changes):
                               allow_creep=False), **changes)
 
 
-def pure_intent():
-  return MotionIntent(response_kind=int(MotionResponseKind.PURE_CRUISE), producer_instance_ns=INSTANCE_NS, allow_creep=False)
+def feedback_intent(sign):
+  """Learn drive from qualified model movement, or braking from an ACC target."""
+  return MotionIntent(response_kind=int(MotionResponseKind.NONE if sign > 0 else MotionResponseKind.ABSOLUTE_ACC),
+                      reference_kind=int(MotionReferenceKind.FORWARD if sign > 0 else MotionReferenceKind.UNKNOWN),
+                      release_allowed=sign > 0, producer_instance_ns=INSTANCE_NS, allow_creep=False)
 
 
 def learned_harness(sign=-1, *, tuned_ki=False):
@@ -56,7 +59,7 @@ def learned_harness(sign=-1, *, tuned_ki=False):
   harness.state.vEgo = 20.23
   harness.state.aEgo = 0.0
   for _ in range(80):
-    harness.step(sign * 0.3, pure_intent())
+    harness.step(sign * 0.3, feedback_intent(sign))
   assert harness.control.motion_phase == MotionPhase.TRACK
   assert not harness.control.motion_input_constrained
   assert sign * harness.control.pid.i > 0.03
@@ -103,7 +106,7 @@ def test_coast_contract_rejects_model_semantics_departure_and_unqualified_reques
 
 @pytest.mark.parametrize('tuned_ki', [False, True], ids=['launch-response', 'configured-pid'])
 @pytest.mark.parametrize('sign', [-1, 1], ids=['negative-history', 'positive-history'])
-def test_accepted_coast_retires_the_same_integral_and_pure_cruise_can_learn_again(sign, tuned_ki):
+def test_accepted_coast_retires_the_same_integral_and_qualified_feedback_can_learn_again(sign, tuned_ki):
   harness = learned_harness(sign, tuned_ki=tuned_ki)
   outputs = [harness.control.last_output_accel]
   settle_ticks = math.ceil(max(0.0, COAST_COMMAND - outputs[-1]) / UPWARD_STEP) + 2
@@ -123,7 +126,7 @@ def test_accepted_coast_retires_the_same_integral_and_pure_cruise_can_learn_agai
     assert 0.0 < command['GAS_COMMAND'] < 10.0
 
   for _ in range(80):
-    harness.step(sign * 0.3, pure_intent())
+    harness.step(sign * 0.3, feedback_intent(sign))
   assert sign * harness.control.pid.i > 0.03
   # The next independent braking request must remain immediately available.
   harness.step(COAST_COMMAND, coast_intent())

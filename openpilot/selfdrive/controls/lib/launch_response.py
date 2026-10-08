@@ -22,7 +22,6 @@ class ResponseDomain(IntEnum):
   MODEL = 1
   ABSOLUTE_ACC = 2
   LEAD_BRAKING = 3
-  PURE_CRUISE = 4
 
 
 class LaunchResponse:
@@ -138,8 +137,6 @@ class LaunchResponse:
     Ordinary ACC admits only nonpositive correction, including compensation
     for excess acceleration while its target is positive. Independently
     qualified lead braking additionally requires a negative target.
-    Only explicit pure cruise admits signed rolling disturbance correction:
-    its target is net acceleration, so crossing zero does not reset I.
     Model movement retains its original nonnegative permission and cannot
     inherit another domain's correction.
     """
@@ -168,7 +165,7 @@ class LaunchResponse:
         self._domain = None
     nonpositive_response = response_domain in (ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING)
     if nonpositive_response or model_response and a_target < 0.0:
-      # Risk/following domains cannot spend previous pure-cruise drive effort.
+      # Risk/following domains cannot spend previous model drive effort.
       self._pid.i = min(self.bias, 0.0)
       self._positive_authorized = False
       if self.armed:
@@ -194,8 +191,7 @@ class LaunchResponse:
       return base_output
     minimum = min(0.0, lower_limit - base_output)
     maximum = max(0.0, upper_limit - base_output)
-    can_learn_positive = rolling and (response_domain == ResponseDomain.PURE_CRUISE
-                                     or model_response and forward and (positive_allowed or self._positive_authorized))
+    can_learn_positive = rolling and model_response and forward and (positive_allowed or self._positive_authorized)
     if self.armed:
       minimum = 0.0
       if not forward:

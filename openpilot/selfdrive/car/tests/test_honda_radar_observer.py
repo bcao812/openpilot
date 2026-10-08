@@ -5,7 +5,7 @@ import subprocess
 import sys
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from opendbc.car.structs import car
 from opendbc.car.honda.tests.test_bosch_a_observer import START, scan_frames
@@ -14,9 +14,9 @@ from openpilot.cereal import custom, messaging
 from openpilot.common.params import Params, ParamKeyFlag
 from openpilot.common.prefix import OpenpilotPrefix
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver, configure_observer_process
-from openpilot.selfdrive.car.honda_radar_observer_config import ObserverSettings, SERVICE, observer_requested
+from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL, ObserverSettings, SERVICE, observer_requested
 
-SETTINGS = ObserverSettings(1, True, True, True)
+SETTINGS = ObserverSettings(True, True, True)
 
 
 def configuration():
@@ -66,31 +66,38 @@ class TestHondaRadarObserver(unittest.TestCase):
       scheduler.assert_not_called()
     self.assertEqual(os.sched_getaffinity(0), before)
 
-  def test_persistent_typed_settings_and_fail_closed_modes(self):
+  def test_persistent_settings_and_retired_mode_values_do_not_select_a_pipeline(self):
     cp, _ = configuration()
     with TemporaryDirectory() as directory:
       params = Params(directory)
       self.assertFalse(observer_requested(True, params, cp))
       for key in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
         params.put_bool(key, True, block=True)
-      params.put('HondaBoschARadarMode', 1, block=True)
       params.put_bool('HondaBoschARadarOverlay', True, block=True)
       for flag in (ParamKeyFlag.CLEAR_ON_MANAGER_START, ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION,
                    ParamKeyFlag.CLEAR_ON_OFFROAD_TRANSITION, ParamKeyFlag.CLEAR_ON_IGNITION_ON):
         params.clear_all(flag)
         self.assertTrue(observer_requested(True, params, cp))
         self.assertTrue(params.get_bool('HondaBoschARadarOverlay'))
-      params.put('HondaBoschARadarMode', 2, block=True)
-      self.assertTrue(observer_requested(True, params, cp))
-      params.put('HondaBoschARadarMode', 3, block=True)
-      self.assertTrue(observer_requested(True, params, cp))
-      params.put('HondaBoschARadarMode', 4, block=True)
-      self.assertTrue(observer_requested(True, params, cp))
-      for value in (0, 5, -1):
+      for value in (0, 1, 2, 3, 4, 5, -1):
         params.put('HondaBoschARadarMode', value, block=True)
-        self.assertFalse(observer_requested(True, params, cp))
+        self.assertTrue(observer_requested(True, params, cp))
+        self.assertEqual(ObserverSettings.read(params), SETTINGS)
       Path(params.get_param_path('HondaBoschARadarMode')).write_bytes(b'bad')
+      self.assertEqual(ObserverSettings.read(params), SETTINGS)
+      self.assertTrue(observer_requested(True, params, cp))
+      self.assertFalse(observer_requested(False, params, cp))
+      params.put_bool('AlphaLongitudinalEnabled', False, block=True)
       self.assertFalse(observer_requested(True, params, cp))
+
+  def test_settings_backend_failure_disables_admission_without_claiming_configuration_exit(self):
+    params = Mock()
+    params.get_bool.side_effect = OSError('unavailable settings fixture')
+    cp, cp_sp = configuration()
+    settings = ObserverSettings.read(params)
+    self.assertFalse(settings.available)
+    self.assertFalse(settings.control_requested(cp, cp_sp))
+    self.assertFalse(observer_requested(True, params, cp))
 
   def test_wire_roundtrip_and_both_dec_internal_modes(self):
     for mode in ('acc', 'blended'):
@@ -103,6 +110,7 @@ class TestHondaRadarObserver(unittest.TestCase):
       self.assertTrue(msg.valid)
       wire = msg.to_bytes()
       decoded = messaging.log_from_bytes(wire).hondaRadarObservations
+      self.assertEqual(decoded.mode, CONTROL)
       self.assertTrue(decoded.active)
       self.assertFalse(decoded.calibrated)
       self.assertEqual(len(decoded.observations), 2)
@@ -110,7 +118,7 @@ class TestHondaRadarObserver(unittest.TestCase):
       self.assertEqual(decoded.scope.decMode, 1 if mode == 'blended' else 0)
       self.assertEqual({k: v.to_dict() for k, v in sm.items()}, original)
 
-  def test_runtime_scope_loss_stale_messages_and_no_can_timeout(self):
+  def test_perception_survives_feedback_gaps_but_expires_missing_can(self):
     cp, cp_sp = configuration()
     observer = HondaRadarObserver(cp, cp_sp)
     observer.update([can_message(START, scan_frames())], state(START), SETTINGS, START + 1)
@@ -120,10 +128,11 @@ class TestHondaRadarObserver(unittest.TestCase):
     sm = state(START + 300_000_000)
     sm['longitudinalPlanSP'].dec.active = False
     msg = observer.update([], sm, SETTINGS, START + 300_000_000)
-    self.assertFalse(msg.hondaRadarObservations.active)
+    self.assertTrue(msg.hondaRadarObservations.active)
     self.assertFalse(observer.decoder.events)
     msg = observer.update([], state(START), SETTINGS, START + 900_000_000)
-    self.assertEqual(msg.hondaRadarObservations.reason, 'scopeStale')
+    self.assertTrue(msg.hondaRadarObservations.active)
+    self.assertEqual(msg.hondaRadarObservations.reason, 'radarSilence')
 
   def test_can_socket_batch_boundaries_preserve_observations(self):
     envelopes = [can_message(START + i * 1_000_000, [frame]) for i, frame in enumerate(scan_frames())]
@@ -147,8 +156,8 @@ class TestHondaRadarObserver(unittest.TestCase):
     self.assertEqual(len(expected), 2)
 
   def test_entry_boundary_does_not_expand_control_scope(self):
-    for settings in (ObserverSettings(1, False, True, True), ObserverSettings(1, True, False, True),
-                     ObserverSettings(1, True, True, False), ObserverSettings(5, True, True, True)):
+    for settings in (ObserverSettings(False, True, True), ObserverSettings(True, False, True),
+                     ObserverSettings(True, True, False)):
       observer = HondaRadarObserver(*configuration())
       msg = observer.update([can_message(START, scan_frames())], state(START), settings, START)
       self.assertFalse(msg.hondaRadarObservations.active)
@@ -241,7 +250,6 @@ class TestHondaRadarObserver(unittest.TestCase):
       cp, cp_sp = configuration()
       params.put('CarParams', cp.to_bytes(), block=True)
       params.put('CarParamsSP', cp_sp.to_bytes(), block=True)
-      params.put('HondaBoschARadarMode', 1, block=True)
       for key in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
         params.put_bool(key, True, block=True)
       pm = messaging.PubMaster(['can', 'selfdriveState', 'longitudinalPlanSP', 'carControl'])

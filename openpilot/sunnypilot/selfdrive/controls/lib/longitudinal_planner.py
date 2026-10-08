@@ -35,7 +35,6 @@ class CruiseTarget:
 class LongitudinalPlannerSP:
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP, mpc):
     self.events_sp = EventsSP()
-    self.resolver = SpeedLimitResolver()
     self.dec = DynamicExperimentalController(CP, mpc)
     self.scc = SmartCruiseControl(hold_entry_speed=resolve_longitudinal_mode(CP, CP_SP) == LongitudinalMode.UNIFIED)
     self.resolver = SpeedLimitResolver()
@@ -106,7 +105,7 @@ class LongitudinalPlannerSP:
     plan_sp_send = messaging.new_message('longitudinalPlanSP')
 
     plan_sp_send.valid = (sm.all_checks(service_list=['carState', 'controlsState'])
-                         and (not getattr(self, 'motion_enabled', False) or self.motion_intent.valid or self.reference_planner.standby))
+                         and (not getattr(self, 'unified', False) or self.motion_intent.valid or self.reference_planner.standby))
 
     longitudinalPlanSP = plan_sp_send.longitudinalPlanSP
     longitudinalPlanSP.longitudinalPlanMonoTime = parent_plan_mono_time

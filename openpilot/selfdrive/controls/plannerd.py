@@ -10,7 +10,6 @@ from openpilot.selfdrive.controls.lib.ldw import LaneDepartureWarning
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace, TRACE_MARKER
-from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE as HONDA_RADAR_SERVICE
 import openpilot.cereal.messaging as messaging
 
 
@@ -52,7 +51,7 @@ def main():
   cloudlog.info("plannerd got CarParamsSP")
 
   gps_location_service = get_gps_location_service(params)
-  ignore_services = ["carStateSP", "selfdriveStateSP", gps_location_service, HONDA_RADAR_SERVICE]
+  ignore_services = ["carStateSP", "selfdriveStateSP", gps_location_service]
 
   ldw = LaneDepartureWarning()
   trace = LongitudinalTrace.create(CP)
@@ -62,7 +61,7 @@ def main():
     longitudinal_planner = LongitudinalPlanner(CP, CP_SP, trace=trace)
     pm = messaging.PubMaster(['longitudinalPlan', 'driverAssistance', 'longitudinalPlanSP'])
     sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'vehicleParameters', 'radarState', 'modelV2', 'selfdriveState',
-                              'carStateSP', 'selfdriveStateSP', gps_location_service, HONDA_RADAR_SERVICE],
+                              'carStateSP', 'selfdriveStateSP', gps_location_service],
                              poll='modelV2', ignore_alive=ignore_services, ignore_avg_freq=ignore_services, ignore_valid=ignore_services)
 
     # None unless /data/plannerd_profile exists at process start. plannerd is FIFO 51 on core 7

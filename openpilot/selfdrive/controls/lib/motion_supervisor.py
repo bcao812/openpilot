@@ -37,7 +37,7 @@ class MotionResponseKind(IntEnum):
   NONE = 0
   ABSOLUTE_ACC = 1
   LEAD_BRAKING = 2
-  PURE_CRUISE = 3
+  PURE_CRUISE = 3  # Retired; reserved for decoding historical logs, never accepted.
   # Version 8: guarded cruise coasting is an execution request, without
   # acceleration-error feedback. It carries UNKNOWN model semantics and
   # neither movement nor departure permission; the owner still resolves stops.
@@ -49,7 +49,7 @@ class MotionResponseKind(IntEnum):
 
 
 MOTION_REFERENCE_KINDS = tuple(MotionReferenceKind)
-MOTION_RESPONSE_KINDS = tuple(MotionResponseKind)
+MOTION_RESPONSE_KINDS = tuple(kind for kind in MotionResponseKind if kind != MotionResponseKind.PURE_CRUISE)
 
 
 class StopReason(IntFlag):
@@ -170,7 +170,7 @@ class MotionIntent:
             and self.response_kind in MOTION_RESPONSE_KINDS
             and (self.response_kind not in (MotionResponseKind.ABSOLUTE_ACC, MotionResponseKind.CRUISE_REQUEST)
                  or self.reference_kind in (MotionReferenceKind.UNKNOWN, MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD))
-            and (self.response_kind not in (MotionResponseKind.PURE_CRUISE, MotionResponseKind.CRUISE_COAST)
+            and (self.response_kind != MotionResponseKind.CRUISE_COAST
                  or self.reference_kind == MotionReferenceKind.UNKNOWN)
             and (self.response_kind != MotionResponseKind.CRUISE_COAST or not self.release_allowed and not self.moving_lead)
             and (self.reference_kind not in (MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.REST, MotionReferenceKind.NO_FORWARD)
@@ -618,8 +618,7 @@ class MotionSupervisor:
     rolling_continuation = (
       self.phase == MotionPhase.APPROACH and not held_stop and not near_standstill and new_input and not reasons
       and (intent.reference_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
-           or intent.response_kind in (MotionResponseKind.PURE_CRUISE, MotionResponseKind.ABSOLUTE_ACC,
-                                       MotionResponseKind.CRUISE_COAST, MotionResponseKind.CRUISE_REQUEST))
+           or intent.response_kind in (MotionResponseKind.ABSOLUTE_ACC, MotionResponseKind.CRUISE_COAST, MotionResponseKind.CRUISE_REQUEST))
     )
     strong_departure = (new_input and intent.release_accel is not None and intent.release_accel >= STOP_RELEASE_ACCEL)
     release_qualified = (intent.release_allowed and a_target > CREEP_ACCEL and not raw_reasons

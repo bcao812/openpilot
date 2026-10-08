@@ -14,6 +14,7 @@ import numpy as np
 from capnp.lib.capnp import _DynamicListBuilder, _DynamicListReader, _DynamicStructBuilder, _DynamicStructReader
 
 from opendbc.car.honda.bosch_a_radar import radar_scan_continuous
+from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL
 
 VERSION = 'bosch-a-shadow-3'
 MAX_TRACKS = 32
@@ -1006,11 +1007,10 @@ class HondaRadarFusion:
       self.reset(clear_ego=now_ns <= self.last_now_ns)
     self.session, self.sequence, self.dropped, self.last_now_ns = session, sequence, dropped, now_ns
     scope = read(body, 'scope', {})
-    # Mode 4 is a perception producer, not a consumer of the plan it will help
-    # construct. Keep legacy observe/shadow/assist scope exactly as recorded.
-    scope_keys = ('alphaLong', 'experimentalSetting', 'decSetting') if read(body, 'mode', 0) == 4 else (
-      'alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive')
-    enabled = read(body, 'schemaVersion', 0) == 1 and read(body, 'active', False) and all(read(scope, key, False) for key in scope_keys)
+    # Perception starts before the first DEC plan; consumer scope is separate.
+    scope_keys = ('alphaLong', 'experimentalSetting', 'decSetting')
+    enabled = (read(body, 'schemaVersion', 0) == 1 and read(body, 'mode', 0) == CONTROL
+               and read(body, 'active', False) and all(read(scope, key, False) for key in scope_keys))
     if not enabled or sm is None:
       self.reset()
     elif not all(sm.seen[k] and sm.valid[k] for k in ('modelV2', 'carState')):

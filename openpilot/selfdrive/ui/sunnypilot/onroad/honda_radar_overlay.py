@@ -4,7 +4,6 @@ import pyray as rl
 
 from openpilot.cereal import log, messaging
 from openpilot.common.swaglog import cloudlog
-from openpilot.selfdrive.car.honda_radar_observer_config import FUSION_MODES, OBSERVE
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarOverlayState, project_radar_point
 from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import accepted_influences, influence_rgb, radar_influence_strength
 from openpilot.selfdrive.ui.ui_state import ui_state
@@ -41,8 +40,7 @@ class HondaRadarOverlay:
   def _render(self, view, rect):
     now = time.monotonic_ns()
     if now >= self.next_params_ns:
-      self.enabled = (ui_state.params.get('HondaBoschARadarMode', return_default=True) in (OBSERVE, *FUSION_MODES)
-                      and ui_state.params.get_bool('HondaBoschARadarOverlay'))
+      self.enabled = ui_state.params.get_bool('HondaBoschARadarOverlay')
       self.camera_offset = ui_state.params.get('CameraOffset', return_default=True) if ui_state.active_bundle else 0.0
       self.next_params_ns = now + 1_000_000_000
       self.layout_key = None

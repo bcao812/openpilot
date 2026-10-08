@@ -49,12 +49,21 @@ def test_withdrawn_model_stop_returns_a_rolling_car_to_its_current_reference(spe
   assert controller.motion_phase == MotionPhase.TRACK
 
 
-@pytest.mark.parametrize('response', [MotionResponseKind.NONE, MotionResponseKind.PURE_CRUISE, MotionResponseKind.ABSOLUTE_ACC])
+@pytest.mark.parametrize('response', [MotionResponseKind.NONE, MotionResponseKind.ABSOLUTE_ACC])
 def test_current_moving_target_can_withdraw_an_unheld_approach(response):
   harness = MotionHarness()
   assert harness.step(MotionIntent(reasons=StopReason.E2E), v_ego=1.8, a_target=-0.2)
   assert not harness.step(continuation(response=response), v_ego=1.8, a_target=-0.2)
   assert harness.supervisor.phase == MotionPhase.RELEASE
+
+
+def test_retired_pure_cruise_cannot_withdraw_an_approach():
+  harness = MotionHarness()
+  assert harness.step(MotionIntent(reasons=StopReason.E2E), v_ego=1.8, a_target=-0.2)
+  assert harness.step(continuation(response=MotionResponseKind.PURE_CRUISE), v_ego=1.8, a_target=-0.2)
+  assert harness.supervisor.phase == MotionPhase.APPROACH
+  assert harness.supervisor.degraded
+  assert harness.supervisor.reasons & StopReason.INVALID
 
 
 @pytest.mark.parametrize('new_plan,new_model', [(False, False), (True, False)])
