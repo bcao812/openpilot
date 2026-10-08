@@ -1,17 +1,30 @@
 import time
+from dataclasses import dataclass, replace
 
 import pyray as rl
 
 from openpilot.cereal import log, messaging
 from openpilot.common.swaglog import cloudlog
-from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarOverlayState, project_radar_point
+from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarLabelPoint, RadarOverlayState, project_radar_point
 from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import accepted_influences, influence_rgb, radar_influence_strength
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import FontWeight, gui_app
+from openpilot.system.ui.lib.text_measure import measure_text_cached
 
 SERVICE = 'hondaRadarObservations'
 MARKER_RADIUS = 6
 LABEL_FONT_SIZE = 32
+BOUNDARY_LINE_WIDTH = 2
+BOUNDARY_TICK_HEIGHT = 16
+LABEL_GAP = 6
+
+
+@dataclass(frozen=True)
+class RadarLabelLayout:
+  point: RadarLabelPoint
+  marker: rl.Vector2
+  text_position: rl.Vector2
+  lines: tuple[tuple[rl.Vector2, rl.Vector2], ...]
 
 
 class HondaRadarOverlay:
@@ -83,22 +96,48 @@ class HondaRadarOverlay:
     # Scope, source freshness and camera time are checked on every frame above.
     # Cached layout never caches validity or opacity.
     influences = accepted_influences(sm, now)
-    for point, marker, text_position in self.labels:
-      rgb = influence_rgb(radar_influence_strength(point, influences)) or (0, 255, 0)
-      color = rl.Color(*rgb, 255 if frame_ns - point.time_ns <= 80_000_000 else 140)
-      rl.draw_circle_v(marker, MARKER_RADIUS, color)
-      rl.draw_text_ex(self.font, point.text, text_position, LABEL_FONT_SIZE, 0, color)
+    for label in self.labels:
+      rgb = influence_rgb(radar_influence_strength(label.point, influences)) or (0, 255, 0)
+      color = rl.Color(*rgb, 255 if frame_ns - label.point.time_ns <= 80_000_000 else 140)
+      for start, end in label.lines:
+        rl.draw_line_ex(start, end, BOUNDARY_LINE_WIDTH, color)
+      rl.draw_circle_v(label.marker, MARKER_RADIUS, color)
+      rl.draw_text_ex(self.font, label.point.text, label.text_position, LABEL_FONT_SIZE, 0, color)
 
   def _layout_labels(self, points, transform, camera_height, rect):
     labels = []
+
+    def in_view(x, y):
+      return rect.x <= x <= rect.x + rect.width and rect.y <= y <= rect.y + rect.height
+
     for point in points:
       position = project_radar_point(point, transform, camera_height, self.camera_offset)
       if position is None:
         continue
       x, y = position
-      if not (rect.x <= x <= rect.x + rect.width and rect.y <= y <= rect.y + rect.height):
+      if not in_view(x, y):
         continue
-      # Never shift detections to make room for text. The dot marks the exact
-      # ground-plane projection; distance stays immediately to its right.
-      labels.append((point, rl.Vector2(x, y), rl.Vector2(x + MARKER_RADIUS + 6, y - LABEL_FONT_SIZE / 2)))
+      marker = rl.Vector2(x, y)
+      lines = []
+      label_x, label_top = x, y - MARKER_RADIUS
+      if point.boundary_laterals is not None:
+        ends = [project_radar_point(replace(point, lateral=lateral), transform, camera_height, self.camera_offset)
+                for lateral in point.boundary_laterals]
+        if len(ends) == 2 and all(end is not None for end in ends):
+          left, right = (rl.Vector2(*end) for end in ends)
+          # The same-distance boundary and reflection point are collinear.
+          # AugmentedRoadView's existing content scissor clips lines and text;
+          # clipping a line never manufactures an endpoint marker at the border.
+          lines.append((left, right))
+          for end in (left, right):
+            if in_view(end.x, end.y):
+              lines.append((rl.Vector2(end.x, end.y - BOUNDARY_TICK_HEIGHT / 2),
+                            rl.Vector2(end.x, end.y + BOUNDARY_TICK_HEIGHT / 2)))
+          label_x = (left.x + right.x) / 2
+          label_top = min(left.y, right.y, y) - BOUNDARY_TICK_HEIGHT / 2
+      # Never shift detections to make room for text. Only the transparent
+      # distance label is centered above the projected span (or lone dot).
+      size = measure_text_cached(self.font, point.text, LABEL_FONT_SIZE)
+      text_position = rl.Vector2(label_x - size.x / 2, label_top - LABEL_GAP - size.y)
+      labels.append(RadarLabelLayout(point, marker, text_position, tuple(lines)))
     return labels

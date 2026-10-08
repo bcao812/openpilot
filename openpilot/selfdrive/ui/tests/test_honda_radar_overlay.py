@@ -1,3 +1,5 @@
+from dataclasses import replace
+import math
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import unittest
@@ -114,6 +116,120 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       overlay.render(None, None)
     self.assertFalse(overlay.state.active)
 
+  def test_asymmetric_boundaries_use_the_same_projection_and_camera_offset_as_the_dot(self):
+    import pyray as rl
+    from openpilot.selfdrive.ui.sunnypilot.onroad import honda_radar_overlay as renderer
+    point = RadarLabelPoint(0, 20, 0.2, START, 1, 1, boundary_laterals=(2.0, -0.5), boundary_time_ns=START)
+    overlay = renderer.HondaRadarOverlay()
+    overlay.font, overlay.camera_offset = object(), 0.35
+    for focal in (500.0, 1000.0):
+      with self.subTest(focal=focal), patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)):
+        # The lateral term in row 2 also exercises a nonhorizontal image span.
+        matrix = ((640, focal, 0), (360, 100, focal), (1, 0, 0))
+        label, = overlay._layout_labels([point], matrix, 1.2, rl.Rectangle(0, 0, 1280, 720))
+      self.assertAlmostEqual(label.marker.x, 640 + focal * (0.35 - 0.2) / 20, places=3)
+      self.assertAlmostEqual(label.marker.y, 360 + (100 * (0.35 - 0.2) + focal * 1.2) / 20, places=3)
+      span, left_tick, right_tick = label.lines
+      for endpoint, lateral, tick in zip(span, point.boundary_laterals, (left_tick, right_tick), strict=True):
+        self.assertAlmostEqual(endpoint.x, 640 + focal * (0.35 - lateral) / 20, places=3)
+        self.assertAlmostEqual(endpoint.y, 360 + (100 * (0.35 - lateral) + focal * 1.2) / 20, places=3)
+        self.assertAlmostEqual(tick[0].x, endpoint.x)
+        self.assertAlmostEqual(tick[1].x, endpoint.x)
+        self.assertAlmostEqual((tick[0].y + tick[1].y) / 2, endpoint.y)
+        self.assertEqual(tick[1].y - tick[0].y, renderer.BOUNDARY_TICK_HEIGHT)
+      self.assertLess(span[0].x, label.marker.x)
+      self.assertLess(label.marker.x, span[1].x)
+      self.assertAlmostEqual(label.text_position.x + 32, (span[0].x + span[1].x) / 2, places=3)
+      self.assertLess(label.text_position.y + 40, min(left_tick[0].y, right_tick[0].y))
+
+  def test_missing_incomplete_or_unprojectable_boundary_keeps_the_dot_and_upper_label(self):
+    import pyray as rl
+    from openpilot.selfdrive.ui.sunnypilot.onroad import honda_radar_overlay as renderer
+    overlay = renderer.HondaRadarOverlay()
+    overlay.font = object()
+    matrix = ((640, 1000, 0), (360, 0, 1000), (1, 0, 0))
+    behind_camera = ((640, 1000, 0), (360, 0, 1000), (1, 4, 0))
+    for boundaries, transform in ((None, matrix), ((2.0,), matrix), ((float('nan'), -0.5), matrix),
+                                  ((6.0, -0.5), behind_camera)):
+      with self.subTest(boundaries=boundaries), patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)):
+        point = RadarLabelPoint(0, 20, 0, START, 1, 1, boundary_laterals=boundaries)
+        label, = overlay._layout_labels([point], transform, 1.2, rl.Rectangle(0, 0, 1280, 720))
+      self.assertFalse(label.lines)
+      self.assertEqual((label.marker.x, label.marker.y), (640, 420))
+      self.assertEqual(label.text_position.x + 32, label.marker.x)
+      self.assertLess(label.text_position.y + 40, label.marker.y - renderer.MARKER_RADIUS)
+      self.assertEqual(label.point.text, '20.0')
+
+  def test_offscreen_boundary_does_not_create_a_false_endpoint_at_the_view_border(self):
+    import pyray as rl
+    from openpilot.selfdrive.ui.sunnypilot.onroad import honda_radar_overlay as renderer
+    overlay = renderer.HondaRadarOverlay()
+    overlay.font = object()
+    point = RadarLabelPoint(0, 20, 0, START, 1, 1, boundary_laterals=(20.0, -1.0), boundary_time_ns=START)
+    matrix = ((640, 1000, 0), (360, 0, 1000), (1, 0, 0))
+    with patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)):
+      label, = overlay._layout_labels([point], matrix, 1.2, rl.Rectangle(0, 0, 1280, 720))
+    span, right_tick = label.lines
+    self.assertEqual((label.marker.x, label.marker.y), (640, 420))
+    self.assertEqual((span[0].x, span[1].x), (-360, 690))
+    # The enclosing camera scissor clips the span; only its real visible end
+    # gets a short vertical marker, never x=0 where the line crosses the border.
+    self.assertEqual((right_tick[0].x, right_tick[1].x), (690, 690))
+
+  def test_raw_boundary_wire_roundtrip_reaches_the_renderer(self):
+    import numpy as np
+    import pyray as rl
+    from openpilot.cereal import log, messaging
+    from openpilot.selfdrive.ui.sunnypilot.onroad import honda_radar_overlay as renderer
+    data = sample()
+    for event in data['observations']:
+      if event['positionValid']:
+        azimuth = event['raw']['azimuthRaw']
+        event['raw'].update(edgeARaw=azimuth + 60, edgeBRaw=azimuth - 20)
+    wire = messaging.new_message(renderer.SERVICE)
+    wire.valid, wire.logMonoTime = True, START + 1
+    setattr(wire, renderer.SERVICE, data)
+    decoded = messaging.log_from_bytes(wire.to_bytes())
+    sm = state(START)
+    calib = messaging.new_message('extrinsicsCalibration').extrinsicsCalibration
+    calib.calStatus, calib.height = log.ExtrinsicsCalibration.Status.calibrated, [1.2]
+    sm['extrinsicsCalibration'], sm.valid['extrinsicsCalibration'] = calib, True
+    observer = Mock(updated={renderer.SERVICE: True}, valid={renderer.SERVICE: decoded.valid},
+                    logMonoTime={renderer.SERVICE: decoded.logMonoTime})
+    observer.__getitem__ = Mock(return_value=decoded.hondaRadarObservations)
+    overlay = renderer.HondaRadarOverlay()
+    overlay.sm, overlay.enabled, overlay.next_params_ns = observer, True, START + 1_000_000_000
+    view = SimpleNamespace(frame=object(), client=SimpleNamespace(timestamp_eof=START), device_camera=object(),
+                           model_renderer=SimpleNamespace(_car_space_transform=np.array(((640., 1000., 0), (360., 0, 1000.), (1., 0, 0)))))
+    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
+    with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
+         patch.object(renderer.gui_app, 'font', return_value=object()), \
+         patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)), \
+         patch.object(rl, 'draw_circle_v') as circles, patch.object(rl, 'draw_line_ex') as lines, \
+         patch.object(rl, 'draw_rectangle_rec') as backgrounds, patch.object(rl, 'draw_text_ex') as text:
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+    point, = overlay.state.points(START, START + 2)
+    raw = decoded.hondaRadarObservations.observations[0].raw
+    self.assertEqual((raw.edgeARaw, raw.edgeBRaw), (raw.azimuthRaw + 60, raw.azimuthRaw - 20))
+    self.assertIsNotNone(point.boundary_laterals)
+    self.assertEqual(lines.call_count, 3)
+    self.assertEqual(circles.call_count, 1)
+    span = lines.call_args_list[0].args
+    marker = circles.call_args.args[0]
+    for projected, angle_raw in ((span[0], raw.edgeARaw), (marker, raw.azimuthRaw), (span[1], raw.edgeBRaw)):
+      self.assertAlmostEqual(projected.x, 640 - 1000 * math.tan((angle_raw - 1024) / 2048.0), places=3)
+      self.assertAlmostEqual(projected.y, 360 + 1000 * 1.2 / point.distance, places=3)
+    self.assertLess(span[0].x, marker.x)
+    self.assertLess(marker.x, span[1].x)
+    self.assertEqual(text.call_count, 1)
+    self.assertEqual(text.call_args.args[1], '54.1')
+    label_position = text.call_args.args[2]
+    self.assertAlmostEqual(label_position.x + 32, (span[0].x + span[1].x) / 2, places=3)
+    self.assertLess(label_position.y + 40, marker.y - renderer.BOUNDARY_TICK_HEIGHT / 2)
+    for call in (*lines.call_args_list, circles.call_args, text.call_args):
+      self.assertEqual((call.args[-1].r, call.args[-1].g, call.args[-1].b, call.args[-1].a), (0, 255, 0, 255))
+    backgrounds.assert_not_called()
+
   def test_real_render_path_uses_text_and_camera_frame_time(self):
     import numpy as np
     import pyray as rl
@@ -140,8 +256,10 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, params=params, active_bundle=False)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2) as clock, \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
+         patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)) as measure, \
+         patch.object(renderer, 'radar_influence_strength', return_value=0.0) as strength, \
          patch.object(renderer, 'project_radar_point', wraps=project_radar_point) as project, \
-         patch.object(rl, 'draw_circle_v') as circles, patch.object(rl, 'draw_line_v') as lines, \
+         patch.object(rl, 'draw_circle_v') as circles, patch.object(rl, 'draw_line_ex') as lines, \
          patch.object(rl, 'draw_rectangle_rec') as backgrounds, patch.object(rl, 'draw_text_ex') as draw:
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       self.assertTrue(overlay.enabled)
@@ -153,7 +271,8 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       expected = project_radar_point(overlay.state.points(START, START + 2)[0], view.model_renderer._car_space_transform, 1.2)
       self.assertAlmostEqual(marker.x, expected[0], places=3)
       self.assertAlmostEqual(marker.y, expected[1], places=3)
-      self.assertGreater(draw.call_args.args[2].x, marker.x + radius)
+      self.assertAlmostEqual(draw.call_args.args[2].x + 32, marker.x, places=3)
+      self.assertLess(draw.call_args.args[2].y + 40, marker.y - radius)
       self.assertEqual((color.r, color.g, color.b), (0, 255, 0))
       backgrounds.assert_not_called()
       lines.assert_not_called()
@@ -162,32 +281,61 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       draw.reset_mock()
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       self.assertEqual(project.call_count, 1)  # same observation and camera transform
+      self.assertEqual(measure.call_count, 1)
       self.assertEqual(draw.call_args_list[0].args[2].x, original_x)
       view.model_renderer._car_space_transform[0, 0] += 25
       draw.reset_mock()
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       self.assertEqual(project.call_count, 2)
       self.assertAlmostEqual(draw.call_args_list[0].args[2].x, original_x + 25, places=3)
+      # Adding boundaries to the same accepted position changes cached geometry
+      # without moving its reflection point or changing its physical identity.
+      point = overlay.state.history[0][-1]
+      overlay.state.history[0][-1] = replace(point, boundary_laterals=(point.lateral + 1.0, point.lateral - 0.5),
+                                          boundary_time_ns=START)
+      original_marker = circles.call_args.args[0]
+      draw.reset_mock()
+      lines.reset_mock()
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      self.assertEqual(project.call_count, 5)
+      self.assertEqual(measure.call_count, 3)
+      self.assertEqual(lines.call_count, 3)  # span plus the two real end ticks
+      self.assertEqual((circles.call_args.args[0].x, circles.call_args.args[0].y), (original_marker.x, original_marker.y))
+      span = lines.call_args_list[0].args
+      self.assertLess(span[0].x, original_marker.x)
+      self.assertLess(original_marker.x, span[1].x)
+      self.assertAlmostEqual(draw.call_args.args[2].x + 32, (span[0].x + span[1].x) / 2, places=3)
+      for call in (*lines.call_args_list, circles.call_args, draw.call_args):
+        self.assertEqual((call.args[-1].r, call.args[-1].g, call.args[-1].b, call.args[-1].a), (0, 255, 0, 255))
+      backgrounds.assert_not_called()
       # Fading and expiry must remain live even when geometry is cached.
       clock.return_value = START + 120_000_000
       view.client.timestamp_eof = START + 100_000_000
+      strength.return_value = 0.6
       draw.reset_mock()
+      lines.reset_mock()
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
-      self.assertEqual(project.call_count, 2)
-      self.assertEqual(draw.call_args_list[0].args[-1].a, 140)
+      self.assertEqual(project.call_count, 5)
+      self.assertEqual(measure.call_count, 3)
+      for call in (*lines.call_args_list, circles.call_args, draw.call_args):
+        self.assertEqual((call.args[-1].r, call.args[-1].g, call.args[-1].b), renderer.influence_rgb(0.6))
+        self.assertEqual(call.args[-1].a, 140)
       clock.return_value = START + 210_000_000
       view.client.timestamp_eof = START + 200_000_000
       draw.reset_mock()
       circles.reset_mock()
+      lines.reset_mock()
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       draw.assert_not_called()
       circles.assert_not_called()
+      lines.assert_not_called()
       draw.reset_mock()
       clock.return_value = START + 2
       view.client.timestamp_eof = START - 1
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       draw.assert_not_called()  # future position not drawn
       circles.assert_not_called()
+      lines.assert_not_called()
 
   def test_sixteen_markers_near_screen_edge_keep_projected_positions(self):
     import numpy as np
@@ -212,8 +360,9 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
+         patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)), \
          patch.object(rl, 'draw_circle_v') as circles, \
-         patch.object(rl, 'draw_line_v') as lines, patch.object(rl, 'draw_rectangle_rec') as rectangles, \
+         patch.object(rl, 'draw_line_ex') as lines, patch.object(rl, 'draw_rectangle_rec') as rectangles, \
          patch.object(rl, 'draw_text_ex') as text:
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
     markers = [call.args[0] for call in circles.call_args_list]
@@ -226,7 +375,8 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     self.assertEqual(len({(marker.x, marker.y) for marker in markers}), 1)
     for marker, call in zip(markers, text.call_args_list, strict=True):
       self.assertTrue(0 <= marker.x <= 1280 and 0 <= marker.y <= 720)
-      self.assertGreater(call.args[2].x, marker.x)
+      self.assertAlmostEqual(call.args[2].x + 32, marker.x, places=3)
+      self.assertLess(call.args[2].y + 40, marker.y - renderer.MARKER_RADIUS)
 
   def test_only_overlay_setting_remains_and_changes_are_offroad_only(self):
     from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands import honda
