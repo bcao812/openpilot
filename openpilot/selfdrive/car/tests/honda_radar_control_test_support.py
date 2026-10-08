@@ -202,9 +202,13 @@ class ControlPipeline:
     car.vEgo, car.aEgo, car.standstill = speed, accel, speed <= .001
     car.gasPressed, car.brakePressed = pedal == 'gas', pedal == 'brake'
     state['selfdriveState'].enabled = engaged
+    # Mirror controlsd's UNIFIED pedal gate in both the sensing input and the
+    # actual owner/CAN feedback. Engagement alone is not longActive on a pedal.
+    long_active = bool(engaged and not car.gasPressed and not car.brakePressed)
     # carControl is a reader after its first wire publication.
     control = state['carControl'].as_builder()
-    control.enabled = control.longActive = engaged
+    control.enabled, control.longActive = engaged, long_active
+    control.cruiseControl.override = bool(engaged and not long_active)
     state['carControl'] = control.as_reader()
     state.logMonoTime['carControl'] = source_ns
     for service in ('carState', 'carStateSP', 'selfdriveState', 'vehicleParameters', 'gpsLocationExternal', 'gpsLocation', 'radarTracks'):
@@ -237,7 +241,7 @@ class ControlPipeline:
     identity = (plan.modelMonoTime, plan.aTarget, plan.shouldStop, plan.solverStatus, intent,
                 float(plan.reference.accel), float(plan.reference.constraintAccel), bool(plan.reference.overridden),
                 speeds, accels, action_t)
-    row = {'frame': frame, 'time': frame * DT_MDL, 'source_ns': source_ns, 'speed': float(speed),
+    row = {'frame': frame, 'time': frame * DT_MDL, 'source_ns': source_ns, 'speed': float(speed), 'long_active': long_active,
                'target': float(plan.aTarget), 'stop': bool(plan.shouldStop), 'reasons': int(plan.motionIntent.reasons),
                'release': bool(plan.motionIntent.releaseAllowed), 'moving': bool(plan.motionIntent.movingLead),
                'solver': int(plan.solverStatus), 'dec_mode': self.planner.dec.mode(), 'radar': state['radarState'].to_dict(),
@@ -260,15 +264,16 @@ class ControlPipeline:
       timing = self.reference_consumer.consume(plan.reference, publication_ns, owner_ns, command_identity=identity)
       assert timing.valid
       output = self.owner.update(
-        engaged, car, plan.aTarget, plan.shouldStop,
+        long_active, car, plan.aTarget, plan.shouldStop,
         (CarControllerParams.BOSCH_ACCEL_MIN, CarControllerParams.BOSCH_ACCEL_MAX), intent=intent,
         plan_time_ns=publication_ns, model_time_ns=plan.modelMonoTime, now_ns=owner_ns,
         plan_valid=bool(plan_event.valid and timing.valid), solver_status=plan.solverStatus,
         braking_plan_valid=True)
-      row['owner'].append({'accel': float(output), 'phase': self.owner.motion_phase.text,
+      row['owner'].append({'accel': float(output), 'active': long_active, 'phase': self.owner.motion_phase.text,
                                'stop': bool(self.owner.resolved_should_stop), 'constrained': bool(self.owner.motion_input_constrained)})
       command = messaging.new_message('carControl', logMonoTime=owner_ns, valid=True)
-      command.carControl.enabled = command.carControl.longActive = engaged
+      command.carControl.enabled, command.carControl.longActive = engaged, long_active
+      command.carControl.cruiseControl.override = bool(engaged and not long_active)
       command.carControl.actuators.accel = float(output)
       command.carControl.actuators.longControlState = self.owner.long_control_state
       cached = messaging.log_from_bytes(command.to_bytes()).carControl

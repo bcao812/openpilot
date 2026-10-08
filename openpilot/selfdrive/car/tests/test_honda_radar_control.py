@@ -805,8 +805,9 @@ def test_session_and_reset_clear_identity_before_accepting_new_source():
   result = controller.update(**recovered)
   assert result.objects and evidence(result)['sessionId'] == 'new-session' and result.degraded
   assert result.risk_unresolved
-  # The caller owns an explicit driver disengage/re-engage reset. An observer
-  # restart or waiting past TTL is not evidence that its old obstacle departed.
+  # An explicit adapter/configuration reset starts a new perception lifecycle.
+  # Driver longActive edges retain this history; observer restart and TTL do
+  # not prove that the old obstacle departed.
   controller.reset()
   reengaged = scene(3)
   reengaged['observation']['sessionId'] = 'new-session'

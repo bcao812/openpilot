@@ -216,7 +216,6 @@ class RadarD:
     self.settings_next_ns = 0
     self.fusion_control = None
     self.fusion_state = None
-    self.last_long_active = None
     self.control_scope_unavailable = False
 
   def control_enabled(self, sm, now_ns):
@@ -307,21 +306,14 @@ class RadarD:
       from openpilot.selfdrive.car.honda_radar_control import HondaRadarControl
       self.fusion_control = HondaRadarControl()
     if self.fusion_control is not None:
-      control_ns = sm.logMonoTime.get('carControl', 0)
-      if (getattr(sm, 'seen', {}).get('carControl', False) and sm.valid.get('carControl', False)
-          and 0 < control_ns <= now_ns and now_ns - control_ns <= 250_000_000):
-        long_active = bool(sm['carControl'].longActive)
-        if self.last_long_active is not None and long_active != self.last_long_active:
-          # Only an observed authority lifecycle boundary clears unresolved
-          # prior-session risks. Missing heartbeats and sensor TTL never do.
-          self.fusion_control.reset()
-        self.last_long_active = long_active
+      # Perception confirmation follows current sensor identity and geometry.
+      # Driver actuation transitions are enforced by the planner and owner.
       if not enabled and self.control_scope_unavailable:
         # SP.valid also reflects the preceding MPC result. Its failure or a
         # missing feedback packet must not reset the perception adapter and
         # masquerade as clear-road evidence. The independent observer keeps
         # running; retain adapter history until fresh input or an explicit
-        # authority/configuration boundary resolves it.
+        # configuration boundary resolves it.
         # Publish the original visual leads during this scope gap. These
         # diagnostics preserve perception history; they do not establish that
         # an object ever controlled the car or grant any new radar authority.

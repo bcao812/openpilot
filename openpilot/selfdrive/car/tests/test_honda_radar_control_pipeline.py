@@ -19,6 +19,101 @@ def record(record_property, name, rows):
   record_property(name, json.dumps(rows, separators=(',', ':'), allow_nan=False))
 
 
+def confirmed_offset_target(pipeline):
+  """M4-inspired body offset with matched synthetic visual input."""
+  target = Target(20.0, 8.0, lateral=1.3, slot=2, oem_id=16)
+  rows = [pipeline.step(speed=8.0, radar=[target], visual=[target]) for _ in range(24)]
+  matched = next(lead for lead in objects(rows[-1]) if lead['evidence']['source'] == 'fused')
+  identity = matched['evidence']['sessionId'], matched['evidence']['trackId']
+  # Let the fixture's visual probability/association disappear while fresh CAN
+  # keeps this physical identity and its independently confirmed body history.
+  rows.extend(pipeline.step(speed=8.0, radar=[target]) for _ in range(24))
+  memory = pipeline.radard.fusion_control._tracks[identity[1]]
+  assert memory.path.confirmed and 1.1 < abs(memory.path.offset) < 2.0
+  current = next(lead for lead in objects(rows[-1]) if lead['evidence']['trackId'] == identity[1])
+  assert current['evidence']['source'] == 'radar' and current['modelProb'] == 0.0
+  assert current['evidence']['brakeQualified'] and current['evidence']['pathState'] == 'inPath'
+  return target, identity, memory.generation, rows
+
+
+@pytest.mark.parametrize('intervention', ['gas', 'brake', 'disabled'])
+def test_driver_edges_preserve_fresh_confirmed_body_during_long_visual_gap(intervention, record_property):
+  with control_pipeline(speed=8.0) as pipeline:
+    target, identity, generation, rows = confirmed_offset_target(pipeline)
+    adapter = pipeline.radard.fusion_control
+    last_position_ns = adapter._tracks[identity[1]].position_ns
+    for _ in range(4):
+      row = pipeline.step(speed=8.0, radar=[target], engaged=intervention != 'disabled',
+                          pedal=intervention if intervention != 'disabled' else None)
+      rows.append(row)
+      memory = adapter._tracks[identity[1]]
+      assert pipeline.radard.fusion_control is adapter
+      assert memory.generation == generation and memory.path.confirmed
+      assert memory.position_ns > last_position_ns
+      last_position_ns = memory.position_ns
+      lead = next(lead for lead in objects(row) if lead['evidence']['trackId'] == identity[1])
+      assert lead['evidence']['sessionId'] == identity[0] and lead['evidence']['brakeQualified']
+      assert not row['long_active'] and not pipeline.state['carControl'].longActive
+      assert all(not owner['active'] and owner['phase'] == 'off' and owner['accel'] == 0.0 for owner in row['owner'])
+      assert all(not command['active'] and not command['brake'] and command['accel'] == 0.0
+                 and not command['release'] and not command['resume'] for command in row['can'])
+      assert pipeline.planner.reference_planner.radar_held_identity is None
+      assert not pipeline.planner.reference_planner._radar_stop_pending
+    last_manual_ns = rows[-1]['source_ns']
+    for _ in range(12):
+      row = pipeline.step(speed=8.0, radar=[target])
+      rows.append(row)
+      memory = adapter._tracks[identity[1]]
+      assert memory.generation == generation and memory.path.confirmed
+      assert memory.position_ns > last_position_ns
+      last_position_ns = memory.position_ns
+      assert row['long_active'] and pipeline.state['carControl'].longActive
+      motion = pipeline.state['controlsState'].motionState
+      assert motion.referenceTimingValid and motion.referenceSourceMonoTime == row['source_ns'] > last_manual_ns
+      # This moving fixture never manufactures a stop ACK. Recovery consumes
+      # its new owner publication, with no remembered object HOLD to borrow.
+      assert pipeline.planner.reference_planner.radar_held_identity is None
+      assert not pipeline.planner.reference_planner._radar_stop_pending
+      assert all(owner['active'] and owner['phase'] != 'hold' for owner in row['owner'])
+      assert all(command['active'] for command in row['can'])
+    record(record_property, f'confirmed_body_driver_edge_{intervention}', rows)
+
+
+@pytest.mark.parametrize('change', ['observed_out', 'new_identity'])
+def test_confirmed_body_history_still_yields_to_current_out_or_identity_change(change, record_property):
+  with control_pipeline(speed=8.0) as pipeline:
+    target, identity, _, rows = confirmed_offset_target(pipeline)
+    confirmed_position_ns = pipeline.radard.fusion_control._tracks[identity[1]].position_ns
+    if change == 'observed_out':
+      # A bounded lateral transition keeps the same raw identity while valid
+      # current model/lane geometry observes it leaving the existing 2 m band.
+      for index in range(1, 23):
+        rows.append(pipeline.step(speed=8.0, radar=[Target(20.0, 8.0, lateral=1.3 + .1*index, slot=2, oem_id=16)]))
+      outside = Target(20.0, 8.0, lateral=3.5, slot=2, oem_id=16)
+      rows.extend(pipeline.step(speed=8.0, radar=[outside]) for _ in range(12))
+      adapter = pipeline.radard.fusion_control
+      same_track, = [track for track in pipeline.state[SERVICE].fusion.tracks if track.trackId == identity[1]]
+      assert same_track.active and same_track.oemTrackId == target.oem_id
+      assert same_track.positionMonoTime > confirmed_position_ns
+      assert rows[-1]['radar']['fusionSessionId'] == identity[0]
+      assert identity[1] in rows[-1]['radar']['fusionClearedTracks']
+      assert identity[1] in adapter._cleared and identity[1] not in adapter._tracks
+      assert identity not in adapter._lost_tracks
+      assert not any(lead['evidence']['trackId'] == identity[1] and lead['evidence']['brakeQualified'] for lead in objects(rows[-1]))
+    else:
+      replacement = Target(target.distance, target.speed, lateral=target.lateral, slot=target.slot, oem_id=17)
+      rows.extend(pipeline.step(speed=8.0, radar=[replacement]) for _ in range(20))
+      tracks = [track for track in pipeline.state[SERVICE].fusion.tracks if track.active and track.oemTrackId == 17]
+      track, = tracks
+      assert track.trackId != identity[1]
+      memory = pipeline.radard.fusion_control._tracks[int(track.trackId)]
+      assert not memory.path.confirmed
+      for lead in objects(rows[-1]):
+        if lead['evidence']['trackId'] == track.trackId:
+          assert not lead['evidence']['followQualified'] and not lead['evidence']['stopQualified']
+    record(record_property, f'confirmed_body_revocation_{change}', rows)
+
+
 def establish_prior_object_hold(pipeline):
   """Explicit lifecycle-test premise, paired with the actual owner receipt.
 
