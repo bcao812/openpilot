@@ -7,6 +7,8 @@ solves below are a fixed comparison experiment, never production work.
 
 from copy import deepcopy
 from dataclasses import replace
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -21,7 +23,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   OCCUPANCY_ACCELERATION_REINTEGRATION_LIMIT, OCCUPANCY_POSITION_BUFFER, OCCUPANCY_POSITION_REINTEGRATION_LIMIT,
   OCCUPANCY_VELOCITY_REINTEGRATION_LIMIT, QP_FEASIBILITY_TOL, REFERENCE_BOUND, REST_STATE_TOL,
   RISK_STOP_DISTANCE, STOP_DISTANCE, T_IDXS,
-  LongitudinalMpc, LongitudinalPlanSource, MpcReference,
+  LongitudinalMpc, LongitudinalPlanSource, MpcReference, OccupancyBound,
 )
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, ModelSource, MovingPreference, RestGoal
 from openpilot.selfdrive.controls.tests.test_mpc_problem_contract import NativeProblemRecorder
@@ -196,6 +198,47 @@ def test_follow_geometry_coast_requires_current_explicit_producer_proof(proof):
   assert any(bound is not None for bound in planner.finite_occupancy_bounds((projection,)))
 
 
+@pytest.mark.parametrize('proof', ['nonzero', 'omitted_default', 'explicit_zero'])
+def test_wire_follow_geometry_proof_survives_snapshot_and_controls_coast_inheritance(proof):
+  from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption, RadarConsumptionView
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import native_frame, radar_frame
+
+  lead = object_lead(distance=20.0, speed=5.0)
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  consumer = RadarConsumption()
+  fresh_wire = native_frame(radar_frame(lead, display=(lead,), publication=EPOCH_NS)).to_bytes()
+  with log.RadarState.from_bytes(fresh_wire) as reader:
+    view = consumer.update(reader, publication_ns=EPOCH_NS, now_ns=EPOCH_NS, speed=10.0)
+    assert isinstance(view, RadarConsumptionView)
+    assert view.radarObjects[0].evidence.followGeometryMonoTime == EPOCH_NS
+    projection, = planner.fusion_lead_projections(view, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+    assert projection.persistent
+  stamp = EPOCH_NS + 50_000_000
+  coast = coast_from(lead, stamp)
+  if proof == 'omitted_default':
+    # An omitted field exercises the default-zero compatibility contract.
+    del coast.evidence.followGeometryMonoTime
+  elif proof == 'explicit_zero':
+    coast.evidence.followGeometryMonoTime = 0
+  native = native_frame(radar_frame(coast, display=(coast,), publication=stamp))
+  before, wire = native.to_dict(), native.to_bytes()
+  native.clear_write_flag()
+  expected = EPOCH_NS if proof == 'nonzero' else 0
+  with log.RadarState.from_bytes(wire) as reader:
+    assert reader.radarObjects[0].evidence.followGeometryMonoTime == expected
+    view = consumer.update(reader, publication_ns=stamp, now_ns=stamp, speed=10.0)
+    assert isinstance(view, RadarConsumptionView)
+    assert view.radarObjects[0].evidence.followGeometryMonoTime == view.leadOne.evidence.followGeometryMonoTime == expected
+    assert qualified_lead(view.leadOne, 'brake', 0.0, now_ns=stamp)
+    projection, = planner.fusion_lead_projections(view, now_ns=stamp, reference_ns=stamp)
+    assert projection.persistent is (proof == 'nonzero')
+    if proof != 'nonzero':
+      assert planner._fusion_follow_geometry == {}
+      assert any(bound is not None for bound in planner.finite_occupancy_bounds((projection,)))
+  assert native.to_dict() == before and native.to_bytes() == wire
+
+
 @pytest.mark.parametrize('interruption', ['absent', 'out', 'reset', 'finite_fresh', 'clock_reversal'])
 def test_follow_geometry_is_not_recovered_after_its_continuity_is_revoked(interruption):
   lead = object_lead(distance=20.0, speed=5.0)
@@ -266,15 +309,20 @@ def test_follow_geometry_keeps_all_objects_and_never_renews_its_fresh_horizon(ne
       planner.fusion_lead_projections(fused_state(coast), now_ns=stamp, reference_ns=stamp)
 
 
-def test_conflicting_coast_generation_views_invalidate_follow_geometry():
+@pytest.mark.parametrize('field', ['generation', 'followGeometryMonoTime'])
+def test_conflicting_coast_identity_views_invalidate_follow_geometry_after_wire_roundtrip(field):
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import native_frame, radar_frame
+
   lead = object_lead(distance=20.0, speed=5.0)
   planner = solve(fused_state(lead))
   stamp = EPOCH_NS + 50_000_000
   coast = coast_from(lead, stamp)
   display = deepcopy(coast)
-  display.evidence.generation += 1
+  setattr(display.evidence, field, getattr(display.evidence, field) + 1)
+  wire = native_frame(radar_frame(coast, display=(display,), publication=stamp)).to_bytes()
   solves = planner.diagnostic_solve_calls
-  planner.update(fused_state(coast, display=(display,)), reference=MpcReference(20.0), now_ns=stamp, reference_ns=stamp)
+  with log.RadarState.from_bytes(wire) as reader:
+    planner.update(reader, reference=MpcReference(20.0), now_ns=stamp, reference_ns=stamp)
   assert planner.solution_status == MPC_INVALID_INPUT and planner._fusion_follow_geometry == {}
   assert planner.diagnostic_solve_calls == solves and planner.object_influence_identities == ()
 
@@ -1322,6 +1370,148 @@ def test_new_failure_clears_previously_active_constraint_tokens():
   bad = object_lead(distance=float('nan'))
   planner.update(fused_state(bad), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
   assert planner.solution_status != 0 and planner.object_influence_identities == ()
+
+
+_AUXILIARY_CASES = json.loads((Path(__file__).parent / 'fixtures/radar_fusion_auxiliary_constraints_ce092bb0.json').read_text())['cases']
+
+
+def saved_auxiliary_problem(case):
+  """Restore a saved post-native object; never execute another native solve."""
+  planner = LongitudinalMpc()
+  planner.x0[:] = case['x0']
+  planner.x_sol[:] = case['x']
+  planner.u_sol[:] = case['u']
+  planner.v_solution, planner.a_solution, planner.j_solution = planner.x_sol[:, 1], planner.x_sol[:, 2], planner.u_sol[:, 0]
+  planner.params[:, :2] = case['physical_accel_bounds']
+  planner.diagnostic_reference_bounds = tuple(np.asarray(values) for values in case['reference_bounds'])
+  planner._rest_constraint_buffers = [tuple(np.asarray(row[key]) for key in ('C', 'D', 'lower', 'upper'))
+                                      for row in case['constraint_rows']]
+  bounds = [None] * N
+  for stage, duration, upper, identities, lower in case['occupancy_bounds']:
+    bounds[stage] = OccupancyBound(duration, upper, tuple(tuple(identity) for identity in identities), lower)
+  planner._occupancy_bounds = tuple(bounds)
+  planner._native_occupancy_bounds_active = True
+  planner._passing_speed_limit = case['passing_speed_limit']
+  objects = [SimpleNamespace(**{**obj, 'evidence': SimpleNamespace(**obj['evidence'])}) for obj in case['objects']]
+  planner._fusion_projections = tuple(planner.project_fusion_lead(lead, slot=None, reference_ns=case['reference_ns']) for lead in objects)
+  planner.solution_status = planner.last_solver_status = case['native_solver_return']
+  planner.diagnostic_last_solver_return = case['native_solver_return']
+  planner.previous_solution_valid = True
+  return planner
+
+
+def reintegrated_saved_states(planner):
+  states = np.empty_like(planner.x_sol)
+  states[0] = planner.x0
+  for stage, duration in enumerate(np.diff(T_IDXS)):
+    states[stage+1] = planner.integrate_jerk(states[stage], planner.j_solution[stage], duration)
+  return states
+
+
+@pytest.mark.parametrize('case', _AUXILIARY_CASES, ids=lambda case: case['id'])
+def test_recorded_auxiliary_residuals_still_require_actual_clearance(case, record_property):
+  planner = saved_auxiliary_problem(case)
+  original_x0, original_jerks = planner.x0.copy(), planner.j_solution.copy()
+  states = reintegrated_saved_states(planner)
+  # An independent cubic/root evaluator checks the real object windows; the
+  # recorded small row residual alone never decides whether to accept a case.
+  trajectory = SimpleNamespace(x_sol=states, j_solution=original_jerks)
+  clearances = [(projection.identity, moving_window_clearance(trajectory, projection))
+                for projection in planner._fusion_projections if not projection.persistent and projection.occupied.any()]
+  assert clearances and all(np.isfinite(value) for _, value in clearances)
+  record_property('actual_finite_clearances_m', repr(clearances))
+  expected = '' if all(value >= CRASH_DISTANCE for _, value in clearances) else 'finite_occupancy_clearance_violated'
+  assert planner.occupancy_trajectory_error(states, original_jerks, tolerance=QP_FEASIBILITY_TOL) != ''
+  assert planner.reintegrate_occupancy_precision() == expected
+  diagnostic = planner.diagnostic_occupancy_projection
+  assert diagnostic['maximumCorrectedConstraintViolation'] > QP_FEASIBILITY_TOL
+  assert diagnostic['auxiliaryConstraintTolerances']
+  assert diagnostic['applied'] is (expected == '')
+  np.testing.assert_array_equal(planner.x0, original_x0)
+  np.testing.assert_array_equal(planner.j_solution, original_jerks)
+  if not expected:
+    np.testing.assert_array_equal(planner.x_sol, states)
+    assert planner.occupancy_trajectory_error(planner.x_sol, planner.j_solution, tolerance=QP_FEASIBILITY_TOL, post_native=True) == ''
+    assert planner.diagnostic_solve_calls == 0
+    for row in diagnostic['auxiliaryConstraintTolerances']:
+      assert row['role'] in ('position_m', 'speed_lower_m_per_s')
+      assert row['lowerTolerance'] <= 1e-6
+      assert row['upperTolerance'] <= (1e-6 if row['role'] == 'position_m' else QP_FEASIBILITY_TOL)
+
+
+@pytest.mark.parametrize('change', ['C', 'D', 'lower', 'upper', 'role', 'inactive'])
+def test_auxiliary_tolerance_never_matches_a_changed_or_uninstalled_position_row(change):
+  planner = saved_auxiliary_problem(_AUXILIARY_CASES[1])
+  states = reintegrated_saved_states(planner)
+  C, D, lower, upper = planner._rest_constraint_buffers[11]
+  if change == 'C':
+    C[1, 0] = np.nextafter(C[1, 0], np.inf)
+  elif change == 'D':
+    D[1, 0] = np.nextafter(D[1, 0], np.inf)
+  elif change == 'lower':
+    lower[1] = np.nextafter(lower[1], np.inf)
+  elif change == 'upper':
+    upper[1] = np.nextafter(upper[1], np.inf)
+  elif change == 'role':
+    planner._occupancy_bounds = (*planner._occupancy_bounds[:11], None)
+  else:
+    planner._native_occupancy_bounds_active = False
+  assert planner.occupancy_trajectory_error(states, planner.j_solution, tolerance=QP_FEASIBILITY_TOL, post_native=True) == 'finite_occupancy_reintegration_constraints_violated'
+
+
+def test_auxiliary_tolerance_never_exempts_another_future_rest_speed_row():
+  planner = saved_auxiliary_problem(_AUXILIARY_CASES[0])
+  states = reintegrated_saved_states(planner)
+  C, D, lower, upper = planner._rest_constraint_buffers[7]
+  C[1], D[1], lower[1], upper[1] = C[0].copy(), D[0].copy(), lower[0], upper[0]
+  C[0], D[0], lower[0], upper[0] = 0.0, 0.0, -1.0, 1.0
+  planner._occupancy_bounds = (*planner._occupancy_bounds[:7], None, *planner._occupancy_bounds[8:])
+  planner.rest_goal, planner.rest_goal_state = SimpleNamespace(native_node=N), 'constrained'
+  assert planner.occupancy_trajectory_error(states, planner.j_solution, tolerance=QP_FEASIBILITY_TOL, post_native=True) == 'finite_occupancy_reintegration_constraints_violated'
+
+
+def test_auxiliary_speed_upper_certificate_keeps_its_original_tolerance():
+  planner = saved_auxiliary_problem(_AUXILIARY_CASES[0])
+  states = reintegrated_saved_states(planner)
+  C, D, _, _ = planner._rest_constraint_buffers[0]
+  value = C[0] @ states[0] + D[0, 0] * planner.j_solution[0]
+  planner._passing_speed_limit = value - 5e-7
+  for C, D, lower, upper in planner._rest_constraint_buffers:
+    upper[0] = planner._passing_speed_limit
+  low_tolerance, high_tolerance, roles = planner._occupancy_auxiliary_tolerances(0, QP_FEASIBILITY_TOL)
+  assert roles[0] == 'speed_lower_m_per_s'
+  assert low_tolerance[0] == 1e-6 and high_tolerance[0] == QP_FEASIBILITY_TOL
+  assert planner.occupancy_trajectory_error(states, planner.j_solution, tolerance=QP_FEASIBILITY_TOL, post_native=True) == 'finite_occupancy_reintegration_constraints_violated'
+
+
+@pytest.mark.parametrize('native_status,solution_status', [(4, 0), (None, 0), (0, 4)])
+def test_post_native_auxiliary_budget_requires_actual_native_success(native_status, solution_status):
+  planner = saved_auxiliary_problem(_AUXILIARY_CASES[0])
+  states = reintegrated_saved_states(planner)
+  planner.diagnostic_last_solver_return, planner.solution_status = native_status, solution_status
+  assert planner.occupancy_trajectory_error(states, planner.j_solution, tolerance=QP_FEASIBILITY_TOL, post_native=True) == 'finite_occupancy_postcheck_requires_native_success'
+  assert planner.reintegrate_occupancy_precision() == 'finite_occupancy_reintegration_requires_native_success'
+
+
+def test_auxiliary_speed_budget_cannot_admit_an_actual_between_node_reverse():
+  planner = saved_auxiliary_problem(_AUXILIARY_CASES[0])
+  # Change the proposed control, never the measured initial state. This
+  # creates a coherent curve with forward nodes but a reverse interior.
+  planner.j_solution[0] -= 1.05e-7
+  states = reintegrated_saved_states(planner)
+  assert np.min(states[:, 1]) >= 0.0
+  assert planner.trajectory_minimum_velocity(states, planner.j_solution) < -QP_FEASIBILITY_TOL
+  assert planner.occupancy_trajectory_error(states, planner.j_solution, tolerance=QP_FEASIBILITY_TOL, post_native=True) == 'finite_occupancy_continuous_velocity_violated'
+
+
+def test_final_post_native_check_rechecks_changed_raw_geometry():
+  planner = saved_auxiliary_problem(_AUXILIARY_CASES[0])
+  assert planner.reintegrate_occupancy_precision() == ''
+  projection = next(projection for projection in planner._fusion_projections if not projection.persistent)
+  minimum = moving_window_clearance(planner, projection)
+  projection.raw_trajectory[:, 0] -= minimum - (CRASH_DISTANCE - 1e-4)
+  assert planner.diagnostic_occupancy_projection['applied']
+  assert planner.occupancy_trajectory_error(planner.x_sol, planner.j_solution, tolerance=QP_FEASIBILITY_TOL, post_native=True) == 'finite_occupancy_clearance_violated'
 
 
 @pytest.mark.parametrize('with_rest', [False, True])

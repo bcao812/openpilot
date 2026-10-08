@@ -1184,30 +1184,89 @@ class LongitudinalMpc:
     # is a stronger feasible subset than the ordinary split-rest certificate.
     return np.array([0.0, 1.0, duration / 2.0]), 0.0
 
-  def occupancy_trajectory_error(self, states, jerks, *, tolerance):
+  def _occupancy_auxiliary_tolerances(self, stage, tolerance):
+    """Identify installed auxiliary rows; unknown and other rest rows stay strict."""
+    lower_tolerance, upper_tolerance, roles = [tolerance] * 2, [tolerance] * 2, [None] * 2
+    if (not self._native_occupancy_bounds_active or self.solution_status != 0
+        or self.diagnostic_last_solver_return != 0):
+      return lower_tolerance, upper_tolerance, roles
+    C, D, lower, upper = self._rest_constraint_buffers[stage]
+    bound = self._occupancy_bounds[stage]
+    node = self.effective_rest_node
+    if node is None:
+      node = self.rest_goal.native_node if self.rest_goal is not None else 0
+    future = (self.rest_goal_state == 'constrained' or self.effective_rest_state == 'constrained') and node > 0
+    if bound is not None or not future or stage >= node - 1:
+      row, control = self.occupancy_speed_row(stage)
+      ceiling = self._passing_speed_limit if self._passing_speed_limit is not None else REFERENCE_BOUND
+      if np.array_equal(C[0], row) and D[0, 0] == control and lower[0] == 0.0 and upper[0] == ceiling:
+        lower_tolerance[0] = min(OCCUPANCY_VELOCITY_REINTEGRATION_LIMIT, 1e-6)
+        roles[0] = 'speed_lower_m_per_s'
+    if bound is not None and 0.0 < bound.duration <= T_IDXS[stage+1] - T_IDXS[stage]:
+      duration = bound.duration
+      if (np.array_equal(C[1], [1.0, duration, duration**2 / 2.0]) and D[1, 0] == duration**3 / 6.0
+          and lower[1] == bound.position_lower_limit and upper[1] == bound.position_limit):
+        lower_tolerance[1] = upper_tolerance[1] = min(OCCUPANCY_POSITION_REINTEGRATION_LIMIT, OCCUPANCY_POSITION_BUFFER / 1000.0)
+        roles[1] = 'position_m'
+    return lower_tolerance, upper_tolerance, roles
+
+  def occupancy_trajectory_error(self, states, jerks, *, tolerance, post_native=False):
     """Recheck the final trajectory, including any rest-precision adjustment."""
     if not any(getattr(self, '_occupancy_bounds', ())):
       return ''
     if (states.shape != (N+1, X_DIM) or jerks.shape != (N,)
         or not np.all(np.isfinite(states)) or not np.all(np.isfinite(jerks))):
       return 'invalid_finite_occupancy_trajectory'
+    if post_native and (self.solution_status != 0 or self.diagnostic_last_solver_return != 0):
+      return 'finite_occupancy_postcheck_requires_native_success'
     if max(float(np.max(np.abs(states[0] - self.x0))),
            float(np.max(np.abs(self.trajectory_dynamics_defects(states, jerks))))) > tolerance:
       return 'finite_occupancy_dynamics_residual_exceeded'
+    if post_native:
+      # Check the current installed problem each time, including after a rest
+      # precision adjustment. A previous repair flag never bypasses a check.
+      lower, upper = self.diagnostic_reference_bounds
+      box_violation = float(max(0.0, np.max(lower[1:] - states[1:, 1:]), np.max(states[1:, 1:] - upper[1:])))
+      maximum_violation, rejected, used_tolerances = box_violation, box_violation > tolerance, []
+      for stage, (C, D, row_lower, row_upper) in enumerate(self._rest_constraint_buffers):
+        value = C @ states[stage] + D[:, 0] * jerks[stage]
+        low_tolerance, high_tolerance, roles = self._occupancy_auxiliary_tolerances(stage, tolerance)
+        for index in range(2):
+          low_violation, high_violation = float(max(0.0, row_lower[index] - value[index])), float(max(0.0, value[index] - row_upper[index]))
+          maximum_violation = max(maximum_violation, low_violation, high_violation)
+          rejected |= low_violation > low_tolerance[index] or high_violation > high_tolerance[index]
+          if max(low_violation, high_violation) > tolerance:
+            used_tolerances.append(dict(stage=stage, row=index, role=roles[index],
+                                        unit='m' if roles[index] == 'position_m' else 'm/s' if roles[index] == 'speed_lower_m_per_s' else None,
+                                        lowerTolerance=low_tolerance[index], upperTolerance=high_tolerance[index],
+                                        rawLowerViolation=low_violation, rawUpperViolation=high_violation))
+      if self.diagnostic_occupancy_projection is not None or used_tolerances or rejected:
+        if self.diagnostic_occupancy_projection is None:
+          self.diagnostic_occupancy_projection = {'applied': False}
+        self.diagnostic_occupancy_projection.update(maximumCorrectedConstraintViolation=maximum_violation,
+                                                    auxiliaryConstraintTolerances=used_tolerances)
+      if rejected:
+        return 'finite_occupancy_reintegration_constraints_violated'
     if (np.any(states[1:, 1] < -tolerance)
         or np.any(states[1:, 2] < self.params[1:, 0] - tolerance)
         or np.any(states[1:, 2] > self.params[1:, 1] + tolerance)):
       return 'finite_occupancy_physical_bounds_violated'
     if self.trajectory_minimum_velocity(states, jerks) < -tolerance:
       return 'finite_occupancy_continuous_velocity_violated'
+    if post_native and any(self.segment_minimum_velocity(states[stage], jerk, duration) < -tolerance
+                           for stage, (jerk, duration) in enumerate(zip(jerks, np.diff(T_IDXS), strict=True))):
+      return 'finite_occupancy_continuous_velocity_violated'
     for stage, bound in enumerate(self._occupancy_bounds):
       if bound is None:
         continue
       row, control = self.occupancy_speed_row(stage)
-      if row @ states[stage] + control * jerks[stage] < -tolerance:
+      low_tolerance, high_tolerance = [tolerance] * 2, [tolerance] * 2
+      if post_native:
+        low_tolerance, high_tolerance, _ = self._occupancy_auxiliary_tolerances(stage, tolerance)
+      if row @ states[stage] + control * jerks[stage] < -low_tolerance[0]:
         return 'finite_occupancy_continuous_velocity_violated'
       position = self.integrate_jerk(states[stage], jerks[stage], bound.duration)[0]
-      if position > bound.position_limit + tolerance or position < bound.position_lower_limit - tolerance:
+      if position > bound.position_limit + high_tolerance[1] or position < bound.position_lower_limit - low_tolerance[1]:
         return 'finite_occupancy_position_bound_violated'
     for projection in self._fusion_projections:
       if not projection.persistent:
@@ -1223,15 +1282,18 @@ class LongitudinalMpc:
         row, control = self.occupancy_speed_row(stage)
         if row @ states[stage] + control * jerk > self._passing_speed_limit + tolerance:
           return 'finite_occupancy_passing_speed_exceeded'
+        if post_native and -self.segment_minimum_velocity(-states[stage], -jerk, T_IDXS[stage+1] - T_IDXS[stage]) > self._passing_speed_limit + tolerance:
+          return 'finite_occupancy_passing_speed_exceeded'
     return ''
 
   def reintegrate_occupancy_precision(self):
     """Reconcile bounded native state defects with unchanged control and x0.
 
     A successful native solve is required. No state is clipped and jerk never
-    changes. The candidate must satisfy every installed box/general row plus
-    the original 1e-9 dynamics and exact occupancy-geometry checks. Independent
-    position/velocity/acceleration budgets bound the complete continuous
+    changes. The candidate must satisfy all physical constraints, with only
+    identified auxiliary rows using separate unit-specific numeric residuals.
+    The original 1e-9 dynamics and exact occupancy-geometry checks stay intact.
+    Independent position/velocity/acceleration budgets bound the complete continuous
     correction; larger residuals and failed solves remain explicit failures.
     """
     if not any(self._occupancy_bounds):
@@ -1273,15 +1335,7 @@ class LongitudinalMpc:
     diagnostic['maximumContinuousStateCorrectionBound'] = continuous_correction.tolist()
     if np.any(continuous_correction > budget):
       return 'finite_occupancy_reintegration_budget_exceeded'
-    lower, upper = self.diagnostic_reference_bounds
-    violation = float(max(0.0, np.max(lower[1:] - states[1:, 1:]), np.max(states[1:, 1:] - upper[1:])))
-    for stage, (C, D, row_lower, row_upper) in enumerate(self._rest_constraint_buffers):
-      value = C @ states[stage] + D[:, 0] * jerks[stage]
-      violation = max(violation, float(np.max(row_lower - value)), float(np.max(value - row_upper)))
-    diagnostic['maximumCorrectedConstraintViolation'] = violation
-    if violation > QP_FEASIBILITY_TOL:
-      return 'finite_occupancy_reintegration_constraints_violated'
-    if (failure := self.occupancy_trajectory_error(states, jerks, tolerance=QP_FEASIBILITY_TOL)):
+    if (failure := self.occupancy_trajectory_error(states, jerks, tolerance=QP_FEASIBILITY_TOL, post_native=True)):
       return failure
     self.x_sol[:] = states
     # run() established views of x_sol. Keep reference history aligned with
@@ -2551,7 +2605,7 @@ class LongitudinalMpc:
         self._fusion_fcw_counts = {}
         self._fusion_fcw_epochs = {}
         return
-      if (failure := self.occupancy_trajectory_error(self.x_sol, self.j_solution, tolerance=QP_FEASIBILITY_TOL)):
+      if (failure := self.occupancy_trajectory_error(self.x_sol, self.j_solution, tolerance=QP_FEASIBILITY_TOL, post_native=True)):
         self.fail(MPC_OCCUPANCY_UNSATISFIED)
         self.failure_reason = failure
         return

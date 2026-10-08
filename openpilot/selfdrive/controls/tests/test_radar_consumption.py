@@ -318,8 +318,10 @@ def test_native_field_snapshot_preserves_each_source_and_purpose(source):
         native.leadOne, purpose, probability, now_ns=PUBLICATION)
 
 
-@pytest.mark.parametrize('field', ['dRel', 'generation', 'positionMonoTime', 'physicalConflictValid'])
+@pytest.mark.parametrize('field', ['dRel', 'generation', 'positionMonoTime', 'physicalConflictValid', 'followGeometryMonoTime'])
 def test_native_duplicate_identity_conflicts_survive_snapshotting(field):
+  from openpilot.cereal import log
+
   predicted = coast()
   native = native_frame(radar_frame(predicted, display=(predicted,)))
   if field == 'dRel':
@@ -329,12 +331,16 @@ def test_native_duplicate_identity_conflicts_survive_snapshotting(field):
   else:
     evidence = native.leadOne.evidence
     setattr(evidence, field, getattr(evidence, field) + 1)
-  before = native.to_dict()
+  before, wire = native.to_dict(), native.to_bytes()
+  native.clear_write_flag()
   consumer = RadarConsumption()
-  view = consume_frame(consumer, native)
-  assert consumer.expired_identities == () and not consumer.degraded
-  assert len(view.radarObjects) == 1 and view.leadOne.present
-  assert view.to_dict() == before and native.to_dict() == before
+  with log.RadarState.from_bytes(wire) as reader:
+    view = consume_frame(consumer, reader)
+    assert view is reader and consumer.publication_view is None
+    assert consumer.expired_identities == () and not consumer.degraded
+    assert len(view.radarObjects) == 1 and view.leadOne.present
+    assert view.to_dict() == before
+  assert native.to_dict() == before and native.to_bytes() == wire
 
 
 def test_same_native_publication_rechecked_at_a_later_consumption_time():
