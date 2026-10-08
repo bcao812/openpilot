@@ -5,7 +5,9 @@ from dataclasses import replace
 
 import pytest
 
-from openpilot.selfdrive.car.honda_radar_control import COAST_NS, HORIZON, MAX_OBJECTS, MAX_TRACKS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _corridors, _qualified_path
+from openpilot.selfdrive.car.honda_radar_control import (
+  COAST_NS, HORIZON, MAX_OBJECTS, MAX_TRACKS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _corridors, _qualified_path,
+)
 from openpilot.selfdrive.car.honda_radar_relevance import remaining_occupancy_window
 
 
@@ -1215,6 +1217,9 @@ def test_recorded_side_reflection_uses_future_inner_interval_even_with_favorable
   claim = evidence(result)
   assert result.healthy and not result.degraded and len(result.objects) == 1
   assert claim['trackId'] == 4 and claim['pathState'] == 'entering' and claim['brakeQualified']
-  assert claim['conflictStart'] > .8  # current OUT is not a fabricated close in-path obstacle
+  # Widening the sweep advances entry, but the current reflection remains
+  # outside it and must only supply a future occupancy window.
+  assert abs(claim['pathOffset']) > SWEPT_HALF_WIDTH
+  assert 0.0 < claim['conflictStart'] < claim['conflictEnd'] <= HORIZON
   assert not claim['followQualified'] and not claim['stopQualified'] and not claim['departureQualified']
   assert not result.leads[0]['present']
