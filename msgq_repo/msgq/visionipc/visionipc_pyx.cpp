@@ -12,7 +12,7 @@
         "language": "c++",
         "name": "msgq.visionipc.visionipc_pyx",
         "sources": [
-            "/data/honda-fusion-20261007-build-780dbd2/msgq_repo/msgq/visionipc/visionipc_pyx.pyx"
+            "/data/honda-fusion-20261007-build-9468ef65-01/msgq_repo/msgq/visionipc/visionipc_pyx.pyx"
         ]
     },
     "module_name": "msgq.visionipc.visionipc_pyx"

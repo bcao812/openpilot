@@ -366,7 +366,7 @@ struct RadarLeadEvidence {
 
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(8723944d29d8bcab, 13, 3)
+    CAPNP_DECLARE_STRUCT_HEADER(8723944d29d8bcab, 14, 3)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1513,6 +1513,8 @@ public:
 
   inline double getPhysicalConflictEnd() const;
 
+  inline  ::uint64_t getFollowGeometryMonoTime() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -1648,6 +1650,9 @@ public:
 
   inline double getPhysicalConflictEnd();
   inline void setPhysicalConflictEnd(double value);
+
+  inline  ::uint64_t getFollowGeometryMonoTime();
+  inline void setFollowGeometryMonoTime( ::uint64_t value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -8251,6 +8256,20 @@ inline double RadarLeadEvidence::Builder::getPhysicalConflictEnd() {
 inline void RadarLeadEvidence::Builder::setPhysicalConflictEnd(double value) {
   _builder.setDataField<double>(
       ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Reader::getFollowGeometryMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t RadarLeadEvidence::Builder::getFollowGeometryMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setFollowGeometryMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS, value);
 }
 
 inline  ::uint8_t LongitudinalObjectInfluence::Reader::getVersion() const {

@@ -10,7 +10,7 @@
         "language": "c++",
         "name": "msgq.ipc_pyx",
         "sources": [
-            "/data/honda-fusion-20261007-build-780dbd2/msgq_repo/msgq/ipc_pyx.pyx"
+            "/data/honda-fusion-20261007-build-9468ef65-01/msgq_repo/msgq/ipc_pyx.pyx"
         ]
     },
     "module_name": "msgq.ipc_pyx"
