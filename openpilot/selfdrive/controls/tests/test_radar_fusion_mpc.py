@@ -982,7 +982,7 @@ def test_same_object_cannot_publish_inconsistent_physical_windows_in_its_display
   assert planner.finite_risk_braking_accel is None and planner.finite_risk_evidence == ()
 
 
-@pytest.mark.parametrize('case', ['coasting', 'stale', 'bad_input', 'caution', 'visual', 'degraded', 'late_passing'])
+@pytest.mark.parametrize('case', ['coasting', 'stale', 'bad_input', 'caution', 'visual', 'late_passing'])
 def test_solver_failure_alone_never_grants_finite_risk_emergency_braking(case):
   crossing = object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False, physical_window=(0.02, 0.10))
   state = fused_state(crossing)
@@ -999,8 +999,6 @@ def test_solver_failure_alone_never_grants_finite_risk_emergency_braking(case):
   elif case == 'visual':
     state = fused_state(object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False, source='vision',
                                    physical_window=(0.02, 0.10)))
-  elif case == 'degraded':
-    state.fusionDegraded = True
   elif case == 'late_passing':
     state = fused_state(object_lead(distance=5.0, start=4.0, end=6.0, path='entering', persistent=False, physical_window=(4.0, 6.0)))
   planner = LongitudinalMpc()
@@ -1008,6 +1006,20 @@ def test_solver_failure_alone_never_grants_finite_risk_emergency_braking(case):
   planner.set_weights(prev_accel_constraint=False)
   planner.update(state, reference=MpcReference(20.0), now_ns=now_ns, reference_ns=reference_ns)
   assert planner.finite_risk_braking_accel is None and planner.finite_risk_evidence == ()
+
+
+@pytest.mark.parametrize('degraded', [False, True])
+def test_unrelated_fusion_diagnostic_does_not_remove_a_fresh_physical_risk(degraded):
+  crossing = object_lead(distance=0.8, start=0.02, end=0.10, path='entering', persistent=False,
+                         physical_window=(0.02, 0.10))
+  state = fused_state(crossing)
+  state.fusionDegraded = degraded
+  planner = LongitudinalMpc()
+  planner.set_cur_state(10.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+  planner.update(state, reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.finite_risk_braking_accel == ACCEL_MIN
+  assert planner.finite_risk_evidence
 
 
 def test_faster_target_no_longer_fails_the_old_box_and_has_no_emergency_proof():

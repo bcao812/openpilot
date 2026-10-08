@@ -14,7 +14,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.motion_supervisor import DEGRADED_ACCEL, MODEL_LEASE_NS, MOTION_INTENT_VERSION, PLAN_LEASE_NS, MotionIntent, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
-from openpilot.selfdrive.selfdrived.events import ET, EVENTS
+from openpilot.selfdrive.selfdrived.events import ET
 from openpilot.selfdrive.selfdrived.state import SOFT_DISABLE_TIME, StateMachine
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import (
   CONTROL_STEP_NS, State, new_event, serialized, bounded_submaster, CapturingPublisher, ControlsHarness, selfdrive_event_harness,
@@ -428,7 +428,7 @@ def radar_loss_event_harness():
   'future_plan', 'future_model', 'model_after_plan', 'missing_model', 'wrong_version', 'wrong_mode',
   'local_legacy', 'stock_long', 'interceptor',
 ])
-def test_radar_loss_event_requires_healthy_fresh_same_main_plan_and_local_unified_scope(defect):
+def test_historical_radar_loss_claim_never_adds_a_dedicated_sensor_failure_event(defect):
   harness, daemon, car_state = radar_loss_event_harness()
   event = harness.events['longitudinalPlan']
   plan = event.longitudinalPlan
@@ -474,49 +474,53 @@ def test_radar_loss_event_requires_healthy_fresh_same_main_plan_and_local_unifie
     daemon.sm.freq_ok['longitudinalPlan'] = False
   with patch('openpilot.selfdrive.selfdrived.selfdrived.time.monotonic_ns', return_value=now):
     daemon.update_events(car_state)
-  assert (EventName.radarTempUnavailable in daemon.events.names) is (defect == 'none')
+  assert EventName.radarTempUnavailable not in daemon.events.names
+  if defect == 'none':
+    assert EventName.commIssue not in daemon.events.names
 
 
-def test_radar_loss_alert_uses_existing_immediate_prompt_three_second_exit_and_force_decel():
+def test_healthy_control_remains_enabled_after_more_than_three_seconds_of_radar_loss_diagnostics():
   harness, daemon, car_state = radar_loss_event_harness()
-  with patch('openpilot.selfdrive.selfdrived.selfdrived.time.monotonic_ns', return_value=harness.now_ns):
-    daemon.update_events(car_state)
-  assert daemon.events.names == [EventName.radarTempUnavailable]
-  assert daemon.events.contains(ET.NO_ENTRY) and daemon.events.contains(ET.SOFT_DISABLE)
+  background = []
+  for service in daemon.sm.data:
+    if service not in ('controlsState', 'longitudinalPlan'):
+      event = new_event(service)
+      setattr(event, service, daemon.sm[service])
+      background.append(event)
   machine = StateMachine()
   machine.state = State.enabled
-  assert machine.update(daemon.events) == (True, True)
-  assert machine.state == State.softDisabling and machine.soft_disable_timer == int(SOFT_DISABLE_TIME / DT_CTRL)
-  make_alert = EVENTS[EventName.radarTempUnavailable][ET.SOFT_DISABLE]
-  first = make_alert(daemon.CP, car_state, daemon.sm, True, machine.soft_disable_timer, 0)
-  assert first.alert_text_1 == 'TAKE CONTROL IMMEDIATELY'
-  assert first.alert_text_2 == 'Radar Temporarily Unavailable'
-  assert first.audible_alert == log.SelfdriveState.AudibleAlert.warningSoft
-  final = make_alert(daemon.CP, car_state, daemon.sm, True, int(.5 / DT_CTRL) - 1, 0)
-  assert final.audible_alert == log.SelfdriveState.AudibleAlert.warningImmediate
-  harness.selfdrive_state.state = machine.state
-  command, motion = harness.step()
-  assert harness.control.pm.messages['controlsState'].controlsState.forceDecel
-  assert command.driverMonitoringEscalation and not motion.degraded
-  for _ in range(int(SOFT_DISABLE_TIME / DT_CTRL) - 1):
+  origin = harness.now_ns
+  for _ in range(int(SOFT_DISABLE_TIME / DT_CTRL) + 20):
+    harness.selfdrive_state.state = machine.state
+    command, motion = harness.step()
+    incoming = [harness.control.pm.messages['controlsState'], serialized(harness.events['longitudinalPlan'])]
+    for event in background:
+      event.logMonoTime = harness.now_ns
+      incoming.append(serialized(event))
+    daemon.sm.update_msgs(harness.now_ns / 1e9, incoming)
+    # Preserve the harness's bounded collaborators while keeping every
+    # transport fresh; this test changes only the historical radar claim.
+    daemon.sm.updated = dict.fromkeys(daemon.sm.updated, False)
+    with patch('openpilot.selfdrive.selfdrived.selfdrived.time.monotonic_ns', return_value=harness.now_ns):
+      daemon.update_events(car_state)
+    assert EventName.radarTempUnavailable not in daemon.events.names
+    assert EventName.commIssue not in daemon.events.names
     assert machine.update(daemon.events) == (True, True)
-  assert machine.update(daemon.events) == (False, False) and machine.state == State.disabled
-  harness.selfdrive_state.state, harness.selfdrive_state.enabled = machine.state, False
-  command, motion = harness.step()
-  assert not command.longActive and not command.cruiseControl.resume and motion.phase == 'off'
-  assert not motion.objectInfluences
-  daemon.events.add(EventName.pcmEnable)
-  assert machine.update(daemon.events) == (False, False) and machine.state == State.disabled
+    assert machine.state == State.enabled and command.longActive and not motion.degraded
+    assert not harness.control.pm.messages['controlsState'].controlsState.forceDecel
+    assert not command.driverMonitoringEscalation
+  assert harness.now_ns - origin > int(SOFT_DISABLE_TIME * 1e9)
+  assert harness.plan.radarRiskUnresolved
 
 
-def test_clearing_the_current_plan_claim_recovers_before_soft_disable_deadline():
+def test_clearing_a_diagnostic_claim_does_not_change_engagement_state():
   harness, daemon, car_state = radar_loss_event_harness()
   with patch('openpilot.selfdrive.selfdrived.selfdrived.time.monotonic_ns', return_value=harness.now_ns):
     daemon.update_events(car_state)
   machine = StateMachine()
   machine.state = State.enabled
   machine.update(daemon.events)
-  assert machine.state == State.softDisabling
+  assert machine.state == State.enabled
   harness.plan.radarRiskUnresolved = False
   harness.step()
   daemon.sm.update_msgs(harness.now_ns / 1e9, [serialized(harness.events['longitudinalPlan'])])
@@ -524,6 +528,28 @@ def test_clearing_the_current_plan_claim_recovers_before_soft_disable_deadline()
     daemon.update_events(car_state)
   assert EventName.radarTempUnavailable not in daemon.events.names
   assert machine.update(daemon.events) == (True, True) and machine.state == State.enabled
+
+
+@pytest.mark.parametrize('situation', ['adopted_hold', 'model_braking'])
+def test_ignoring_a_history_flag_does_not_release_a_real_hold_or_weaken_braking(situation):
+  outputs = []
+  for risk in (False, True):
+    harness = ControlsHarness()
+    if situation == 'adopted_hold':
+      harness.hold()
+      harness.plan.motionIntent.reasons = int(StopReason.E2E)
+      harness.plan.motionIntent.releaseAllowed = False
+      harness.plan.aTarget = .5
+    else:
+      harness.plan.aTarget = -.8
+    harness.plan.radarRiskUnresolved = risk
+    command, motion = harness.step()
+    assert command.actuators.accel < 0.0
+    if situation == 'adopted_hold':
+      assert motion.phase == 'hold' and motion.resolvedStop
+      assert not command.cruiseControl.resume
+    outputs.append((command.actuators.accel, motion.phase, motion.resolvedStop, motion.degraded))
+  assert outputs[0] == outputs[1]
 
 
 def test_card_can_send_the_last_positive_command_for_its_alive_tail_after_controlsd_stops():

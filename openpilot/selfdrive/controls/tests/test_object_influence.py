@@ -68,6 +68,29 @@ def test_unadopted_or_invalid_final_plan_has_no_labels(changes):
   assert not plan_records(radar(lead()), (('session-a', 1),), **changes)
 
 
+@pytest.mark.parametrize('kind', ['braking', 'follow', 'hold', 'release', 'caution'])
+def test_history_loss_flags_do_not_hide_a_valid_adopted_object_influence(kind):
+  item = lead(7)
+  state = radar(item)
+  identity = ('session-a', 7)
+  kwargs = {'identities': (identity,)}
+  if kind == 'follow':
+    kwargs['target_accel'] = .2
+  elif kind == 'hold':
+    kwargs.update(held_identity=identity, reference_accepted=False, standstill=True)
+  elif kind == 'release':
+    kwargs.update(held_identity=identity, release_identity=identity, target_accel=.5)
+  elif kind == 'caution':
+    item.evidence.cautionQualified, item.evidence.pathState, item.evidence.coasting = True, 'edge', False
+    kwargs.update(identities=(), caution_identities=(identity,), target_accel=0.0, reference_accepted=False)
+  baseline = plan_records(state, **kwargs)
+  assert len(baseline) == 1 and baseline[0]['kind'] == kind
+  state.fusionDegraded = state.fusionRiskUnresolved = True
+  assert plan_records(state, **kwargs) == baseline
+  assert not plan_records(state, **{**kwargs, 'independent_stop': True})
+  assert not plan_records(state, **{**kwargs, 'permitted': False})
+
+
 def test_generation_and_slot_changes_do_not_change_physical_receipt_identity():
   item = lead(7, source='fused', index=0)
   first = plan_records(radar(item), (('session-a', 7),))

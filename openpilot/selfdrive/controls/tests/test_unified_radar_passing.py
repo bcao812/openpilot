@@ -14,7 +14,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import QP_FEASIBILITY_TOL, T_IDXS
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead
-from openpilot.selfdrive.controls.tests.test_radar_consumption import native_frame, radar_frame
+from openpilot.selfdrive.controls.tests.test_radar_consumption import coast, native_frame, radar_frame
 from openpilot.selfdrive.controls.tests.test_radar_fusion_mpc import EPOCH_NS, late_passing_objects
 from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import (
@@ -67,6 +67,16 @@ def passing_state(*, initial_accel=.16649655997753143, blocker=None, action_cap=
     state['controlsState'].forceDecel = True
   elif blocker == 'fusion_degraded':
     state['radarState'].fusionDegraded = True
+  elif blocker == 'producer_loss':
+    state['radarState'].fusionRiskUnresolved = True
+  elif blocker == 'consumer_loss':
+    publication = EPOCH_NS - 100_000_000
+    lost = coast(publication=publication, relevant=True, track=99)
+    planner.reference_planner.radar_consumption.update(
+      native_frame(radar_frame(lost, publication=publication)), publication_ns=publication,
+      now_ns=EPOCH_NS - 40_000_000, speed=SPEED,
+    )
+    assert planner.reference_planner.radar_consumption.degraded
   elif blocker in ('gas', 'brake'):
     setattr(state['carState'], blocker + 'Pressed', True)
   elif blocker == 'override':
@@ -115,7 +125,7 @@ def test_passing_final_request_matches_actual_native_a_interpolation(initial_acc
 
 @pytest.mark.parametrize('blocker', [
   'negative_model', 'model_stop', 'cruise_history_brake', 'cruise_stop', 'cruise_below_witness', 'force_decel',
-  'negative_maximum', 'curve_policy', 'caution', 'fusion_degraded', 'gas', 'brake', 'override', 'short_preview',
+  'negative_maximum', 'curve_policy', 'caution', 'gas', 'brake', 'override', 'short_preview',
   'held_stop', 'model_rest', 'model_unknown',
 ])
 def test_independent_final_braking_or_uncertainty_vetoes_passing_before_native_solve(blocker):
@@ -134,6 +144,21 @@ def test_independent_final_braking_or_uncertainty_vetoes_passing_before_native_s
   # These late windows cannot borrow urgent finite-risk authority merely
   # because a conservative behind branch or an ordinary solve then fails.
   assert planner.mpc.finite_risk_braking_accel is None
+
+
+@pytest.mark.parametrize('diagnostic', ['fusion_degraded', 'producer_loss', 'consumer_loss'])
+def test_historical_radar_diagnostics_do_not_veto_a_fresh_passing_solution(diagnostic):
+  baseline, _, expected = run_case()
+  planner, _, reference = run_case(blocker=diagnostic)
+  assert expected.allow_passing and reference.allow_passing
+  assert planner.mpc.solution_status == baseline.mpc.solution_status == 0
+  assert planner.mpc.diagnostic_passing['accepted'] and baseline.mpc.diagnostic_passing['accepted']
+  np.testing.assert_array_equal(planner.mpc.params, baseline.mpc.params)
+  assert planner.output_a_target == pytest.approx(baseline.output_a_target, abs=QP_FEASIBILITY_TOL, rel=0.0)
+  assert planner.motion_intent.release_allowed == baseline.motion_intent.release_allowed
+  assert not planner.output_should_stop
+  if diagnostic == 'consumer_loss':
+    assert planner.reference_planner.radar_consumption.degraded
 
 
 def test_passing_authorization_does_not_persist_into_a_later_braking_frame():

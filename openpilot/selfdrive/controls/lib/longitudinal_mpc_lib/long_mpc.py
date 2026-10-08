@@ -902,7 +902,7 @@ class LongitudinalMpc:
     iterate or our conservative occupancy envelope. The resulting request is
     impact mitigation, never a claim that this collision has been avoided.
     """
-    if (not getattr(radarstate, 'fusionHealthy', False) or getattr(radarstate, 'fusionDegraded', False)
+    if (not getattr(radarstate, 'fusionHealthy', False)
         or not all(isinstance(stamp, Integral) and not isinstance(stamp, bool) and stamp > 0 for stamp in (now_ns, reference_ns))
         or not 0 <= now_ns - reference_ns <= REFERENCE_MAX_AGE_NS
         or self.x0[0] != 0.0 or self.x0[1] <= 0.0 or not ACCEL_MIN <= self.x0[2] <= ACCEL_MAX):

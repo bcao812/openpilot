@@ -19,8 +19,7 @@ from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_events import CarEvents
-from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
-from openpilot.selfdrive.controls.lib.motion_supervisor import MODEL_LEASE_NS, MOTION_INTENT_VERSION, PLAN_LEASE_NS
+from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
@@ -264,21 +263,6 @@ class SelfdriveD(CruiseHelper):
 
     CruiseHelper.__init__(self, self.CP)
     self.button_state_tracker = ButtonStateTracker()
-
-  def radar_risk_unresolved(self):
-    plan = self.sm['longitudinalPlan']
-    if (not self.cp_olc or not getattr(plan, 'radarRiskUnresolved', False)
-        or resolve_longitudinal_mode(self.CP, self.CP_SP) != LongitudinalMode.UNIFIED
-        or plan.motionIntent.version != MOTION_INTENT_VERSION or plan.motionIntent.mode != int(LongitudinalMode.UNIFIED)
-        or not plan.motionIntent.valid
-        or not self.sm.seen['longitudinalPlan'] or not self.sm.all_checks(['longitudinalPlan'])):
-      return False
-    # The claim and its source epoch must come from the same healthy main
-    # plan. A repeated publication cannot renew an expired model observation.
-    now_ns = time.monotonic_ns()
-    plan_ns, model_ns = self.sm.logMonoTime['longitudinalPlan'], plan.modelMonoTime
-    return (0 < model_ns <= plan_ns <= now_ns and now_ns - plan_ns <= PLAN_LEASE_NS
-            and now_ns - model_ns <= MODEL_LEASE_NS)
 
   def update_events(self, CS):
     """Compute onroadEvents from carState"""
@@ -551,8 +535,6 @@ class SelfdriveD(CruiseHelper):
         self.events.add(EventName.radarTempUnavailable)
       elif self.radar_any_error:
         self.events.add(EventName.radarFault)
-      if self.radar_risk_unresolved() and EventName.radarTempUnavailable not in self.events.names:
-        self.events.add(EventName.radarTempUnavailable)
     if CS.canTimeout:
       self.events.add(EventName.canBusMissing)
     elif not CS.canValid:

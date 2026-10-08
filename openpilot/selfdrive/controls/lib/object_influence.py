@@ -93,8 +93,6 @@ def plan_object_influences(radar_state, *, active_identities, now_ns, permitted,
       or not accel_min < 0.0 < accel_max or not accel_min <= target_accel <= accel_max):
     return []
   radar = _reader(radar_state)
-  if fusion_admitted and _read(radar, 'fusionDegraded', False):
-    return []
   raw_fusion = _read(radar, 'fusionActive', False)
   if raw_fusion and not fusion_admitted:
     leads = (_read(radar, 'visionLeadOne'), _read(radar, 'visionLeadTwo'))
