@@ -18,7 +18,8 @@ from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan
 from openpilot.selfdrive.controls.lib.lead_qualification import MAX_CONTROL_OBJECTS
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_STOP_DISTANCE, CRASH_DISTANCE, MODEL_V_REF, MPC_INVALID_INPUT, MPC_OCCUPANCY_UNSATISFIED, N,
-  OCCUPANCY_POSITION_BUFFER, OCCUPANCY_POSITION_REINTEGRATION_LIMIT, QP_FEASIBILITY_TOL, REFERENCE_BOUND, REST_STATE_TOL,
+  OCCUPANCY_ACCELERATION_REINTEGRATION_LIMIT, OCCUPANCY_POSITION_BUFFER, OCCUPANCY_POSITION_REINTEGRATION_LIMIT,
+  OCCUPANCY_VELOCITY_REINTEGRATION_LIMIT, QP_FEASIBILITY_TOL, REFERENCE_BOUND, REST_STATE_TOL,
   RISK_STOP_DISTANCE, STOP_DISTANCE, T_IDXS,
   LongitudinalMpc, LongitudinalPlanSource, MpcReference,
 )
@@ -1047,7 +1048,8 @@ def test_new_failure_clears_previously_active_constraint_tokens():
 
 
 @pytest.mark.parametrize('with_rest', [False, True])
-def test_nanometer_position_reintegration_preserves_native_jerk_and_all_constraints(with_rest):
+@pytest.mark.parametrize('axis', [0, 1, 2])
+def test_bounded_state_reintegration_preserves_native_jerk_and_all_constraints(with_rest, axis):
   speed = 1.0 if with_rest else 10.0
   reference = rest_reference(speed, 6) if with_rest else MpcReference(20.0)
   crossing = object_lead(distance=6.0 if with_rest else 20.0, ego_speed=speed,
@@ -1057,21 +1059,26 @@ def test_nanometer_position_reintegration_preserves_native_jerk_and_all_constrai
   planner = solve(state, speed=speed, reference=reference)
   native = planner.solver
 
-  class PositionNoise(NativeProblemRecorder):
+  budget = np.array([OCCUPANCY_POSITION_REINTEGRATION_LIMIT, OCCUPANCY_VELOCITY_REINTEGRATION_LIMIT,
+                     OCCUPANCY_ACCELERATION_REINTEGRATION_LIMIT])
+
+  class StateNoise(NativeProblemRecorder):
     def get(self, stage, field):
       result = super().get(stage, field)
       if stage == N and field == 'x':
         result = result.copy()
-        result[0] += 0.5 * OCCUPANCY_POSITION_REINTEGRATION_LIMIT
+        result[axis] += 0.5 * budget[axis]
       return result
 
-  planner.solver = PositionNoise(native)
+  planner.solver = StateNoise(native)
   initial = planner.x0.copy()
   planner.update(state, reference=reference, now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
   assert planner.solution_status == planner.last_solver_status == 0
   diagnostic = planner.diagnostic_occupancy_projection
   assert diagnostic['applied'] and diagnostic['maximumJerkCorrection'] == 0.0
-  assert diagnostic['maximumStateCorrection'][0] <= OCCUPANCY_POSITION_REINTEGRATION_LIMIT
+  assert np.all(diagnostic['maximumStateCorrection'] <= budget)
+  assert np.all(diagnostic['maximumContinuousStateCorrectionBound'] <= budget)
+  assert diagnostic['stateCorrectionUnits'] == ['m', 'm/s', 'm/s^2']
   np.testing.assert_array_equal(planner.x_sol[0], initial)
   np.testing.assert_array_equal(planner.j_solution, [native.get(stage, 'u')[0] for stage in range(N)])
   assert np.max(np.abs(planner.trajectory_dynamics_defects(planner.x_sol, planner.j_solution))) <= QP_FEASIBILITY_TOL
@@ -1081,7 +1088,7 @@ def test_nanometer_position_reintegration_preserves_native_jerk_and_all_constrai
     assert np.max(np.abs(planner.x_sol[6:, 1:])) <= REST_STATE_TOL
 
 
-@pytest.mark.parametrize('kind', ['micrometer_position', 'meter_position', 'velocity', 'cumulative_position'])
+@pytest.mark.parametrize('kind', ['position', 'meter_position', 'velocity', 'acceleration', 'cumulative_position', 'continuous_position'])
 def test_reintegration_never_admits_larger_or_accumulated_native_errors(kind):
   crossing = object_lead(distance=20.0, start=1.2, end=2.6, path='entering', persistent=False)
   state = fused_state(crossing)
@@ -1094,21 +1101,30 @@ def test_reintegration_never_admits_larger_or_accumulated_native_errors(kind):
         result = result.copy()
         if kind == 'cumulative_position':
           result[0] += stage * OCCUPANCY_POSITION_REINTEGRATION_LIMIT / 2.0
+        elif kind == 'continuous_position' and stage > 0:
+          result[0] -= 0.95 * OCCUPANCY_POSITION_REINTEGRATION_LIMIT
+          result[1] -= 0.9 * OCCUPANCY_VELOCITY_REINTEGRATION_LIMIT
         elif stage == N:
           if kind == 'velocity':
-            result[1] += 3.0 * QP_FEASIBILITY_TOL
+            result[1] += 2.0 * OCCUPANCY_VELOCITY_REINTEGRATION_LIMIT
+          elif kind == 'acceleration':
+            result[2] += 2.0 * OCCUPANCY_ACCELERATION_REINTEGRATION_LIMIT
           else:
-            result[0] += 1e-6 if kind == 'micrometer_position' else 1.0
+            result[0] += 2.0 * OCCUPANCY_POSITION_REINTEGRATION_LIMIT if kind == 'position' else 1.0
       return result
 
   planner.solver = NativeNoise(planner.solver)
   planner.update(state, reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
   assert planner.solution_status == MPC_OCCUPANCY_UNSATISFIED
-  expected = ('finite_occupancy_reintegration_budget_exceeded' if kind == 'cumulative_position'
+  expected = ('finite_occupancy_reintegration_budget_exceeded' if kind in ('cumulative_position', 'continuous_position')
               else 'finite_occupancy_dynamics_residual_exceeded')
   assert planner.failure_reason == expected
   assert not planner.diagnostic_occupancy_projection['applied']
   assert not planner.previous_solution_valid and planner.object_influence_identities == ()
+  if kind == 'continuous_position':
+    diagnostic = planner.diagnostic_occupancy_projection
+    assert diagnostic['maximumStateCorrection'][0] < OCCUPANCY_POSITION_REINTEGRATION_LIMIT
+    assert diagnostic['maximumContinuousStateCorrectionBound'][0] > OCCUPANCY_POSITION_REINTEGRATION_LIMIT
 
 
 def test_failed_native_solve_cannot_enter_position_reintegration(monkeypatch):
@@ -1125,6 +1141,38 @@ def test_failed_native_solve_cannot_enter_position_reintegration(monkeypatch):
   monkeypatch.setattr(planner, 'reintegrate_occupancy_precision', forbidden_repair)
   planner.update(fused_state(crossing), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
   assert planner.solution_status == 4 and planner.diagnostic_occupancy_projection is None
+
+
+def test_bounded_reintegration_cannot_relax_a_real_installed_position_row():
+  planner = LongitudinalMpc()
+  planner.set_cur_state(0.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+  cost_weights, constraint_weights = planner._cost_weights.copy(), planner._constraint_cost_weights.copy()
+  cost_weights[0], constraint_weights[-1] = 0.0, 0.0
+  planner.set_cost_weights(cost_weights, constraint_weights)
+  lead = object_lead(distance=CRASH_DISTANCE+OCCUPANCY_POSITION_BUFFER, speed=0.0, ego_speed=0.0, persistent=False)
+  native = planner.solver
+
+  class SmallUnsafeJerk(NativeProblemRecorder):
+    def get(self, stage, field):
+      result = super().get(stage, field)
+      if field == 'u':
+        result = result.copy()
+        # All state defects/corrections stay inside the numerical budgets,
+        # but forward creep breaches this problem's actual zero-position row.
+        result[0] += 5e-8
+      return result
+
+  planner.solver = SmallUnsafeJerk(native)
+  planner.update(fused_state(lead), reference=MpcReference(0.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.diagnostic_last_solver_return == 0
+  assert planner.solution_status == MPC_OCCUPANCY_UNSATISFIED
+  assert planner.failure_reason == 'finite_occupancy_reintegration_constraints_violated'
+  diagnostic = planner.diagnostic_occupancy_projection
+  assert np.all(np.array(diagnostic['maximumContinuousStateCorrectionBound']) <= diagnostic['maximumStateCorrectionBudget'])
+  assert diagnostic['maximumCorrectedConstraintViolation'] > QP_FEASIBILITY_TOL
+  assert not diagnostic['applied'] and not planner.previous_solution_valid
+  assert planner.object_influence_identities == ()
 
 
 def test_valid_edge_caution_has_no_mpc_obstacle_or_fcw_authority():
@@ -1179,7 +1227,7 @@ def test_mild_negative_radar_velocity_keeps_approaching_geometry():
   (4.188114166259766, -0.5062192678451538, 17.479167938232422, -0.0602441169321537, -2.5708842277526855,
    0.7778034210205078, 49068416, 17.26700520236193, -0.18627953748592974, 13.676217081056151, True),
   (4.152256011962891, -0.5448019504547119, 17.479167938232422, -0.0602441169321537, -2.5708842277526855,
-   0.7778034210205078, 110202583, 16.9960673302231, -0.3422777626409075, 10.61000930564217, False),
+   0.7778034210205078, 110202583, 16.9960673302231, -0.3422777626409075, 10.61000930564217, True),
   (1.0514822006225586, -0.18802042305469513, 5.570803165435791, -0.08574940264225006, -0.7474237680435181,
    0.10351847112178802, 93279354, 5.460660318684282, -0.15524186349386138, 3.509812642972538, True),
   (0.9412540197372437, -0.5520215630531311, 5.309693336486816, -0.12712086737155914, -0.5738447904586792,
@@ -1194,8 +1242,9 @@ def test_recorded_small_negative_motion_preserves_inputs_and_enforces_native_acc
   from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import sample_reference_acceleration
   # a85d0e7 / route 8a samples 0,1,2,3,10,11. This checks the explicit motion
   # hypothesis and requested plan, not the object's measured future behavior.
-  # Sample 1 repeatedly exceeds the unchanged native-reintegration budget;
-  # correct prediction alone cannot turn that rejected iterate into a plan.
+  # Sample 1 used to exceed the 10 nm / 1 nm/s repair admission despite a
+  # successful native solve. Its unchanged jerk must now pass bounded state
+  # reintegration AND all original final constraints and physical clearances.
   lead = object_lead(distance=distance, speed=lead_speed, ego_speed=speed, acceleration=lead_acceleration,
                      start=start, end=10.0, path='entering', persistent=False)
   recorded = deepcopy(vars(lead))

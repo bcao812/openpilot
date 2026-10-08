@@ -82,10 +82,13 @@ REST_STATE_TOL = 1e-3
 # Keep numerical constraint residuals separate from the existing geometric
 # clearance. The exact post-solve check still requires CRASH_DISTANCE.
 OCCUPANCY_POSITION_BUFFER = 1e-3
-# Admission for re-integrating unchanged native jerk, not a final constraint
-# tolerance: at most 10 nm per position defect AND cumulative position change.
-# This is 100,000 times smaller than the separate 1 mm geometry buffer.
-OCCUPANCY_POSITION_REINTEGRATION_LIMIT = 1e-8
+# Unit-specific admission for re-integrating unchanged native jerk, not final
+# constraint tolerances. These bound each defect, cumulative node corrections,
+# AND every point between nodes. The 0.1 mm position budget is one tenth of the
+# separate 1 mm geometry buffer; final physical clearance is still checked.
+OCCUPANCY_POSITION_REINTEGRATION_LIMIT = 1e-4  # m
+OCCUPANCY_VELOCITY_REINTEGRATION_LIMIT = 1e-5  # m/s
+OCCUPANCY_ACCELERATION_REINTEGRATION_LIMIT = 1e-6  # m/s^2
 # Only a separately proven, fresh near-term physical conflict can retain
 # mitigation authority through a solver failure. This is not an FCW horizon.
 FINITE_RISK_HORIZON = 1.0
@@ -1185,12 +1188,13 @@ class LongitudinalMpc:
     return ''
 
   def reintegrate_occupancy_precision(self):
-    """Reconcile tiny native position defects with unchanged control and x0.
+    """Reconcile bounded native state defects with unchanged control and x0.
 
     A successful native solve is required. No state is clipped and jerk never
     changes. The candidate must satisfy every installed box/general row plus
-    the original 1e-9 dynamics and exact occupancy-geometry checks. Larger
-    residuals, and all failed native solves, remain explicit failures.
+    the original 1e-9 dynamics and exact occupancy-geometry checks. Independent
+    position/velocity/acceleration budgets bound the complete continuous
+    correction; larger residuals and failed solves remain explicit failures.
     """
     if not any(self._occupancy_bounds):
       return ''
@@ -1201,9 +1205,11 @@ class LongitudinalMpc:
     maximum_defect = np.maximum(np.max(np.abs(defects), axis=0), np.abs(raw_states[0] - self.x0))
     if np.max(maximum_defect) <= QP_FEASIBILITY_TOL:
       return ''
-    budget = np.array([OCCUPANCY_POSITION_REINTEGRATION_LIMIT, QP_FEASIBILITY_TOL, QP_FEASIBILITY_TOL])
+    budget = np.array([OCCUPANCY_POSITION_REINTEGRATION_LIMIT, OCCUPANCY_VELOCITY_REINTEGRATION_LIMIT,
+                       OCCUPANCY_ACCELERATION_REINTEGRATION_LIMIT])
     diagnostic = {'applied': False, 'maximumNativeDynamicsDefect': maximum_defect.tolist(),
-                  'maximumStateCorrectionBudget': budget.tolist(), 'maximumJerkCorrection': 0.0}
+                  'maximumStateCorrectionBudget': budget.tolist(), 'maximumJerkCorrection': 0.0,
+                  'stateCorrectionUnits': ['m', 'm/s', 'm/s^2']}
     self.diagnostic_occupancy_projection = diagnostic
     if not np.all(np.isfinite(maximum_defect)) or np.any(maximum_defect > budget):
       return 'finite_occupancy_dynamics_residual_exceeded'
@@ -1214,6 +1220,20 @@ class LongitudinalMpc:
     correction = np.max(np.abs(states - raw_states), axis=0)
     diagnostic['maximumStateCorrection'] = correction.tolist()
     if not np.all(np.isfinite(states)) or np.any(correction > budget):
+      return 'finite_occupancy_reintegration_budget_exceeded'
+    # The corrected and raw segments use identical jerk. Their state
+    # difference is therefore exactly quadratic/linear/constant in time.
+    # Bound the complete interval, not just its nodes: a tiny velocity or
+    # acceleration correction must not hide larger between-node displacement.
+    durations = np.diff(T_IDXS)
+    delta = np.abs(states[:-1] - raw_states[:-1])
+    continuous_correction = np.maximum(correction, [
+      np.max(delta[:, 0] + delta[:, 1] * durations + 0.5 * delta[:, 2] * durations**2),
+      np.max(delta[:, 1] + delta[:, 2] * durations),
+      np.max(delta[:, 2]),
+    ])
+    diagnostic['maximumContinuousStateCorrectionBound'] = continuous_correction.tolist()
+    if np.any(continuous_correction > budget):
       return 'finite_occupancy_reintegration_budget_exceeded'
     lower, upper = self.diagnostic_reference_bounds
     violation = float(max(0.0, np.max(lower[1:] - states[1:, 1:]), np.max(states[1:, 1:] - upper[1:])))
