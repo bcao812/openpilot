@@ -1131,8 +1131,8 @@ def test_actual_publisher_contract_and_scheduler_identity(monkeypatch, unified, 
     published_parents.append((parent_plan_mono_time, legacy_acceleration))
 
   monkeypatch.setattr(planner, 'publish_longitudinal_plan_sp', publish_sp)
-  state = replay.ReplayState({'radarState': Snapshot(leadOne=Snapshot(present=False))})
-  state.valid = {'radarState': input_valid}
+  state = replay.ReplayState({'radarState': Snapshot(leadOne=Snapshot(present=False)), 'carState': Snapshot(standstill=False)})
+  state.valid['radarState'] = input_valid
   state.logMonoTime = {'modelV2': 1_000_000_000}
   publication = replay.publish_plan(planner, state, 1_020_000_000)
   assert publication.logMonoTime == 1_020_000_000
