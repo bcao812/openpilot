@@ -153,7 +153,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       self.assertAlmostEqual(marker.x, expected[0], places=3)
       self.assertAlmostEqual(marker.y, expected[1], places=3)
       self.assertGreater(draw.call_args.args[2].x, marker.x + radius)
-      self.assertEqual((color.r, color.g, color.b), (255, 215, 0))
+      self.assertEqual((color.r, color.g, color.b), (0, 255, 0))
       backgrounds.assert_not_called()
       lines.assert_not_called()
       original_x = draw.call_args_list[0].args[2].x

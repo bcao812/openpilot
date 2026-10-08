@@ -98,12 +98,12 @@ class TestControlInfluenceRendering(HeadlessUITestCase):
       motion.objectInfluences[0].version = 1
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       unaccepted = circles.call_args.args[-1]
-      self.assertEqual((unaccepted.r, unaccepted.g, unaccepted.b), (255, 215, 0))
+      self.assertEqual((unaccepted.r, unaccepted.g, unaccepted.b), (0, 255, 0))
       motion.objectInfluences[0].version = 2
       sm['carState'].gasPressed = True
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       reset = circles.call_args.args[-1]
-      self.assertEqual((reset.r, reset.g, reset.b), (255, 215, 0))
+      self.assertEqual((reset.r, reset.g, reset.b), (0, 255, 0))
       self.assertEqual(project.call_count, 1)
 
   def test_native_physical_mitigation_receipt_only_colors_the_adopted_target(self):

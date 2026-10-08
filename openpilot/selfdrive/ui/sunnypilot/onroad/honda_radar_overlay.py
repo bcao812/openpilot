@@ -86,7 +86,7 @@ class HondaRadarOverlay:
     # Cached layout never caches validity or opacity.
     influences = accepted_influences(sm, now)
     for point, marker, text_position in self.labels:
-      rgb = influence_rgb(radar_influence_strength(point, influences)) or (255, 215, 0)
+      rgb = influence_rgb(radar_influence_strength(point, influences)) or (0, 255, 0)
       color = rl.Color(*rgb, 255 if frame_ns - point.time_ns <= 80_000_000 else 140)
       rl.draw_circle_v(marker, MARKER_RADIUS, color)
       rl.draw_text_ex(self.font, point.text, text_position, LABEL_FONT_SIZE, 0, color)
