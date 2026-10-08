@@ -1189,7 +1189,19 @@ def test_rest_postprocessing_cannot_publish_a_trajectory_that_breaks_the_crossin
   monkeypatch.setattr(planner, 'check_effective_rest_goal', unsafe_postprocessing)
   planner.update(fused_state(crossing), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
   assert planner.solution_status == MPC_OCCUPANCY_UNSATISFIED
-  assert planner.failure_reason == 'finite_occupancy_position_bound_violated'
+  # The complete installed-row check now runs before the geometric bound
+  # check. This is still the same 0.85 s position violation, not a solve fault.
+  assert planner.failure_reason == 'finite_occupancy_reintegration_constraints_violated'
+  assert planner.diagnostic_last_solver_return == 0
+  diagnostic = planner.diagnostic_occupancy_projection
+  row, = diagnostic['auxiliaryConstraintTolerances']
+  assert (row['stage'], row['row'], row['role'], row['unit']) == (3, 1, 'position_m', 'm')
+  expected_violation = 10.0 * crossing.evidence.conflictEnd - (crossing.dRel - CRASH_DISTANCE - OCCUPANCY_POSITION_BUFFER)
+  assert row['rawUpperViolation'] == pytest.approx(expected_violation, abs=1e-12, rel=0.0)
+  assert row['upperTolerance'] == min(OCCUPANCY_POSITION_REINTEGRATION_LIMIT, OCCUPANCY_POSITION_BUFFER / 1000.0)
+  assert row['rawUpperViolation'] > row['upperTolerance']
+  assert diagnostic['maximumCorrectedConstraintViolation'] == row['rawUpperViolation']
+  assert crossing.dRel - 10.0 * crossing.evidence.conflictEnd < CRASH_DISTANCE
   assert not planner.previous_solution_valid
 
 
