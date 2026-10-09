@@ -8,6 +8,7 @@ from openpilot.selfdrive.ui.onroad.alert_renderer import AlertRenderer
 from openpilot.selfdrive.ui.onroad.driver_state import DriverStateRenderer
 from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
+from openpilot.selfdrive.ui.onroad.camera_projection import CameraIdentity, get_overlay_projection
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_overlay import HondaRadarOverlay
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import gui_app
@@ -47,10 +48,11 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     self._set_placeholder_color(BORDER_COLORS[UIStatus.DISENGAGED])
 
     self.device_camera: DeviceCameraConfig | None = None
+    self._camera_identity: CameraIdentity | None = None
     self.view_from_calib = view_frame_from_device_frame.copy()
     self.view_from_wide_calib = view_frame_from_device_frame.copy()
 
-    self._matrix_cache_key = (0, 0.0, 0.0, stream_type)
+    self._matrix_cache_key = None
     self._cached_matrix: np.ndarray | None = None
     self._content_rect = rl.Rectangle()
 
@@ -158,10 +160,14 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
       self.switch_stream(target)
 
   def _update_calibration(self):
-    # Update device camera if not already set
+    # Camera identity may arrive after the first frame or initially report unknown.
     sm = ui_state.sm
-    if not self.device_camera and sm.seen['narrowRoadCameraState'] and sm.seen['deviceState']:
-      self.device_camera = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['narrowRoadCameraState'].sensor))]
+    if sm.seen['narrowRoadCameraState'] and sm.seen['deviceState']:
+      wide_sensor = str(sm['wideRoadCameraState'].sensor) if sm.seen['wideRoadCameraState'] else None
+      camera_identity = (str(sm['deviceState'].deviceType), str(sm['narrowRoadCameraState'].sensor), wide_sensor)
+      if camera_identity != self._camera_identity:
+        self._camera_identity = camera_identity
+        self.device_camera = DEVICE_CAMERAS.get(camera_identity[:2])
 
     # Check if camera calibration data is available and valid
     if not (sm.updated["extrinsicsCalibration"] and sm.valid['extrinsicsCalibration']):
@@ -181,9 +187,17 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
       self.view_from_wide_calib = view_frame_from_device_frame @ wide_from_device @ device_from_calib
 
   def _calc_frame_matrix(self, rect: rl.Rectangle) -> np.ndarray:
+    device_camera = self.device_camera or DEFAULT_DEVICE_CAMERA
+    is_wide_camera = self.stream_type == WIDE_CAM
+    camera_config = device_camera.wide_road if is_wide_camera else device_camera.narrow_road
+
     # Check if we can use cached matrix
     cache_key = (
       ui_state.sm.recv_frame['extrinsicsCalibration'],
+      self._camera_identity,
+      camera_config,
+      self._content_rect.x,
+      self._content_rect.y,
       self._content_rect.width,
       self._content_rect.height,
       self.stream_type
@@ -192,9 +206,7 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
       return self._cached_matrix
 
     # Get camera configuration
-    device_camera = self.device_camera or DEFAULT_DEVICE_CAMERA
-    is_wide_camera = self.stream_type == WIDE_CAM
-    intrinsic = device_camera.wide_road.intrinsics if is_wide_camera else device_camera.narrow_road.intrinsics
+    intrinsic = camera_config.intrinsics
     calibration = self.view_from_wide_calib if is_wide_camera else self.view_from_calib
     zoom = 2.0 if is_wide_camera else 1.1
 
@@ -238,7 +250,8 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
       [0.0, zoom, (h / 2 + y - y_offset) - (cy * zoom)],
       [0.0, 0.0, 1.0]
     ])
-    self.model_renderer.set_transform(video_transform @ calib_transform)
+    overlay_projection = get_overlay_projection(calib_transform, self._camera_identity, is_wide_camera, camera_config.size)
+    self.model_renderer.set_transform(video_transform @ overlay_projection)
 
     return self._cached_matrix
 
