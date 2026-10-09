@@ -432,6 +432,19 @@ class LongitudinalMpc:
     self.diagnostic_last_obstacle_summary = None
     self.diagnostic_obstacle_failures = 0
     self.diagnostic_occupancy_refinement = None
+    # Failure logging survives solver resets and is independent of opt-in traces.
+    self._failure_log_key = None
+    self._failure_log_time = 0.0
+    self._failure_log_suppressed = 0
+    self.diagnostic_failure_log_errors = 0
+    self._diagnostic_input_times = {}
+    self._diagnostic_radar = None
+    self._diagnostic_rejected_lead = None
+    self._diagnostic_now_ns = None
+    self._diagnostic_reference_ns = None
+    self._diagnostic_native_return = None
+    self._diagnostic_problem_installed = False
+    self._failure_diagnosed = False
     # UNIFIED dates its reference with the consumer clock. Keep the clock high
     # water across solver resets; reset buffers must not admit a replayed epoch.
     self._reference_clock_ns = 0
@@ -969,6 +982,7 @@ class LongitudinalMpc:
                    getattr(evidence, 'physicalConflictEnd', 0.0), getattr(evidence, 'followGeometryMonoTime', 0),
                    getattr(evidence, 'conflictSupportVersion', 0), getattr(evidence, 'conflictSupportedEnd', 0.0))
       if key in signatures and signatures[key] != signature:
+        self._diagnostic_rejected_lead = lead
         raise ValueError('Inconsistent fusion identity views')
       signatures[key] = signature
     candidates = control_leads(radarstate)
@@ -979,6 +993,7 @@ class LongitudinalMpc:
     result = []
     next_follow_geometry = {}
     for lead in candidates:
+      self._diagnostic_rejected_lead = lead
       if not np.all(np.isfinite([lead.dRel, lead.yRel, lead.vRel, lead.vLead, lead.aLeadK, lead.aLeadTau])):
         raise ValueError('Nonfinite fusion object')
       evidence = lead.evidence
@@ -1056,6 +1071,7 @@ class LongitudinalMpc:
           next_follow_geometry[identity] = (*measured, previous[3], consumed_ns, previous[5], previous[6])
       result.append(projection)
     self._fusion_follow_geometry = next_follow_geometry
+    self._diagnostic_rejected_lead = None
     return tuple(result)
 
   @classmethod
@@ -2656,6 +2672,14 @@ class LongitudinalMpc:
       self.failure_reason = ''
 
   def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None, now_ns=None, reference_ns=None):
+    if self.solution_status == 0:
+      self._failure_log_key = None
+    self._failure_diagnosed = False
+    self._diagnostic_native_return = None
+    self._diagnostic_problem_installed = False
+    self._diagnostic_rejected_lead = None
+    self._diagnostic_now_ns = now_ns
+    self._diagnostic_reference_ns = reference_ns
     self._occupancy_limit_cache = {}
     self.continuation_problem = None
     self.params[:, COMFORT_NORMALIZER:RISK_NORMALIZER+1] = 0.0
@@ -2664,6 +2688,7 @@ class LongitudinalMpc:
     # UI attribution observe the exact incoming message; they never edit it.
     if hasattr(radarstate, 'as_reader'):
       radarstate = radarstate.as_reader()
+    self._diagnostic_radar = radarstate
     self.diagnostic_last_obstacle_summary = None
     self.source_object_identity = None
     self.fcw_object_identity = None
@@ -2693,7 +2718,7 @@ class LongitudinalMpc:
     self.solve_time = 0.0
 
     if not np.all(np.isfinite(self.x0)):
-      self.fail(MPC_INVALID_INPUT)
+      self.fail(MPC_INVALID_INPUT, stage='initial_state', detail='Nonfinite initial state')
       return
     fusion_active = bool(getattr(radarstate, 'fusionActive', False))
     if fusion_active != getattr(self, '_was_fusion_active', False):
@@ -2717,8 +2742,8 @@ class LongitudinalMpc:
           projections = self.fusion_lead_projections(radarstate, now_ns=now_ns, reference_ns=reference_ns)
           projections = self.select_occupancy_branches(projections, reference)
         self._fusion_projections = projections
-      except (AttributeError, TypeError, ValueError, FloatingPointError, OverflowError):
-        self.fail(MPC_INVALID_INPUT)
+      except (AttributeError, TypeError, ValueError, FloatingPointError, OverflowError) as error:
+        self.fail(MPC_INVALID_INPUT, stage='fusion_projection', detail=error)
         return
       present_leads = tuple(projection.lead for projection in projections if np.any(projection.occupied))
       # The scalar recovery proof freezes a continuously occupied forward
@@ -2762,7 +2787,8 @@ class LongitudinalMpc:
     else:
       for lead in (radarstate.leadOne, radarstate.leadTwo):
         if lead.present and not np.all(np.isfinite([lead.dRel, lead.vLead, lead.aLeadK, lead.aLeadTau])):
-          self.fail(MPC_INVALID_INPUT)
+          self._diagnostic_rejected_lead = lead
+          self.fail(MPC_INVALID_INPUT, stage='legacy_lead', detail='Nonfinite lead')
           return
       present_leads = tuple(lead for lead in (radarstate.leadOne, radarstate.leadTwo) if lead.present)
     if not fusion_active and present_leads and all(lead.vLead >= 0.0 for lead in present_leads):
@@ -2793,8 +2819,8 @@ class LongitudinalMpc:
       try:
         with np.errstate(over='ignore', invalid='ignore'):
           reference_obstacles, reference_sources, accel_min, accel_max = self.reference_obstacles(reference, t_follow)
-      except (TypeError, ValueError, FloatingPointError):
-        self.fail(MPC_INVALID_INPUT)
+      except (TypeError, ValueError, FloatingPointError) as error:
+        self.fail(MPC_INVALID_INPUT, stage='reference_obstacles', detail=error)
         return
       ordinary_continuation = (
         reference.cruise_speed is None and reference.typed_model is None and not present_leads
@@ -2851,8 +2877,9 @@ class LongitudinalMpc:
       )
       self.set_reference_problem(reference, x_obstacles, sources, accel_min, t_follow, lead_slots=lead_slots,
                                  unknown_tail_masks=np.column_stack(unknown_tail_masks) if unknown_tail_masks is not None else None)
-    except (TypeError, ValueError, FloatingPointError):
-      self.fail(MPC_INVALID_INPUT)
+      self._diagnostic_problem_installed = True
+    except (TypeError, ValueError, FloatingPointError) as error:
+      self.fail(MPC_INVALID_INPUT, stage='problem_setup', detail=error)
       return
     if fusion_active:
       self._finite_risk_candidates = self.prove_finite_physical_risk(radarstate, now_ns=now_ns, reference_ns=reference_ns)
@@ -2920,7 +2947,7 @@ class LongitudinalMpc:
       failure = validate() if self.solution_status == 0 else self.failure_reason
 
     if failure and self.solution_status == 0:
-      self.fail(MPC_OCCUPANCY_UNSATISFIED)
+      self.fail(MPC_OCCUPANCY_UNSATISFIED, stage='occupancy_postcheck', detail=failure)
       self.failure_reason = failure
     if refinement is not None:
       refinement.update(finalStatus=int(self.solution_status), finalFailure=self.failure_reason,
@@ -2957,7 +2984,161 @@ class LongitudinalMpc:
         sourceRule='first_minimum_by_bounded_object_order;extra_object_enum_is_lead0',
       )
 
-  def fail(self, status):
+  @staticmethod
+  def _failure_scalar(value):
+    if value is None or isinstance(value, bool):
+      return value
+    if isinstance(value, Integral):
+      return int(value)
+    if isinstance(value, Real):
+      return float(value) if np.isfinite(value) else None
+    return value[:160] if isinstance(value, str) else None
+
+  def set_failure_context(self, sm, now_ns):
+    """Copy publication identities at consumption, without serializing inputs."""
+    self._diagnostic_input_times = {}
+    self._diagnostic_radar = None
+    self._diagnostic_rejected_lead = None
+    self._diagnostic_now_ns = None
+    self._diagnostic_reference_ns = None
+    self._diagnostic_native_return = None
+    self._diagnostic_problem_installed = False
+    self._failure_diagnosed = False
+    try:
+      times = sm.logMonoTime
+      self._diagnostic_input_times = dict(zip(
+        ('consumerMonoTime', 'carStateMonoTime', 'modelMonoTime', 'radarStateMonoTime'),
+        (int(value) if isinstance(value, Integral) and not isinstance(value, bool) and 0 < value < (1 << 64) else None
+         for value in (now_ns, times.get('carState'), times.get('modelV2'), times.get('radarState'))), strict=True))
+      self._diagnostic_radar = sm['radarState']
+    except Exception:
+      self.diagnostic_failure_log_errors += 1
+
+  def finish_failure_context(self, completed):
+    try:
+      if completed and self.solution_status == 0:
+        self._failure_log_key = None
+      elif completed and not self._failure_diagnosed:
+        # Some model/rest acceptance failures do not call fail()/reset().
+        self._log_failure(self.solution_status, 'planner_result', self.failure_reason)
+    except Exception:
+      self.diagnostic_failure_log_errors += 1
+
+  def _failure_native_statistics(self):
+    result = {'known': False, 'qpResidualsKnown': False, 'reason': 'no_current_native_return'}
+    if self._diagnostic_native_return is None:
+      return result
+    try:
+      # SQP_RTI statistics rows are iteration, QP status, QP iterations, then
+      # four optional QP residuals. get_residuals() recomputes RTI residuals;
+      # never call it from logging or request an unsupported native getter.
+      stats = self.solver.get_stats('statistics')
+      if not isinstance(stats, np.ndarray) or stats.ndim != 2 or stats.shape[0] not in (3, 7) or not 0 < stats.shape[1] <= 32:
+        result['reason'] = 'unknown_statistics_layout'
+        return result
+      values = stats[:3, -1]
+      if not np.all(np.isfinite(values)) or np.any(values != np.trunc(values)):
+        result['reason'] = 'invalid_statistics'
+        return result
+      result.update(known=True, reason='', iteration=int(values[0]), qpStatus=int(values[1]), qpIterations=int(values[2]))
+      if stats.shape[0] == 7:
+        result.update(qpResidualsKnown=bool(np.all(np.isfinite(stats[3:7, -1]))),
+                      qpResiduals=[self._failure_scalar(value) for value in stats[3:7, -1]])
+    except Exception as error:
+      result['reason'] = 'statistics_unavailable'
+      result['exception'] = type(error).__name__[:80]
+    return result
+
+  def _failure_radar_summary(self):
+    radar = self._diagnostic_radar
+    if radar is None:
+      return {'known': False}
+    objects = getattr(radar, 'radarObjects', ())
+    selected = []
+    # Prefer the rejected object or the finite objects that installed hard
+    # constraints; the display slots alone need not show either of them.
+    candidates = [self._diagnostic_rejected_lead]
+    candidates.extend(projection.lead for projection in self._fusion_projections[:MAX_CONTROL_OBJECTS]
+                      if not projection.persistent)
+    candidates.extend(objects[index] for index in range(min(len(objects), 4)))
+    candidates.extend((radar.leadOne, radar.leadTwo))
+    for lead in candidates:
+      if lead is None or not getattr(lead, 'present', False) or any(lead is previous for previous in selected):
+        continue
+      selected.append(lead)
+      if len(selected) == 4:
+        break
+    summaries = []
+    for lead in selected:
+      summary = {field: self._failure_scalar(getattr(lead, field, None)) for field in ('dRel', 'vRel', 'vLead', 'aLeadK')}
+      evidence = getattr(lead, 'evidence', None)
+      summary.update({field: self._failure_scalar(getattr(evidence, field, None)) for field in (
+        'sessionId', 'trackId', 'generation', 'modelMonoTime', 'estimateMonoTime', 'positionMonoTime', 'velocityMonoTime',
+        'conflictStart', 'conflictEnd', 'conflictSupportedEnd', 'brakeQualified', 'coasting')})
+      summary.update(source=str(getattr(evidence, 'source', 'unknown'))[:40],
+                     pathState=str(getattr(evidence, 'pathState', 'unknown'))[:40],
+                     rejected=lead is self._diagnostic_rejected_lead)
+      summaries.append(summary)
+    return {'known': True, 'fusionActive': bool(getattr(radar, 'fusionActive', False)),
+            'modelMonoTime': self._failure_scalar(getattr(radar, 'mdMonoTime', None)),
+            'objectCount': len(objects), 'sampleLimit': 4, 'objects': summaries}
+
+  def _failure_constraint_summary(self):
+    result = {'problemInstalled': self._diagnostic_problem_installed, 'restGoalState': self.rest_goal_state,
+              'restGoalNode': self._failure_scalar(getattr(self.rest_goal, 'native_node', None)),
+              'effectiveRestNode': self._failure_scalar(self.effective_rest_node)}
+    if not self._diagnostic_problem_installed:
+      return result  # A partly constructed problem must not describe old rows as current.
+    stages = [stage for stage, bound in enumerate(self._occupancy_bounds) if bound is not None]
+    sampled_stages = sorted({0, *stages[:2]})
+    result.update(occupancyPhysics=bool(self._native_occupancy_bounds_active), occupancyStages=stages,
+                  parameterRanges=[[self._failure_scalar(np.min(self.params[:, column])),
+                                    self._failure_scalar(np.max(self.params[:, column]))] for column in range(3)],
+                  # These are the exact copied native C/D/lg/ug buffers, limited
+                  # to stage zero and the first two finite-position stages.
+                  hardRows=[{'stage': stage,
+                             'C': [[self._failure_scalar(value) for value in row] for row in self._rest_constraint_buffers[stage][0]],
+                             'D': [[self._failure_scalar(value) for value in row] for row in self._rest_constraint_buffers[stage][1]],
+                             'lower': [self._failure_scalar(value) for value in self._rest_constraint_buffers[stage][2]],
+                             'upper': [self._failure_scalar(value) for value in self._rest_constraint_buffers[stage][3]]}
+                            for stage in sampled_stages])
+    if self.diagnostic_reference_bounds is not None:
+      result['stateBoundRanges'] = [
+        [[self._failure_scalar(value) for value in summary]
+         for summary in (values[1:].min(axis=0), values[1:].max(axis=0))] for values in self.diagnostic_reference_bounds]
+    return result
+
+  def _log_failure(self, status, stage, detail=''):
+    """Best-effort, bounded evidence from the failed problem, before reset."""
+    try:
+      self._failure_diagnosed = True
+      reason = str(detail)[:192]
+      exception = type(detail).__name__[:80] if isinstance(detail, Exception) else ''
+      key = (int(status), stage, exception, reason)
+      timestamp = time.monotonic()
+      if key == self._failure_log_key and timestamp < self._failure_log_time + 5.0:
+        self._failure_log_suppressed += 1
+        return
+      suppressed = self._failure_log_suppressed
+      # Advance before payload/getter/logger work, including when it fails.
+      self._failure_log_key, self._failure_log_time, self._failure_log_suppressed = key, timestamp, 0
+      payload = dict(self._diagnostic_input_times, status=int(status), stage=stage, reason=reason, exception=exception,
+                     mpcConsumerMonoTime=self._failure_scalar(self._diagnostic_now_ns),
+                     referenceMonoTime=self._failure_scalar(self._diagnostic_reference_ns),
+                     nativeReturn=self._diagnostic_native_return, x0=[self._failure_scalar(value) for value in self.x0],
+                     solveTime=self._failure_scalar(self.solve_time), suppressedCount=suppressed)
+      for field, collect in (('radar', self._failure_radar_summary), ('constraints', self._failure_constraint_summary),
+                             ('native', self._failure_native_statistics)):
+        try:
+          payload[field] = collect()
+        except Exception as error:
+          payload[field] = {'known': False, 'exception': type(error).__name__[:80]}
+      cloudlog.event('long_mpc_failure_v1', error=True, **payload)
+    except Exception:
+      self.diagnostic_failure_log_errors += 1
+
+  def fail(self, status, *, stage='unspecified', detail=''):
+    self._log_failure(status, stage, detail)
     continuation_problem = self.continuation_problem if status in (4, MPC_OCCUPANCY_UNSATISFIED) else None
     failed_goal = self.rest_goal
     effective_node = self.effective_rest_node
@@ -2971,7 +3152,10 @@ class LongitudinalMpc:
     timestamp = time.monotonic()
     if timestamp > last_cloudlog_t + 5.0:
       last_cloudlog_t = timestamp
-      cloudlog.warning(f"Long mpc reset, solution_status: {status}")
+      try:
+        cloudlog.warning(f"Long mpc reset, solution_status: {status}")
+      except Exception:
+        self.diagnostic_failure_log_errors += 1
     self.reset()
     self.continuation_problem = continuation_problem
     self.solution_status = status
@@ -3002,6 +3186,7 @@ class LongitudinalMpc:
     self.source = LongitudinalPlanSource.cruise
 
   def run(self):
+    self._diagnostic_native_return = None
     try:
       self.diagnostic_last_x0 = tuple(float(value) for value in self.x0)
       if self.diagnostic_details_enabled:
@@ -3011,7 +3196,7 @@ class LongitudinalMpc:
     except Exception:
       pass
     if not np.all(np.isfinite(self.params)) or not np.all(np.isfinite(self.yref)) or not np.all(np.isfinite(self.x0)):
-      self.fail(MPC_INVALID_INPUT)
+      self.fail(MPC_INVALID_INPUT, stage='pre_solve', detail='Nonfinite parameters, reference or initial state')
       return
     if self._costs_pending:
       # Direct run callers retain the base-cost contract. In normal update,
@@ -3023,27 +3208,30 @@ class LongitudinalMpc:
     self.solver.constraints_set(0, "ubx", self.x0)
 
     solve_started_t = time.monotonic()
+    stage = 'native_solve'
     try:
       self.diagnostic_last_solver_return = None
       self.diagnostic_solve_calls += 1
       self.solution_status = int(self.solver.solve())
       self.diagnostic_last_solver_return = self.solution_status
+      self._diagnostic_native_return = self.solution_status
       self.last_solver_status = self.solution_status
       if self.solution_status != 0:
         self.solve_time = time.monotonic() - solve_started_t
-        self.fail(self.solution_status)
+        self.fail(self.solution_status, stage=stage, detail='Native solver returned failure')
         return
+      stage = 'native_readback'
       self.solve_time = float(self.solver.get_stats('time_tot')[0])
       for i in range(N+1):
         self.x_sol[i] = self.solver.get(i, 'x')
       for i in range(N):
         self.u_sol[i] = self.solver.get(i, 'u')
-    except RuntimeError:
+    except RuntimeError as error:
       self.solve_time = time.monotonic() - solve_started_t
-      self.fail(MPC_SOLVER_ERROR)
+      self.fail(MPC_SOLVER_ERROR, stage=stage, detail=error)
       return
     if not np.all(np.isfinite(self.x_sol)) or not np.all(np.isfinite(self.u_sol)):
-      self.fail(MPC_INVALID_SOLUTION)
+      self.fail(MPC_INVALID_SOLUTION, stage='post_solve', detail='Nonfinite native trajectory')
       return
     self.failure_reason = ''
 

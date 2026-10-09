@@ -629,7 +629,15 @@ class MotionSupervisor:
     release_eligible = intent.release_allowed and not raw_reasons and stopped_phase
     self.release_lead_t = self._confirmation_time(self.release_lead_t, release_eligible, new_input, plan_step, model_step)
     following_moving_lead = self.moving_lead_t >= CREEP_STOP_T - 1e-9
-    creep_stop = self._update_creep(v_ego, a_target, intent.allow_creep and not following_moving_lead, elapsed_ns / 1e9,
+    # The same fresh movement permission which withdraws an unheld rolling
+    # stop also retires its independent creep deadline. A still-negative
+    # target continues to brake; it need not turn positive just to avoid an
+    # added fixed-stop ramp. Raw stops and standstill departure keep their
+    # existing authority, and cached samples cannot withdraw a creep stop.
+    rolling_movement = (new_input and intent.release_allowed and not raw_reasons and not held_stop
+                        and not standstill and v_ego >= STOP_SPEED)
+    creep_stop = self._update_creep(v_ego, a_target, intent.allow_creep and not following_moving_lead and not rolling_movement,
+                                    elapsed_ns / 1e9,
                                     movement_evidence=bool(intent.moving_lead or intent.release_allowed), fresh_input=new_input)
 
     reasons = raw_reasons
@@ -642,9 +650,10 @@ class MotionSupervisor:
     near_standstill = standstill or v_ego < STOP_SPEED
     # An already rolling car may continue a newly accepted moving target
     # after the stop cause disappears; it need not request more speed first.
-    # This cannot start a held car, spend a cached source, or clear the creep
-    # and close-lead reasons retained above. Standstill departure keeps its
-    # separate positive-target and confirmation contract.
+    # A source description alone cannot clear the creep or close-lead reasons
+    # retained above; only explicit rolling movement permission resets creep.
+    # This cannot start a held car or spend a cached source. Standstill
+    # departure keeps its separate positive-target and confirmation contract.
     rolling_continuation = (
       self.phase == MotionPhase.APPROACH and not held_stop and not near_standstill and new_input and not reasons
       and (intent.reference_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)

@@ -17,7 +17,7 @@ from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
 from openpilot.selfdrive.controls.tests.test_radar_consumption import (
-  CONSUMPTION, PUBLICATION, SESSION, coast, native_frame, radar_frame,
+  CONSUMPTION, PUBLICATION, SESSION, coast, measured, native_frame, radar_frame,
 )
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
@@ -127,14 +127,17 @@ def test_only_valid_edge_caution_can_be_ignored_for_another_cars_departure(kind,
     assert has_departing_lead(frame, speed, .3, now_ns=CONSUMPTION, held_identity=(SESSION, 5)) is expected
 
 
-def test_unified_expiry_matches_the_surviving_collection_without_changing_original_bytes():
+@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('publication', [PUBLICATION, CONSUMPTION])
+def test_unified_expiry_matches_the_surviving_collection_without_changing_original_bytes(source, publication):
   primary = formal_lead(now_ns=PUBLICATION, dRel=40.0, vLead=5.5, vLeadK=5.5, vRel=.5,
                         evidence={'trackId': 5})
   outputs = []
-  for add_coast in (False, True):
-    extras = (coast(),) if add_coast else ()
+  for add_expired in (False, True):
+    expired = coast() if source == 'predicted' else measured(source=source)
+    extras = (expired,) if add_expired else ()
     frame = radar_frame(primary, *extras, display=(primary,))
-    state = state_at(frame, speed=5.0)
+    state = state_at(frame, speed=5.0, publication=publication)
     serialized = state['radarState'].to_bytes()
     state['radarState'].clear_write_flag()
     planner = enabled_planner(5.0)
@@ -147,7 +150,8 @@ def test_unified_expiry_matches_the_surviving_collection_without_changing_origin
   np.testing.assert_array_equal(outputs[0][1], outputs[1][1])
 
 
-def test_loss_of_an_already_adopted_hold_target_does_not_release_that_hold():
+@pytest.mark.parametrize('initial_publication', [PUBLICATION, CONSUMPTION])
+def test_loss_of_an_already_adopted_hold_target_does_not_release_that_hold(initial_publication):
   planner = enabled_planner(1.0)
   # This component starts with an established object barrier. Acquisition and
   # actual braking are verified by the rolling owner/CAN pipeline below.
@@ -156,7 +160,7 @@ def test_loss_of_an_already_adopted_hold_target_does_not_release_that_hold():
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
     for elapsed in (0, 100_000_000, 5_000_000_000):
       now = CONSUMPTION + elapsed
-      publication = PUBLICATION if elapsed == 0 else now
+      publication = initial_publication if elapsed == 0 else now
       frame = raw if elapsed == 0 else radar_frame(publication=publication)
       state = state_at(frame, now=now, publication=publication)
       planner.update(state, now_ns=now)

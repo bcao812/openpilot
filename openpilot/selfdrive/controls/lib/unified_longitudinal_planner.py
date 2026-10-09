@@ -9,6 +9,7 @@ from openpilot.common.constants import CV
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
+from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.selfdrive.car.honda_radar_observer_config import ObserverSettings
 from openpilot.selfdrive.controls.lib.cruise_response import (
@@ -19,13 +20,13 @@ from openpilot.selfdrive.controls.lib.drive_helpers import (CLOSE_LEAD_STOP_SPEE
                                                           get_departure_accel_from_plan, should_stop)
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_VERSION
-from openpilot.selfdrive.controls.lib.lead_qualification import control_leads, lead_identity, qualified_lead
+from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MEASUREMENT_AGE_NS, control_leads, lead_identity, qualified_lead
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS,
 )
-from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter, stationary_lead_departure_compatible
+from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter, normalize_standstill_speed, stationary_lead_departure_compatible
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   CONTROL_N_T_IDX, ALLOW_THROTTLE_THRESHOLD, MIN_ALLOW_THROTTLE_SPEED,
   LEAD_BRAKING_MIN_CHANGE_SCALE, CREEP_FOLLOW_MIN_ACCEL, CREEP_FOLLOW_MODEL_MARGIN,
@@ -128,41 +129,63 @@ def cruise_accel_limit(params, speed, steering_angle, e2e_allowed, coast_accel, 
   return maximum
 
 
-def has_departing_lead(radar_state, speed, delay, *, minimum_gap_base=CREEP_FOLLOW_MIN_GAP, now_ns=None, held_identity=None):
+def departing_lead_rejection(radar_state, speed, delay, *, minimum_gap_base=CREEP_FOLLOW_MIN_GAP, now_ns=None,
+                             held_identity=None, allow_unbound_physical=False):
+  """Return the first failed departure gate and its object, or None."""
   if not (math.isfinite(speed) and 0.0 <= speed < STOP_SPEED and math.isfinite(delay)
           and 0.0 <= delay <= 1.0 and radar_state.leadOne.present
           and not isinstance(minimum_gap_base, bool) and math.isfinite(minimum_gap_base)
           and 3.0 <= minimum_gap_base <= CREEP_FOLLOW_MIN_GAP):
-    return False
+    return 'departure_inputs', None
   minimum_gap = minimum_gap_base + speed * (delay + DT_MDL) + speed ** 2 / (2.0 * COMFORT_BRAKE)
   primary_identity = lead_identity(radar_state.leadOne)
-  if (primary_identity is not None or held_identity is not None) and primary_identity != held_identity:
-    return False
+  if held_identity is not None and primary_identity != held_identity:
+    return 'held_identity_mismatch', primary_identity
+  unbound_physical = primary_identity is not None and held_identity is None
+  if unbound_physical and allow_unbound_physical is not True:
+    return 'unbound_identity', primary_identity
   for lead in control_leads(radar_state):
     if not lead.present:
       continue
+    identity = lead_identity(lead)
     values = (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb, lead.yRel)
     if not all(math.isfinite(value) for value in values):
-      return False
-    identity = lead_identity(lead)
+      return 'nonfinite_lead', identity
     evidence = getattr(lead.as_reader() if hasattr(lead, 'as_reader') else lead, 'evidence', None)
     lateral = evidence.pathOffset if getattr(evidence, 'version', 0) == 1 else lead.yRel
     if getattr(evidence, 'version', 0) == 1 and identity != primary_identity:
-      # A distant second vehicle need not depart for the blocking vehicle to
-      # lead us forward. Every independent obstacle still constrains the MPC.
       if qualified_lead(lead, 'caution', 0.0, now_ns=now_ns):
         continue
-      if (not qualified_lead(lead, 'brake', 0.95, now_ns=now_ns)
-          or lead.dRel + min(lead.vRel, 0.0) * CREEP_FINISH_T < minimum_gap):
-        return False
-      continue
-    if (lead.dRel < minimum_gap or not qualified_lead(lead, 'departure', 0.95, now_ns=now_ns)
-        or abs(lateral) > 1.8 or lead.vLead < CREEP_FOLLOW_MIN_LEAD_SPEED
-        or lead.vRel < -CREEP_FOLLOW_MAX_CLOSING_SPEED
-        or lead.vLead + min(lead.aLeadK, 0.0) * CREEP_FINISH_T < STOP_SPEED
-        or abs(lead.vLead - speed - lead.vRel) > CREEP_FOLLOW_MAX_CLOSING_SPEED):
-      return False
-  return True
+      if not unbound_physical:
+        # A known blocking vehicle may depart ahead of another distant car.
+        # With no known barrier, every non-caution object must instead pass
+        # the full departure checks below; a new ID cannot stand in for an
+        # independently observed stationary or occluded obstacle.
+        if not qualified_lead(lead, 'brake', 0.95, now_ns=now_ns):
+          return 'secondary_brake_unqualified', identity
+        if lead.dRel + min(lead.vRel, 0.0) * CREEP_FINISH_T < minimum_gap:
+          return 'secondary_gap', identity
+        continue
+    if lead.dRel < minimum_gap:
+      return 'lead_gap', identity
+    if not qualified_lead(lead, 'departure', 0.95, now_ns=now_ns):
+      return 'lead_departure_unqualified', identity
+    if abs(lateral) > 1.8:
+      return 'lead_path_offset', identity
+    if lead.vLead < CREEP_FOLLOW_MIN_LEAD_SPEED:
+      return 'lead_speed', identity
+    if lead.vRel < -CREEP_FOLLOW_MAX_CLOSING_SPEED:
+      return 'lead_closing', identity
+    if lead.vLead + min(lead.aLeadK, 0.0) * CREEP_FINISH_T < STOP_SPEED:
+      return 'lead_stopping', identity
+    if abs(lead.vLead - speed - lead.vRel) > CREEP_FOLLOW_MAX_CLOSING_SPEED:
+      return 'lead_velocity_inconsistent', identity
+  return None
+
+
+def has_departing_lead(radar_state, speed, delay, *, minimum_gap_base=CREEP_FOLLOW_MIN_GAP, now_ns=None, held_identity=None):
+  return departing_lead_rejection(radar_state, speed, delay, minimum_gap_base=minimum_gap_base,
+                                  now_ns=now_ns, held_identity=held_identity) is None
 
 
 class RadarInputView:
@@ -200,6 +223,8 @@ class UnifiedLongitudinalPlanner:
     self._radar_stop_candidate = None
     self._radar_stop_pending = {}
     self.radar_consumption = RadarConsumption()
+    self._radar_consumed_ns = None
+    self._radar_consumed_view = None
     self.caution_accel_limited = False
     self.caution_object_identities = ()
     self.mitigation_object_evidence = ()
@@ -220,6 +245,8 @@ class UnifiedLongitudinalPlanner:
     self.cold_standby_started = False
     self.standby = False
     self.continuation = PlannerContinuation()
+    self._departure_wait_started_ns = None
+    self._departure_wait_last_log_ns = None
     planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), valid=False)
 
   def invalidate(self, speed, reason, *, preserve_continuation=False):
@@ -418,6 +445,7 @@ class UnifiedLongitudinalPlanner:
       self.radar_settings = ObserverSettings()
 
   def radar_input_state(self, state, now_ns):
+    self._radar_consumed_ns = self._radar_consumed_view = None
     self.refresh_radar_settings(now_ns)
     radar = state['radarState']
     if hasattr(radar, 'as_reader'):
@@ -443,10 +471,87 @@ class UnifiedLongitudinalPlanner:
       if state.valid.get('radarState', False) and state.all_checks(service_list=['radarState']):
         radar = self.radar_consumption.update(
           radar, publication_ns=state.logMonoTime.get('radarState'), now_ns=now_ns,
-          speed=state['carState'].vEgo, retain_losses=not reset,
+          speed=normalize_standstill_speed(state['carState'].vEgo, actual_standstill=state['carState'].standstill),
+          retain_losses=not reset,
         )
+        if (self.radar_consumption.publication_view is not None
+            and self.radar_consumption.publication_ns == state.logMonoTime.get('radarState')):
+          self._radar_consumed_ns, self._radar_consumed_view = now_ns, radar
       return RadarInputView(state, radar)
     return state
+
+  def unbound_radar_departure_rejection(self, state, *, now_ns):
+    """An empty object barrier is not proof of a healthy radar consumer."""
+    radar = state['radarState']
+    publication_ns = state.logMonoTime.get('radarState')
+    primary_identity = lead_identity(radar.leadOne)
+    if (self.fusion_admitted is not True or self._radar_consumed_ns != now_ns
+        or self._radar_consumed_view is not radar or self.radar_consumption.publication_view is None
+        or self.radar_consumption.publication_ns != publication_ns
+        or state.valid.get('radarState') is not True or not state.all_checks(service_list=['radarState'])):
+      return 'radar_consumption_unconfirmed'
+    if (not valid_timestamp(now_ns) or not valid_timestamp(publication_ns)
+        or not 0 <= now_ns - publication_ns <= MAX_MEASUREMENT_AGE_NS
+        or not valid_timestamp(getattr(radar, 'mdMonoTime', None))
+        or not 0 <= now_ns - radar.mdMonoTime <= MAX_MEASUREMENT_AGE_NS
+        or radar.mdMonoTime > publication_ns):
+      return 'radar_publication_stale'
+    if (getattr(radar, 'fusionActive', None) is not True or getattr(radar, 'fusionHealthy', None) is not True
+        or getattr(radar, 'fusionDegraded', None) is not False):
+      return 'radar_producer_unhealthy'
+    if getattr(radar, 'fusionRiskUnresolved', None) is not False:
+      return 'radar_producer_risk'
+    if self.radar_consumption.degraded is not False or self.radar_consumption.lost_identities != ():
+      return 'radar_consumer_loss'
+    if self.radar_risk_unresolved is not False:
+      return 'radar_risk_unknown'
+    if primary_identity is None or primary_identity[0] != getattr(radar, 'fusionSessionId', None):
+      return 'radar_session_mismatch'
+    speed = normalize_standstill_speed(state['carState'].vEgo, actual_standstill=state['carState'].standstill)
+    if state['carState'].standstill is not True or not math.isfinite(speed) or not 0.0 <= speed <= 0.05:
+      return 'ego_not_stationary'
+    return None
+
+  def log_departure_blocked(self, state, *, now_ns, active, release_allowed, output, stage, rejected_identity,
+                            admission_reasons, no_model_risk):
+    """Sparse ordinary log evidence; neither logging nor its failures control."""
+    try:
+      motion = state['controlsState'].motionState
+      controls_ns = state.logMonoTime.get('controlsState')
+      waiting = (active and state['carState'].standstill is True and math.isfinite(output) and output > 0.0
+                 and not release_allowed and motion.enabled and motion.phase in ('hold', 'approach') and motion.resolvedStop
+                 and valid_timestamp(now_ns) and valid_timestamp(controls_ns) and 0 <= now_ns - controls_ns <= 250_000_000)
+      if not waiting:
+        self._departure_wait_started_ns = None
+        return
+      if self._departure_wait_started_ns is None or now_ns < self._departure_wait_started_ns:
+        self._departure_wait_started_ns = now_ns
+      if (now_ns - self._departure_wait_started_ns < 500_000_000
+          or self._departure_wait_last_log_ns is not None and now_ns - self._departure_wait_last_log_ns < 5_000_000_000):
+        return
+      # Advance before constructing or sending: failed log transport must not
+      # create a 20 Hz retry loop or affect any motion decision.
+      self._departure_wait_last_log_ns = now_ns
+      radar, evidence = state['radarState'], self.model_evidence
+      timing = self.planner.reference_timing.pending
+      cloudlog.event(
+        'longitudinal_departure_blocked_v1', version=1, decision_mono_ns=str(now_ns),
+        wait_seconds=(now_ns - self._departure_wait_started_ns) / 1e9,
+        stage=stage, rejected_identity=rejected_identity,
+        input_mono_ns={name: str(state.logMonoTime.get(name)) for name in ('carState', 'modelV2', 'radarState', 'controlsState')},
+        plan_producer_mono_ns=str(timing.producer_ns) if timing is not None else None,
+        held_identity=self.radar_held_identity, primary_identity=lead_identity(radar.leadOne),
+        lost_identities=self.radar_consumption.lost_identities, consumer_degraded=self.radar_consumption.degraded,
+        producer_healthy=getattr(radar, 'fusionHealthy', None), producer_degraded=getattr(radar, 'fusionDegraded', None),
+        producer_risk=getattr(radar, 'fusionRiskUnresolved', None),
+        consumption_mono_ns=str(self._radar_consumed_ns) if self._radar_consumed_ns is not None else None,
+        model_unknown=evidence.unknown.reason if evidence is not None and evidence.unknown is not None else None,
+        raw_motion=evidence.raw_motion.kind if evidence is not None and evidence.raw_motion is not None else None,
+        admission_reasons=int(admission_reasons), no_model_risk=bool(no_model_risk), a_target=float(output),
+        model_action=float(state['modelV2'].action.desiredAcceleration), measured_speed=float(state['carState'].vEgo),
+      )
+    except Exception:
+      pass
 
   def reset_radar_consumption_for_driver(self, state):
     car, control = state['carState'], state['carControl']
@@ -1018,9 +1123,33 @@ class UnifiedLongitudinalPlanner:
     # Independent lead departure may be confirmed while the MPC reference is
     # still unwinding braking history. The owner keeps the held brake until
     # this evidence is confirmed and the actual target is positive.
-    lead_departure = (qualified and not admission_reasons and no_model_risk
-                      and cruise_speed >= CREEP_SPEED and has_departing_lead(state['radarState'], speed, delay,
-                                                                            now_ns=now_ns, held_identity=self.radar_held_identity))
+    unbound_physical = self.radar_held_identity is None and lead_identity(radar.leadOne) is not None
+    departure_stage, rejected_identity = None, None
+    if not qualified:
+      departure_stage = 'planning_qualification'
+    elif admission_reasons:
+      departure_stage = 'raw_stop_veto'
+    elif not model_allows_external_departure:
+      departure_stage = 'model_compatibility'
+    elif model.action.shouldStop:
+      departure_stage = 'model_action_stop'
+    elif not model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL:
+      departure_stage = 'model_action_acceleration'
+    elif not model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN:
+      departure_stage = 'model_action_margin'
+    elif cruise_speed < CREEP_SPEED:
+      departure_stage = 'cruise_speed'
+    elif unbound_physical and output <= 0.0:
+      departure_stage = 'nonpositive_target'
+    else:
+      if unbound_physical:
+        departure_stage = self.unbound_radar_departure_rejection(state, now_ns=now_ns)
+      if departure_stage is None:
+        rejection = departing_lead_rejection(radar, speed, delay, now_ns=now_ns, held_identity=self.radar_held_identity,
+                                             allow_unbound_physical=unbound_physical)
+        if rejection is not None:
+          departure_stage, rejected_identity = rejection
+    lead_departure = departure_stage is None
     observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
             trajectory_departure, lead_departure, qualified, no_model_risk)
     release_allowed = bool(trajectory_departure or lead_departure)
@@ -1033,6 +1162,12 @@ class UnifiedLongitudinalPlanner:
       # departure, even when another candidate wins with a negative target.
       # Preserve the raw motion description while withdrawing movement permission.
       moving_lead = release_allowed = False
+      departure_stage = ('turn_lead_lost' if self.turn_lead_guard.lost else
+                         'turn_acceleration_ceiling' if turn_ceiling is not None and turn_ceiling <= 0.0 else 'caution_acceleration_ceiling')
+    self.log_departure_blocked(
+      state, now_ns=now_ns, active=active, release_allowed=release_allowed, output=output,
+      stage=departure_stage, rejected_identity=rejected_identity, admission_reasons=admission_reasons, no_model_risk=no_model_risk,
+    )
     response_kind = MotionResponseKind.NONE
     # An ACC cruise cap still describes an absolute acceleration target. Track
     # that final target with nonpositive correction instead of erasing braking

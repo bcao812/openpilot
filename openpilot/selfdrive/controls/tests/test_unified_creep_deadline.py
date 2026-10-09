@@ -397,15 +397,23 @@ def test_pending_moving_lead_keeps_confirmation_and_confirmed_follow_clears_dist
   assert rows[-1]['window'] == rows[-1]['distance'] == rows[-1]['total'] == 0.0
 
 
-@pytest.mark.parametrize('evidence', ['late_moving_lead', 'forward_release'])
-def test_pending_movement_exempts_only_the_added_distance_trigger(evidence):
-  def intent(frame):
-    if evidence == 'late_moving_lead':
-      return MotionIntent(moving_lead=frame >= 25)
-    return MotionIntent(reference_kind=MotionReferenceKind.FORWARD, release_allowed=True)
-  _, rows = _progress_window(lambda frame: 0.7 + 0.004 * frame, intent_for_frame=intent)
+def test_pending_moving_lead_exempts_only_the_added_distance_trigger():
+  _, rows = _progress_window(lambda frame: 0.7 + 0.004 * frame,
+                            intent_for_frame=lambda frame: MotionIntent(moving_lead=frame >= 25))
   first = next(row for row in rows if row['stop'])
   assert first['elapsed'] == pytest.approx(CREEP_STOP_T + DT_CTRL)
+
+
+@pytest.mark.parametrize('growing', [False, True])
+def test_explicit_fresh_rolling_permission_retires_the_independent_creep_deadline(growing):
+  # Explicit movement permission differs from a pending moving-lead hint.
+  # The negative target still brakes; this only keeps the owner from adding
+  # a second stop while the current producer permits continued rolling.
+  _, rows = _progress_window(lambda frame: 0.7 + (0.004 * frame if growing else 0.0), frames=110,
+                            intent_for_frame=lambda frame: MotionIntent(reference_kind=MotionReferenceKind.FORWARD,
+                                                                       release_allowed=True))
+  assert not any(row['stop'] for row in rows)
+  assert max(row['total'] for row in rows) == pytest.approx(4 * DT_CTRL)
 
 
 @pytest.mark.parametrize('profile', ['growing', 'prompt_deceleration'])

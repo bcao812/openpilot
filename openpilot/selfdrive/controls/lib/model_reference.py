@@ -230,6 +230,16 @@ def _timestamp(value):
   return isinstance(value, Integral) and not isinstance(value, bool) and 0 < value < (1 << 64)
 
 
+def normalize_standstill_speed(measured_speed, *, actual_standstill):
+  """Remove only negative arithmetic residue from an explicitly stopped ego."""
+  # Around 1e-23 m/s was recorded after the stopped estimator settled.
+  # Forward projection of every negative speed would hide real rollback.
+  if (actual_standstill is True and finite_state((measured_speed,))
+      and -np.finfo(float).eps <= measured_speed < 0.0):
+    return 0.0
+  return measured_speed
+
+
 def stationary_lead_departure_compatible(evidence, *, actual_standstill, measured_speed):
   """Bounded model compatibility for an independently qualified lead departure.
 
@@ -239,6 +249,7 @@ def stationary_lead_departure_compatible(evidence, *, actual_standstill, measure
   duration and displacement bounds are a conservative engineering domain for
   this stationary case, not calibrated sensor/model error bounds.
   """
+  measured_speed = normalize_standstill_speed(measured_speed, actual_standstill=actual_standstill)
   if (actual_standstill is not True or not finite_state((measured_speed,)) or not 0.0 <= measured_speed <= 0.05
       or evidence is None or evidence.raw_velocity is None or evidence.raw_motion is None):
     return False

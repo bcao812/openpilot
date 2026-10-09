@@ -1,4 +1,4 @@
-"""Natural measurement age retires one object without hiding invalid evidence."""
+"""Measurement expiry has one risk policy on either side of publication."""
 from copy import deepcopy
 from math import ceil
 from types import SimpleNamespace
@@ -165,7 +165,7 @@ def test_relevant_measured_loss_never_becomes_departure_or_clear_on_ttl(source):
 
 
 @pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
-def test_publication_finalization_uses_earlier_qualification_without_relaxing_consumer_admission(source):
+def test_publication_finalization_and_consumer_remove_the_same_irrelevant_expiry(source):
   old = coast() if source == 'predicted' else measured(source=source)
   frame = radar_frame(old, display=(old,))
   publisher = RadarConsumption()
@@ -173,11 +173,76 @@ def test_publication_finalization_uses_earlier_qualification_without_relaxing_co
   assert not view.radarObjects and not view.leadOne.present
   assert publisher.expired_identities == ((SESSION, 7),)
   assert frame.leadOne.present
-  # The same uncorrected payload was already invalid at this actual event
-  # time. A downstream consumer must still expose it to input validation.
+  # A late publication does not turn the same irrelevant age-only loss into
+  # a whole-frame failure, or make it qualified at the later clock.
   consumer = RadarConsumption()
-  assert consume_frame(consumer, frame, publication=CONSUMPTION, now=CONSUMPTION) is frame
-  assert not consumer.expired_identities
+  consumed = consume_frame(consumer, frame, publication=CONSUMPTION, now=CONSUMPTION)
+  assert not consumed.radarObjects and not consumed.leadOne.present
+  assert consumer.expired_identities == publisher.expired_identities
+  assert not qualified_lead(old, 'brake', 0.0, now_ns=CONSUMPTION)
+  assert not publisher.degraded and not consumer.degraded
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('relevant', [False, True])
+@pytest.mark.parametrize('publication_offset', [-1, 0, 1])
+def test_expiry_before_or_after_publication_preserves_the_same_objects_and_risk(source, relevant, publication_offset):
+  old = coast(relevant=relevant) if source == 'predicted' else measured(source=source, relevant=relevant)
+  threshold = MAX_PREDICTION_AGE_NS if source == 'predicted' else MAX_MEASUREMENT_AGE_NS
+  deadline = old.evidence.positionMonoTime + threshold
+  publication, now = deadline + publication_offset, deadline + 10_000_000
+  fresh = formal_lead(now_ns=PUBLICATION, evidence={'trackId': 9})
+  frame = native_frame(radar_frame(old, fresh, publication=publication, display=(old, fresh)))
+  before, serialized = frame.to_dict(), frame.to_bytes()
+  frame.clear_write_flag()
+  consumer = RadarConsumption()
+  consumed = consume_frame(consumer, frame, publication=publication, now=now)
+  assert [lead.evidence.trackId for lead in control_leads(consumed)] == ([7, 9] if relevant else [9])
+  assert consumed.leadOne.present is relevant and consumed.leadTwo.present
+  assert [lead.evidence.trackId for lead in control_leads(consumed, 'brake', 0.0, now_ns=now)] == [9]
+  assert not control_leads(consumed, 'departure', now_ns=now)
+  assert consumer.expired_identities == (() if relevant else ((SESSION, 7),))
+  assert consumer.lost_identities == (((SESSION, 7),) if relevant else ())
+  assert consumer.degraded is relevant
+  assert frame.to_dict() == before and frame.to_bytes() == serialized
+  assert not consumed.fusionClearedTracks
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('relevant', [False, True])
+def test_expiry_boundary_is_inclusive_when_it_is_also_the_publication_clock(source, relevant):
+  old = coast(relevant=relevant) if source == 'predicted' else measured(source=source, relevant=relevant)
+  threshold = MAX_PREDICTION_AGE_NS if source == 'predicted' else MAX_MEASUREMENT_AGE_NS
+  deadline = old.evidence.positionMonoTime + threshold
+  frame = radar_frame(old, publication=deadline, display=(old,))
+  consumer = RadarConsumption()
+  view = consume_frame(consumer, frame, publication=deadline, now=deadline)
+  assert view.leadOne.present and control_leads(view) == (old,)
+  assert qualified_lead(old, 'brake', 0.0, now_ns=deadline)
+  assert not consumer.degraded and not consumer.expired_identities
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('defect', ['model_too_old', 'estimate_too_old', 'future_measurement', 'duplicate_geometry', 'invalid_position'])
+def test_expired_at_publication_does_not_hide_an_independent_defect(source, defect):
+  old = coast() if source == 'predicted' else measured(source=source)
+  frame = radar_frame(old, publication=CONSUMPTION, display=(old,))
+  if defect == 'model_too_old':
+    threshold = MAX_PREDICTION_AGE_NS if source == 'predicted' else MAX_MEASUREMENT_AGE_NS
+    old.evidence.modelMonoTime = CONSUMPTION - threshold - 1
+  elif defect == 'estimate_too_old':
+    old.evidence.estimateMonoTime = CONSUMPTION - 250_000_001
+  elif defect == 'future_measurement':
+    old.evidence.velocityMonoTime = CONSUMPTION + 1
+  elif defect == 'invalid_position':
+    old.evidence.positionValid = False
+  else:
+    frame.leadOne = deepcopy(old)
+    frame.leadOne.dRel += 1.0
+  consumer = RadarConsumption()
+  view = consume_frame(consumer, frame, publication=CONSUMPTION, now=CONSUMPTION)
+  assert view is frame and view.radarObjects == [old] and view.leadOne.present
+  assert not consumer.expired_identities and not consumer.degraded
 
 
 def test_pilot_sample_9_uses_actual_publication_and_consumer_clocks():
@@ -268,12 +333,15 @@ def test_missing_or_future_publication_cannot_prove_natural_age(publication):
   assert consume_frame(RadarConsumption(), raw, publication=publication) is raw
 
 
-def test_relevant_loss_persists_through_empty_fresh_messages_and_unrelated_recovery():
+@pytest.mark.parametrize('source', ['radar', 'predicted'])
+@pytest.mark.parametrize('publication', [PUBLICATION, CONSUMPTION])
+def test_relevant_loss_persists_through_empty_fresh_messages_and_unrelated_recovery(source, publication):
   consumer = RadarConsumption()
-  predicted = coast(relevant=True)
-  raw = radar_frame(predicted, display=(predicted,))
-  view = consume_frame(consumer, raw)
-  assert view.radarObjects == () and consumer.degraded
+  lost = coast(relevant=True) if source == 'predicted' else measured(relevant=True)
+  raw = radar_frame(lost, publication=publication, display=(lost,))
+  view = consume_frame(consumer, raw, publication=publication)
+  assert view.radarObjects == [lost] and consumer.degraded
+  assert not consumer.expired_identities
   assert not raw.fusionRiskUnresolved and not view.fusionRiskUnresolved
   for elapsed in (100_000_000, 2_000_000_000, 30_000_000_000):
     now = PUBLICATION + elapsed
@@ -290,18 +358,22 @@ def test_consumption_age_does_not_turn_a_forecast_boundary_into_a_far_crossing(d
   consumer = RadarConsumption()
   frame = radar_frame(predicted, display=(predicted,))
   view = consume_frame(consumer, frame)
-  assert not view.radarObjects and not view.leadOne.present
-  assert consumer.expired_identities == ((SESSION, 7),)
+  assert bool(view.radarObjects) is expected_loss and view.leadOne.present is expected_loss
+  assert consumer.expired_identities == (() if expected_loss else ((SESSION, 7),))
   assert consumer.degraded is expected_loss
   assert frame.fusionClearedTracks == view.fusionClearedTracks == ()
   assert predicted.evidence.positionMonoTime == PUBLICATION - 300_000_000
   assert predicted.evidence.estimateMonoTime == PUBLICATION
 
 
-@pytest.mark.parametrize('recovery', ['same', 'different_session', 'different_track', 'migrated_slot', 'coast', 'caution'])
-def test_only_fresh_same_physical_identity_recovers_the_loss(recovery):
+@pytest.mark.parametrize('source', ['radar', 'predicted'])
+@pytest.mark.parametrize('publication', [PUBLICATION, CONSUMPTION])
+@pytest.mark.parametrize('recovery', ['same', 'different_session', 'different_track', 'migrated_slot', 'coast', 'caution',
+                                      'old_position', 'old_velocity'])
+def test_only_fresh_same_physical_identity_recovers_the_loss(recovery, source, publication):
   consumer = RadarConsumption()
-  consume_frame(consumer, radar_frame(coast(relevant=True)))
+  lost = coast(relevant=True) if source == 'predicted' else measured(relevant=True)
+  consume_frame(consumer, radar_frame(lost, publication=publication), publication=publication)
   now = CONSUMPTION + 100_000_000
   lead = formal_lead(now_ns=now, evidence={'generation': 8})
   if recovery == 'different_session':
@@ -315,6 +387,9 @@ def test_only_fresh_same_physical_identity_recovers_the_loss(recovery):
     lead.evidence.source, lead.evidence.coasting = 'predicted', True
   elif recovery == 'caution':
     lead = caution_lead(now_ns=now)
+  elif recovery in ('old_position', 'old_velocity'):
+    field = 'positionMonoTime' if recovery == 'old_position' else 'velocityMonoTime'
+    setattr(lead.evidence, field, getattr(lost.evidence, field))
   consume_frame(consumer, radar_frame(lead, publication=now, display=(lead,)), publication=now, now=now)
   assert consumer.degraded is (recovery not in ('same', 'migrated_slot'))
 
@@ -513,7 +588,7 @@ def test_unread_malformed_wire_fields_do_not_add_a_snapshot_exception(defect):
   assert native.to_bytes() == serialized
 
 
-def test_snapshot_decode_fallback_still_expires_other_coast_and_remembers_loss():
+def test_snapshot_decode_fallback_retains_relevant_expiry_and_remembers_loss():
   from openpilot.cereal import log
 
   predicted = coast(relevant=True)
@@ -525,18 +600,19 @@ def test_snapshot_decode_fallback_still_expires_other_coast_and_remembers_loss()
   consumer = RadarConsumption()
   with log.RadarState.from_bytes(serialized) as reader:
     view = consume_frame(consumer, reader)
-    assert view.radarObjects == () and not view.leadOne.present and not view.leadTwo.present
-    assert consumer.expired_identities == ((SESSION, 7),)
+    assert len(view.radarObjects) == 1 and not view.leadOne.present and view.leadTwo.present
+    assert consumer.expired_identities == ()
     assert consumer.degraded and consumer.lost_identities == ((SESSION, 7),)
     assert len(reader.radarObjects) == 1 and reader.leadTwo.present
   builder_consumer = RadarConsumption()
   view = consume_frame(builder_consumer, native)
-  assert view.radarObjects == () and builder_consumer.degraded
+  assert len(view.radarObjects) == 1 and builder_consumer.degraded
   assert native.to_bytes() == serialized
 
 
-def test_validated_collection_is_immutable_and_expiry_builds_a_new_collection():
-  predicted, fresh = coast(relevant=True), formal_lead(now_ns=PUBLICATION, evidence={'trackId': 8})
+@pytest.mark.parametrize('relevant', [False, True])
+def test_validated_collection_is_immutable_and_expiry_preserves_relevant_objects(relevant):
+  predicted, fresh = coast(relevant=relevant), formal_lead(now_ns=PUBLICATION, evidence={'trackId': 8})
   native = native_frame(radar_frame(predicted, fresh, display=(predicted, fresh)))
   consumer = RadarConsumption()
   boundary = predicted.evidence.positionMonoTime + MAX_PREDICTION_AGE_NS
@@ -548,9 +624,10 @@ def test_validated_collection_is_immutable_and_expiry_builds_a_new_collection():
     with pytest.raises(AttributeError):
       setattr(first, field, None)
   second = consume_frame(consumer, native, now=boundary + 1)
-  assert [lead.evidence.trackId for lead in control_leads(second)] == [8]
+  assert [lead.evidence.trackId for lead in control_leads(second)] == ([7, 8] if relevant else [8])
   assert control_leads(second) is control_leads(second) and control_leads(second) is not objects
-  assert consumer.degraded and consumer.lost_identities == ((SESSION, 7),)
+  assert consumer.degraded is relevant
+  assert consumer.lost_identities == (((SESSION, 7),) if relevant else ())
   assert [lead.evidence.trackId for lead in control_leads(first)] == [7, 8]
   assert not control_leads(first, 'brake', now_ns=boundary + 250_000_000)
   native.fusionActive = False
@@ -580,13 +657,13 @@ def test_complete_publication_reuse_keeps_expired_hold_attribution_and_loss():
   consumed = consume_frame(consumer, raw)
   publication = consumer.publication_view
   assert publication is not None and publication._radar is raw and consumer.publication_ns == PUBLICATION
-  assert not consumed.radarObjects and len(publication.radarObjects) == 1
+  assert len(consumed.radarObjects) == len(publication.radarObjects) == 1
   assert consumer.degraded and consumer.lost_identities == ((SESSION, 7),)
   kwargs = {'now_ns': CONSUMPTION, 'reference_accepted': False, 'held_identity': (SESSION, 7), 'target_accel': 0.0}
   raw_records = plan_records(raw, **kwargs)
   assert raw_records and raw_records[0]['kind'] == 'hold'
   assert plan_records(publication, **kwargs) == raw_records
-  assert not plan_records(consumed, **kwargs)
+  assert plan_records(consumed, **kwargs) == raw_records
   consumer.clear_publication()
   assert consumer.publication_view is None and consumer.publication_ns is None
   assert consumer.degraded and consumer.lost_identities == ((SESSION, 7),)

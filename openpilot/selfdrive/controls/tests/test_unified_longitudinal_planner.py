@@ -10,7 +10,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlSt
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace, MOTION_TRACE_SCHEMA, UNIFIED_TRACE_FIELDS
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent, StopReason
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
-from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import model_reference_from_velocity
+from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import departing_lead_rejection, has_departing_lead, model_reference_from_velocity
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state, advance, Publisher
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_following_scenarios import simulate_following
@@ -349,3 +349,196 @@ def test_positive_forward_speed_does_not_discard_measured_braking():
   planner.update(state, now_ns=advance(state, 0))
   assert planner.mpc.x0[1] > 0.0
   assert planner.mpc.x0[2] == -0.5
+
+
+@pytest.mark.parametrize('held', ['none', 'matching', 'different'])
+@pytest.mark.parametrize('other', ['none', 'departing', 'stationary', 'occluded', 'caution'])
+def test_unbound_physical_departure_requires_all_obstacles_without_replacing_a_held_identity(held, other):
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, SESSION, radar_frame
+
+  primary = formal_lead(now_ns=PUBLICATION, dRel=15.0, vLead=1.0, vLeadK=1.0, vRel=1.0, evidence={'trackId': 5})
+  objects = [primary]
+  if other != 'none':
+    factory = caution_lead if other == 'caution' else formal_lead
+    speed = 1.0 if other == 'departing' else 0.0
+    objects.append(factory(now_ns=PUBLICATION, dRel=8.0, vLead=speed, vLeadK=speed, vRel=speed, evidence={'trackId': 7}))
+    if other == 'occluded':
+      objects[-1].evidence.source = 'predicted'
+      objects[-1].evidence.coasting = True
+  radar = radar_frame(*objects, display=(primary,))
+  identity = None if held == 'none' else (SESSION, 5 if held == 'matching' else 7)
+  rejection = departing_lead_rejection(radar, 0.0, .5, now_ns=CONSUMPTION, held_identity=identity, allow_unbound_physical=True)
+  assert (rejection is None) is (held != 'different' and (held == 'matching' or other not in ('stationary', 'occluded')))
+  if held == 'none':
+    assert not has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION)
+    if other in ('stationary', 'occluded'):
+      assert rejection == ('lead_departure_unqualified', (SESSION, 7))
+  elif held == 'different':
+    assert rejection == ('held_identity_mismatch', (SESSION, 5))
+
+
+@pytest.mark.parametrize('speed,standstill,consumed', [
+  (0.0, True, True), (-1.9180846832417676e-23, True, True),
+  (-np.finfo(float).eps, True, True), (-2.0 * np.finfo(float).eps, True, False),
+  (-0.001, True, False), (-1.9180846832417676e-23, False, False),
+])
+def test_radar_consumption_uses_only_stopped_arithmetic_roundoff_without_mutating_car_state(speed, standstill, consumed):
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, radar_frame
+  from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
+
+  primary = formal_lead(now_ns=PUBLICATION, dRel=15.0, vLead=1.0, vLeadK=1.0, vRel=1.0)
+  state = state_at(radar_frame(primary, display=(primary,)), speed=0.0)
+  state['carState'].vEgo, state['carState'].standstill = speed, standstill
+  wire_speed = state['carState'].as_reader().vEgo
+  planner = enabled_planner(0.0)
+  with patch.object(planner.dec, 'enabled', return_value=True):
+    view = planner.reference_planner.radar_input_state(state, CONSUMPTION)
+  reference = planner.reference_planner
+  assert (reference._radar_consumed_view is view['radarState']) is consumed
+  assert (reference._radar_consumed_ns == CONSUMPTION) is consumed
+  assert state['carState'].vEgo == wire_speed
+
+
+@pytest.mark.parametrize('defect', [
+  'none', 'unconsumed', 'wrong_tick', 'wrong_publication', 'unhealthy', 'degraded', 'producer_risk',
+  'consumer_loss', 'overflow', 'wrong_session', 'not_standstill', 'invalid_message',
+])
+def test_unbound_radar_departure_requires_known_current_health_and_no_persistent_loss(defect):
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, coast, native_frame, radar_frame
+  from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
+
+  primary = formal_lead(now_ns=PUBLICATION, dRel=15.0, vLead=1.0, vLeadK=1.0, vRel=1.0)
+  radar = radar_frame(primary, display=(primary,), degraded=defect == 'degraded', risk_unresolved=defect == 'producer_risk')
+  if defect == 'unhealthy':
+    radar.fusionHealthy = False
+  if defect == 'wrong_session':
+    radar.fusionSessionId = 'different-session'
+  state = state_at(radar, speed=0.0)
+  if defect == 'not_standstill':
+    state['carState'].standstill = False
+  planner = enabled_planner(0.0)
+  reference = planner.reference_planner
+  if defect == 'consumer_loss':
+    old = PUBLICATION - 100_000_000
+    lost = coast(publication=old, relevant=True, track=99)
+    reference.radar_consumption.update(native_frame(radar_frame(lost, publication=old)),
+                                       publication_ns=old, now_ns=old + 60_000_000, speed=10.0)
+    assert reference.radar_consumption.lost_identities
+  elif defect == 'overflow':
+    reference.radar_consumption._overflow_loss = True
+  with patch.object(planner.dec, 'enabled', return_value=True):
+    view = state if defect == 'unconsumed' else reference.radar_input_state(state, CONSUMPTION)
+  if defect == 'wrong_publication':
+    state.logMonoTime['radarState'] += 1
+  elif defect == 'invalid_message':
+    state.valid['radarState'] = False
+  rejection = reference.unbound_radar_departure_rejection(view, now_ns=CONSUMPTION + (defect == 'wrong_tick'))
+  assert (rejection is None) is (defect == 'none')
+  if defect in ('consumer_loss', 'overflow'):
+    assert rejection == 'radar_consumer_loss'
+
+
+@pytest.mark.parametrize('field', ['fusionHealthy', 'fusionDegraded', 'fusionRiskUnresolved'])
+def test_unknown_radar_health_cannot_be_interpreted_as_clear(field):
+  from types import SimpleNamespace
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, radar_frame
+  from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
+
+  primary = formal_lead(now_ns=PUBLICATION, dRel=15.0, vLead=1.0, vLeadK=1.0, vRel=1.0)
+  planner = enabled_planner(0.0)
+  state = state_at(radar_frame(primary, display=(primary,)), speed=0.0)
+  reference = planner.reference_planner
+  with patch.object(planner.dec, 'enabled', return_value=True):
+    view = reference.radar_input_state(state, CONSUMPTION)
+  assert reference.unbound_radar_departure_rejection(view, now_ns=CONSUMPTION) is None
+  fields = ('leadOne', 'mdMonoTime', 'fusionSessionId', 'fusionActive', 'fusionHealthy', 'fusionDegraded', 'fusionRiskUnresolved')
+  # A consumer adapter with unknown metadata must fail even after a prior
+  # healthy consumption. Preserve the receipt to isolate that metadata gate.
+  unknown = SimpleNamespace(**{name: getattr(view['radarState'], name) for name in fields if name != field})
+  view.radar = reference._radar_consumed_view = unknown
+  assert reference.unbound_radar_departure_rejection(view, now_ns=CONSUMPTION) is not None
+
+
+def run_unbound_physical_departure(condition='none', *, frames=24):
+  from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import SESSION, coast, native_frame, radar_frame
+  from openpilot.selfdrive.controls.tests.test_stationary_lead_departure import held_recorded_departure_case
+
+  Params().put_bool('DynamicExperimentalControl', False, block=True)
+  planner, owner, state = held_recorded_departure_case()
+  for name in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
+    Params().put_bool(name, True, block=True)
+  reference = planner.reference_planner
+  assert reference.radar_held_identity is None
+  state['carState'].vEgo = -1.9180846832417676e-23
+  if condition == 'held_mismatch':
+    reference.radar_held_identity = (SESSION, 7)
+  elif condition == 'consumer_loss':
+    old = 1_800_000_000
+    lost = coast(publication=old, relevant=True, track=99)
+    reference.radar_consumption.update(native_frame(radar_frame(lost, publication=old)),
+                                       publication_ns=old, now_ns=old + 60_000_000, speed=10.0)
+    assert reference.radar_consumption.lost_identities
+  elif condition == 'model_stop':
+    state['modelV2'].action.shouldStop = True
+  records = []
+  with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'active', return_value=True), \
+       patch.object(planner.dec, 'mode', return_value='blended'):
+    for frame in range(20, 20 + frames):
+      now = 1_000_000_000 + frame * 50_000_000
+      factory = caution_lead if condition == 'side_primary' else formal_lead
+      primary = factory(now_ns=now, dRel=15.0, vLead=1.6, vLeadK=1.6, vRel=1.6, evidence={'trackId': 5})
+      objects = [primary]
+      if condition in ('stationary_other', 'occluded_other'):
+        other = formal_lead(now_ns=now, dRel=8.0, vLead=0.0, vLeadK=0.0, vRel=0.0, evidence={'trackId': 7})
+        if condition == 'occluded_other':
+          other.evidence.source, other.evidence.coasting = 'predicted', True
+        objects.append(other)
+      radar = radar_frame(*objects, publication=now, display=(primary,), risk_unresolved=condition == 'producer_risk')
+      if condition == 'unhealthy':
+        radar.fusionHealthy = False
+      state['radarState'] = native_frame(radar)
+      state['controlsState'].longControlState = owner.long_control_state
+      state['controlsState'].motionState.phase = owner.motion_phase.text
+      state['controlsState'].motionState.resolvedStop = owner.resolved_should_stop
+      plan, outputs = consume(planner, owner, state, frame)
+      assert plan.solverStatus == 0 and plan.motionIntent.valid
+      assert not owner.motion_degraded
+      records.append((plan.aTarget, plan.motionIntent.releaseAllowed, owner.resolved_should_stop, tuple(outputs)))
+  return reference, records
+
+
+@pytest.mark.parametrize('condition', [
+  'none', 'held_mismatch', 'consumer_loss', 'stationary_other', 'occluded_other', 'side_primary',
+  'model_stop', 'producer_risk', 'unhealthy',
+])
+def test_actual_hold_uses_unbound_departure_only_when_all_independent_guards_hold(condition):
+  reference, records = run_unbound_physical_departure(condition)
+  if condition == 'none':
+    assert any(released and not held and max(outputs) > 0.0 for _, released, held, outputs in records)
+    assert reference.radar_held_identity is None  # current evidence never invents an adopted physical barrier
+  else:
+    assert all(not released and held and max(outputs) <= 0.0 for _, released, held, outputs in records)
+
+
+def test_departure_diagnostics_are_rate_limited_and_logging_failure_does_not_change_control():
+  outcomes, logs = [], []
+  for failure in (None, RuntimeError('transport unavailable')):
+    with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.cloudlog.event', side_effect=failure) as event:
+      _, records = run_unbound_physical_departure('held_mismatch', frames=120)
+    outcomes.append(records)
+    logs.append([call for call in event.call_args_list if call.args[0] == 'longitudinal_departure_blocked_v1'])
+  assert outcomes[0] == outcomes[1]
+  assert len(logs[0]) == len(logs[1]) == 2
+  for recorded in logs:
+    first, last = (call.kwargs for call in recorded)
+    assert first['stage'] == last['stage'] == 'held_identity_mismatch'
+    assert first['wait_seconds'] >= .5
+    assert int(last['decision_mono_ns']) - int(first['decision_mono_ns']) >= 5_000_000_000
+    assert first['held_identity'][1] == 7 and first['primary_identity'][1] == 5
+    assert set(first['input_mono_ns']) == {'carState', 'modelV2', 'radarState', 'controlsState'}

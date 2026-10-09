@@ -52,7 +52,14 @@ def changed_sample(index, value):
   return raw
 
 
-@pytest.mark.parametrize('speed', [-0.0, 0.05])
+@pytest.mark.parametrize('speed', [
+  -0.0, 0.05, -np.finfo(float).eps,
+  # Exact stopped vEgo residues from route 00000091--cfe14c017c, segment 29,
+  # 22:19:11.864--22:19:12.063 +08:00 on 2026-10-09, source 9e3a811dd8a8.
+  # Only measured speed varies here; the raw model fixture above is separate.
+  -5.914764288085437e-24, -1.9180846832417676e-23, -1.8333419315871246e-23,
+  -1.3595017425856318e-23, -7.237740429695797e-24,
+])
 @pytest.mark.parametrize('model_ns,anchor_ns,now_ns', [
   (1184580849025, 1184581734182, 1184596901421),  # exact recorded publication/anchor/consumption proxies
   (SOURCE_NS + 5_000_000, SOURCE_NS, SOURCE_NS + 10_000_000),
@@ -70,7 +77,8 @@ def test_recorded_departure_is_compatible_without_reclassifying_model_or_grantin
 
 @pytest.mark.parametrize('standstill,speed', [
   (False, 0.0), (True, 0.050001), (True, 0.2), (True, -0.001),
-  (True, np.nan), (True, np.inf), (True, True), (1, 0.0),
+  (True, np.nextafter(-np.finfo(float).eps, -np.inf)), (False, -1e-23),
+  (None, -1e-23), (True, None), (True, np.nan), (True, np.inf), (True, -np.inf), (True, True), (1, 0.0),
 ])
 def test_measured_movement_or_invalid_standstill_cannot_use_stationary_compatibility(standstill, speed):
   reference = evidence(LOGGED_DEPARTURE_VELOCITY, 0.0)
@@ -95,10 +103,11 @@ def test_measured_movement_or_invalid_standstill_cannot_use_stationary_compatibi
   pytest.param(LOGGED_DEPARTURE_VELOCITY.reshape(1, -1), id='non-vector'),
 ])
 @pytest.mark.parametrize('later_publication', [False, True])
-def test_prefix_compatibility_keeps_raw_risk_and_incomplete_inputs_blocked(raw, later_publication):
+@pytest.mark.parametrize('measured_speed', [0.0, -1.9180846832417676e-23])
+def test_prefix_compatibility_keeps_raw_risk_and_incomplete_inputs_blocked(raw, later_publication, measured_speed):
   reference = evidence(raw, 0.0, model_ns=SOURCE_NS + int(later_publication) * 5_000_000,
                        anchor_ns=SOURCE_NS, now_ns=SOURCE_NS + 10_000_000)
-  assert not compatible(reference)
+  assert not compatible(reference, speed=measured_speed)
   assert not reference.allows_departure and not reference.allows_external_departure
 
 
@@ -202,8 +211,11 @@ def held_recorded_departure_case():
   return planner, owner, state
 
 
-def test_recorded_shape_with_departing_lead_releases_actual_held_owner_after_confirmation():
+@pytest.mark.parametrize('measured_speed', [0.0, -1.9180846832417676e-23])
+def test_recorded_shape_with_departing_lead_releases_actual_held_owner_after_confirmation(measured_speed):
   planner, owner, state = held_recorded_departure_case()
+  state['carState'].vEgo = measured_speed
+  measured_input = state['carState'].as_reader().vEgo
   outputs = []
   released = False
   confirmed_while_held = False
@@ -229,16 +241,20 @@ def test_recorded_shape_with_departing_lead_releases_actual_held_owner_after_con
   assert owner.motion_phase in (MotionPhase.RELEASE, MotionPhase.TRACK)
   assert not owner.resolved_should_stop and outputs[-1] > 0.0
   assert not state['carState'].gasPressed and state['carState'].standstill
+  assert state['carState'].vEgo == measured_input
 
 
-@pytest.mark.parametrize('condition', ['moving', 'later_zero', 'model_stop', 'no_lead', 'uncertain_lead'])
+@pytest.mark.parametrize('condition', ['moving', 'rollback', 'later_zero', 'model_stop', 'no_lead', 'uncertain_lead'])
 def test_stationary_prefix_cannot_release_owner_without_all_other_departure_guards(condition):
   planner, owner, state = held_recorded_departure_case()
+  state['carState'].vEgo = -1.9180846832417676e-23
   if condition == 'moving':
     state['carState'].vEgo = 0.2
     state['carState'].standstill = False
     for lead in (state['radarState'].leadOne, state['radarState'].leadTwo):
       lead.vRel = lead.vLead - state['carState'].vEgo
+  elif condition == 'rollback':
+    state['carState'].vEgo = -0.001
   elif condition == 'later_zero':
     raw = changed_sample(20, 0.0)
     state['modelV2'].velocity.x = raw.tolist()

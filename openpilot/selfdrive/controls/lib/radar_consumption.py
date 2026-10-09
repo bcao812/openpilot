@@ -1,17 +1,17 @@
 """One immutable object view for all consumers of a radarState planner tick.
 
-A measured object or coast may cross its deadline after qualification. Remove
-irrelevant expired hypotheses from both the full collection and display slots,
-while remembering relevant loss independently of message/prediction lifetimes.
-Relevant new expiry and malformed input retain the existing failure path; the
-earlier consumer coast policy keeps its established behavior.
+A measured object or coast may cross its deadline before or after publication.
+Remove irrelevant expired hypotheses from both the full collection and display
+slots, while remembering relevant loss independently of message lifetimes.
+Relevant expiry and malformed input retain the existing failure braking path.
 """
 from dataclasses import dataclass
 
 from openpilot.selfdrive.car.honda_radar_relevance import HORIZON, loss_relevant, remaining_occupancy_window
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, _ControlLeadView, _StructSnapshot, _as_reader, _finite, _integer, _object_key, _read,
-  control_leads, lead_identity, measurement_expired_since, qualified_lead,
+  MAX_CONTROL_OBJECTS, MAX_ESTIMATE_AGE_NS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS,
+  _ControlLeadView, _StructSnapshot, _as_reader, _finite, _integer, _object_key, _read,
+  control_leads, lead_identity, qualified_lead,
 )
 
 
@@ -85,8 +85,31 @@ class _Loss:
   velocity_ns: int
 
 
+def _measurement_expired_at(lead, now_ns):
+  """Classify age-only loss without admitting it at an earlier source clock.
+
+  Source-time qualification checks the unmodified evidence's structure and
+  original lifetime. Current estimate/model evidence must still be fresh;
+  only the position or velocity measurement may have expired. The result is
+  used solely for retirement/loss handling, never as a control qualification.
+  """
+  if not _integer(now_ns, 1) or not (
+      qualified_lead(lead, 'brake', 0.0, require_active_window=False)
+      or qualified_lead(lead, 'caution', 0.0, require_active_window=False)):
+    return False
+  evidence = _read(lead, 'evidence')
+  if str(_read(evidence, 'source')) not in ('radar', 'fused', 'predicted'):
+    return False
+  maximum_age = MAX_PREDICTION_AGE_NS if _read(evidence, 'coasting') is True else MAX_MEASUREMENT_AGE_NS
+  measurements = tuple(_read(evidence, field) for field in ('positionMonoTime', 'velocityMonoTime'))
+  return (0 <= now_ns - _read(evidence, 'estimateMonoTime') <= MAX_ESTIMATE_AGE_NS
+          and 0 <= now_ns - _read(evidence, 'modelMonoTime') <= maximum_age
+          and all(stamp <= now_ns for stamp in measurements)
+          and any(now_ns - stamp > maximum_age for stamp in measurements))
+
+
 def _qualified_objects(radar, qualified_ns):
-  """Validate every identity view before any duplicate or expiry is removed."""
+  """Validate every identity view, including age-only losses, before removal."""
   raw = tuple(radar.radarObjects)
   if len(raw) > MAX_CONTROL_OBJECTS:
     return None
@@ -100,7 +123,7 @@ def _qualified_objects(radar, qualified_ns):
     evidence = _read(lead, 'evidence')
     admitted = (qualified_lead(lead, 'brake', 0.0, now_ns=qualified_ns, require_active_window=False)
                 or qualified_lead(lead, 'caution', 0.0, now_ns=qualified_ns, require_active_window=False))
-    if (not admitted
+    if (not (admitted or _measurement_expired_at(lead, qualified_ns))
         or not _finite(_read(lead, 'aLeadTau')) or _read(lead, 'aLeadTau') < 0.0
         or _read(evidence, 'conflictEnd') > HORIZON):
       return None
@@ -169,10 +192,10 @@ class RadarConsumption:
     return tuple(self._lost)
 
   def update(self, radar, *, publication_ns, now_ns, speed, retain_losses=True):
-    # Consumers must prove validity at the actual publication. An earlier
-    # source/estimate clock cannot excuse an already invalid publication.
+    # Actual publication/consumption clocks govern control qualification.
+    # Age-only loss classification cannot renew expired control authority.
     return self._update(radar, qualified_ns=publication_ns, publication_ns=publication_ns,
-                        now_ns=now_ns, speed=speed, retain_losses=retain_losses, retire_relevant_coasts=True)
+                        now_ns=now_ns, speed=speed, retain_losses=retain_losses)
 
   def finalize_publication(self, radar, *, qualified_ns, publication_ns, speed):
     """Retire measurements that expired during this producer's computation.
@@ -182,9 +205,9 @@ class RadarConsumption:
     A relevant loss retains the invalid object for failure braking.
     """
     return self._update(radar, qualified_ns=qualified_ns, publication_ns=publication_ns,
-                        now_ns=publication_ns, speed=speed, retain_losses=True, retire_relevant_coasts=False)
+                        now_ns=publication_ns, speed=speed, retain_losses=True)
 
-  def _update(self, radar, *, qualified_ns, publication_ns, now_ns, speed, retain_losses, retire_relevant_coasts):
+  def _update(self, radar, *, qualified_ns, publication_ns, now_ns, speed, retain_losses):
     self.expired_identities = ()
     self.clear_publication()
     radar = _as_reader(radar)
@@ -242,7 +265,7 @@ class RadarConsumption:
     expired = set()
     identities = []
     for lead in objects:
-      if not measurement_expired_since(lead, qualified_ns=qualified_ns, now_ns=now_ns):
+      if not _measurement_expired_at(lead, now_ns):
         continue
       identity = lead_identity(lead)
       evidence = _read(lead, 'evidence')
@@ -253,12 +276,10 @@ class RadarConsumption:
         else:
           self._lost[identity] = _Loss(publication_ns, _read(evidence, 'positionMonoTime'),
                                        _read(evidence, 'velocityMonoTime'))
-      # A loss flag is diagnostic, not a braking command. Newly handled
-      # expiry must not remove a relevant obstacle and turn the old failure
-      # envelope into unconstrained cruise. Preserve that invalid object for
-      # the existing failure path. The earlier consumer coast policy keeps
-      # its established behavior and does not acquire new release authority.
-      if relevant and not (retire_relevant_coasts and str(_read(evidence, 'source')) == 'predicted'):
+      # A loss flag is diagnostic, not a braking command. The same relevant
+      # obstacle must retain failure braking whether its measurement crossed
+      # the deadline before or after publication, measured or predicted.
+      if relevant:
         continue
       expired.add(_object_key(lead))
       identities.append(identity)

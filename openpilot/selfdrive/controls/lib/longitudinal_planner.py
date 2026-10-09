@@ -340,6 +340,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # recorded consumer time explicitly; input timestamps cannot date themselves.
     if now_ns is None:
       now_ns = time.monotonic_ns()
+    self.mpc.set_failure_context(sm, now_ns)
     self._radar_publication = None
     self.observation_result = None
     self.observation_attempt = observe(self.observation, "begin", self, sm, now_ns=now_ns, passive_version=PASSIVE_PITCH_VERSION)
@@ -350,6 +351,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       completed = True
       return result
     finally:
+      self.mpc.finish_failure_context(completed)
       self.observation_result = observe(self.observation, "finish", self.observation_attempt, self, completed)
       observe_trace(self.trace, "finish_attempt", self)
 

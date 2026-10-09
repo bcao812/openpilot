@@ -15,7 +15,8 @@ from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import st
 
 
 @pytest.mark.parametrize('boundary,source', [
-  ('consumer', 'radar'), ('consumer', 'fused'),
+  ('consumer', 'radar'), ('consumer', 'fused'), ('consumer', 'predicted'),
+  ('late_publication', 'radar'), ('late_publication', 'fused'), ('late_publication', 'predicted'),
   ('publisher', 'radar'), ('publisher', 'fused'), ('publisher', 'predicted'),
 ])
 def test_expired_near_obstacle_does_not_turn_ongoing_braking_into_cruise(boundary, source):
@@ -36,6 +37,8 @@ def test_expired_near_obstacle_does_not_turn_ongoing_braking_into_cruise(boundar
       state['radarState'], state.logMonoTime['radarState'] = event.radarState, event.logMonoTime
     else:
       state['radarState'] = native_frame(frame)
+      if boundary == 'late_publication':
+        state.logMonoTime['radarState'] = now - 1_000_000
     # The visual model asks for forward motion and supplies no visual lead.
     assert state['modelV2'].action.desiredAcceleration > 0.0
     assert not state['radarState'].visionLeadOne.present
