@@ -161,6 +161,7 @@ def test_healthy_explicit_scope_exit_keeps_its_lifecycle_meaning(scope_case, exi
   elif exit_kind == 'dec_inactive':
     pipeline.planner.dec._active = False
   elif exit_kind == 'experimental_off':
+    now += 1_000_000  # A new receive tick; the other scope inputs remain fresh.
     event = messaging.new_message('selfdriveState', logMonoTime=now, valid=True)
     event.selfdriveState = state['selfdriveState']
     event.selfdriveState.experimentalMode = False
@@ -188,7 +189,7 @@ def test_scope_health_does_not_claim_dec_or_mpc_recomputation_after_early_return
     if rejection == 'owner_contract':
       state['controlsState'].motionState.version = 0
     elif rejection == 'model_shape':
-      model = state['modelV2'].as_builder()
+      model = state['modelV2'].as_reader().as_builder()
       model.velocity.x = []
       state['modelV2'] = model.as_reader()
     else:
