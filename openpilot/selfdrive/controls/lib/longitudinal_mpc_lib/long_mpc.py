@@ -486,6 +486,8 @@ class LongitudinalMpc:
     self._fusion_projections = ()
     self._occupancy_bounds = (None,) * N
     self._occupancy_limit_cache = {}
+    # Tracks installed finite-object physical rows/boxes, including a soft
+    # occupancy tail with no supported position row. reset() must clear both.
     self._native_occupancy_bounds_active = False
     self.diagnostic_occupancy_bounds = ()
     self.diagnostic_occupancy_projection = None
@@ -1203,6 +1205,17 @@ class LongitudinalMpc:
           return None
     return tuple(bounds)
 
+  @property
+  def finite_occupancy_physics_required(self):
+    """Finite risk cannot buy clearance with backwards or impossible motion.
+
+    A support deadline limits hard position geometry, not the physical
+    vehicle model used to respond to its remaining soft obstacle. Ordinary
+    persistent following and non-fusion problems retain their existing policy.
+    """
+    return (any(self._occupancy_bounds)
+            or any(not projection.persistent and projection.occupied.any() for projection in self._fusion_projections))
+
   def occupancy_speed_row(self, stage):
     """One sufficient continuous nonnegative-speed row, with fixed-x0 care."""
     duration = T_IDXS[stage+1] - T_IDXS[stage]
@@ -1248,7 +1261,7 @@ class LongitudinalMpc:
 
   def occupancy_trajectory_error(self, states, jerks, *, tolerance, post_native=False):
     """Recheck the final trajectory, including any rest-precision adjustment."""
-    if not any(getattr(self, '_occupancy_bounds', ())):
+    if not self.finite_occupancy_physics_required:
       return ''
     if (states.shape != (N+1, X_DIM) or jerks.shape != (N,)
         or not np.all(np.isfinite(states)) or not np.all(np.isfinite(jerks))):
@@ -1334,7 +1347,7 @@ class LongitudinalMpc:
     Independent position/velocity/acceleration budgets bound the complete continuous
     correction; larger residuals and failed solves remain explicit failures.
     """
-    if not any(self._occupancy_bounds):
+    if not self.finite_occupancy_physics_required:
       return ''
     if self.solution_status != 0 or self.diagnostic_last_solver_return != 0:
       return 'finite_occupancy_reintegration_requires_native_success'
@@ -2033,7 +2046,7 @@ class LongitudinalMpc:
     constrained_stages = max(0, node - 1) if future else 0
     splits = []
     occupancy_stages = []
-    self._native_occupancy_bounds_active = any(self._occupancy_bounds)
+    self._native_occupancy_bounds_active = self.finite_occupancy_physics_required
     for stage, duration in enumerate(np.diff(T_IDXS)):
       C, D, lower, upper = self._rest_constraint_buffers[stage]
       C.fill(0.0)
@@ -2065,8 +2078,9 @@ class LongitudinalMpc:
         splits.append(float(split))
       elif self._native_occupancy_bounds_active:
         # An earlier between-node reverse excursion cannot buy extra space
-        # for a later crossing. Keep this one-row certificate on the remaining
-        # ordinary intervals too; future-rest intervals retain their two rows.
+        # for a later crossing or reduce its soft risk after hard support ends.
+        # Keep this certificate over the complete horizon, even when no hard
+        # position interval remains; future-rest intervals retain their two rows.
         C[0], D[0, 0] = self.occupancy_speed_row(stage)
         lower[0], upper[0] = 0.0, self._passing_speed_limit if self._passing_speed_limit is not None else REFERENCE_BOUND
       self.solver.constraints_set(stage, 'C', C)
@@ -2345,10 +2359,11 @@ class LongitudinalMpc:
         # never publish this relaxed solution as goal satisfaction.
         self.rest_goal_braking_accel = minimum_accel
 
-    if any(self._occupancy_bounds):
+    if self.finite_occupancy_physics_required:
       # Position clearance is not bought with an impossible acceleration or
-      # a backwards velocity excursion. Intersect after the rest boxes are
-      # built so a crossing can never relax a simultaneous model stop.
+      # a backwards velocity excursion, including when only the conservative
+      # soft tail remains. Intersect after the rest boxes are built so a
+      # crossing can never relax a simultaneous model stop.
       lower[1:, 0] = np.maximum(lower[1:, 0], 0.0)
       lower[1:, 1] = np.maximum(lower[1:, 1], self.params[1:, 0])
       upper[1:, 1] = np.minimum(upper[1:, 1], self.params[1:, 1])
@@ -2675,7 +2690,7 @@ class LongitudinalMpc:
     failure = validate()
     refinement = None
     if (failure and self.solution_status == 0 and self.diagnostic_last_solver_return == 0
-        and any(self._occupancy_bounds)
+        and self.finite_occupancy_physics_required
         and failure not in ('invalid_finite_occupancy_trajectory',
                             'finite_occupancy_postcheck_requires_native_success',
                             'finite_occupancy_reintegration_requires_native_success')):

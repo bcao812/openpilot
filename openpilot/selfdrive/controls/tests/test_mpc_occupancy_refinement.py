@@ -52,7 +52,7 @@ def run_problem(defect):
   mpc.solver = recorder
   mpc.set_cur_state(10.0, 0.0)
   mpc.set_weights(prev_accel_constraint=False)
-  lead = object_lead(17, distance=60.0, speed=2.0, ego_speed=10.0,
+  lead = object_lead(17, distance=20.0, speed=2.0, ego_speed=10.0,
                      start=1.0, end=2.0, path='entering', persistent=False)
   mpc.update(fused_state(lead), reference=MpcReference(20.0),
              now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
@@ -131,8 +131,8 @@ def test_rest_goal_is_revalidated_for_the_refined_candidate(kind):
   epoch = reference.typed_model.source.model_mono_time_ns
   mpc.set_cur_state(speed, 0.0)
   mpc.set_weights(prev_accel_constraint=False)
-  lead = object_lead(17, distance=60.0, speed=2.0, ego_speed=speed,
-                     start=1.0, end=2.0, path='entering', persistent=False, epoch=epoch)
+  lead = object_lead(17, distance=8.0, speed=0.0, ego_speed=speed,
+                     start=.1, end=2.0, path='entering', persistent=False, epoch=epoch)
   original_check = mpc.occupancy_trajectory_error
   original_rest = mpc.project_rest_precision
   checked_solutions = []

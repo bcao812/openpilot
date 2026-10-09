@@ -91,7 +91,7 @@ def test_measured_200ms_deadline_retires_every_view_and_preserves_other_objects(
   assert not after.leadOne.present and after.leadTwo.present
   assert consumer.expired_identities == ((SESSION, 7),) and not consumer.degraded
   assert native.to_dict() == before and native.to_bytes() == serialized
-  assert after.fusionClearedTracks == native.fusionClearedTracks
+  assert tuple(after.fusionClearedTracks) == tuple(native.fusionClearedTracks)
 
 
 @pytest.mark.parametrize('source,caution', [('radar', False), ('fused', False), ('radar', True)])

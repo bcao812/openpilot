@@ -8,13 +8,15 @@ import pytest
 from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.selfdrive.controls.lib.lead_qualification import _StructSnapshot, qualified_lead
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  CRASH_DISTANCE, MPC_INVALID_INPUT, N, T_IDXS, LongitudinalMpc, MpcReference,
+  CRASH_DISTANCE, MPC_INVALID_INPUT, N, QP_FEASIBILITY_TOL, REFERENCE_BOUND, T_IDXS, LongitudinalMpc, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
+from openpilot.selfdrive.controls.tests.test_mpc_problem_contract import NativeProblemRecorder
 from openpilot.selfdrive.controls.tests.test_radar_consumption import coast, consume_frame, radar_frame
 from openpilot.selfdrive.controls.tests.test_radar_fusion_mpc import (
   EPOCH_NS, action, fused_state, late_passing_objects, object_lead, solve,
 )
+from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
 
 
 def supported(lead, end, version=1):
@@ -86,7 +88,103 @@ def test_measured_close_opposing_object_without_lateral_support_still_brakes():
   assert projection.occupied.all() and projection.conflict_end == 10.0
   assert projection.hard_conflict_end == 0.0 and not any(planner._occupancy_bounds)
   assert action(planner) <= -1.0 and np.min(planner.a_solution[1:]) <= -3.0
+  assert planner.finite_occupancy_physics_required and planner._native_occupancy_bounds_active
+  assert planner.trajectory_minimum_velocity(planner.x_sol, planner.j_solution) >= -QP_FEASIBILITY_TOL
+  assert np.all(planner.a_solution[1:] >= planner.params[1:, 0] - QP_FEASIBILITY_TOL)
+  assert np.all(planner.a_solution[1:] <= planner.params[1:, 1] + QP_FEASIBILITY_TOL)
+  assert planner.occupancy_trajectory_error(planner.x_sol, planner.j_solution,
+                                            tolerance=QP_FEASIBILITY_TOL, post_native=True) == ''
   assert planner.finite_risk_evidence == () and vars(lead.evidence) == original
+
+
+@pytest.mark.parametrize('next_kind', ['no_objects', 'persistent_follow', 'nonfusion', 'reset_direct_run'])
+def test_soft_tail_physics_is_installed_and_cleared_with_its_actual_native_lifecycle(next_kind):
+  planner = LongitudinalMpc()
+  recorder = NativeProblemRecorder(planner.solver)
+  planner.solver = recorder
+  planner.set_cur_state(10.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+  lead = supported(object_lead(distance=30.0, speed=5.0, persistent=False), 0.0)
+  planner.update(fused_state(lead), reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.solution_status == 0
+  assert planner.finite_occupancy_physics_required and planner._native_occupancy_bounds_active
+  assert not any(planner._occupancy_bounds)
+  for stage in range(N):
+    # There is a forward-motion certificate in every interval and no position
+    # row. The native state boxes, including the terminal box, are physical.
+    assert recorder.constraints[stage, 'C'][0, 1] == 1.0
+    assert recorder.constraints[stage, 'lg'][0] == 0.0
+    np.testing.assert_array_equal(recorder.constraints[stage, 'C'][:, 0], 0.0)
+  for stage in range(1, N+1):
+    np.testing.assert_array_equal(recorder.constraints[stage, 'lbx'], [0.0, planner.params[stage, 0]])
+    assert recorder.constraints[stage, 'ubx'][1] == planner.params[stage, 1]
+
+  def no_finite_physics_installed():
+    for stage in range(N):
+      np.testing.assert_array_equal(recorder.constraints[stage, 'C'], 0.0)
+      np.testing.assert_array_equal(recorder.constraints[stage, 'D'], 0.0)
+      np.testing.assert_array_equal(recorder.constraints[stage, 'lg'], -1.0)
+      np.testing.assert_array_equal(recorder.constraints[stage, 'ug'], 1.0)
+    for stage in range(1, N+1):
+      np.testing.assert_array_equal(recorder.constraints[stage, 'lbx'], -REFERENCE_BOUND)
+      np.testing.assert_array_equal(recorder.constraints[stage, 'ubx'], REFERENCE_BOUND)
+
+  recorder.before_solve = no_finite_physics_installed
+  if next_kind == 'reset_direct_run':
+    parameters = planner.params.copy()
+    planner.reset()
+    no_finite_physics_installed()  # reset itself must clear native rows first.
+    planner.params[:] = parameters
+    planner.set_cur_state(10.0, 0.0)
+    planner.run()
+  else:
+    state = (fused_state(object_lead(distance=30.0, speed=5.0)) if next_kind == 'persistent_follow'
+             else radar_state() if next_kind == 'nonfusion' else fused_state())
+    planner.update(state, reference=MpcReference(20.0), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  assert planner.solution_status == 0
+  assert not planner.finite_occupancy_physics_required and not planner._native_occupancy_bounds_active
+
+
+@pytest.mark.parametrize('support_end', [0.0, .1])
+def test_continuous_velocity_row_after_position_support_is_still_installed_and_rechecked(support_end):
+  lead = supported(object_lead(distance=30.0, speed=5.0, persistent=False), support_end)
+  planner = solve(fused_state(lead))
+  stage = N-1
+  assert planner._occupancy_bounds[stage] is None
+  C, D, lower, _ = planner._rest_constraint_buffers[stage]
+  assert C[0, 1] == 1.0 and lower[0] == 0.0
+  assert planner.occupancy_trajectory_error(planner.x_sol, planner.j_solution,
+                                            tolerance=QP_FEASIBILITY_TOL, post_native=True) == ''
+  # Reinstall a stricter row after the solve. Acceptance must use this actual
+  # final problem even though no position row exists in this late interval.
+  lower[0] = float(C[0] @ planner.x_sol[stage] + D[0, 0] * planner.j_solution[stage]) + .1
+  planner.solver.constraints_set(stage, 'lg', lower)
+  assert planner.occupancy_trajectory_error(planner.x_sol, planner.j_solution,
+                                            tolerance=QP_FEASIBILITY_TOL, post_native=True) == 'finite_occupancy_reintegration_constraints_violated'
+
+
+@pytest.mark.parametrize('support_end', [0.0, .005])
+def test_reverse_between_positive_nodes_after_support_end_is_not_accepted(support_end):
+  planner = LongitudinalMpc()
+  planner.set_cur_state(.0009, -.1)
+  lead = supported(object_lead(distance=2.0, speed=0.0, ego_speed=.0009, persistent=False), support_end)
+  planner._fusion_projections = planner.fusion_lead_projections(fused_state(lead), now_ns=EPOCH_NS, reference_ns=EPOCH_NS)
+  planner._occupancy_bounds = planner.finite_occupancy_bounds()
+  planner.params[:, 0], planner.params[:, 1] = ACCEL_MIN, 2.0
+  jerks = np.zeros(N)
+  jerks[0] = 5.0
+  states = np.empty((N+1, 3))
+  states[0] = planner.x0
+  for stage, duration in enumerate(np.diff(T_IDXS)):
+    position, velocity, acceleration = states[stage]
+    jerk = jerks[stage]
+    states[stage+1] = (position + velocity*duration + .5*acceleration*duration**2 + jerk*duration**3/6.0,
+                       velocity + acceleration*duration + .5*jerk*duration**2, acceleration + jerk*duration)
+  assert np.min(states[:, 1]) > 0.0
+  assert np.min(states[:, 2]) >= ACCEL_MIN and np.max(states[:, 2]) <= 2.0
+  # Its analytic minimum is at .02 s, outside either supported prefix.
+  assert support_end < .02 < T_IDXS[1] and .0009 - .1**2 / (2*5.0) < 0.0
+  assert planner.occupancy_trajectory_error(states, jerks, tolerance=QP_FEASIBILITY_TOL) == 'finite_occupancy_continuous_velocity_violated'
 
 
 def test_expired_support_is_not_revived_by_an_older_initial_state_or_treated_as_clear():
