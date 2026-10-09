@@ -131,6 +131,7 @@ enum class EventName_91f1992a1f77fb03: uint16_t {
   BIG_MODEL_READY_D_E_P_R_E_C_A_T_E_D,
   BIG_MODEL_FAILED,
   CAR_NOT_READY,
+  LONGITUDINAL_CONTROL_UNAVAILABLE,
 };
 CAPNP_DECLARE_ENUM(EventName, 91f1992a1f77fb03);
 CAPNP_DECLARE_SCHEMA(d692e23d1a247d99);
@@ -481,6 +482,8 @@ enum class LongitudinalPlanSource_b231a753cc079120: uint16_t {
 };
 CAPNP_DECLARE_ENUM(LongitudinalPlanSource, b231a753cc079120);
 CAPNP_DECLARE_SCHEMA(f241315ad87f2721);
+CAPNP_DECLARE_SCHEMA(be730be28b69c647);
+CAPNP_DECLARE_SCHEMA(8caa850813e7758c);
 CAPNP_DECLARE_SCHEMA(d4d51185ac4aa241);
 CAPNP_DECLARE_SCHEMA(bade111db2477c77);
 CAPNP_DECLARE_SCHEMA(d94d738a9e5b3361);
@@ -1993,7 +1996,7 @@ struct LongitudinalPlan {
   struct Deprecated;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(e00b5b3eba12876c, 11, 10)
+    CAPNP_DECLARE_STRUCT_HEADER(e00b5b3eba12876c, 11, 11)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -2008,7 +2011,38 @@ struct LongitudinalPlan::Deprecated {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(f241315ad87f2721, 11, 10)
+    CAPNP_DECLARE_STRUCT_HEADER(f241315ad87f2721, 11, 11)
+    #if !CAPNP_LITE
+    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
+    #endif  // !CAPNP_LITE
+  };
+};
+
+struct LongitudinalContinuation {
+  LongitudinalContinuation() = delete;
+
+  class Reader;
+  class Builder;
+  class Pipeline;
+  struct Candidate;
+
+  struct _capnpPrivate {
+    CAPNP_DECLARE_STRUCT_HEADER(be730be28b69c647, 9, 2)
+    #if !CAPNP_LITE
+    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
+    #endif  // !CAPNP_LITE
+  };
+};
+
+struct LongitudinalContinuation::Candidate {
+  Candidate() = delete;
+
+  class Reader;
+  class Builder;
+  class Pipeline;
+
+  struct _capnpPrivate {
+    CAPNP_DECLARE_STRUCT_HEADER(8caa850813e7758c, 3, 3)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -2053,7 +2087,7 @@ struct LongitudinalMotionState {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(d94d738a9e5b3361, 8, 3)
+    CAPNP_DECLARE_STRUCT_HEADER(d94d738a9e5b3361, 14, 4)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -10409,6 +10443,8 @@ public:
 
   inline bool getActivePublished() const;
 
+  inline bool getLongitudinalControlUnavailableAdded() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -10540,6 +10576,9 @@ public:
 
   inline bool getActivePublished();
   inline void setActivePublished(bool value);
+
+  inline bool getLongitudinalControlUnavailableAdded();
+  inline void setLongitudinalControlUnavailableAdded(bool value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -14247,6 +14286,9 @@ public:
 
   inline bool getRadarRiskUnresolved() const;
 
+  inline bool hasContinuation() const;
+  inline  ::cereal::LongitudinalContinuation::Reader getContinuation() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -14366,6 +14408,13 @@ public:
   inline bool getRadarRiskUnresolved();
   inline void setRadarRiskUnresolved(bool value);
 
+  inline bool hasContinuation();
+  inline  ::cereal::LongitudinalContinuation::Builder getContinuation();
+  inline void setContinuation( ::cereal::LongitudinalContinuation::Reader value);
+  inline  ::cereal::LongitudinalContinuation::Builder initContinuation();
+  inline void adoptContinuation(::capnp::Orphan< ::cereal::LongitudinalContinuation>&& value);
+  inline ::capnp::Orphan< ::cereal::LongitudinalContinuation> disownContinuation();
+
 private:
   ::capnp::_::StructBuilder _builder;
   template <typename, ::capnp::Kind>
@@ -14388,6 +14437,7 @@ public:
   inline  ::cereal::LongitudinalMotionIntent::Pipeline getMotionIntent();
   inline  ::cereal::LongitudinalReference::Pipeline getReference();
   inline  ::cereal::LongitudinalPlanDiagnostics::Pipeline getDiagnostics();
+  inline  ::cereal::LongitudinalContinuation::Pipeline getContinuation();
 private:
   ::capnp::AnyPointer::Pipeline _typeless;
   friend class ::capnp::PipelineHook;
@@ -14611,6 +14661,277 @@ public:
       : _typeless(kj::mv(typeless)) {}
 
   inline  ::cereal::GpsTrajectory::Pipeline getGpsTrajectory();
+private:
+  ::capnp::AnyPointer::Pipeline _typeless;
+  friend class ::capnp::PipelineHook;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+};
+#endif  // !CAPNP_LITE
+
+class LongitudinalContinuation::Reader {
+public:
+  typedef LongitudinalContinuation Reads;
+
+  Reader() = default;
+  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
+
+  inline ::capnp::MessageSize totalSize() const {
+    return _reader.totalSize().asPublic();
+  }
+
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const {
+    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
+  }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint8_t getVersion() const;
+
+  inline  ::uint64_t getEpisodeStartMonoTime() const;
+
+  inline  ::uint64_t getDonorProducerMonoTime() const;
+
+  inline  ::uint64_t getDonorSourceMonoTime() const;
+
+  inline  ::uint64_t getDonorModelMonoTime() const;
+
+  inline  ::uint64_t getValidUntilMonoTime() const;
+
+  inline bool hasCandidate() const;
+  inline  ::cereal::LongitudinalContinuation::Candidate::Reader getCandidate() const;
+
+  inline bool hasReason() const;
+  inline  ::capnp::Text::Reader getReason() const;
+
+  inline bool getIndependentBrakingValid() const;
+
+  inline float getIndependentBrakingAccel() const;
+
+  inline float getTailExtensionSeconds() const;
+
+  inline double getValidationTime() const;
+
+  inline bool getValid() const;
+
+  inline double getSourceCruiseKph() const;
+
+private:
+  ::capnp::_::StructReader _reader;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::List;
+  friend class ::capnp::MessageBuilder;
+  friend class ::capnp::Orphanage;
+};
+
+class LongitudinalContinuation::Builder {
+public:
+  typedef LongitudinalContinuation Builds;
+
+  Builder() = delete;  // Deleted to discourage incorrect usage.
+                       // You can explicitly initialize to nullptr instead.
+  inline Builder(decltype(nullptr)) {}
+  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
+  inline operator Reader() const { return Reader(_builder.asReader()); }
+  inline Reader asReader() const { return *this; }
+
+  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const { return asReader().toString(); }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint8_t getVersion();
+  inline void setVersion( ::uint8_t value);
+
+  inline  ::uint64_t getEpisodeStartMonoTime();
+  inline void setEpisodeStartMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getDonorProducerMonoTime();
+  inline void setDonorProducerMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getDonorSourceMonoTime();
+  inline void setDonorSourceMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getDonorModelMonoTime();
+  inline void setDonorModelMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getValidUntilMonoTime();
+  inline void setValidUntilMonoTime( ::uint64_t value);
+
+  inline bool hasCandidate();
+  inline  ::cereal::LongitudinalContinuation::Candidate::Builder getCandidate();
+  inline void setCandidate( ::cereal::LongitudinalContinuation::Candidate::Reader value);
+  inline  ::cereal::LongitudinalContinuation::Candidate::Builder initCandidate();
+  inline void adoptCandidate(::capnp::Orphan< ::cereal::LongitudinalContinuation::Candidate>&& value);
+  inline ::capnp::Orphan< ::cereal::LongitudinalContinuation::Candidate> disownCandidate();
+
+  inline bool hasReason();
+  inline  ::capnp::Text::Builder getReason();
+  inline void setReason( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initReason(unsigned int size);
+  inline void adoptReason(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownReason();
+
+  inline bool getIndependentBrakingValid();
+  inline void setIndependentBrakingValid(bool value);
+
+  inline float getIndependentBrakingAccel();
+  inline void setIndependentBrakingAccel(float value);
+
+  inline float getTailExtensionSeconds();
+  inline void setTailExtensionSeconds(float value);
+
+  inline double getValidationTime();
+  inline void setValidationTime(double value);
+
+  inline bool getValid();
+  inline void setValid(bool value);
+
+  inline double getSourceCruiseKph();
+  inline void setSourceCruiseKph(double value);
+
+private:
+  ::capnp::_::StructBuilder _builder;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  friend class ::capnp::Orphanage;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+};
+
+#if !CAPNP_LITE
+class LongitudinalContinuation::Pipeline {
+public:
+  typedef LongitudinalContinuation Pipelines;
+
+  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
+  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
+      : _typeless(kj::mv(typeless)) {}
+
+  inline  ::cereal::LongitudinalContinuation::Candidate::Pipeline getCandidate();
+private:
+  ::capnp::AnyPointer::Pipeline _typeless;
+  friend class ::capnp::PipelineHook;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+};
+#endif  // !CAPNP_LITE
+
+class LongitudinalContinuation::Candidate::Reader {
+public:
+  typedef Candidate Reads;
+
+  Reader() = default;
+  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
+
+  inline ::capnp::MessageSize totalSize() const {
+    return _reader.totalSize().asPublic();
+  }
+
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const {
+    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
+  }
+#endif  // !CAPNP_LITE
+
+  inline double getTargetAccel() const;
+
+  inline bool hasSpeeds() const;
+  inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader getSpeeds() const;
+
+  inline bool hasAccels() const;
+  inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader getAccels() const;
+
+  inline bool hasJerks() const;
+  inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader getJerks() const;
+
+  inline double getSpeedTolerance() const;
+
+  inline double getAccelTolerance() const;
+
+private:
+  ::capnp::_::StructReader _reader;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::List;
+  friend class ::capnp::MessageBuilder;
+  friend class ::capnp::Orphanage;
+};
+
+class LongitudinalContinuation::Candidate::Builder {
+public:
+  typedef Candidate Builds;
+
+  Builder() = delete;  // Deleted to discourage incorrect usage.
+                       // You can explicitly initialize to nullptr instead.
+  inline Builder(decltype(nullptr)) {}
+  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
+  inline operator Reader() const { return Reader(_builder.asReader()); }
+  inline Reader asReader() const { return *this; }
+
+  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const { return asReader().toString(); }
+#endif  // !CAPNP_LITE
+
+  inline double getTargetAccel();
+  inline void setTargetAccel(double value);
+
+  inline bool hasSpeeds();
+  inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder getSpeeds();
+  inline void setSpeeds( ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setSpeeds(::kj::ArrayPtr<const double> value);
+  inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder initSpeeds(unsigned int size);
+  inline void adoptSpeeds(::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>> disownSpeeds();
+
+  inline bool hasAccels();
+  inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder getAccels();
+  inline void setAccels( ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setAccels(::kj::ArrayPtr<const double> value);
+  inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder initAccels(unsigned int size);
+  inline void adoptAccels(::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>> disownAccels();
+
+  inline bool hasJerks();
+  inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder getJerks();
+  inline void setJerks( ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setJerks(::kj::ArrayPtr<const double> value);
+  inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder initJerks(unsigned int size);
+  inline void adoptJerks(::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>> disownJerks();
+
+  inline double getSpeedTolerance();
+  inline void setSpeedTolerance(double value);
+
+  inline double getAccelTolerance();
+  inline void setAccelTolerance(double value);
+
+private:
+  ::capnp::_::StructBuilder _builder;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  friend class ::capnp::Orphanage;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+};
+
+#if !CAPNP_LITE
+class LongitudinalContinuation::Candidate::Pipeline {
+public:
+  typedef Candidate Pipelines;
+
+  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
+  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
+      : _typeless(kj::mv(typeless)) {}
+
 private:
   ::capnp::AnyPointer::Pipeline _typeless;
   friend class ::capnp::PipelineHook;
@@ -14997,6 +15318,23 @@ public:
   inline bool hasObjectInfluences() const;
   inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Reader getObjectInfluences() const;
 
+  inline  ::uint8_t getContinuationVersion() const;
+
+  inline bool getContinuationActive() const;
+
+  inline  ::uint64_t getContinuationEpisodeMonoTime() const;
+
+  inline  ::uint64_t getContinuationDonorProducerMonoTime() const;
+
+  inline  ::uint64_t getContinuationDonorSourceMonoTime() const;
+
+  inline  ::uint64_t getContinuationDonorModelMonoTime() const;
+
+  inline  ::uint64_t getContinuationValidUntilMonoTime() const;
+
+  inline bool hasContinuationReason() const;
+  inline  ::capnp::Text::Reader getContinuationReason() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -15096,6 +15434,34 @@ public:
   inline  ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>::Builder initObjectInfluences(unsigned int size);
   inline void adoptObjectInfluences(::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>&& value);
   inline ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>> disownObjectInfluences();
+
+  inline  ::uint8_t getContinuationVersion();
+  inline void setContinuationVersion( ::uint8_t value);
+
+  inline bool getContinuationActive();
+  inline void setContinuationActive(bool value);
+
+  inline  ::uint64_t getContinuationEpisodeMonoTime();
+  inline void setContinuationEpisodeMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getContinuationDonorProducerMonoTime();
+  inline void setContinuationDonorProducerMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getContinuationDonorSourceMonoTime();
+  inline void setContinuationDonorSourceMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getContinuationDonorModelMonoTime();
+  inline void setContinuationDonorModelMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getContinuationValidUntilMonoTime();
+  inline void setContinuationValidUntilMonoTime( ::uint64_t value);
+
+  inline bool hasContinuationReason();
+  inline  ::capnp::Text::Builder getContinuationReason();
+  inline void setContinuationReason( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initContinuationReason(unsigned int size);
+  inline void adoptContinuationReason(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownContinuationReason();
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -38265,6 +38631,20 @@ inline void LongitudinalSelfdriveDiagnostics::Builder::setActivePublished(bool v
       ::capnp::bounded<30>() * ::capnp::ELEMENTS, value);
 }
 
+inline bool LongitudinalSelfdriveDiagnostics::Reader::getLongitudinalControlUnavailableAdded() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<31>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalSelfdriveDiagnostics::Builder::getLongitudinalControlUnavailableAdded() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<31>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalSelfdriveDiagnostics::Builder::setLongitudinalControlUnavailableAdded(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<31>() * ::capnp::ELEMENTS, value);
+}
+
 inline bool LongitudinalControlDiagnostics::Reader::hasContext() const {
   return !_reader.getPointerField(
       ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
@@ -44196,6 +44576,45 @@ inline void LongitudinalPlan::Builder::setRadarRiskUnresolved(bool value) {
       ::capnp::bounded<15>() * ::capnp::ELEMENTS, value);
 }
 
+inline bool LongitudinalPlan::Reader::hasContinuation() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalPlan::Builder::hasContinuation() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::LongitudinalContinuation::Reader LongitudinalPlan::Reader::getContinuation() const {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation>::get(_reader.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS));
+}
+inline  ::cereal::LongitudinalContinuation::Builder LongitudinalPlan::Builder::getContinuation() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation>::get(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::LongitudinalContinuation::Pipeline LongitudinalPlan::Pipeline::getContinuation() {
+  return  ::cereal::LongitudinalContinuation::Pipeline(_typeless.getPointerField(10));
+}
+#endif  // !CAPNP_LITE
+inline void LongitudinalPlan::Builder::setContinuation( ::cereal::LongitudinalContinuation::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation>::set(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::LongitudinalContinuation::Builder LongitudinalPlan::Builder::initContinuation() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation>::init(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS));
+}
+inline void LongitudinalPlan::Builder::adoptContinuation(
+    ::capnp::Orphan< ::cereal::LongitudinalContinuation>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation>::adopt(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::LongitudinalContinuation> LongitudinalPlan::Builder::disownContinuation() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation>::disown(_builder.getPointerField(
+      ::capnp::bounded<10>() * ::capnp::POINTERS));
+}
+
 inline bool LongitudinalPlan::Deprecated::Reader::getLateralValid() const {
   return _reader.getDataField<bool>(
       ::capnp::bounded<0>() * ::capnp::ELEMENTS);
@@ -44641,6 +45060,403 @@ inline  ::cereal::LongitudinalPersonality LongitudinalPlan::Deprecated::Builder:
 inline void LongitudinalPlan::Deprecated::Builder::setPersonality( ::cereal::LongitudinalPersonality value) {
   _builder.setDataField< ::cereal::LongitudinalPersonality>(
       ::capnp::bounded<40>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint8_t LongitudinalContinuation::Reader::getVersion() const {
+  return _reader.getDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint8_t LongitudinalContinuation::Builder::getVersion() {
+  return _builder.getDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setVersion( ::uint8_t value) {
+  _builder.setDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalContinuation::Reader::getEpisodeStartMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalContinuation::Builder::getEpisodeStartMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setEpisodeStartMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalContinuation::Reader::getDonorProducerMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalContinuation::Builder::getDonorProducerMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setDonorProducerMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalContinuation::Reader::getDonorSourceMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalContinuation::Builder::getDonorSourceMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setDonorSourceMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalContinuation::Reader::getDonorModelMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalContinuation::Builder::getDonorModelMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setDonorModelMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalContinuation::Reader::getValidUntilMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalContinuation::Builder::getValidUntilMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setValidUntilMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalContinuation::Reader::hasCandidate() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalContinuation::Builder::hasCandidate() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::LongitudinalContinuation::Candidate::Reader LongitudinalContinuation::Reader::getCandidate() const {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation::Candidate>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::cereal::LongitudinalContinuation::Candidate::Builder LongitudinalContinuation::Builder::getCandidate() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation::Candidate>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::LongitudinalContinuation::Candidate::Pipeline LongitudinalContinuation::Pipeline::getCandidate() {
+  return  ::cereal::LongitudinalContinuation::Candidate::Pipeline(_typeless.getPointerField(0));
+}
+#endif  // !CAPNP_LITE
+inline void LongitudinalContinuation::Builder::setCandidate( ::cereal::LongitudinalContinuation::Candidate::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation::Candidate>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::LongitudinalContinuation::Candidate::Builder LongitudinalContinuation::Builder::initCandidate() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation::Candidate>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void LongitudinalContinuation::Builder::adoptCandidate(
+    ::capnp::Orphan< ::cereal::LongitudinalContinuation::Candidate>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation::Candidate>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::LongitudinalContinuation::Candidate> LongitudinalContinuation::Builder::disownCandidate() {
+  return ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation::Candidate>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline bool LongitudinalContinuation::Reader::hasReason() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalContinuation::Builder::hasReason() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader LongitudinalContinuation::Reader::getReason() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder LongitudinalContinuation::Builder::getReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline void LongitudinalContinuation::Builder::setReason( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder LongitudinalContinuation::Builder::initReason(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalContinuation::Builder::adoptReason(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> LongitudinalContinuation::Builder::disownReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+
+inline bool LongitudinalContinuation::Reader::getIndependentBrakingValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalContinuation::Builder::getIndependentBrakingValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setIndependentBrakingValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS, value);
+}
+
+inline float LongitudinalContinuation::Reader::getIndependentBrakingAccel() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline float LongitudinalContinuation::Builder::getIndependentBrakingAccel() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setIndependentBrakingAccel(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline float LongitudinalContinuation::Reader::getTailExtensionSeconds() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+
+inline float LongitudinalContinuation::Builder::getTailExtensionSeconds() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setTailExtensionSeconds(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
+}
+
+inline double LongitudinalContinuation::Reader::getValidationTime() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+
+inline double LongitudinalContinuation::Builder::getValidationTime() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setValidationTime(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalContinuation::Reader::getValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalContinuation::Builder::getValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS, value);
+}
+
+inline double LongitudinalContinuation::Reader::getSourceCruiseKph() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+
+inline double LongitudinalContinuation::Builder::getSourceCruiseKph() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Builder::setSourceCruiseKph(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS, value);
+}
+
+inline double LongitudinalContinuation::Candidate::Reader::getTargetAccel() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline double LongitudinalContinuation::Candidate::Builder::getTargetAccel() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Candidate::Builder::setTargetAccel(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalContinuation::Candidate::Reader::hasSpeeds() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalContinuation::Candidate::Builder::hasSpeeds() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader LongitudinalContinuation::Candidate::Reader::getSpeeds() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder LongitudinalContinuation::Candidate::Builder::getSpeeds() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void LongitudinalContinuation::Candidate::Builder::setSpeeds( ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline void LongitudinalContinuation::Candidate::Builder::setSpeeds(::kj::ArrayPtr<const double> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder LongitudinalContinuation::Candidate::Builder::initSpeeds(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalContinuation::Candidate::Builder::adoptSpeeds(
+    ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>> LongitudinalContinuation::Candidate::Builder::disownSpeeds() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline bool LongitudinalContinuation::Candidate::Reader::hasAccels() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalContinuation::Candidate::Builder::hasAccels() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader LongitudinalContinuation::Candidate::Reader::getAccels() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder LongitudinalContinuation::Candidate::Builder::getAccels() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline void LongitudinalContinuation::Candidate::Builder::setAccels( ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline void LongitudinalContinuation::Candidate::Builder::setAccels(::kj::ArrayPtr<const double> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder LongitudinalContinuation::Candidate::Builder::initAccels(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalContinuation::Candidate::Builder::adoptAccels(
+    ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>> LongitudinalContinuation::Candidate::Builder::disownAccels() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+
+inline bool LongitudinalContinuation::Candidate::Reader::hasJerks() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalContinuation::Candidate::Builder::hasJerks() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader LongitudinalContinuation::Candidate::Reader::getJerks() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder LongitudinalContinuation::Candidate::Builder::getJerks() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline void LongitudinalContinuation::Candidate::Builder::setJerks( ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline void LongitudinalContinuation::Candidate::Builder::setJerks(::kj::ArrayPtr<const double> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder LongitudinalContinuation::Candidate::Builder::initJerks(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalContinuation::Candidate::Builder::adoptJerks(
+    ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>> LongitudinalContinuation::Candidate::Builder::disownJerks() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+
+inline double LongitudinalContinuation::Candidate::Reader::getSpeedTolerance() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline double LongitudinalContinuation::Candidate::Builder::getSpeedTolerance() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Candidate::Builder::setSpeedTolerance(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline double LongitudinalContinuation::Candidate::Reader::getAccelTolerance() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline double LongitudinalContinuation::Candidate::Builder::getAccelTolerance() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalContinuation::Candidate::Builder::setAccelTolerance(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
 }
 
 inline  ::uint8_t LongitudinalMotionIntent::Reader::getVersion() const {
@@ -45481,6 +46297,138 @@ inline void LongitudinalMotionState::Builder::adoptObjectInfluences(
 inline ::capnp::Orphan< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>> LongitudinalMotionState::Builder::disownObjectInfluences() {
   return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::LongitudinalObjectInfluence,  ::capnp::Kind::STRUCT>>::disown(_builder.getPointerField(
       ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+
+inline  ::uint8_t LongitudinalMotionState::Reader::getContinuationVersion() const {
+  return _reader.getDataField< ::uint8_t>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint8_t LongitudinalMotionState::Builder::getContinuationVersion() {
+  return _builder.getDataField< ::uint8_t>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalMotionState::Builder::setContinuationVersion( ::uint8_t value) {
+  _builder.setDataField< ::uint8_t>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalMotionState::Reader::getContinuationActive() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalMotionState::Builder::getContinuationActive() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalMotionState::Builder::setContinuationActive(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalMotionState::Reader::getContinuationEpisodeMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalMotionState::Builder::getContinuationEpisodeMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalMotionState::Builder::setContinuationEpisodeMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalMotionState::Reader::getContinuationDonorProducerMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalMotionState::Builder::getContinuationDonorProducerMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalMotionState::Builder::setContinuationDonorProducerMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalMotionState::Reader::getContinuationDonorSourceMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalMotionState::Builder::getContinuationDonorSourceMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalMotionState::Builder::setContinuationDonorSourceMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalMotionState::Reader::getContinuationDonorModelMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalMotionState::Builder::getContinuationDonorModelMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalMotionState::Builder::setContinuationDonorModelMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalMotionState::Reader::getContinuationValidUntilMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalMotionState::Builder::getContinuationValidUntilMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalMotionState::Builder::setContinuationValidUntilMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalMotionState::Reader::hasContinuationReason() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS).isNull();
+}
+inline bool LongitudinalMotionState::Builder::hasContinuationReason() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader LongitudinalMotionState::Reader::getContinuationReason() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder LongitudinalMotionState::Builder::getContinuationReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+inline void LongitudinalMotionState::Builder::setContinuationReason( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder LongitudinalMotionState::Builder::initContinuationReason(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), size);
+}
+inline void LongitudinalMotionState::Builder::adoptContinuationReason(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> LongitudinalMotionState::Builder::disownContinuationReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
 }
 
 inline bool UiPlan::Reader::hasPosition() const {

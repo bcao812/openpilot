@@ -366,7 +366,7 @@ struct RadarLeadEvidence {
 
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(8723944d29d8bcab, 14, 3)
+    CAPNP_DECLARE_STRUCT_HEADER(8723944d29d8bcab, 15, 3)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -586,7 +586,7 @@ struct LongitudinalPlanSP::DynamicExperimentalControl {
 
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(bc6a5bae100ebf77, 1, 0)
+    CAPNP_DECLARE_STRUCT_HEADER(bc6a5bae100ebf77, 2, 0)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1515,6 +1515,10 @@ public:
 
   inline  ::uint64_t getFollowGeometryMonoTime() const;
 
+  inline  ::uint8_t getConflictSupportVersion() const;
+
+  inline double getConflictSupportedEnd() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -1653,6 +1657,12 @@ public:
 
   inline  ::uint64_t getFollowGeometryMonoTime();
   inline void setFollowGeometryMonoTime( ::uint64_t value);
+
+  inline  ::uint8_t getConflictSupportVersion();
+  inline void setConflictSupportVersion( ::uint8_t value);
+
+  inline double getConflictSupportedEnd();
+  inline void setConflictSupportedEnd(double value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -3058,6 +3068,12 @@ public:
 
   inline bool getActive() const;
 
+  inline  ::uint8_t getScopeVersion() const;
+
+  inline bool getScopeValid() const;
+
+  inline  ::uint64_t getScopeSourceMonoTime() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -3094,6 +3110,15 @@ public:
 
   inline bool getActive();
   inline void setActive(bool value);
+
+  inline  ::uint8_t getScopeVersion();
+  inline void setScopeVersion( ::uint8_t value);
+
+  inline bool getScopeValid();
+  inline void setScopeValid(bool value);
+
+  inline  ::uint64_t getScopeSourceMonoTime();
+  inline void setScopeSourceMonoTime( ::uint64_t value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -8272,6 +8297,34 @@ inline void RadarLeadEvidence::Builder::setFollowGeometryMonoTime( ::uint64_t va
       ::capnp::bounded<13>() * ::capnp::ELEMENTS, value);
 }
 
+inline  ::uint8_t RadarLeadEvidence::Reader::getConflictSupportVersion() const {
+  return _reader.getDataField< ::uint8_t>(
+      ::capnp::bounded<74>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint8_t RadarLeadEvidence::Builder::getConflictSupportVersion() {
+  return _builder.getDataField< ::uint8_t>(
+      ::capnp::bounded<74>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setConflictSupportVersion( ::uint8_t value) {
+  _builder.setDataField< ::uint8_t>(
+      ::capnp::bounded<74>() * ::capnp::ELEMENTS, value);
+}
+
+inline double RadarLeadEvidence::Reader::getConflictSupportedEnd() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
+}
+
+inline double RadarLeadEvidence::Builder::getConflictSupportedEnd() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
+}
+inline void RadarLeadEvidence::Builder::setConflictSupportedEnd(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<14>() * ::capnp::ELEMENTS, value);
+}
+
 inline  ::uint8_t LongitudinalObjectInfluence::Reader::getVersion() const {
   return _reader.getDataField< ::uint8_t>(
       ::capnp::bounded<0>() * ::capnp::ELEMENTS);
@@ -9929,6 +9982,48 @@ inline bool LongitudinalPlanSP::DynamicExperimentalControl::Builder::getActive()
 inline void LongitudinalPlanSP::DynamicExperimentalControl::Builder::setActive(bool value) {
   _builder.setDataField<bool>(
       ::capnp::bounded<17>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint8_t LongitudinalPlanSP::DynamicExperimentalControl::Reader::getScopeVersion() const {
+  return _reader.getDataField< ::uint8_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint8_t LongitudinalPlanSP::DynamicExperimentalControl::Builder::getScopeVersion() {
+  return _builder.getDataField< ::uint8_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalPlanSP::DynamicExperimentalControl::Builder::setScopeVersion( ::uint8_t value) {
+  _builder.setDataField< ::uint8_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool LongitudinalPlanSP::DynamicExperimentalControl::Reader::getScopeValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS);
+}
+
+inline bool LongitudinalPlanSP::DynamicExperimentalControl::Builder::getScopeValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalPlanSP::DynamicExperimentalControl::Builder::setScopeValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t LongitudinalPlanSP::DynamicExperimentalControl::Reader::getScopeSourceMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalPlanSP::DynamicExperimentalControl::Builder::getScopeSourceMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalPlanSP::DynamicExperimentalControl::Builder::setScopeSourceMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
 }
 
 inline bool LongitudinalPlanSP::SmartCruiseControl::Reader::hasVision() const {

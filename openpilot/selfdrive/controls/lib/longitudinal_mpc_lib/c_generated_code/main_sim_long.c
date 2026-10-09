@@ -92,6 +92,8 @@ int main()
     p[9] = 0.0;
     p[10] = 6.0;
     p[11] = 6.0;
+    p[12] = 0.0;
+    p[13] = 0.0;
 
     long_acados_sim_update_params(capsule, p, NP);
   
