@@ -179,16 +179,48 @@ def test_explicit_rejection_also_revokes_retained_loss_memory_before_radar_retur
 
 
 @pytest.mark.parametrize('reason', ['sourceGap', 'visionUnqualified', 'noMatch', 'ambiguous'])
-def test_missing_association_alone_does_not_revoke_continuous_confirmed_camera(reason):
+@pytest.mark.parametrize('radar_distance, visual_distance', [(17.15, 22.71), (17.30, 22.45)])
+def test_current_soft_rejection_blocks_farther_visual_replacement_until_reconfirmation(reason, radar_distance, visual_distance):
+  controller = HondaRadarControl()
+  bias = radar_distance - visual_distance
+  controller.update(**scene(tracks=[radar(distance=radar_distance)], leads=[vision(distance=visual_distance)],
+                            bindings=[binding(bias_x=bias)]))
+  suspension = binding(bias_x=bias, identityState='unresolved', identityReason=reason, rejectionMonoTime=START + STEP)
+  result = controller.update(**scene(1, tracks=[], leads=[vision(distance=visual_distance)], bindings=[suspension]))
+  # These farther visual replacements were observed in the recorded window.
+  # Keep the nearer radar coast until this association is currently eligible.
+  assert len(result.objects) == 2
+  assert all(lead['evidence']['reason'] != 'visionFallback' for lead in result.objects)
+  assert result.leads[0]['dRel'] == pytest.approx(radar_distance)
+  retained = next(lead for lead in result.objects if lead['evidence']['trackId'] == 1)
+  assert retained['evidence']['source'] == 'predicted' and retained['evidence']['coasting']
+  assert retained['evidence']['brakeQualified']
+  assert not any(retained['evidence'][purpose] for purpose in ('followQualified', 'stopQualified', 'departureQualified'))
+  assert retained['evidence']['positionMonoTime'] == START
+  assert retained['evidence']['velocityMonoTime'] == START
+  assert controller._tracks[1].last_vision['evidence']['estimateMonoTime'] == START
+  assert any(lead['evidence']['source'] == 'vision' and lead['dRel'] == visual_distance for lead in result.objects)
+  recovered = controller.update(**scene(4, tracks=[radar(4, distance=radar_distance)],
+                                       leads=[vision(distance=visual_distance)],
+                                       bindings=[binding(bias_x=bias, bindingStartMonoTime=START + 2 * STEP,
+                                                         bindingSamples=3, identityReason='reconfirmed')]))
+  assert len(recovered.objects) == 1
+  assert recovered.objects[0]['dRel'] == pytest.approx(radar_distance)
+  assert recovered.objects[0]['evidence']['source'] == 'fused'
+  assert all(recovered.objects[0]['evidence'][purpose] for purpose in ('followQualified', 'stopQualified', 'departureQualified'))
+  assert controller._tracks[1].last_vision['evidence']['estimateMonoTime'] == START + 4 * STEP
+
+
+def test_soft_rejection_is_per_frame_when_optional_observer_goes_missing():
   controller = HondaRadarControl()
   controller.update(**scene(leads=[vision()], bindings=[binding()]))
-  suspension = binding(identityState='unresolved', identityReason=reason, rejectionMonoTime=START + STEP)
-  result = controller.update(**scene(1, tracks=[], leads=[vision()], bindings=[suspension]))
+  suspension = binding(identityState='unresolved', identityReason='sourceGap', rejectionMonoTime=START + STEP)
+  rejected = controller.update(**scene(1, tracks=[], leads=[vision()], bindings=[suspension]))
+  assert all(lead['evidence']['reason'] != 'visionFallback' for lead in rejected.objects)
+  assert controller._tracks[1].last_vision is not None
+  result = controller.update(**observer_gap(2))
   assert len(result.objects) == 1 and result.objects[0]['evidence']['reason'] == 'visionFallback'
-  for frame in range(2, 10):
-    result = controller.update(**observer_gap(frame))
-    assert len(result.objects) == 1 and result.objects[0]['evidence']['reason'] == 'visionFallback'
-    assert not result.degraded and not result.risk_unresolved
+  assert not result.degraded and not result.risk_unresolved
 
 
 @pytest.mark.parametrize('changes', [{'index': 1}, {'identifier': 2}])

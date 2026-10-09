@@ -17,7 +17,7 @@ from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, STOP_RELEASE_ACCEL, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  J_EGO_COST, MODEL_A_REF, MODEL_BRAKING_PRIORITY, MODEL_V_REF, MPC_GOAL_INFEASIBLE,
+  COMFORT_NORMALIZER, J_EGO_COST, MODEL_A_REF, MODEL_BRAKING_PRIORITY, MODEL_V_REF, MPC_GOAL_INFEASIBLE, RISK_NORMALIZER,
   PARAM_DIM, REST_STATE_TOL, T_IDXS, TYPED_MODEL_MODE, LongitudinalMpc, LongitudinalPlanSource, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.model_reference import moving_preference
@@ -103,7 +103,9 @@ def test_matching_generated_solver_has_real_path_and_terminal_slots():
   model_path = Path(__file__).resolve().parents[1] / 'lib/longitudinal_mpc_lib/acados_ocp_long.json'
   generated = json.loads(model_path.read_text())
   assert generated['dims']['nx'] == 3 and generated['dims']['nu'] == 1
-  assert generated['dims']['np'] == PARAM_DIM == 12
+  assert generated['dims']['np'] == PARAM_DIM == 14
+  assert COMFORT_NORMALIZER == 12 and RISK_NORMALIZER == 13
+  assert generated['parameter_values'][COMFORT_NORMALIZER:RISK_NORMALIZER+1] == [0.0, 0.0]
   assert generated['dims']['nbx'] == generated['dims']['nbx_e'] == 2
   assert generated['constraints']['idxbx'] == generated['constraints']['idxbx_e'] == [1, 2]
 

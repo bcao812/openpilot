@@ -987,6 +987,13 @@ class HondaRadarControl:
         active = next((lead for lead in radar_objects if lead['evidence']['trackId'] == identifier), None)
         if identifier in cleared or active is not None and not active['evidence']['coasting']:
           continue
+        # A current soft rejection still blocks replacing the radar obstacle
+        # on this frame. Only explicit identity contradictions clear the saved
+        # visual stream above; an absent optional observer keeps its old rules.
+        rejected = any(b['candidateTrackId'] == identifier and
+                       (b['identityState'] == 'different' or b['rejectionMonoTime']) for b in bindings)
+        if rejected:
+          continue
         fallback = self._visual_fallback(memory, identity_visions, eof, speed, yaw)
         if fallback is not None:
           radar_objects = [lead for lead in radar_objects if lead['evidence']['trackId'] != identifier]

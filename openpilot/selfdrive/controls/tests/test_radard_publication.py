@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from opendbc.car.structs import car
 from openpilot.cereal import messaging
 from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE
 from openpilot.selfdrive.controls.radard import RadarD
@@ -15,16 +16,18 @@ from openpilot.selfdrive.controls.tests.test_radar_consumption import (
 
 class Inputs(dict):
   def __init__(self, now):
-    super().__init__(modelV2=SimpleNamespace(velocity=SimpleNamespace(x=[]), leadsV3=[]),
-                     carState=SimpleNamespace(vEgo=10.0))
-    self[SERVICE] = SimpleNamespace()
-    self.seen = {'modelV2': True, SERVICE: True}
-    self.valid = {SERVICE: True}
-    self.recv_frame = {'carState': now}
-    self.logMonoTime = {'modelV2': now, SERVICE: now}
+    super().__init__((service, getattr(messaging.new_message(service), service))
+                     for service in ('modelV2', 'carState', SERVICE))
+    self['modelV2'].timestampEof = now
+    self['carState'].vEgo = 10.0
+    self['radarTracks'] = car.RadarData.new_message()
+    self.seen = dict.fromkeys(self, True)
+    self.valid = dict.fromkeys(self, True)
+    self.recv_frame = dict.fromkeys(self, now)
+    self.logMonoTime = dict.fromkeys(self, now)
 
-  def all_checks(self, services):
-    return True
+  def all_checks(self, service_list=None):
+    return all(self.seen[service] and self.valid[service] for service in (service_list or self))
 
 
 def update_with_result(rd, frame, now=PUBLICATION, *, enabled=True, scope_missing=False):
@@ -35,7 +38,8 @@ def update_with_result(rd, frame, now=PUBLICATION, *, enabled=True, scope_missin
   )), _unresolved_loss=False, _lost_tracks={}, _session=SESSION)
   rd.control_enabled = Mock(return_value=enabled)
   rd.control_scope_unavailable = scope_missing
-  rd.update(Inputs(now), SimpleNamespace(points=[], errors=[]), now_ns=now)
+  inputs = Inputs(now)
+  rd.update(inputs, inputs['radarTracks'], now_ns=now)
 
 
 def publish_at(rd, now):

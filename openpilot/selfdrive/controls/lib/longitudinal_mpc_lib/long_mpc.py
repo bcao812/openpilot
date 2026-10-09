@@ -35,13 +35,15 @@ MPC_SOURCES = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
 
 X_DIM = 3
 U_DIM = 1
-PARAM_DIM = 12
+PARAM_DIM = 14
 MODEL_V_REF = 6
 MODEL_A_REF = 7
 MODEL_BRAKING_PRIORITY = 8
 TYPED_MODEL_MODE = 9
 COMFORT_STOP_DISTANCE = 10
 RISK_STOP_DISTANCE = 11
+COMFORT_NORMALIZER = 12
+RISK_NORMALIZER = 13
 COST_E_DIM = 5
 COST_DIM = COST_E_DIM + 1
 CONSTR_DIM = 4
@@ -263,8 +265,11 @@ def gen_long_model():
   typed_model_mode = SX.sym('typed_model_mode')
   comfort_stop_distance = SX.sym('comfort_stop_distance')
   risk_stop_distance = SX.sym('risk_stop_distance')
+  comfort_normalizer = SX.sym('comfort_normalizer')
+  risk_normalizer = SX.sym('risk_normalizer')
   model.p = vertcat(a_min, a_max, x_obstacle, a_prev, lead_t_follow, lead_danger_factor,
-                   model_v_ref, model_a_ref, model_braking_priority, typed_model_mode, comfort_stop_distance, risk_stop_distance)
+                   model_v_ref, model_a_ref, model_braking_priority, typed_model_mode, comfort_stop_distance, risk_stop_distance,
+                   comfort_normalizer, risk_normalizer)
 
   # dynamics model
   f_expl = vertcat(v_ego, a_ego, j_ego)
@@ -305,6 +310,11 @@ def gen_long_ocp():
   typed_model_mode = ocp.model.p[TYPED_MODEL_MODE]
   comfort_stop_distance = ocp.model.p[COMFORT_STOP_DISTANCE]
   risk_stop_distance = ocp.model.p[RISK_STOP_DISTANCE]
+  # Zero preserves the original velocity-dependent residual. An unknown
+  # occupancy tail uses this tick's fixed initial-speed scale only when it
+  # actually supplies that residual's separately selected obstacle minimum.
+  comfort_normalizer = if_else(ocp.model.p[COMFORT_NORMALIZER] > 0.0, ocp.model.p[COMFORT_NORMALIZER], v_ego + 10.0)
+  risk_normalizer = if_else(ocp.model.p[RISK_NORMALIZER] > 0.0, ocp.model.p[RISK_NORMALIZER], v_ego + 10.0)
 
   ocp.cost.yref = np.zeros((COST_DIM, ))
   ocp.cost.yref_e = np.zeros((COST_E_DIM, ))
@@ -317,7 +327,7 @@ def gen_long_ocp():
   # from an obstacle at every timestep. This obstacle can be a lead car
   # or other object. In e2e mode we can use x_position targets as a cost
   # instead.
-  distance_error = ((x_obstacle - x_ego) - desired_dist_comfort) / (v_ego + 10.)
+  distance_error = ((x_obstacle - x_ego) - desired_dist_comfort) / comfort_normalizer
   velocity_error, acceleration_error = v_ego - model_v_ref, a_ego - model_a_ref
   # A typed ego preference does not ask us to chase a distant lead. Where
   # admitted lead geometry is tighter than that preference, stronger braking
@@ -340,7 +350,7 @@ def gen_long_ocp():
   constraints = vertcat(v_ego,
                         (a_ego - a_min),
                         (a_max - a_ego),
-                        ((x_obstacle - x_ego) - lead_danger_factor * desired_dist_risk) / (v_ego + 10.))
+                        ((x_obstacle - x_ego) - lead_danger_factor * desired_dist_risk) / risk_normalizer)
   ocp.model.con_h_expr = constraints
 
   x0 = np.zeros(X_DIM)
@@ -361,7 +371,7 @@ def gen_long_ocp():
   ocp.constraints.lg = -np.ones(2)
   ocp.constraints.ug = np.ones(2)
   ocp.parameter_values = np.array([-1.2, 1.2, 0.0, 0.0, get_T_FOLLOW(), LEAD_DANGER_FACTOR,
-                                   0.0, 0.0, 0.0, 0.0, STOP_DISTANCE, STOP_DISTANCE])
+                                   0.0, 0.0, 0.0, 0.0, STOP_DISTANCE, STOP_DISTANCE, 0.0, 0.0])
 
 
   # We put all constraint cost weights to 0 and only set them at runtime
@@ -1719,7 +1729,8 @@ class LongitudinalMpc:
         or states.shape != (N+1, X_DIM) or jerks.shape != (N,)
         or parameters.shape != (N+1, PARAM_DIM)
         or not np.all(np.isfinite(states)) or not np.all(np.isfinite(jerks))
-        or not np.all(np.isfinite(parameters[:, [0, 1, 2, 4, 5, RISK_STOP_DISTANCE]]))
+        or not np.all(np.isfinite(parameters[:, [0, 1, 2, 4, 5, RISK_STOP_DISTANCE, COMFORT_NORMALIZER, RISK_NORMALIZER]]))
+        or np.any(parameters[:, [COMFORT_NORMALIZER, RISK_NORMALIZER]] < 0.0)
         or np.any(parameters[:, 5] <= 0.0)
         or np.any(parameters[:, RISK_STOP_DISTANCE] < 4.0) or np.any(parameters[:, RISK_STOP_DISTANCE] > STOP_DISTANCE)):
       return 'invalid_scheduled_rest_trajectory'
@@ -1744,7 +1755,9 @@ class LongitudinalMpc:
                                              - STOP_DISTANCE + parameters[0, RISK_STOP_DISTANCE]))
     if initial_margin >= -tolerance * (initial_state[1] + 10.0):
       # Keep the original admission rule when no existing deficit needs recovery.
-      if np.any(distance_margin / (states[:, 1] + 10.0) < -tolerance):
+      risk_normalizer = np.where(parameters[:, RISK_NORMALIZER] > 0.0,
+                                 parameters[:, RISK_NORMALIZER], states[:, 1] + 10.0)
+      if np.any(distance_margin / risk_normalizer < -tolerance):
         return 'scheduled_rest_lead_danger_envelope_violated'
     else:
       if (not isinstance(recovery_position_limit, (int, float, np.integer, np.floating))
@@ -2139,12 +2152,17 @@ class LongitudinalMpc:
       jerks[stage] = jerk
     return states, jerks
 
-  def set_reference_problem(self, reference, x_obstacles, sources, accel_min, t_follow, *, lead_slots=None):
+  def set_reference_problem(self, reference, x_obstacles, sources, accel_min, t_follow, *, lead_slots=None,
+                            unknown_tail_masks=None):
     """Install genuine costs and state bounds in this same native problem."""
     if lead_slots is None:
       lead_slots = tuple(MPC_SOURCES.index(source) if source in MPC_SOURCES else None for source in sources)
     if len(lead_slots) != len(sources) or any(slot not in (None, 0, 1) for slot in lead_slots):
       raise ValueError('Invalid compact lead assignment')
+    if (unknown_tail_masks is not None
+        and (unknown_tail_masks.shape != x_obstacles.shape or unknown_tail_masks.dtype != np.bool_
+             or np.any(unknown_tail_masks & ~np.isfinite(x_obstacles)))):
+      raise ValueError('Invalid unknown-tail obstacle assignment')
     typed = reference.typed_model if reference is not None else None
     if typed is not None and not isinstance(typed, ModelReferenceEvidence):
       raise ValueError('Invalid typed model reference')
@@ -2158,8 +2176,10 @@ class LongitudinalMpc:
     self.diagnostic_rest_goal = None
     self.yref[:, :] = 0.0
     self.params[:, MODEL_V_REF:TYPED_MODEL_MODE+1] = 0.0
+    self.params[:, COMFORT_NORMALIZER:RISK_NORMALIZER+1] = 0.0
     selected = np.argmin(x_obstacles, axis=1)
     comfort_selected = selected
+    risk_selected = selected
     self.params[:, COMFORT_STOP_DISTANCE] = STOP_DISTANCE
     self.params[:, RISK_STOP_DISTANCE] = STOP_DISTANCE
     if reference is not None and any(distance < STOP_DISTANCE for distance in reference.lead_risk_stop_distances):
@@ -2174,6 +2194,7 @@ class LongitudinalMpc:
       # min_i(x_i - factor * base_i) is a separate minimum from the raw
       # obstacle and comfort minima. Fold only its base into the native row;
       # p[2] remains the unmodified minimum, and virtual obstacles keep base 6.
+      risk_selected = np.argmin(risk_obstacles, axis=1)
       distance_offset = np.min(risk_obstacles, axis=1) - np.min(x_obstacles, axis=1)
       self.params[:, RISK_STOP_DISTANCE] = np.clip(STOP_DISTANCE - distance_offset / lead_factors, 4.0, STOP_DISTANCE)
     if reference is not None and reference.comfort_stop_distance < STOP_DISTANCE:
@@ -2189,6 +2210,14 @@ class LongitudinalMpc:
       distance_offset = np.min(comfort_obstacles, axis=1) - np.min(x_obstacles, axis=1)
       self.params[:, COMFORT_STOP_DISTANCE] = np.clip(STOP_DISTANCE - distance_offset,
                                                      reference.comfort_stop_distance, STOP_DISTANCE)
+    if unknown_tail_masks is not None:
+      # Compact comfort/risk offsets can choose different physical objects.
+      # Preserve their individual first-minimum tie order and never let an
+      # unselected unknown object change another residual's normalization.
+      stages = np.arange(N+1)
+      fixed_normalizer = max(float(self.x0[1]), 0.0) + 10.0
+      self.params[:, COMFORT_NORMALIZER] = np.where(unknown_tail_masks[stages, comfort_selected], fixed_normalizer, 0.0)
+      self.params[:, RISK_NORMALIZER] = np.where(unknown_tail_masks[stages, risk_selected], fixed_normalizer, 0.0)
     weights = self.stage_cost_weights()
     lower = np.full((N+1, 2), -REFERENCE_BOUND)
     upper = np.full((N+1, 2), REFERENCE_BOUND)
@@ -2463,6 +2492,7 @@ class LongitudinalMpc:
 
   def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None, now_ns=None, reference_ns=None):
     self._occupancy_limit_cache = {}
+    self.params[:, COMFORT_NORMALIZER:RISK_NORMALIZER+1] = 0.0
     self.diagnostic_occupancy_refinement = None
     # Reading an unset struct through a capnp builder allocates it. MPC and
     # UI attribution observe the exact incoming message; they never edit it.
@@ -2508,6 +2538,7 @@ class LongitudinalMpc:
       self._fusion_follow_geometry = {}
     self._was_fusion_active = fusion_active
     lead_slots = None
+    unknown_tail_masks = None
     if fusion_active:
       try:
         if any(stamp is not None and (not isinstance(stamp, Integral) or isinstance(stamp, bool) or stamp <= 0)
@@ -2532,13 +2563,24 @@ class LongitudinalMpc:
         if limit > self.x0[0]:
           self.rest_recovery_position_limit = float(limit)
       obstacles = [np.full(N+1, np.inf), np.full(N+1, np.inf)]
+      unknown_tail_masks = [np.zeros(N+1, dtype=bool), np.zeros(N+1, dtype=bool)]
       sources = [LongitudinalPlanSource.cruise, LongitudinalPlanSource.cruise]
       lead_slots, identities, influence_tokens = [None, None], [None, None], [None, None]
       for projection in projections:
         # A reversing target has no positive forward stopping-distance credit.
         obstacle = (projection.trajectory[:, 0]
                     + get_stopped_equivalence_factor(np.maximum(projection.trajectory[:, 1], 0.0)))
+        unknown_tail = (projection.occupied & (T_IDXS > projection.hard_conflict_end)
+                        & (projection.conflict_support_version == 1) & (not projection.persistent)
+                        & (not projection.pass_before))
+        # Keep raw opposing motion and every supported hard row. Keep the
+        # unknown tail in the objective; saturate its final equivalence at
+        # the ego origin only when it projects behind that origin.
+        # Floor the final equivalence, before the cross-object minimum, so a
+        # positive lead-speed credit is neither invented nor added twice.
+        obstacle = np.where(unknown_tail, np.maximum(obstacle, self.x0[0]), obstacle)
         obstacles.append(np.where(projection.occupied & (not projection.pass_before), obstacle, np.inf))
+        unknown_tail_masks.append(unknown_tail)
         sources.append(MPC_SOURCES[projection.slot] if projection.slot is not None else LongitudinalPlanSource.lead0)
         # Additional objects and finite occupancy never inherit lead0's
         # separately qualified compact distance merely by sharing its enum.
@@ -2602,6 +2644,7 @@ class LongitudinalMpc:
       if fusion_active:
         lead_slots.extend([None] * len(reference_sources))
         identities.extend([None] * len(reference_sources))
+        unknown_tail_masks.extend(np.zeros(N+1, dtype=bool) for _ in reference_sources)
     if fusion_active:
       # A released crossing leaves no obstacle. Where there is no explicit
       # cruise/model goal either, retain the same finite ordinary continuation
@@ -2636,7 +2679,8 @@ class LongitudinalMpc:
         (stage, bound.duration, bound.position_limit, bound.identities, bound.position_lower_limit)
         for stage, bound in enumerate(self._occupancy_bounds) if bound is not None
       )
-      self.set_reference_problem(reference, x_obstacles, sources, accel_min, t_follow, lead_slots=lead_slots)
+      self.set_reference_problem(reference, x_obstacles, sources, accel_min, t_follow, lead_slots=lead_slots,
+                                 unknown_tail_masks=np.column_stack(unknown_tail_masks) if unknown_tail_masks is not None else None)
     except (TypeError, ValueError, FloatingPointError):
       self.fail(MPC_INVALID_INPUT)
       return
