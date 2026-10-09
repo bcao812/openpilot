@@ -349,7 +349,7 @@ def test_real_selfdrived_events_convert_degradation_to_three_second_soft_disable
   daemon, car_state = selfdrive_event_harness(state_event)
   assert daemon.sm.all_checks()
   daemon.update_events(car_state)
-  assert daemon.events.names == [EventName.commIssue]
+  assert daemon.events.names == [EventName.longitudinalControlUnavailable]
   assert daemon.events.contains(ET.NO_ENTRY)
   assert daemon.events.contains(ET.SOFT_DISABLE)
   machine = StateMachine()
@@ -378,6 +378,7 @@ def test_real_selfdrived_events_convert_degradation_to_three_second_soft_disable
 
 @pytest.mark.parametrize('version,degraded,openpilot_long', [
   (0, True, True), (MOTION_INTENT_VERSION, False, True), (MOTION_INTENT_VERSION, True, False),
+  (MOTION_INTENT_VERSION + 1, True, True),
 ])
 def test_motion_event_gate_does_not_reinterpret_legacy_or_stock_longitudinal(version, degraded, openpilot_long):
   state_event = new_event('controlsState')
@@ -388,9 +389,10 @@ def test_motion_event_gate_does_not_reinterpret_legacy_or_stock_longitudinal(ver
   daemon.CP.openpilotLongitudinalControl = openpilot_long
   daemon.update_events(car_state)
   assert EventName.commIssue not in daemon.events.names
+  assert EventName.longitudinalControlUnavailable not in daemon.events.names
 
 
-def test_fresh_recovery_clears_the_real_comm_issue_without_a_validity_feedback_deadlock():
+def test_fresh_recovery_clears_the_longitudinal_fault_without_a_validity_feedback_deadlock():
   harness = ControlsHarness()
   harness.plan.motionIntent.valid = False
   harness.step()

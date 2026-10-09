@@ -237,7 +237,8 @@ def test_real_fault_during_waiting_still_reaches_actual_fault_consumers(mode, fa
   assert command.actuators.accel <= -0.2
   assert not command.cruiseControl.resume
   daemon, _, machine = event_consumers(harness)
-  assert EventName.commIssue in daemon.events.names
+  assert EventName.longitudinalControlUnavailable in daemon.events.names
+  assert EventName.commIssue not in daemon.events.names
   assert daemon.events.contains(ET.SOFT_DISABLE)
   assert machine.state == State.softDisabling
 
@@ -254,7 +255,8 @@ def test_a_causal_invalid_packet_cannot_be_repaired_with_the_same_ids_to_clear_f
   assert repaired.degraded and not repaired.waitingForFreshInput
   assert command.actuators.accel <= -0.2
   daemon, _, machine = event_consumers(harness)
-  assert EventName.commIssue in daemon.events.names and machine.state == State.softDisabling
+  assert EventName.longitudinalControlUnavailable in daemon.events.names and machine.state == State.softDisabling
+  assert EventName.commIssue not in daemon.events.names
   _, fresh = harness.step()
   assert not fresh.degraded and not fresh.waitingForFreshInput
 
@@ -284,7 +286,8 @@ def test_fault_cause_survives_off_and_cannot_be_relabelled_as_healthy_wait(mode,
   assert motion.degraded and not motion.waitingForFreshInput
   assert command.actuators.accel <= -0.2
   daemon, _, machine = event_consumers(harness)
-  assert EventName.commIssue in daemon.events.names and machine.state == State.softDisabling
+  assert EventName.longitudinalControlUnavailable in daemon.events.names and machine.state == State.softDisabling
+  assert EventName.commIssue not in daemon.events.names
   _, fresh = harness.step()
   assert not fresh.degraded and not fresh.waitingForFreshInput
 

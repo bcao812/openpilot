@@ -103,12 +103,13 @@ def test_real_motion_fault_branch_state_machine_alert_and_next_force_decel_are_o
   assert value.enabledBefore and value.activeBefore and value.enabledAfter and value.activeAfter
   assert value.softDisableTimerBefore == 0
   assert value.softDisableTimerAfter == round(SOFT_DISABLE_TIME / 0.01)
-  assert value.motionCheckKnown and value.motionDegraded and value.motionCommIssueAdded
-  assert list(value.events) == daemon.events.names == [EventName.commIssue]
+  assert value.motionCheckKnown and value.motionDegraded and not value.motionCommIssueAdded
+  assert value.longitudinalControlUnavailableAdded
+  assert list(value.events) == daemon.events.names == [EventName.longitudinalControlUnavailable]
   assert list(value.currentAlertTypes) == daemon.state_machine.current_alert_types
   assert ET.SOFT_DISABLE in value.currentAlertTypes
   assert not value.controlsForceDecel and value.controlsForceDecelKnown
-  assert daemon.pm.messages["selfdriveState"].selfdriveState.alertType == "commIssue/softDisable"
+  assert daemon.pm.messages["selfdriveState"].selfdriveState.alertType == "longitudinalControlUnavailable/softDisable"
   controls.events["selfdriveState"] = daemon.pm.messages["selfdriveState"].as_builder()
   controls.step()
   actual = controls.control.pm.messages["controlsState"].controlsState
@@ -125,6 +126,7 @@ def test_healthy_wait_does_not_claim_a_motion_comm_issue(mode):
   value = step(daemon, raw)
   assert value.motionCheckKnown and value.motionWaitingForFreshInput
   assert not value.motionDegraded and not value.motionCommIssueAdded
+  assert not value.longitudinalControlUnavailableAdded
   assert list(value.events) == []
   assert value.stateAfter == value.statePublished == "enabled"
 
@@ -135,6 +137,7 @@ def test_an_independent_communication_event_is_not_attributed_to_the_motion_bran
   value = step(daemon, raw)
   assert EventName.commIssue in value.events
   assert value.motionCheckKnown and not value.motionCommIssueAdded and not value.motionDegraded
+  assert not value.longitudinalControlUnavailableAdded
   assert value.stateAfter == "softDisabling"
 
 
@@ -241,7 +244,7 @@ def test_skipped_decision_branches_are_unknown_instead_of_reported_healthy(early
   assert not value.motionCommIssueAdded
 
 
-@pytest.mark.parametrize("failure", [None, "begin", "motion_check", "motion_comm_issue_added", "state_machine_input",
+@pytest.mark.parametrize("failure", [None, "begin", "motion_check", "longitudinal_control_unavailable_added", "state_machine_input",
                                     "state_machine_output", "publish"])
 def test_observer_enable_disable_and_failure_preserve_actual_events_states_alerts_and_publications(failure, tmp_path):
   control = ControlsHarness()

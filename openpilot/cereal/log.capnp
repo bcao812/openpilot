@@ -138,6 +138,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     usbErrorDEPRECATED @78;
     audioFeedbackDEPRECATED @97;
     bigModelReadyDEPRECATED @101;
+    longitudinalControlUnavailable @104;
   }
 }
 
@@ -1089,12 +1090,13 @@ struct LongitudinalSelfdriveDiagnostics {
   motionVersion @18 :UInt16;
   motionDegraded @19 :Bool;
   motionWaitingForFreshInput @20 :Bool;
-  motionCommIssueAdded @21 :Bool;
+  motionCommIssueAdded @21 :Bool;  # historical attribution; current motion faults use @27
   controlsForceDecel @22 :Bool;
   controlsForceDecelKnown @23 :Bool;
   statePublished @24 :SelfdriveState.OpenpilotState;
   enabledPublished @25 :Bool;
   activePublished @26 :Bool;
+  longitudinalControlUnavailableAdded @27 :Bool;
 }
 
 struct LongitudinalControlDiagnostics {

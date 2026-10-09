@@ -19,7 +19,8 @@ from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_events import CarEvents
-from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
+from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
+from openpilot.selfdrive.controls.lib.motion_supervisor import MODEL_LEASE_NS, MOTION_INTENT_VERSION, PLAN_LEASE_NS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
@@ -60,6 +61,32 @@ MonitoringPolicy = log.DriverMonitoringState.MonitoringPolicy
 TurnDirection = custom.ModelDataV2SP.TurnDirection
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
+
+
+def fresh_longitudinal_planning_failure(sm, CP, CP_SP, now_ns):
+  """Classify a received failed plan without granting it control validity.
+
+  An old solver status, an unknown producer or an unhealthy transport cannot
+  exempt a service from the communication checks. The owner independently
+  reports degradation until it accepts fresh recovery evidence.
+  """
+  if (sm.valid['longitudinalPlan'] or CP_SP is None
+      or resolve_longitudinal_mode(CP, CP_SP) != LongitudinalMode.UNIFIED):
+    return False
+  plan = sm['longitudinalPlan']
+  if (plan.solverStatus == 0 or plan.motionIntent.version != MOTION_INTENT_VERSION
+      or plan.motionIntent.mode != int(LongitudinalMode.UNIFIED)):
+    return False
+  for service in ('longitudinalPlan', 'modelV2'):
+    if not (sm.seen[service] and sm.alive[service] and sm.freq_ok[service]):
+      return False
+  if not sm.valid['modelV2']:
+    return False
+  plan_ns, model_ns = sm.logMonoTime['longitudinalPlan'], plan.modelMonoTime
+  current_model_ns = sm.logMonoTime['modelV2']
+  return (0 < model_ns <= plan_ns <= now_ns and now_ns - plan_ns <= PLAN_LEASE_NS
+          and now_ns - model_ns <= MODEL_LEASE_NS
+          and 0 < current_model_ns <= now_ns and now_ns - current_model_ns <= MODEL_LEASE_NS)
 
 
 # selfdrived's step(), in the order it calls them. recv_carState is the 100 Hz pacer -- a
@@ -195,6 +222,7 @@ class SelfdriveD(CruiseHelper):
     self.last_functional_fan_frame = 0
     self.events_prev = []
     self.logged_comm_issue = None
+    self.longitudinal_unavailable = False
     self.not_running_prev = None
     # Recomputed only when their 2 Hz / 20 Hz source message arrives; see update_events. The
     # companion *_frame fields hold the sm.recv_frame value the cache was built from, which is
@@ -545,18 +573,23 @@ class SelfdriveD(CruiseHelper):
     no_system_errors = (not has_disable_events) or (len(self.events) == num_events)
     warmup_sec = 5.
     big_model_settling = self.big_model_loading or time.monotonic() < self.big_model_ready_t + warmup_sec
-    if not self.sm.all_checks() and no_system_errors and not big_model_settling:  # the load holds modelV2 and friends back on purpose
-      if not self.sm.all_alive():
+    plan_failure = fresh_longitudinal_planning_failure(self.sm, self.CP, getattr(self, 'CP_SP', None), time.monotonic_ns())
+    # The invalid plan still reaches its consumer as invalid. Only its event
+    # classification changes; every independent transport failure retains the
+    # generic alert. Compute these before adding the dedicated disable event.
+    health_services = [s for s in self.sm.services if s != 'longitudinalPlan'] if plan_failure else self.sm.services
+    if not self.sm.all_checks(health_services) and no_system_errors and not big_model_settling:
+      if not self.sm.all_alive(health_services):
         self.events.add(EventName.commIssue)
-      elif not self.sm.all_freq_ok():
+      elif not self.sm.all_freq_ok(health_services):
         self.events.add(EventName.commIssueAvgFreq)
       else:
         self.events.add(EventName.commIssue)
 
       logs = {
-        'invalid': [s for s, valid in self.sm.valid.items() if not valid],
-        'not_alive': [s for s, alive in self.sm.alive.items() if not alive],
-        'not_freq_ok': [s for s, freq_ok in self.sm.freq_ok.items() if not freq_ok],
+        'invalid': [s for s in health_services if not self.sm.valid[s]],
+        'not_alive': [s for s in health_services if not self.sm.alive[s]],
+        'not_freq_ok': [s for s in health_services if not self.sm.freq_ok[s]],
       }
       if logs != self.logged_comm_issue:
         cloudlog.event("commIssue", error=True, **logs)
@@ -590,10 +623,24 @@ class SelfdriveD(CruiseHelper):
     recent_steer_pressed = (self.sm.frame - self.last_steering_pressed_frame)*DT_CTRL < 2.0
     controlstate = self.sm['controlsState']
     observe(getattr(self, "longitudinal_observation", None), "motion_check", controlstate)
-    if (self.CP.openpilotLongitudinalControl and controlstate.motionState.version == MOTION_INTENT_VERSION
-        and controlstate.motionState.degraded):
-      self.events.add(EventName.commIssue)
-      observe(getattr(self, "longitudinal_observation", None), "motion_comm_issue_added")
+    motion = controlstate.motionState
+    motion_degraded = (self.CP.openpilotLongitudinalControl and motion.version == MOTION_INTENT_VERSION and motion.degraded)
+    longitudinal_unavailable = plan_failure or motion_degraded
+    if longitudinal_unavailable:
+      self.events.add(EventName.longitudinalControlUnavailable)
+      observe(getattr(self, "longitudinal_observation", None), "longitudinal_control_unavailable_added")
+    if longitudinal_unavailable != getattr(self, 'longitudinal_unavailable', False):
+      plan = self.sm['longitudinalPlan']
+      cloudlog.event("longitudinalControlUnavailable", error=longitudinal_unavailable,
+                     transition="entered" if longitudinal_unavailable else "recovered",
+                     latest_plan_mono_time=int(self.sm.logMonoTime['longitudinalPlan']),
+                     latest_plan_model_mono_time=int(plan.modelMonoTime), latest_plan_solver_status=int(plan.solverStatus),
+                     latest_plan_valid=bool(self.sm.valid['longitudinalPlan']), planning_failure_qualified=plan_failure,
+                     controls_state_mono_time=int(self.sm.logMonoTime['controlsState']),
+                     consumed_plan_mono_time=int(motion.planMonoTime), consumed_model_mono_time=int(motion.modelMonoTime),
+                     motion_degraded=motion_degraded, motion_reasons=int(motion.reasons),
+                     waiting_for_fresh_input=bool(motion.waitingForFreshInput))
+      self.longitudinal_unavailable = longitudinal_unavailable
     lac = getattr(controlstate.lateralControlState, controlstate.lateralControlState.which())
     if lac.active and not recent_steer_pressed and not self.cp_not_car:
       clipped_speed = max(CS.vEgo, 0.3)

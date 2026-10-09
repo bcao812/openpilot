@@ -14,6 +14,7 @@ from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.simple_kalman import KF1D
 from openpilot.selfdrive.car.honda_radar_observer_config import ObserverSettings, SERVICE as HONDA_RADAR_SERVICE, SCOPE_MAX_AGE_NS
+from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
 
 from opendbc.car import structs
 from opendbc.car.hyundai.values import HyundaiFlags
@@ -209,6 +210,8 @@ class RadarD:
 
     self.radar_state: capnp._DynamicStructBuilder | None = None
     self.radar_state_valid = False
+    self.radar_qualified_ns = None
+    self.publication_expiry = RadarConsumption()
 
     self.ready = False
     self.params = params if params is not None else Params()
@@ -244,6 +247,7 @@ class RadarD:
 
   def update(self, sm: messaging.SubMaster, rr: car.RadarData, *, now_ns=None):
     now_ns = time.monotonic_ns() if now_ns is None else now_ns
+    self.radar_qualified_ns = now_ns
     self.ready = sm.seen['modelV2']
 
     if sm.recv_frame['carState'] != self.last_v_ego_frame:
@@ -299,6 +303,10 @@ class RadarD:
     self.radar_state.visionLeadOne = self.radar_state.leadOne
     self.radar_state.visionLeadTwo = self.radar_state.leadTwo
     enabled = self.control_enabled(sm, now_ns)
+    if not enabled and not self.control_scope_unavailable:
+      # Only an explicit configuration exit resets publication losses. A
+      # missing control packet or failed plan is not clear-road evidence.
+      self.publication_expiry.clear()
     if enabled and self.fusion_control is None:
       from openpilot.selfdrive.car.honda_radar_control import HondaRadarControl
       self.fusion_control = HondaRadarControl()
@@ -363,6 +371,20 @@ class RadarD:
     radar_msg = messaging.new_message("radarState")
     radar_msg.valid = self.radar_state_valid
     radar_msg.radarState = self.radar_state
+    view = self.publication_expiry.finalize_publication(
+      self.radar_state, qualified_ns=self.radar_qualified_ns, publication_ns=radar_msg.logMonoTime, speed=self.v_ego,
+    )
+    if self.publication_expiry.expired_identities:
+      radar_msg.radarState.radarObjects = [lead.to_dict() for lead in view.radarObjects]
+      radar_msg.radarState.leadOne, radar_msg.radarState.leadTwo = view.leadOne.to_dict(), view.leadTwo.to_dict()
+      cloudlog.event('honda_radar_publication_expiry', identities=self.publication_expiry.expired_identities,
+                     qualifiedMonoTime=self.radar_qualified_ns, publicationMonoTime=radar_msg.logMonoTime,
+                     riskUnresolved=self.publication_expiry.degraded)
+    if self.publication_expiry.degraded:
+      radar_msg.radarState.fusionRiskUnresolved = True
+      radar_msg.radarState.fusionDegraded = True
+      if radar_msg.radarState.fusionReason in ('active', 'noQualifiedObjects'):
+        radar_msg.radarState.fusionReason = 'objectDegraded'
     pm.send("radarState", radar_msg)
 
 

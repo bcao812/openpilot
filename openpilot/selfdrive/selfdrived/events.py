@@ -686,6 +686,11 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.NO_ENTRY: NoEntryAlert(tr_noop("Low Communication Rate Between Processes")),
   },
 
+  EventName.longitudinalControlUnavailable: {
+    ET.SOFT_DISABLE: soft_disable_alert("Longitudinal Control Unavailable"),
+    ET.NO_ENTRY: NoEntryAlert(tr_noop("Longitudinal Control Unavailable")),
+  },
+
   EventName.selfdrivedLagging: {
     ET.SOFT_DISABLE: soft_disable_alert("System Lagging"),
     ET.NO_ENTRY: NoEntryAlert(tr_noop("Selfdrive Process Lagging: Reboot Your Device")),

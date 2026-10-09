@@ -128,6 +128,23 @@ def _physical_identity(evidence):
   return session, int(track)
 
 
+def valid_conflict_support(evidence):
+  """A support deadline bounds hard prediction, never the object's lifetime."""
+  version = _read(evidence, 'conflictSupportVersion', 0)
+  if not _integer(version) or version not in (0, 1):
+    return False
+  if version == 0:
+    return True  # Old messages retain their complete hard occupancy window.
+  end, supported_end = _read(evidence, 'conflictEnd'), _read(evidence, 'conflictSupportedEnd')
+  if not (_finite(end) and _finite(supported_end) and 0.0 <= supported_end <= end):
+    return False
+  if _read(evidence, 'physicalConflictValid', False) is True:
+    physical_start, physical_end = _read(evidence, 'physicalConflictStart'), _read(evidence, 'physicalConflictEnd')
+    return (_finite(physical_start) and _finite(physical_end)
+            and 0.0 <= physical_start < physical_end <= supported_end)
+  return True
+
+
 def _snapshot_facts(lead):
   """Decode common immutable facts, without granting any purpose or time."""
   get = lead._values.get
@@ -177,7 +194,8 @@ def _snapshot_facts(lead):
   offset, start, end, lateral_speed = (read(field) for field in ('pathOffset', 'conflictStart', 'conflictEnd', 'lateralSpeed'))
   path_source = read('pathSource', '')
   if (not all(_finite(value) for value in (offset, start, end, lateral_speed))
-      or not isinstance(path_source, str) or not path_source or not 0.0 <= start < end):
+      or not isinstance(path_source, str) or not path_source or not 0.0 <= start < end
+      or not valid_conflict_support(evidence)):
     return False
   flags = tuple(read(purpose + 'Qualified', False) for purpose in PURPOSES)
   caution_exclusive = all(flag is False for flag in flags[:-1])
@@ -305,7 +323,7 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
   path_values = tuple(_read(evidence, field) for field in ('pathOffset', 'conflictStart', 'conflictEnd', 'lateralSpeed'))
   path_source = _read(evidence, 'pathSource', '')
   if (not all(_finite(value) for value in path_values) or not isinstance(path_source, str) or not path_source
-      or not 0.0 <= path_values[1] < path_values[2]):
+      or not 0.0 <= path_values[1] < path_values[2] or not valid_conflict_support(evidence)):
     return False
   # An entering object is useful only during its predicted occupancy window.
   if require_active_window and (reference - estimate) / 1e9 >= path_values[2]:
@@ -315,26 +333,36 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
   return True
 
 
-def coast_measurement_expired(lead, *, publication_ns, now_ns):
-  """Recognize only a qualified coast aging past its real measurement limit.
+def measurement_expired_since(lead, *, qualified_ns, now_ns):
+  """Recognize a physical object's measurement crossing its existing limit.
 
-  Publication time is the actual radarState event time. Checking at an
-  invented earlier time, or refreshing source timestamps, could conceal a
-  producer that already published invalid evidence. All other freshness and
-  evidence requirements remain unchanged; this grants no control authority.
+  Both clocks must describe actual processing boundaries. The producer uses
+  its earlier qualification and the new Event's timestamp; a consumer uses
+  the actual publication and consumption timestamps. A source already old at
+  the earlier boundary, or with any other invalid evidence, is not natural
+  expiry. No source timestamp or evidence lifetime is changed here.
   """
-  if not _integer(publication_ns, 1) or not _integer(now_ns, 1) or publication_ns > now_ns:
+  if not _integer(qualified_ns, 1) or not _integer(now_ns, 1) or qualified_ns > now_ns:
     return False
   evidence = _read(lead, 'evidence')
-  if str(_read(evidence, 'source')) != 'predicted' or _read(evidence, 'coasting') is not True:
+  if str(_read(evidence, 'source')) not in ('radar', 'fused', 'predicted'):
     return False
-  if not qualified_lead(lead, 'brake', 0.0, now_ns=publication_ns, require_active_window=False):
+  if not (qualified_lead(lead, 'brake', 0.0, now_ns=qualified_ns, require_active_window=False)
+          or qualified_lead(lead, 'caution', 0.0, now_ns=qualified_ns, require_active_window=False)):
     return False
+  maximum_age = MAX_PREDICTION_AGE_NS if _read(evidence, 'coasting') is True else MAX_MEASUREMENT_AGE_NS
   if (not 0 <= now_ns - _read(evidence, 'estimateMonoTime') <= MAX_ESTIMATE_AGE_NS
-      or not 0 <= now_ns - _read(evidence, 'modelMonoTime') <= MAX_PREDICTION_AGE_NS):
+      or not 0 <= now_ns - _read(evidence, 'modelMonoTime') <= maximum_age):
     return False
-  return any(now_ns - _read(evidence, field) > MAX_PREDICTION_AGE_NS
+  return any(now_ns - _read(evidence, field) > maximum_age
              for field in ('positionMonoTime', 'velocityMonoTime'))
+
+
+def coast_measurement_expired(lead, *, publication_ns, now_ns):
+  """Compatibility check for a predicted coast from a real publication."""
+  evidence = _read(lead, 'evidence')
+  return (str(_read(evidence, 'source')) == 'predicted' and _read(evidence, 'coasting') is True
+          and measurement_expired_since(lead, qualified_ns=publication_ns, now_ns=now_ns))
 
 
 def _object_key(lead):

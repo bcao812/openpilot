@@ -13,6 +13,7 @@ this version therefore makes no speculative stationary-object class rejection.
 from dataclasses import dataclass, field, replace
 import math
 from numbers import Real
+import struct
 
 from openpilot.selfdrive.car.honda_radar_relevance import loss_relevant, remaining_occupancy_window
 
@@ -127,6 +128,7 @@ class _Path:
   physical_valid: bool = False
   physical_start: float = 0.0
   physical_end: float = 0.0
+  supported_end: float = 0.0
 
 
 def _without_physical_conflict(path):
@@ -264,7 +266,7 @@ class _Corridor:
                       and physical_intervals[0][0] < physical_intervals[0][1])
     physical_start, physical_end = physical_intervals[0] if physical_valid else (0.0, 0.0)
     return _Path('inPath' if inside else 'entering', offset, rate, start, end, self.source, len(merged) == 1, spatial_limit,
-                 physical_valid=physical_valid, physical_start=physical_start, physical_end=physical_end)
+                 physical_valid=physical_valid, physical_start=physical_start, physical_end=physical_end, supported_end=end)
 
 
 def _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_variance, velocity_valid, half_width=SWEPT_HALF_WIDTH):
@@ -289,6 +291,9 @@ def _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_varianc
       # Reaching the quality/spatial bound is not a predicted clearing event.
       # Keep a currently occupied object through the MPC horizon; a subsequent
       # measured OUT can clear it even when lateral velocity remains untrusted.
+      # The original end remains the supported hard-constraint prefix. The
+      # extension carries ordinary obstacle/risk pressure, not fictitious
+      # evidence that the predicted point occupies every later hard row.
       limited = horizon < HORIZON or prediction.prediction_limited
       occupied = replace(prediction, start=0.0, end=HORIZON, prediction_limited=limited)
       return _without_physical_conflict(occupied) if limited else occupied
@@ -317,7 +322,7 @@ def _object_path(corridors, x, y, vx, vy, position_variance, velocity_variance, 
     # independently of which body surface supplies the radar reflection. Its
     # radar d/v remain the motion components of this one physical object.
     return _Path('inPath', inner.offset, inner.rate, 0.0, HORIZON, 'visionLead', confirmed=True,
-                 authority_reason='confirmedVisionPath')
+                 authority_reason='confirmedVisionPath', supported_end=HORIZON)
   outer = _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_variance, velocity_valid,
                            half_width=OVERLAP_HALF_WIDTH)
   if confirmed and outer.state == 'inPath':
@@ -493,16 +498,32 @@ class HondaRadarControl:
             'cautionQualified': False,
             'physicalConflictValid': False, 'physicalConflictStart': 0.0, 'physicalConflictEnd': 0.0,
             'coasting': False, 'pathState': 'inPath', 'pathOffset': 0.0, 'conflictStart': 0.0, 'conflictEnd': HORIZON,
+            'conflictSupportVersion': 1, 'conflictSupportedEnd': HORIZON,
             'lateralSpeed': 0.0, 'pathSource': 'visionLead', 'visionIndex': index, 'reason': 'vision',
           }
       result.append(lead)
     return result
 
   @staticmethod
+  def _identity_visions(visions, model):
+    # radard's modelProb has a delayed falling edge for ordinary visual leads.
+    # Borrowing current motion components or continuing a physical identity
+    # also needs the current raw hypothesis, independent of that display and
+    # ordinary-vision qualification. Keep the original objects unchanged.
+    hypotheses = _read(model, 'leadsV3', ())
+    result = []
+    for index, vision in enumerate(visions):
+      probability = _read(hypotheses[index], 'prob') if hypotheses is not None and index < len(hypotheses) else None
+      qualified = _finite(probability) and .8 <= probability <= 1
+      result.append(vision if qualified else {'present': False})
+    return result
+
+  @staticmethod
   def _binding(track_id, bindings, visions, x, y, source_eof):
     for binding in bindings:
       index = binding.get('modelIndex')
-      if not _integer(index) or not 0 <= index < len(visions) or visions[index].get('present') is not True:
+      if (not _integer(index) or not 0 <= index < len(visions) or visions[index].get('present') is not True
+          or not _finite(visions[index].get('modelProb')) or not .8 <= visions[index]['modelProb'] <= 1):
         continue
       start, count = binding.get('bindingStartMonoTime'), binding.get('bindingSamples')
       bx, by = binding.get('bindingAnchorX'), binding.get('bindingAnchorY')
@@ -520,6 +541,26 @@ class HondaRadarControl:
     return -1
 
   @staticmethod
+  def _binding_contradicted(memory, bindings, source_model):
+    if memory.last_vision is None:
+      return False
+    index = memory.last_vision['evidence']['visionIndex']
+    for binding in bindings:
+      rejection_ns = binding.get('rejectionMonoTime')
+      if (not _integer(binding.get('modelIndex')) or binding['modelIndex'] != index
+          or not _integer(binding.get('candidateTrackId')) or binding['candidateTrackId'] != memory.track_id
+          or binding.get('present') is not True or not _finite(binding.get('probability'))
+          or not .8 <= binding['probability'] <= 1
+          or not _integer(rejection_ns) or not 0 < rejection_ns <= source_model):
+        continue
+      # The observer also stamps soft suspensions such as a source gap or
+      # missing candidate. Only an explicit identity contradiction revokes a
+      # proven visual stream; absent input alone cannot erase its continuity.
+      if binding.get('identityState') == 'different' or binding.get('identityReason') in ('visionJump', 'residualSeparation'):
+        return True
+    return False
+
+  @staticmethod
   def _historical_path(memory, eof):
     if memory is None or not _fresh(memory.path_ns, eof, COAST_NS) or memory.path.state not in ('inPath', 'entering'):
       return _Path()
@@ -531,7 +572,20 @@ class HondaRadarControl:
     offset = path.offset + path.rate * dt
     half_width = OVERLAP_HALF_WIDTH if path.confirmed else SWEPT_HALF_WIDTH
     state = 'inPath' if abs(offset) <= half_width else 'entering'
-    return _without_physical_conflict(replace(path, state=state, offset=offset, start=start, end=end, source='previousPath'))
+    supported_end = max(0.0, min(path.supported_end, path.end) - dt)
+    return _without_physical_conflict(replace(path, state=state, offset=offset, start=start, end=end, source='previousPath',
+                                              supported_end=min(end, supported_end)))
+
+  @staticmethod
+  def _limit_predicted_support(path, memory, eof):
+    """Age the last accepted support; a new prediction cannot renew it."""
+    previous = memory.accepted['evidence'] if memory is not None and memory.accepted is not None else None
+    supported_end = 0.0
+    if previous is not None and 0 < previous['estimateMonoTime'] <= eof:
+      end = (previous['conflictSupportedEnd'] if previous.get('conflictSupportVersion', 0) == 1
+             else previous['conflictEnd'])
+      supported_end = max(0.0, end - (eof - previous['estimateMonoTime']) / 1e9)
+    return replace(path, supported_end=min(path.supported_end, path.end, supported_end))
 
   def _make_lead(self, memory, path, eof, model_ns, speed, *, vision=None, vision_index=-1, predicted=False, reason='radar',
                  follow_geometry_ns=0):
@@ -555,6 +609,11 @@ class HondaRadarControl:
                       and memory.path_ns == eof and memory.epoch_ns == eof
                       and _finite(path.physical_start, path.physical_end)
                       and 0.0 <= path.physical_start < path.physical_end <= HORIZON)
+    # The legacy envelope is Float32 on the wire. Match that representation
+    # before publishing Float64 support, so a fully supported finite window
+    # stays equal after serialization instead of accidentally exceeding it.
+    conflict_end = struct.unpack('<f', struct.pack('<f', path.end))[0]
+    supported_end = conflict_end if path.supported_end == path.end else min(path.supported_end, conflict_end)
     return {
       'dRel': float(memory.x), 'yRel': float(memory.y), 'vRel': float(memory.vx - speed),
       'vLead': float(memory.vx), 'vLeadK': float(memory.vx), 'aLeadK': 0.0 if predicted else float(memory.acceleration),
@@ -578,7 +637,8 @@ class HondaRadarControl:
         'physicalConflictStart': float(path.physical_start) if physical_valid else 0.0,
         'physicalConflictEnd': float(path.physical_end) if physical_valid else 0.0,
         'coasting': predicted, 'pathState': path.state, 'pathOffset': path.offset,
-        'conflictStart': path.start, 'conflictEnd': path.end, 'lateralSpeed': path.rate,
+        'conflictStart': path.start, 'conflictEnd': conflict_end, 'lateralSpeed': path.rate,
+        'conflictSupportVersion': 1, 'conflictSupportedEnd': supported_end,
         'pathSource': path.source, 'visionIndex': vision_index, 'reason': reason,
       },
     }
@@ -609,9 +669,11 @@ class HondaRadarControl:
     if old_window.end > 0:
       path = replace(path, start=max(path.start, old_window.start), end=min(path.end, old_window.end),
                      continuous=path.continuous and old_window.continuous,
-                     prediction_limited=path.prediction_limited or old_window.prediction_limited)
+                     prediction_limited=path.prediction_limited or old_window.prediction_limited,
+                     supported_end=min(path.supported_end, old_window.supported_end))
       if path.end <= path.start:
         return None
+    path = self._limit_predicted_support(path, memory, eof)
     projected = _Memory(memory.track_id, memory.oem_id, memory.generation, memory.position_seq, memory.position_ns,
                         memory.velocity_ns, eof, x, y, vx, vy, memory.acceleration, False,
                         memory.position_variance + .5 * dt + 4 * dt * dt,
@@ -670,6 +732,7 @@ class HondaRadarControl:
     self._last_now_ns, self._model_ns, self._eof = now_ns, model_ns, eof
     speed = max(0.0, float(v_ego))
     visions = self._vision(raw_visions, model, model_ns, eof)
+    identity_visions = self._identity_visions(visions, model)
     previous_tracks = dict(self._tracks)
     corridors = _corridors(model)
     fusion = _read(observation, 'fusion')
@@ -726,6 +789,15 @@ class HondaRadarControl:
       tracks = []
     if not healthy:
       tracks = []
+    else:
+      # Revoke before processing active tracks: otherwise their new memory can
+      # retain the old visual identity and revive it on a later observer gap.
+      # The only way to establish it again is a current qualified _binding.
+      memories = list(self._tracks.values()) + [memory for (session, _), memory in self._lost_tracks.items()
+                                               if session == self._session]
+      for memory in memories:
+        if self._binding_contradicted(memory, bindings, source_model):
+          memory.last_vision = None
     radar_objects, used_visions, touched, cleared = [], set(), set(), set()
     degraded = not healthy
     for track in tracks:
@@ -783,7 +855,7 @@ class HondaRadarControl:
         vx = previous.vx if previous else 0.0
       px, py, pvx, pvy = _project(x, y, vx, vy, (eof - source_eof) / 1e9, speed, yaw)
       projected_vx, projected_vy = pvx, pvy
-      vision_index = self._binding(identifier, bindings, visions, px, py, source_eof)
+      vision_index = self._binding(identifier, bindings, identity_visions, px, py, source_eof)
       vision = visions[vision_index] if vision_index >= 0 else None
       direct_velocity = (velocity_values and track['velocityGood'] is True and _fresh(v_ns, now_ns)
                          and v_ns <= observation_ns and abs(v_ns - p_ns) <= MAX_AGE_NS
@@ -875,6 +947,8 @@ class HondaRadarControl:
       if track['coasting'] is True:
         predicted = True
         component_reason += '+positionCoast'
+      if predicted:
+        path = self._limit_predicted_support(path, previous, eof)
       memory = _Memory(identifier, oem, generation, p_seq, p_ns, v_ns, eof, px, py, pvx, pvy,
                        float(acceleration), acceleration_good, float(p_var), float(v_var),
                        path if direct_path else previous.path if previous else _Path(),
@@ -898,7 +972,7 @@ class HondaRadarControl:
           # Model's future hypotheses matched to this same track are not new
           # physical obstacles and must not dilute the radar replacement.
           for other in range(len(visions)):
-            candidate = self._binding(identifier, [b for b in bindings if b['modelIndex'] == other], visions, px, py, source_eof)
+            candidate = self._binding(identifier, [b for b in bindings if b['modelIndex'] == other], identity_visions, px, py, source_eof)
             if candidate >= 0:
               used_visions.add(candidate)
       elif previous is not None and previous.accepted is not None:
@@ -913,11 +987,7 @@ class HondaRadarControl:
         active = next((lead for lead in radar_objects if lead['evidence']['trackId'] == identifier), None)
         if identifier in cleared or active is not None and not active['evidence']['coasting']:
           continue
-        contradicted = any(b['candidateTrackId'] == identifier and
-                          (b['identityState'] == 'different' or b['rejectionMonoTime']) for b in bindings)
-        if contradicted:
-          continue
-        fallback = self._visual_fallback(memory, visions, eof, speed, yaw)
+        fallback = self._visual_fallback(memory, identity_visions, eof, speed, yaw)
         if fallback is not None:
           radar_objects = [lead for lead in radar_objects if lead['evidence']['trackId'] != identifier]
           radar_objects.append(fallback)

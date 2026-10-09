@@ -87,6 +87,11 @@ struct RadarLeadEvidence {
   # these same identity/generation/measurement sources. A coast may copy it
   # only while that geometry still holds; it never grants following authority.
   followGeometryMonoTime @32 :UInt64;
+  # Version 0 preserves the complete legacy hard occupancy window. Version 1
+  # separates supported prediction from an unknown-exit conservative tail.
+  # The tail remains an obstacle/risk; support ending is never observed OUT.
+  conflictSupportVersion @33 :UInt8 = 0;
+  conflictSupportedEnd @34 :Float64;  # seconds from estimateMonoTime, within conflictEnd
 
   enum Source {
     legacy @0;

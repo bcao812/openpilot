@@ -59,6 +59,7 @@ class SelfdriveObservation:
       "version": 1, "inputs": inputs, "carStateReused": car_state_message is None,
       "stateMachineInputKnown": False, "stateMachineCalled": False,
       "motionCheckKnown": False, "motionCommIssueAdded": False, "controlsForceDecelKnown": False,
+      "longitudinalControlUnavailableAdded": False,
     }
     self.sample = sample
 
@@ -72,9 +73,9 @@ class SelfdriveObservation:
       "controlsForceDecel": bool(controls_state.forceDecel), "controlsForceDecelKnown": True,
     })
 
-  def motion_comm_issue_added(self):
+  def longitudinal_control_unavailable_added(self):
     if self.sample is not None and self.values is not None:
-      self.values["motionCommIssueAdded"] = True
+      self.values["longitudinalControlUnavailableAdded"] = True
 
   def state_machine_input(self, daemon):
     if self.sample is None or self.values is None:

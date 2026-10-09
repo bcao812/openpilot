@@ -79,6 +79,7 @@ class StartupHarness:
 
     self.selfdrive, _ = selfdrive_event_harness(serialized(self.latest['controlsState']))
     self.selfdrive.CP = self.CP
+    self.selfdrive.CP_SP = self.CP_SP
     self.selfdrive.cp_olc = True
     self.selfdrive.cp_pcm_cruise = False
     self.selfdrive.enabled = False
@@ -160,6 +161,10 @@ class StartupHarness:
       incoming.append(serialized(event.as_builder() if hasattr(event, 'as_builder') else event))
     state.update_msgs(self.now_ns / 1e9, incoming)
     state.updated = dict.fromkeys(state.services, False)
+    # This fixture republishes at the control cadence; average transport rate
+    # is a bounded collaborator, not the failure under test here.
+    if state is self.selfdrive.sm:
+      state.freq_ok['longitudinalPlan'] = state.freq_ok['modelV2'] = True
 
   def model_event(self):
     event = new_event('modelV2', self.now_ns)
@@ -230,6 +235,7 @@ class StartupHarness:
       'degraded': bool(self.latest['controlsState'].controlsState.motionState.degraded),
       'no_entry': self.selfdrive.events.contains(ET.NO_ENTRY),
       'comm_issue': EventName.commIssue in self.selfdrive.events.names,
+      'longitudinal_unavailable': EventName.longitudinalControlUnavailable in self.selfdrive.events.names,
       'consumed_plan_mono': int(consumed_plan.logMonoTime),
       'consumed_ready': consumed_plan.longitudinalPlan.motionIntent.to_dict().get('ready', True),
       'plan_valid': bool(self.latest['longitudinalPlan'].valid),
@@ -350,7 +356,7 @@ def test_losing_initialized_set_speed_is_a_fault_not_a_return_to_cold_standby():
   assert event.longitudinalPlan.motionIntent.ready
   assert not event.longitudinalPlan.motionIntent.valid
   assert row['degraded']
-  assert row['comm_issue']
+  assert row['longitudinal_unavailable'] and row['comm_issue']
   assert not row['resume']
   assert harness.mpc_update.call_count == previous_calls
 
@@ -389,7 +395,7 @@ def test_real_warm_hold_setpoint_loss_keeps_pressure_and_publishes_a_fault():
   assert not event.valid
   assert event.longitudinalPlan.motionIntent.ready
   assert not event.longitudinalPlan.motionIntent.valid
-  assert row['comm_issue']
+  assert row['longitudinal_unavailable'] and row['comm_issue']
   emitted = harness.native_commands[commands_before:]
   assert emitted
   assert all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0 and not command['resume'] for command in emitted)
@@ -492,7 +498,10 @@ def test_restarting_only_the_planner_cannot_turn_an_existing_hold_into_cold_stan
       assert row['degraded']
       assert row['accel'] <= -2.0
       assert not row['resume']
-  assert row['comm_issue']
+  assert row['longitudinal_unavailable']
+  # Unset cruise invalidates the packet without a nonzero solver status; it is
+  # deliberately outside the narrow planner-failure transport exemption.
+  assert row['comm_issue'] == (fault == 'unset')
   assert harness.controls.LoC.motion_supervisor is previous_supervisor
   assert harness.controls.LoC.resolved_should_stop
   assert not harness.controls.LoC.can_standby
