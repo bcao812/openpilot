@@ -288,6 +288,14 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
     state @0 :DynamicExperimentalControlState;
     enabled @1 :Bool;
     active @2 :Bool;
+    # Version 1 certifies fresh DEC scope inputs independently of the MPC
+    # result. Version 0 retains the enclosing Event.valid legacy contract.
+    scopeVersion @3 :UInt8;
+    scopeValid @4 :Bool;
+    # Oldest carState/controlsState/selfdriveState publication checked for
+    # scope health. Does not certify a recalculated DEC mode or MPC result.
+    # A new plan publication must not refresh an old scope-input receipt.
+    scopeSourceMonoTime @5 :UInt64;
 
     enum DynamicExperimentalControlState {
       acc @0;

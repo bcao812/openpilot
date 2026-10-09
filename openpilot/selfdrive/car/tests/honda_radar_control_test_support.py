@@ -194,7 +194,7 @@ class ControlPipeline:
     self.state.logMonoTime['controlsState'] = owner_ns
 
   def step(self, *, speed, radar=(), visual=(), accel=0.0, model_accel=.6, model_stop=False,
-           observer_online=True, scope_online=True, engaged=True, pedal=None, plant=None):
+           observer_online=True, scope_online=True, engaged=True, pedal=None, plant=None, expected_solver_status=0):
     state, frame = self.state, self.frame
     source_ns = START_NS + frame * FRAME_NS
     car = state['carState']
@@ -232,7 +232,9 @@ class ControlPipeline:
     self._accept('longitudinalPlanSP', publications['longitudinalPlanSP'])
     plan_event = publications['longitudinalPlan']
     plan = plan_event.longitudinalPlan
-    assert plan_event.valid and plan.motionIntent.valid
+    assert plan.solverStatus == expected_solver_status
+    assert bool(plan_event.valid) is (expected_solver_status == 0)
+    assert bool(plan.motionIntent.valid) is (expected_solver_status == 0)
     speeds, accels = tuple(plan.speeds), tuple(plan.accels)
     action_t = self.planner.CP.longitudinalActuatorDelay + DT_MDL
     intent = replace(MotionIntent.from_message(plan.motionIntent), release_accel=get_departure_accel_from_plan(

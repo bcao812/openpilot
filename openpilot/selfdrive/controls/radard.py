@@ -235,13 +235,28 @@ class RadarD:
       return False
     for service in ('selfdriveState', 'longitudinalPlanSP'):
       stamp = sm.logMonoTime.get(service, 0)
-      if (not getattr(sm, 'seen', {}).get(service, False) or not sm.valid.get(service, False)
+      if (not getattr(sm, 'seen', {}).get(service, False)
           or not 0 < stamp <= now_ns or now_ns - stamp > SCOPE_MAX_AGE_NS):
         return False
-      if service == 'selfdriveState' and not sm[service].experimentalMode:
-        self.control_scope_unavailable = False
-        return False
+      if service == 'selfdriveState':
+        if not sm.valid.get(service, False):
+          return False
+        if not sm[service].experimentalMode:
+          self.control_scope_unavailable = False
+          return False
     dec = sm['longitudinalPlanSP'].dec
+    scope_version = int(getattr(dec, 'scopeVersion', 0))
+    if scope_version == 0:
+      # Older producers have no independent scope receipt.
+      if not sm.valid.get('longitudinalPlanSP', False):
+        return False
+    elif scope_version == 1:
+      source_ns = int(dec.scopeSourceMonoTime)
+      if (not dec.scopeValid or not 0 < source_ns <= sm.logMonoTime['longitudinalPlanSP']
+          or now_ns - source_ns > SCOPE_MAX_AGE_NS):
+        return False
+    else:
+      return False
     self.control_scope_unavailable = False
     return bool(sm['selfdriveState'].experimentalMode and dec.enabled and dec.active)
 
@@ -314,11 +329,11 @@ class RadarD:
       # Perception confirmation follows current sensor identity and geometry.
       # Driver actuation transitions are enforced by the planner and owner.
       if not enabled and self.control_scope_unavailable:
-        # SP.valid also reflects the preceding MPC result. Its failure or a
-        # missing feedback packet must not reset the perception adapter and
-        # masquerade as clear-road evidence. The independent observer keeps
-        # running; retain adapter history until fresh input or an explicit
-        # configuration boundary resolves it.
+        # A missing/invalid scope receipt must not reset perception history
+        # or masquerade as clear-road evidence. New SP producers certify
+        # scope separately from MPC success; legacy producers still use
+        # Event.valid. Retain history across unavailable input in either
+        # protocol until fresh scope or an explicit configuration boundary.
         # Publish the original visual leads during this scope gap. These
         # diagnostics preserve perception history; they do not establish that
         # an object ever controlled the car or grant any new radar authority.

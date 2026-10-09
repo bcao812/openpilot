@@ -12,6 +12,7 @@ from openpilot.cereal import messaging, custom
 from opendbc.car import structs
 from openpilot.common.constants import CV
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
+from openpilot.selfdrive.car.honda_radar_observer_config import SCOPE_MAX_AGE_NS
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
@@ -121,6 +122,19 @@ class LongitudinalPlannerSP:
     dec.state = DecState.blended if self.dec.mode() == 'blended' else DecState.acc
     dec.enabled = self.dec.enabled()
     dec.active = self.dec.active()
+    # The radar execution scope depends on healthy DEC inputs, not whether
+    # the preceding MPC found a solution. Keep Event.valid's plan contract
+    # above, and carry the oldest input epoch so re-publication cannot extend
+    # this independent receipt's lifetime at the radar consumer.
+    scope_services = ['carState', 'controlsState', 'selfdriveState']
+    scope_times = {service: sm.logMonoTime.get(service, 0) for service in scope_services}
+    dec.scopeVersion = 1
+    dec.scopeSourceMonoTime = min(scope_times.values())
+    dec.scopeValid = bool(sm.all_checks(service_list=scope_services) and all(
+      getattr(sm, 'seen', {}).get(service, False) and sm.valid.get(service, False)
+      and 0 < stamp <= plan_sp_send.logMonoTime and plan_sp_send.logMonoTime - stamp <= SCOPE_MAX_AGE_NS
+      for service, stamp in scope_times.items()
+    ))
 
     # Smart Cruise Control
     smartCruiseControl = longitudinalPlanSP.smartCruiseControl

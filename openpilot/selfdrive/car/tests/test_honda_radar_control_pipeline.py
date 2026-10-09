@@ -458,6 +458,7 @@ def test_scope_feedback_failure_is_distinct_from_an_explicit_exit(scope, enabled
   with control_pipeline() as pipeline:
     state = pipeline.state
     now = pipeline_support.START_NS
+    # Absent scopeVersion explicitly exercises the legacy Event.valid gate.
     feedback = messaging.new_message('longitudinalPlanSP').longitudinalPlanSP
     feedback.dec.enabled = feedback.dec.active = True
     state['longitudinalPlanSP'] = feedback
@@ -491,7 +492,7 @@ def test_scope_feedback_failure_is_distinct_from_an_explicit_exit(scope, enabled
 
 @pytest.mark.parametrize('feedback_fault', ['invalid', 'invalid_dec_off', 'stale', 'future', 'unseen'])
 def test_feedback_gap_preserves_real_radar_hold_and_perception_loss_history(feedback_fault, record_property):
-  """Invalid SP cannot remove the explicitly established object-hold premise."""
+  """Invalid scope cannot remove the explicitly established object-hold premise."""
   rows = []
   with control_pipeline(speed=0.0) as pipeline:
     for _ in range(28):
@@ -507,9 +508,10 @@ def test_feedback_gap_preserves_real_radar_hold_and_perception_loss_history(feed
       state = pipeline.state
       if feedback_fault in ('invalid', 'invalid_dec_off'):
         state.valid['longitudinalPlanSP'] = False
-      if feedback_fault == 'invalid_dec_off':
         feedback = state['longitudinalPlanSP'].as_builder()
-        feedback.dec.enabled = feedback.dec.active = False
+        feedback.dec.scopeValid = False
+        if feedback_fault == 'invalid_dec_off':
+          feedback.dec.enabled = feedback.dec.active = False
         state['longitudinalPlanSP'] = feedback.as_reader()
       if feedback_fault == 'stale':
         state.logMonoTime['longitudinalPlanSP'] -= SCOPE_MAX_AGE_NS + 1
