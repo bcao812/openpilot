@@ -157,14 +157,18 @@ def test_tighter_current_cap_rejects_continuation_and_strengthens_fallback():
   assert planner.motion_intent.braking_accel <= -1.2
 
 
-def test_a_native_reference_overridden_by_final_cap_is_not_an_executed_donor():
+def test_final_cap_is_part_of_the_dynamically_consistent_donor_reference():
   planner, state = ready_planner()
   reference = planner.reference_planner
   with patch.object(reference, 'independent_constraint', return_value=(-0.4, planner.mpc.source, False, -0.4, False)):
     planner.update(state, now_ns=advance(state, 2))
   assert planner.mpc.solution_status == 0
   assert reference.reference_overridden
-  assert reference.continuation.donor is None
+  donor = reference.continuation.donor
+  assert donor is not None
+  assert donor.trajectory.applied_accel_ceiling == pytest.approx(-0.4)
+  assert np.all(donor.trajectory.states[1:, 2] <= -0.4 + 1e-12)
+  assert np.max(np.abs(planner.mpc.trajectory_dynamics_defects(donor.trajectory.states, donor.trajectory.jerks))) < 1e-9
 
 
 def test_publication_cannot_extend_an_accepted_candidate_deadline():

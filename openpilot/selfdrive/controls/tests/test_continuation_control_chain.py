@@ -47,7 +47,9 @@ class ContinuationChain:
     publisher = Publisher()
     with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=source_ns + 1_000_000):
       self.planner.publish(self.state, publisher)
-    self.plan_event = serialized(publisher.messages['longitudinalPlan'])
+    # Publisher exposes a reader; serialized() owns a mutable message while
+    # clearing its write flag before the actual bytes round trip.
+    self.plan_event = serialized(publisher.messages['longitudinalPlan'].as_builder())
     return self.plan_event
 
   def consume(self, sample_ns, *, model_ns=None, continuation_source=None):

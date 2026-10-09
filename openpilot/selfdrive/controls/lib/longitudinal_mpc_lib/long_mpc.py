@@ -701,8 +701,14 @@ class LongitudinalMpc:
         return 'current_object_clearance'
     return ''
 
-  def snapshot_continuation_donor(self, source_ns, producer_ns, instance_ns):
-    """Call only after the producer has accepted its complete native output."""
+  def snapshot_continuation_donor(self, source_ns, producer_ns, instance_ns, *, accel_ceiling=None):
+    """Seal a reference only after native checks and final producer selection.
+
+    With an adopted ceiling, native acceleration supplies the reference shape;
+    it does not supply an unchecked full trajectory. Keep the measured x0,
+    intersect all future acceleration bounds, then integrate and independently
+    revalidate the complete result against the original installed problem.
+    """
     problem = self.continuation_problem
     if (self.solution_status != 0 or self.diagnostic_last_solver_return != 0 or not self.previous_solution_valid
         or not isinstance(problem, ContinuationProblem)):
@@ -713,12 +719,43 @@ class LongitudinalMpc:
         or not source_ns <= producer_ns or not instance_ns <= producer_ns):
       self.continuation_donor_reason = 'donor_clock_identity'
       return None
-    if (reason := self._continuation_trajectory_error(problem, self.x_sol, self.j_solution)):
+    states, jerks = self.x_sol, self.j_solution
+    diagnostics = {}
+    if accel_ceiling is not None:
+      if (not isinstance(accel_ceiling, Real) or isinstance(accel_ceiling, bool) or not np.isfinite(accel_ceiling)
+          or states.shape != (N+1, X_DIM) or jerks.shape != (N,)
+          or not np.all(np.isfinite(states)) or not np.all(np.isfinite(jerks))):
+        self.continuation_donor_reason = 'invalid_adopted_acceleration_ceiling_or_native_shape'
+        return None
+      accel_ceiling = float(accel_ceiling)
+      lower = np.maximum(problem.state_lower[1:, 1], problem.parameters[1:, 0])
+      upper = np.minimum(np.minimum(problem.state_upper[1:, 1], problem.parameters[1:, 1]), accel_ceiling)
+      if not np.all(np.isfinite([lower, upper])) or np.any(lower > upper):
+        self.continuation_donor_reason = 'adopted_acceleration_intersection_empty'
+        return None
+      accelerations = np.empty(N+1)
+      accelerations[0] = problem.x0[2]  # Measured a0 is never clipped to a request.
+      accelerations[1:] = np.clip(states[1:, 2], lower, upper)
+      conditioned_jerks = np.diff(accelerations) / np.diff(T_IDXS)
+      conditioned_states = np.empty_like(states)
+      conditioned_states[0] = problem.x0
+      for stage, duration in enumerate(np.diff(T_IDXS)):
+        conditioned_states[stage+1] = self.integrate_jerk(conditioned_states[stage], conditioned_jerks[stage], duration)
+      diagnostics = dict(
+        applied_accel_ceiling=accel_ceiling,
+        conditioning_max_state_delta=tuple(float(value) for value in np.max(np.abs(conditioned_states - states), axis=0)),
+        conditioning_max_jerk_delta=float(np.max(np.abs(conditioned_jerks - jerks))),
+        conditioning_max_braking_relaxation=float(np.max(np.where(states[:, 2] < 0.0,
+                                                                  conditioned_states[:, 2] - states[:, 2], 0.0), initial=0.0)),
+        native_max_dynamics_defect=tuple(float(value) for value in np.max(np.abs(self.trajectory_dynamics_defects(states, jerks)), axis=0)),
+      )
+      states, jerks = conditioned_states, conditioned_jerks
+    if (reason := self._continuation_trajectory_error(problem, states, jerks)):
       self.continuation_donor_reason = reason
       return None
     self.continuation_donor_reason = ''
     return ContinuationDonor(int(source_ns), int(producer_ns), int(instance_ns),
-                              frozen_array(self.x_sol), frozen_array(self.j_solution), problem)
+                              frozen_array(states), frozen_array(jerks), problem, **diagnostics)
 
   def continuation_candidate(self, donor, *, now_ns):
     """Read-only numerical proposal; native status and sentinel stay intact."""

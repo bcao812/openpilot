@@ -116,7 +116,7 @@ class PlannerContinuation:
             and motion.referenceEpochMonoTime == donor.source_ns
             and motion.modelMonoTime == donor.model_ns)
 
-  def native_success(self, mpc, state, timing, *, now_ns, permitted, scope):
+  def native_success(self, mpc, state, timing, *, now_ns, permitted, scope, applied_accel_ceiling):
     """Seal only after native, all postchecks and final arbitration succeeded."""
     motion, receipt = state['controlsState'].motionState, self.native_receipt
     if (receipt is not None and self.receipt_available(state, now_ns)
@@ -140,7 +140,8 @@ class PlannerContinuation:
         or timing.producer_ns != now_ns or timing.instance_ns <= 0):
       self.donor = None
       return
-    trajectory = mpc.snapshot_continuation_donor(timing.epoch_ns, timing.producer_ns, timing.instance_ns)
+    trajectory = mpc.snapshot_continuation_donor(timing.epoch_ns, timing.producer_ns, timing.instance_ns,
+                                                accel_ceiling=applied_accel_ceiling)
     if trajectory is None:
       self.donor = None
       return
@@ -178,6 +179,9 @@ class PlannerContinuation:
     if not result.accepted:
       return reject(result.reason)
     target = float(np.interp(action_t, T_IDXS, result.states[:, 2]))
+    prior_cap = donor.trajectory.applied_accel_ceiling
+    if prior_cap is not None and target > prior_cap + 1e-9:
+      return reject('initial_state_above_donor_execution_cap')
     ceiling = float(independent_ceiling(target))
     self.independent_braking_accel = ceiling if math.isfinite(ceiling) and ceiling < 0.0 else None
     # A tighter current cap is a new control requirement. Do not clip a

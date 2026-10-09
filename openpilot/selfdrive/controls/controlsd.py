@@ -180,7 +180,7 @@ class Controls(ControlsExt):
       command_identity = (int(long_plan.modelMonoTime), float(long_plan.aTarget), bool(long_plan.shouldStop),
                           int(long_plan.solverStatus), intent, float(reference.accel),
                           float(reference.constraintAccel), bool(reference.overridden), speeds, accels, action_t,
-                          ContinuationOffer.from_message(long_plan.continuation))
+                          ContinuationOffer.from_message(getattr(long_plan, 'continuation', None)))
       projection_numbers = (command_identity[1], command_identity[5], command_identity[6], action_t, *speeds, *accels)
       offer = command_identity[-1]
       if offer is not None:

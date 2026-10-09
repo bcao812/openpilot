@@ -1,11 +1,13 @@
-"""Bounded numerical candidates from a previous accepted native trajectory.
+"""Bounded numerical candidates from a previous qualified planner reference.
 
 These objects do not grant control authority, renew source leases, or change
 native status. The producer/consumer additionally gate input health, current
 braking policy, operating state and the independent failure-episode budget.
+A producer may condition native acceleration under its final selected ceiling;
+that newly integrated reference must pass the original problem independently.
 """
 from dataclasses import dataclass, replace
-from numbers import Integral
+from numbers import Integral, Real
 
 import numpy as np
 
@@ -13,6 +15,7 @@ import numpy as np
 MAX_DONOR_SOURCE_AGE_NS = 200_000_000
 TERMINAL_ACCEL_TOL = 1e-3  # m/s^2; eligibility, not a relaxed acceptance bound
 TERMINAL_JERK_TOL = 1e-3  # m/s^3
+DONOR_CAP_TOL = 1e-9  # same strict physical precision as the MPC candidate checks
 STATE_ENVELOPE_LEVELS = tuple((.2 / 2**level, .25 / 2**level) for level in range(8)) + ((1e-3, 1e-3),)
 
 
@@ -48,6 +51,13 @@ class ContinuationDonor:
   states: np.ndarray
   jerks: np.ndarray
   problem: ContinuationProblem
+  # A successful producer may construct a reference bounded by its final
+  # selected target. This is a reference contract, not delivered CAN/vehicle a.
+  applied_accel_ceiling: float | None = None
+  conditioning_max_state_delta: tuple[float, float, float] = (0.0, 0.0, 0.0)
+  conditioning_max_jerk_delta: float = 0.0
+  conditioning_max_braking_relaxation: float = 0.0
+  native_max_dynamics_defect: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)
@@ -75,9 +85,10 @@ def build_candidate(donor, problem, *, now_ns, times, integrate, validate):
   The native grids before/after elapsed time have different jerk boundaries.
   Resampling acceleration and independently integrating the resulting constant
   jerk intervals defines a new candidate; interpolating old x/v independently
-  would not. Beyond the old horizon, only an approximately constant-speed old
-  terminal state may supply a zero-acceleration endpoint. The final fixed-grid
-  interval is then reintegrated and checked too, never claimed as old support.
+  would not. Beyond the old horizon, the original API requires an approximately
+  constant-speed terminal state. A reference constructed under its adopted
+  ceiling may instead retain its bounded terminal acceleration, with near-zero
+  terminal jerk. Both short extensions are new hypotheses, not old support.
   """
   if (not isinstance(donor, ContinuationDonor) or not isinstance(problem, ContinuationProblem)
       or not isinstance(donor.problem, ContinuationProblem)):
@@ -113,6 +124,13 @@ def build_candidate(donor, problem, *, now_ns, times, integrate, validate):
       or donor.jerks.shape != (len(times)-1,) or not np.all(np.isfinite(donor.states))
       or not np.all(np.isfinite(donor.jerks))):
     return reject('invalid_donor_trajectory')
+  conditioned = donor.applied_accel_ceiling is not None
+  if conditioned:
+    ceiling = donor.applied_accel_ceiling
+    if not isinstance(ceiling, Real) or isinstance(ceiling, bool) or not np.isfinite(ceiling):
+      return reject('invalid_adopted_donor_ceiling')
+    if np.any(donor.states[1:, 2] > float(ceiling) + DONOR_CAP_TOL):
+      return reject('donor_exceeds_adopted_ceiling')
   if (reason := validate(donor.problem, donor.states, donor.jerks)):
     return reject('donor_' + reason)
   elapsed = (int(problem.reference_ns) - int(donor.source_ns)) / 1e9
@@ -120,10 +138,13 @@ def build_candidate(donor, problem, *, now_ns, times, integrate, validate):
     return reject('continuation_source_shift_too_large')
   shifted_times = times + elapsed
   tail = max(0.0, float(shifted_times[-1] - times[-1]))
-  if tail > 0.0 and (abs(donor.states[-1, 2]) > TERMINAL_ACCEL_TOL or abs(donor.jerks[-1]) > TERMINAL_JERK_TOL):
-    return reject('donor_terminal_not_constant_speed', tail)
+  if tail > 0.0:
+    if conditioned and abs(donor.jerks[-1]) > TERMINAL_JERK_TOL:
+      return reject('conditioned_donor_terminal_jerk', tail)
+    if not conditioned and (abs(donor.states[-1, 2]) > TERMINAL_ACCEL_TOL or abs(donor.jerks[-1]) > TERMINAL_JERK_TOL):
+      return reject('donor_terminal_not_constant_speed', tail)
   accelerations = np.interp(np.minimum(shifted_times, times[-1]), times, donor.states[:, 2])
-  accelerations[shifted_times > times[-1]] = 0.0
+  accelerations[shifted_times > times[-1]] = donor.states[-1, 2] if conditioned else 0.0
   accelerations[0] = problem.x0[2]
   jerks = np.diff(accelerations) / np.diff(times)
   states = np.empty_like(donor.states)

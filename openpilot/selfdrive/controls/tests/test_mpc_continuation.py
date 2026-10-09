@@ -306,3 +306,119 @@ def test_signed_unknown_constraint_rows_cannot_borrow_the_monotone_envelope_proo
   rows[0] = tuple(frozen_array(value) for value in (C, D, lower, upper))
   result = candidate(donor, current=replace(current, linear_constraints=tuple(rows)))
   assert not result.accepted and result.reason == 'current_unsupported_signed_linear_row'
+
+
+def ordinary_accelerating_native(initial_accel=0.0):
+  """The ordinary cruise reference that a slower final response can override."""
+  planner = LongitudinalMpc()
+  recorder = NativeProblemRecorder(planner.solver)
+  planner.solver = recorder
+  planner.set_cur_state(10.0, initial_accel)
+  planner.set_weights(prev_accel_constraint=False)
+  planner.update(radar_state(), reference=MpcReference(20.0, accel_max=1.0), reference_ns=EPOCH, now_ns=PRODUCER)
+  assert planner.solution_status == planner.diagnostic_last_solver_return == 0
+  return planner, recorder
+
+
+def test_actual_cruise_cap_conditions_a_real_native_reference_and_survives_short_failure():
+  planner, recorder = ordinary_accelerating_native()
+  cap = .05
+  assert np.interp(.55, T_IDXS, planner.a_solution) > cap
+  assert abs(planner.a_solution[-1]) > TERMINAL_ACCEL_TOL
+  raw_states, raw_jerks = planner.x_sol.copy(), planner.j_solution.copy()
+  writes = len(recorder.constraint_writes), len(recorder.cost_writes), planner.diagnostic_solve_calls
+  donor = planner.snapshot_continuation_donor(EPOCH, PRODUCER, INSTANCE, accel_ceiling=cap)
+  assert donor is not None, planner.continuation_donor_reason
+  assert donor.applied_accel_ceiling == cap
+  assert donor.conditioning_max_state_delta[2] > 0.0 and donor.conditioning_max_jerk_delta > 0.0
+  assert abs(donor.states[-1, 2] - cap) < 1e-12 and abs(donor.jerks[-1]) <= TERMINAL_JERK_TOL
+  assert np.max(donor.states[1:, 2]) <= cap + QP_FEASIBILITY_TOL
+  assert LongitudinalMpc._continuation_trajectory_error(donor.problem, donor.states, donor.jerks) == ''
+  np.testing.assert_array_equal(planner.x_sol, raw_states)
+  np.testing.assert_array_equal(planner.j_solution, raw_jerks)
+  assert writes == (len(recorder.constraint_writes), len(recorder.cost_writes), planner.diagnostic_solve_calls)
+  recorder.failure = 'solver_status'
+  now = PRODUCER + 50_000_000
+  planner.set_cur_state(10.0, 0.0)
+  planner.update(radar_state(), reference=MpcReference(20.0, accel_max=1.0),
+                 reference_ns=EPOCH + 50_000_000, now_ns=now)
+  result = planner.continuation_candidate(donor, now_ns=now)
+  assert result.accepted, result.reason
+  assert 0.0 < np.interp(.55, T_IDXS, result.states[:, 2]) <= cap + QP_FEASIBILITY_TOL
+  assert result.states[-1, 2] == pytest.approx(donor.states[-1, 2], abs=1e-12)
+  assert result.tail_extension_s == pytest.approx(.05)
+  assert planner.solution_status == planner.last_solver_status == 4
+  np.testing.assert_array_equal(planner.x_sol, 0.0)
+  assert planner.snapshot_continuation_donor(EPOCH + 50_000_000, now, INSTANCE, accel_ceiling=cap) is None
+
+
+def test_conditioned_ceiling_does_not_clip_measured_a0_or_claim_the_initial_interval_is_below_cap():
+  planner, _ = ordinary_accelerating_native(initial_accel=.4)
+  cap = .05
+  donor = planner.snapshot_continuation_donor(EPOCH, PRODUCER, INSTANCE, accel_ceiling=cap)
+  assert donor is not None, planner.continuation_donor_reason
+  np.testing.assert_array_equal(donor.states[0], planner.continuation_problem.x0)
+  assert donor.states[0, 2] == .4 and np.max(donor.states[1:, 2]) <= cap + QP_FEASIBILITY_TOL
+  assert np.interp(.01, T_IDXS, donor.states[:, 2]) > cap  # Initial measured-to-request transition.
+  assert np.interp(.55, T_IDXS, donor.states[:, 2]) <= cap + QP_FEASIBILITY_TOL
+
+
+@pytest.mark.parametrize('cap', [float('nan'), float('inf'), True, ACCEL_MIN - .1])
+def test_conditioning_rejects_malformed_or_empty_acceleration_intersections(cap):
+  planner, _ = ordinary_accelerating_native()
+  assert planner.snapshot_continuation_donor(EPOCH, PRODUCER, INSTANCE, accel_ceiling=cap) is None
+  assert planner.continuation_donor_reason in ('invalid_adopted_acceleration_ceiling_or_native_shape',
+                                               'adopted_acceleration_intersection_empty')
+
+
+def test_conditioning_rechecks_current_risk_instead_of_accepting_native_success_as_its_proof():
+  planner, _ = ordinary_accelerating_native()
+  parameters = planner.continuation_problem.parameters.copy()
+  parameters[:, 2] = 1.0
+  planner.continuation_problem = replace(planner.continuation_problem, parameters=frozen_array(parameters))
+  assert planner.solution_status == planner.diagnostic_last_solver_return == 0
+  assert planner.snapshot_continuation_donor(EPOCH, PRODUCER, INSTANCE, accel_ceiling=.05) is None
+  assert planner.continuation_donor_reason == 'current_risk_distance_deficit'
+
+
+def constant_acceleration_donor(speed, acceleration):
+  states, jerks = integrate_profile([0.0, speed, acceleration], np.full(N+1, acceleration))
+  return ContinuationDonor(EPOCH, PRODUCER, INSTANCE, frozen_array(states), frozen_array(jerks),
+                           problem_for(states), applied_accel_ceiling=acceleration)
+
+
+@pytest.mark.parametrize('speed,acceleration', [(8.0, ACCEL_MAX), (40.0, ACCEL_MIN)])
+def test_conditioned_nominal_on_a_physical_face_does_not_clip_its_violating_corners(speed, acceleration):
+  donor = constant_acceleration_donor(speed, acceleration)
+  assert LongitudinalMpc._continuation_trajectory_error(donor.problem, donor.states, donor.jerks) == ''
+  result = candidate(donor)
+  assert not result.accepted and result.reason == 'no_certified_state_envelope_physical_state_bound'
+  assert result.speed_tolerance == result.accel_tolerance == 0.0
+
+
+def test_negative_conditioned_terminal_acceleration_cannot_extend_through_reverse_velocity():
+  donor = constant_acceleration_donor(1.01, -.1)
+  assert np.min(donor.states[:, 1]) > 0.0
+  current = replace(donor.problem, reference_ns=EPOCH + 150_000_000, consumed_ns=PRODUCER + 150_000_000,
+                    x0=frozen_array([0.0, .995, -.1]))
+  result = candidate(donor, current=current)
+  assert not result.accepted and result.reason == 'current_physical_state_bound'
+
+
+@pytest.mark.parametrize('ceiling,expected', [(float('nan'), 'invalid_adopted_donor_ceiling'),
+                                             (-.1, 'donor_exceeds_adopted_ceiling')])
+def test_conditioned_metadata_must_match_the_stored_reference(ceiling, expected):
+  donor = replace(mathematical_donor(), applied_accel_ceiling=ceiling)
+  result = candidate(donor)
+  assert not result.accepted and result.reason == expected
+
+
+def test_nonzero_terminal_acceleration_still_requires_conditioned_origin_and_current_revalidation():
+  donor = constant_acceleration_donor(8.0, .05)
+  assert candidate(donor).accepted
+  assert candidate(replace(donor, applied_accel_ceiling=None)).reason == 'donor_terminal_not_constant_speed'
+  current = replace(donor.problem, reference_ns=EPOCH + 50_000_000, consumed_ns=PRODUCER + 50_000_000)
+  parameters = current.parameters.copy()
+  parameters[:, 1] = 0.0
+  result = candidate(donor, current=replace(current, parameters=frozen_array(parameters)))
+  assert not result.accepted and result.reason == 'current_physical_state_bound'

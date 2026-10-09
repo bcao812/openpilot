@@ -1146,7 +1146,7 @@ class UnifiedLongitudinalPlanner:
     self.continuation.native_success(
       planner.mpc, state, planner.reference_timing.pending, now_ns=now_ns,
       permitted=bool(continuation_permitted and planner.motion_intent.valid and planner.motion_intent.ready
-                     and not reasons and not planner.fcw and not self.reference_overridden), scope=continuation_scope,
+                     and not reasons and not planner.fcw), scope=continuation_scope, applied_accel_ceiling=output,
     )
     planner._observe(outcome="completed" if healthy else "completed_unhealthy_inputs")
     if planner.trace is not None:
