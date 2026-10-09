@@ -179,6 +179,7 @@ def test_socket_timeout_retains_the_exact_previously_consumed_id_without_claimin
 
 def test_cached_subscriptions_refresh_health_at_unchanged_ids_and_keep_old_wire_snapshot():
   daemon, raw = observed_selfdrive()
+  daemon.sm.freq_ok['controlsState'] = True
   observer = daemon.longitudinal_observation
   first = step(daemon, serialized(raw))
   before = first.to_dict()
@@ -191,7 +192,9 @@ def test_cached_subscriptions_refresh_health_at_unchanged_ids_and_keep_old_wire_
   assert observer.input_cache._entries["controlsState"][1] is original
 
   daemon.sm.valid = {**daemon.sm.valid, "controlsState": False}
-  daemon.sm.freq_ok.pop("controlsState", None)
+  # A live SubMaster always has health keys for every subscribed service.
+  # Unknown health belongs to a partial observer input, tested separately.
+  daemon.sm.freq_ok = {**daemon.sm.freq_ok, 'controlsState': False}
   changed = step(daemon, None)
   assert observer.input_cache._entries["controlsState"][1] is None
   inputs = {entry.service: entry for entry in changed.inputs}
@@ -200,7 +203,9 @@ def test_cached_subscriptions_refresh_health_at_unchanged_ids_and_keep_old_wire_
   assert current.monoTime == original.monoTime == timestamps["controlsState"]
   assert current.knownFlags & CHECK_FLAGS["valid"]
   assert not current.flags & CHECK_FLAGS["valid"]
-  assert not current.knownFlags & CHECK_FLAGS["freq_ok"]
+  assert current.knownFlags & CHECK_FLAGS['freq_ok']
+  assert not current.flags & CHECK_FLAGS['freq_ok']
+  assert EventName.commIssue in changed.events
   step(daemon, None)
   promoted = observer.input_cache._entries["controlsState"][1]
   assert promoted is not original
@@ -210,6 +215,46 @@ def test_cached_subscriptions_refresh_health_at_unchanged_ids_and_keep_old_wire_
   assert daemon.sm.logMonoTime == timestamps
   assert changed.inputs[0].service == "carState"
   assert changed.carStateReused and not changed.inputs[0].flags & CHECK_FLAGS["updated"]
+
+
+def test_cached_observer_partial_health_becomes_unknown_without_mutating_old_wire():
+  daemon, raw = observed_selfdrive()
+  observer = daemon.longitudinal_observation
+  # The observer also accepts partial diagnostic views. Exercise that API
+  # directly without deleting a required key from the running SubMaster.
+  state = SimpleNamespace(frame=daemon.sm.frame, logMonoTime=dict(daemon.sm.logMonoTime),
+                          valid=dict(daemon.sm.valid), alive=dict(daemon.sm.alive),
+                          freq_ok={**daemon.sm.freq_ok, 'controlsState': True},
+                          seen=dict(daemon.sm.seen), updated=dict(daemon.sm.updated))
+
+  def capture():
+    observer.begin(state, raw, raw.carState)
+    observer.state_machine_input(daemon)
+    observer.state_machine_output(daemon)
+    message = log.SelfdriveState.new_message(state=daemon.state_machine.state, enabled=daemon.enabled, active=daemon.active)
+    assert observer.publish(message)
+    return message.longitudinalDiagnostics.as_reader()
+
+  first = capture()
+  before = first.to_dict()
+  capture()
+  original = observer.input_cache._entries['controlsState'][1]
+  original_values = original.to_dict()
+  assert original.knownFlags & CHECK_FLAGS['freq_ok'] and original.flags & CHECK_FLAGS['freq_ok']
+  state.valid = {**state.valid, 'controlsState': False}
+  state.freq_ok.pop('controlsState')
+  changed = capture()
+  assert observer.input_cache._entries['controlsState'][1] is None
+  current = next(entry for entry in changed.inputs if entry.service == 'controlsState')
+  assert current.monoTime == original.monoTime == daemon.sm.logMonoTime['controlsState']
+  assert current.knownFlags & CHECK_FLAGS['valid'] and not current.flags & CHECK_FLAGS['valid']
+  assert not current.knownFlags & CHECK_FLAGS['freq_ok']
+  assert not current.flags & CHECK_FLAGS['freq_ok']
+  capture()
+  promoted = observer.input_cache._entries['controlsState'][1]
+  assert promoted is not original and promoted.to_dict() == current.to_dict()
+  assert original.to_dict() == original_values and first.to_dict() == before
+  assert 'controlsState' in daemon.sm.freq_ok
 
 
 def test_missed_observation_of_a_receive_does_not_assign_a_stale_id_to_reused_carstate():

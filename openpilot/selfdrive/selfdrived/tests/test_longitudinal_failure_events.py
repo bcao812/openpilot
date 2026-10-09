@@ -48,6 +48,16 @@ def update(daemon, car_state, now_ns):
     daemon.update_events(car_state)
 
 
+def mark_frequency_unhealthy(sm, service):
+  # bounded_submaster gives services and ignore_average_freq the same list.
+  # Mutating it would unsubscribe the very service this fault must exercise.
+  subscriptions = tuple(sm.services)
+  sm.ignore_average_freq = [name for name in sm.ignore_average_freq if name != service]
+  sm.freq_ok[service] = False
+  assert tuple(sm.services) == subscriptions and service in sm.services
+  assert not sm.all_freq_ok([service])
+
+
 @pytest.mark.parametrize('status', [4, -6, -1])
 def test_fresh_semantic_failures_keep_invalidity_and_disable_with_specific_text(status):
   daemon, car_state, event, now_ns = failure_harness(status)
@@ -115,7 +125,7 @@ def test_unqualified_failure_never_exempts_the_invalid_plan_from_transport_check
     field = {'unseen': 'seen', 'dead': 'alive', 'slow': 'freq_ok', 'invalid': 'valid'}[defect.split('_')[0]]
     getattr(daemon.sm, field)[service] = False
     if field == 'freq_ok':
-      daemon.sm.ignore_average_freq.remove(service)
+      mark_frequency_unhealthy(daemon.sm, service)
   update(daemon, car_state, now_ns + 1)
   expected = EventName.commIssueAvgFreq if defect.startswith('slow_') else EventName.commIssue
   assert expected in daemon.events.names
@@ -129,7 +139,7 @@ def test_independent_transport_fault_coexists_with_semantic_plan_failure(health,
   daemon, car_state, _, now_ns = failure_harness()
   getattr(daemon.sm, health)[service] = False
   if health == 'freq_ok':
-    daemon.sm.ignore_average_freq.remove(service)
+    mark_frequency_unhealthy(daemon.sm, service)
   update(daemon, car_state, now_ns)
   expected = EventName.commIssueAvgFreq if health == 'freq_ok' else EventName.commIssue
   assert sorted(daemon.events.names) == sorted([expected, EventName.longitudinalControlUnavailable])

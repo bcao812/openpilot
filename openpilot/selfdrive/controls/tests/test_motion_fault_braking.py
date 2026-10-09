@@ -25,6 +25,7 @@ from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, controller
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner_owner, make_handover_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
+from openpilot.selfdrive.selfdrived.events import ET
 
 
 MISSING_HEALTH = object()
@@ -116,7 +117,9 @@ def test_warm_protocol_fault_keeps_braking_and_disables_resume_through_real_hond
   assert harness.control.LoC.motion_owner_established
   daemon, car_state = selfdrive_event_harness(harness.control.pm.messages['controlsState'])
   daemon.update_events(car_state)
-  assert log.OnroadEvent.EventName.commIssue in daemon.events.names
+  assert log.OnroadEvent.EventName.longitudinalControlUnavailable in daemon.events.names
+  assert log.OnroadEvent.EventName.commIssue not in daemon.events.names
+  assert daemon.events.contains(ET.NO_ENTRY) and daemon.events.contains(ET.SOFT_DISABLE)
 
 
 @pytest.mark.parametrize('mode', MOTION_MODES)

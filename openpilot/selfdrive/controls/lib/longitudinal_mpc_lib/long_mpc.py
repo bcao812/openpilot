@@ -2570,9 +2570,13 @@ class LongitudinalMpc:
         # A reversing target has no positive forward stopping-distance credit.
         obstacle = (projection.trajectory[:, 0]
                     + get_stopped_equivalence_factor(np.maximum(projection.trajectory[:, 1], 0.0)))
+        # The soft occupied mask also covers an interpolation endpoint after
+        # the real window. That outer node is not an unknown tail when the
+        # complete window has support; legacy and version-1 costs then agree.
+        has_unknown_tail = (projection.conflict_support_version == 1 and not projection.persistent
+                            and projection.hard_conflict_end < projection.conflict_end)
         unknown_tail = (projection.occupied & (T_IDXS > projection.hard_conflict_end)
-                        & (projection.conflict_support_version == 1) & (not projection.persistent)
-                        & (not projection.pass_before))
+                        & has_unknown_tail & (not projection.pass_before))
         # Keep raw opposing motion and every supported hard row. Keep the
         # unknown tail in the objective; saturate its final equivalence at
         # the ego origin only when it projects behind that origin.
