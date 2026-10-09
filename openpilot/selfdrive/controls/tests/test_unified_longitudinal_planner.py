@@ -390,7 +390,7 @@ def test_radar_consumption_uses_only_stopped_arithmetic_roundoff_without_mutatin
 
   primary = formal_lead(now_ns=PUBLICATION, dRel=15.0, vLead=1.0, vLeadK=1.0, vRel=1.0)
   state = state_at(radar_frame(primary, display=(primary,)), speed=0.0)
-  state['carState'].vEgo, state['carState'].standstill = speed, standstill
+  state['carState'].vEgo, state['carState'].standstill = float(speed), standstill
   wire_speed = state['carState'].as_reader().vEgo
   planner = enabled_planner(0.0)
   with patch.object(planner.dec, 'enabled', return_value=True):

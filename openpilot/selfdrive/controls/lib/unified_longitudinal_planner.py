@@ -259,7 +259,10 @@ class UnifiedLongitudinalPlanner:
     self.caution_accel_limited = False
     self.caution_object_identities = ()
     self.mitigation_object_evidence = ()
-    self.radar_risk_unresolved = False
+    # An invalid plan withdraws its current producer claim, but cannot clear
+    # a physical loss already recorded by the consumer. That loss retains
+    # its existing reacquisition, explicit-clear and driver-reset lifecycle.
+    self.radar_risk_unresolved = self.radar_consumption.degraded
     self.stop_distance_policy.clear()
     self._radar_stop_candidate = None
     self._radar_stop_pending.clear()

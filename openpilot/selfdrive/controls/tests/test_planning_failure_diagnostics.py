@@ -154,7 +154,7 @@ def test_exception_stage_is_separate_from_native_return(diagnosed_mpc, mode, sta
     assert np.all(getattr(mpc, name) == 0.0)
 
 
-def test_first_failure_category_change_and_success_reset_are_not_time_gated(diagnosed_mpc):
+def test_first_failure_category_change_and_success_reset_can_use_the_burst_budget(diagnosed_mpc):
   mpc, native, event = diagnosed_mpc
   with patch.object(long_mpc.time, 'monotonic', return_value=1.0) as clock:
     attempt(mpc)
@@ -174,6 +174,60 @@ def test_first_failure_category_change_and_success_reset_are_not_time_gated(diag
     native.status = 4
     attempt(mpc)
     assert event.call_count == 4
+
+
+@pytest.mark.parametrize('alternate_success', [False, True])
+def test_global_budget_bounds_one_hundred_alternating_ticks_before_payload_work(diagnosed_mpc, alternate_success):
+  mpc, native, event = diagnosed_mpc
+  with patch.object(long_mpc.time, 'monotonic', return_value=0.0) as clock, \
+       patch.object(mpc, '_failure_radar_summary', wraps=mpc._failure_radar_summary) as summarize:
+    failures = 0
+    for tick in range(100):
+      clock.return_value = tick / 20.0
+      native.status = 4 if tick % 2 == 0 else (0 if alternate_success else 2)
+      attempt(mpc)
+      failures += native.status != 0
+      assert mpc.solution_status == native.status
+      if native.status:
+        assert not mpc.previous_solution_valid and np.all(mpc.x_sol == 0.0)
+    assert event.call_count == summarize.call_count == 3
+    assert event.call_args_list[0].kwargs['status'] == 4
+    assert event.call_args_list[0].kwargs['suppressedCount'] == 0
+    assert sum(call.args == ('statistics',) for call in native.get_stats.call_args_list) == 3
+    clock.return_value = 5.0
+    native.status = 2  # A changed category is eligible exactly at the refill boundary.
+    attempt(mpc)
+    assert event.call_count == summarize.call_count == 4
+    assert failure_record(event)['suppressedCount'] == failures - 3
+    # A following success/reset cannot replenish the exhausted global budget.
+    native.status = 0
+    attempt(mpc)
+    native.status = 4
+    attempt(mpc)
+    assert event.call_count == 4
+
+
+def test_global_budget_clock_boundaries_preserve_the_high_water_mark(diagnosed_mpc):
+  mpc, _, event = diagnosed_mpc
+  with patch.object(long_mpc.time, 'monotonic', return_value=0.0) as clock:
+    for status in (4, MPC_INVALID_INPUT, MPC_SOLVER_ERROR):
+      mpc._log_failure(status, 'clock_fixture')
+    assert event.call_count == 3
+    rejected_clocks = (float('nan'), float('inf'), -1.0, 4.999999999, 2.0, 0.0, 4.999999999)
+    for timestamp in rejected_clocks:
+      clock.return_value = timestamp
+      mpc._log_failure(4, 'clock_fixture')
+    assert event.call_count == 3
+    clock.return_value = 5.0
+    mpc._log_failure(4, 'clock_fixture')
+    assert event.call_count == 4
+    assert failure_record(event)['suppressedCount'] == len(rejected_clocks)
+    # Large forward jumps cap the available credit at the same three-record
+    # burst; neither clock regression nor idle time creates an unbounded dump.
+    clock.return_value = 1000.0
+    for status in (MPC_INVALID_INPUT, MPC_SOLVER_ERROR, 4, MPC_INVALID_SOLUTION):
+      mpc._log_failure(status, 'clock_fixture')
+    assert event.call_count == 7
 
 
 @pytest.mark.parametrize('failure', ['statistics', 'payload', 'event', 'warning'])

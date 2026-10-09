@@ -472,7 +472,10 @@ def test_solver_failure_status_is_not_overwritten_by_a_timing_error():
   planner.solver.get_stats.side_effect = RuntimeError("injected timing failure")
   planner.update(radar_state(), reference=MpcReference(20.0))
   assert_failure(planner, 4)
-  planner.solver.get_stats.assert_not_called()
+  assert planner.diagnostic_last_solver_return == 4
+  # The optional statistics read may fail, but must never enter time_tot or
+  # replace the native status with a timing/diagnostic exception status.
+  planner.solver.get_stats.assert_called_once_with('statistics')
 
 
 @pytest.mark.parametrize('field', ['params', 'yref'])

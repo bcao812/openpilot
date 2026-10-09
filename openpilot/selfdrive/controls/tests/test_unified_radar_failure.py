@@ -96,6 +96,9 @@ def test_old_finite_proof_cannot_strengthen_a_new_ordinary_failure():
   old_evidence = planner.mpc.finite_risk_evidence
   assert old_evidence
   planner.reference_planner._radar_update_ns += 50_000_000
+  # A new planner tick clears its previous independent request before handling
+  # the new native outcome. Keep only the deliberately stale finite proof.
+  planner.reference_planner.continuation.begin()
   planner.reference_planner.fail_mpc(state, 10.0, .2)
   assert planner.mpc.finite_risk_evidence == old_evidence
   assert planner.output_a_target == MPC_FAILURE_ACCEL

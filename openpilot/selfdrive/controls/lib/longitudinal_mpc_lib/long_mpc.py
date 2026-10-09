@@ -436,6 +436,8 @@ class LongitudinalMpc:
     self._failure_log_key = None
     self._failure_log_time = 0.0
     self._failure_log_suppressed = 0
+    self._failure_log_credit_ns = 15_000_000_000  # Three records, then one credit per five seconds.
+    self._failure_log_refill_ns = None
     self.diagnostic_failure_log_errors = 0
     self._diagnostic_input_times = {}
     self._diagnostic_radar = None
@@ -3116,9 +3118,27 @@ class LongitudinalMpc:
       exception = type(detail).__name__[:80] if isinstance(detail, Exception) else ''
       key = (int(status), stage, exception, reason)
       timestamp = time.monotonic()
+      if not np.isfinite(timestamp) or timestamp < 0.0:
+        self._failure_log_suppressed += 1
+        return
       if key == self._failure_log_key and timestamp < self._failure_log_time + 5.0:
         self._failure_log_suppressed += 1
         return
+      # One budget spans successes, resets and all failure categories. The
+      # initial burst preserves new-fault evidence without allowing alternating
+      # faults to serialize full payloads every planner tick. Integer credits
+      # avoid accumulating floating-point error at the five-second boundary;
+      # a regressed clock cannot refill or move the high-water mark backwards.
+      timestamp_ns = int(timestamp * 1e9)
+      refill_ns = self._failure_log_refill_ns
+      if refill_ns is None:
+        refill_ns = timestamp_ns
+      self._failure_log_credit_ns = min(15_000_000_000, self._failure_log_credit_ns + max(0, timestamp_ns - refill_ns))
+      self._failure_log_refill_ns = max(refill_ns, timestamp_ns)
+      if self._failure_log_credit_ns < 5_000_000_000:
+        self._failure_log_suppressed += 1
+        return
+      self._failure_log_credit_ns -= 5_000_000_000
       suppressed = self._failure_log_suppressed
       # Advance before payload/getter/logger work, including when it fails.
       self._failure_log_key, self._failure_log_time, self._failure_log_suppressed = key, timestamp, 0

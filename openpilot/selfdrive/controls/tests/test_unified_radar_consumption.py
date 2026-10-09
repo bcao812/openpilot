@@ -165,20 +165,28 @@ def test_loss_of_an_already_adopted_hold_target_does_not_release_that_hold(initi
       state = state_at(frame, now=now, publication=publication)
       planner.update(state, now_ns=now)
       assert planner.reference_planner.radar_consumption.degraded
+      assert planner.reference_planner.radar_consumption.lost_identities == ((SESSION, 7),)
+      assert planner.reference_planner.radar_held_identity == (SESSION, 7)
+      assert planner.reference_planner.radar_release_identity is None
+      if elapsed == 0:
+        # Keeping the relevant expired object invalid intentionally uses the
+        # failure braking path; this must not erase the accepted obstacle.
+        assert planner.mpc.solution_status != 0 and not planner.motion_intent.valid
       assert planner.reference_planner.radar_risk_unresolved
       assert not state['radarState'].fusionRiskUnresolved
       publisher = CapturingPublisher()
       with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=now):
         planner.publish(state, publisher)
       assert publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
-      assert planner.reference_planner.radar_held_identity == (SESSION, 7)
       # A positive planner target is not permission for the owner to release.
       assert not publisher.messages['longitudinalPlan'].longitudinalPlan.motionIntent.releaseAllowed
       assert not planner.motion_intent.moving_lead and not planner.motion_intent.release_allowed
     state['carState'].gasPressed = True
     planner.update(state, now_ns=now + 1_000_000)
   assert not planner.reference_planner.radar_consumption.degraded
+  assert not planner.reference_planner.radar_consumption.lost_identities
   assert not planner.reference_planner.radar_risk_unresolved
+  assert planner.reference_planner.radar_held_identity is None
 
 
 @pytest.mark.parametrize('degraded,risk_unresolved', [(False, False), (True, False), (False, True), (True, True)])
@@ -472,6 +480,7 @@ def test_scope_exit_clears_only_producer_claim_while_retained_consumer_risk_need
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
     planner.update(state, now_ns=CONSUMPTION)
     assert planner.reference_planner.radar_risk_unresolved
+    assert planner.reference_planner.radar_consumption.lost_identities == (((SESSION, 7),) if consumer_loss else ())
     now = CONSUMPTION + 100_000_000
     state = state_at(radar_frame(publication=now, risk_unresolved=True), now=now, publication=now)
     state['selfdriveState'].experimentalMode = False
@@ -479,16 +488,25 @@ def test_scope_exit_clears_only_producer_claim_while_retained_consumer_risk_need
     assert not planner.reference_planner.fusion_admitted
     assert planner.reference_planner.radar_risk_unresolved is consumer_loss
     assert planner.reference_planner.radar_consumption.degraded is consumer_loss
+    assert planner.reference_planner.radar_consumption.lost_identities == (((SESSION, 7),) if consumer_loss else ())
     state['carState'].gasPressed = True
     planner.update(state, now_ns=now + 1_000_000)
   assert not planner.reference_planner.radar_risk_unresolved
   assert not planner.reference_planner.radar_consumption.degraded
+  assert not planner.reference_planner.radar_consumption.lost_identities
 
 
+@pytest.mark.parametrize('consumer_loss', [False, True])
 @pytest.mark.parametrize('failure', ['source_epoch', 'owner', 'model_shape', 'pitch', 'throttle', 'mpc'])
-def test_invalid_early_returns_clear_the_current_plan_claim(failure):
+def test_invalid_early_returns_clear_the_current_plan_claim(failure, consumer_loss):
   planner = enabled_planner(5.0)
   ref = planner.reference_planner
+  if consumer_loss:
+    # This loss was observed by the real consumer independently of the new
+    # plan's validity. Invalidating a plan is not a sensor-clear receipt.
+    ref.radar_consumption.update(native_frame(radar_frame(coast(relevant=True))),
+                                 publication_ns=PUBLICATION, now_ns=CONSUMPTION, speed=5.0)
+    assert ref.radar_consumption.lost_identities == ((SESSION, 7),)
   ref.radar_risk_unresolved = True
   state = state_at(radar_frame(degraded=True, risk_unresolved=True), speed=5.0)
   if failure == 'source_epoch':
@@ -507,11 +525,13 @@ def test_invalid_early_returns_clear_the_current_plan_claim(failure):
         planner.update(state, now_ns=CONSUMPTION)
     else:
       planner.update(state, now_ns=CONSUMPTION)
-  assert not ref.radar_risk_unresolved and not planner.motion_intent.valid
+  assert ref.radar_risk_unresolved is consumer_loss
+  assert ref.radar_consumption.lost_identities == (((SESSION, 7),) if consumer_loss else ())
+  assert not planner.motion_intent.valid
   publisher = CapturingPublisher()
   with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
     planner.publish(state, publisher)
-  assert not publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
+  assert publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved is consumer_loss
 
 
 def test_non_unified_main_plan_publishes_false_even_after_a_retained_claim():

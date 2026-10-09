@@ -16,6 +16,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+from openpilot.selfdrive.controls.lib.longitudinal_continuation import ContinuationBudget
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_STOP_DISTANCE, RISK_STOP_DISTANCE, N, PARAM_DIM, STOP_DISTANCE, LongitudinalMpc, MpcReference, MPC_INVALID_INPUT, MPC_SOLVER_ERROR,
 )
@@ -24,6 +25,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPl
 from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrace
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.controls.lib.parking_approach import ParkingApproach, VisionLeadUncertainty
+from openpilot.selfdrive.controls.lib.planner_continuation import PlannerContinuation
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
 from openpilot.selfdrive.controls.lib.turn_lead_guard import TurnLeadGuard
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
@@ -58,7 +60,8 @@ def snapshot_value(value):
     # The backing store is the dependency; copying a native handle only creates
     # an unequal Python identity. Loaded policy values remain in radar_settings.
     return (type(value).__qualname__, value.get_param_path())
-  if isinstance(value, (ParkingApproach, VisionLeadUncertainty, RadarConsumption, TurnLeadGuard)):
+  if isinstance(value, (ParkingApproach, VisionLeadUncertainty, RadarConsumption, TurnLeadGuard,
+                        PlannerContinuation, ContinuationBudget)):
     return (type(value).__qualname__, snapshot_value(vars(value)))
   if isinstance(value, OrderedDict):
     # The vision cache evicts its oldest entry; ordering is control state too.
@@ -122,7 +125,8 @@ def control_snapshot(planner):
   return result
 
 
-@pytest.mark.parametrize('mutation', ['braking_latch', 'decision', 'model_payload', 'model_clock', 'model_poison', 'cache_order'])
+@pytest.mark.parametrize('mutation', ['braking_latch', 'decision', 'model_payload', 'model_clock', 'model_poison', 'cache_order',
+                                     'continuation_budget', 'continuation_request'])
 def test_control_snapshot_detects_parking_state_and_model_cache_mutations(mutation):
   baseline, observed = make_planner(diagnostics=False), make_planner(diagnostics=True)
   for planner in (baseline, observed):
@@ -147,6 +151,10 @@ def test_control_snapshot_detects_parking_state_and_model_cache_mutations(mutati
     cache._last_model_ns += 50_000_000
   elif mutation == 'model_poison':
     cache._models[1_000_000_000] = None
+  elif mutation == 'continuation_budget':
+    observed.reference_planner.continuation.budget.note_failure(1_000_000_000)
+  elif mutation == 'continuation_request':
+    observed.reference_planner.continuation.independent_braking_accel = -1.0
   else:
     cache._models.move_to_end(950_000_000)
 
