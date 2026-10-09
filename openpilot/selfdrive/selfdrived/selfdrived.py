@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import math
 import time
 import threading
 
@@ -20,7 +21,13 @@ from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_events import CarEvents
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
-from openpilot.selfdrive.controls.lib.motion_supervisor import MODEL_LEASE_NS, MOTION_INTENT_VERSION, PLAN_LEASE_NS
+from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
+from openpilot.selfdrive.controls.lib.motion_supervisor import MODEL_LEASE_NS, MOTION_INTENT_VERSION, PLAN_LEASE_NS, MotionIntent
+from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
+  CONTINUATION_STATUSES, CONTINUATION_VERSION, UNSTABLE_DISABLE_NS, ContinuationBudget, ContinuationDonor,
+  ContinuationHistory, ContinuationOffer, continuation_reference, execution_target, validate_continuation,
+)
+from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer, valid_timestamp
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
@@ -291,6 +298,114 @@ class SelfdriveD(CruiseHelper):
 
     CruiseHelper.__init__(self, self.CP)
     self.button_state_tracker = ButtonStateTracker()
+
+  def _continuation_event_status(self, CS, now_ns, plan_failure, motion_degraded):
+    """Observe bounded execution without declaring the failed native plan valid."""
+    if not hasattr(self, '_longitudinal_failure_budget'):
+      self._longitudinal_failure_budget = ContinuationBudget()
+      self._continuation_history = ContinuationHistory()
+      self._continuation_reference = ReferenceTimingConsumer()
+      self._continuation_donor = None
+    budget = self._longitudinal_failure_budget
+    self._longitudinal_soft_disable_remaining_ns = None
+    if (getattr(self, 'CP_SP', None) is None
+        or resolve_longitudinal_mode(self.CP, self.CP_SP) != LongitudinalMode.UNIFIED):
+      return False, 'unsupported_mode'
+    history_valid = bool(getattr(self, '_car_state_valid', False) and CS.canValid and self._continuation_history.observe(
+      getattr(self, '_car_state_mono_ns', None), now_ns, CS.vEgo, CS.aEgo))
+    plan, motion = self.sm['longitudinalPlan'], self.sm['controlsState'].motionState
+    plan_ns = self.sm.logMonoTime['longitudinalPlan']
+    controls_ns = self.sm.logMonoTime['controlsState']
+    offer = ContinuationOffer.from_message(plan.continuation)
+    reference = continuation_reference(plan.reference, plan_ns=plan_ns, now_ns=now_ns)
+    owner_live = bool(
+      all(getattr(self.sm, health).get(service) is True for service in ('controlsState', 'carControl')
+          for health in ('seen', 'valid', 'alive', 'freq_ok'))
+      and valid_timestamp(controls_ns) and 0 <= now_ns - controls_ns <= PLAN_LEASE_NS
+      and motion.version == MOTION_INTENT_VERSION and motion.planningMode == int(LongitudinalMode.UNIFIED)
+      and motion.enabled and motion.continuationVersion == CONTINUATION_VERSION
+      and self.sm['carControl'].longActive and self.sm['carControl'].enabled and not self.sm['carControl'].cruiseControl.override
+    )
+    owner_reference_healthy = bool(owner_live and not motion.degraded and not motion.waitingForFreshInput
+                                   and motion.referenceTimingVersion == REFERENCE_TIMING_VERSION and motion.referenceTimingValid
+                                   and valid_timestamp(motion.referenceConsumerMonoTime) and valid_timestamp(motion.planMonoTime)
+                                   and motion.planMonoTime <= motion.referenceConsumerMonoTime <= controls_ns)
+    owner_tracking = bool(owner_reference_healthy and motion.phase == 'track' and not motion.reasons and not motion.resolvedStop)
+    if owner_tracking and not motion.continuationActive:
+      times = (motion.referenceSourceMonoTime, motion.referenceEpochMonoTime, motion.referenceProducerMonoTime,
+               motion.referenceProducerInstanceMonoTime, motion.planMonoTime, motion.modelMonoTime, motion.referenceConsumerMonoTime)
+      if (all(valid_timestamp(value) for value in times)
+          and motion.referenceSourceMonoTime == motion.referenceEpochMonoTime <= motion.referenceProducerMonoTime
+          and motion.referenceProducerInstanceMonoTime <= motion.referenceProducerMonoTime
+          and motion.referenceProducerMonoTime <= motion.planMonoTime <= motion.referenceConsumerMonoTime <= controls_ns
+          and motion.modelMonoTime <= motion.planMonoTime
+          and now_ns - min(motion.referenceSourceMonoTime, motion.modelMonoTime) <= PLAN_LEASE_NS):
+        self._continuation_donor = ContinuationDonor(motion.referenceProducerMonoTime, motion.referenceSourceMonoTime,
+                                                    motion.modelMonoTime, motion.referenceProducerInstanceMonoTime)
+    if plan_failure or motion_degraded:
+      episode = offer.episode_start_ns if offer is not None and offer.version == CONTINUATION_VERSION and reference is not None else None
+      budget.note_failure(now_ns, episode_start_ns=episode)
+    elif (owner_reference_healthy and not motion.continuationActive and reference is not None and self.sm.valid['longitudinalPlan']
+          and plan.solverStatus == 0 and plan.motionIntent.valid and plan.motionIntent.ready
+          and self.sm.all_checks(['modelV2', 'longitudinalPlan'])
+          and motion.referenceProducerMonoTime == reference.producer_ns and motion.modelMonoTime == plan.modelMonoTime):
+      budget.note_success(now_ns, producer_ns=reference.producer_ns, source_ns=reference.source_ns, model_ns=plan.modelMonoTime)
+    if budget.episode_start_ns and valid_timestamp(now_ns):
+      self._longitudinal_soft_disable_remaining_ns = max(0, budget.episode_start_ns + UNSTABLE_DISABLE_NS - now_ns)
+    if not plan_failure or plan.solverStatus not in CONTINUATION_STATUSES:
+      return False, 'not_continuable_failure'
+    # A continuation can keep established healthy TRACK running. It can
+    # never open NO_ENTRY, restart a degraded owner, or suppress forceDecel.
+    machine = getattr(self, 'state_machine', None)
+    if (not self.enabled or machine is None or machine.state != State.enabled or not owner_tracking
+        or CS.gasPressed or CS.brakePressed or CS.standstill or CS.cruiseState.standstill or not CS.canValid
+        or CS.vEgo < CLOSE_LEAD_STOP_SPEED
+        or self.events.contains(ET.OVERRIDE_LONGITUDINAL)
+        or self.sm['driverMonitoringState'].noResponseForceDecel or self.sm['controlsState'].forceDecel
+        or not history_valid or reference is None):
+      return False, 'continuation_authority_unavailable'
+    model = self.sm['modelV2']
+    if (self.sm.logMonoTime['modelV2'] != plan.modelMonoTime or not self.sm.all_checks(['modelV2'])
+        or model.action.shouldStop or model.meta.hardBrakePredicted or plan.fcw
+        or not math.isfinite(model.action.desiredAcceleration)):
+      return False, 'continuation_model_changed'
+    check = self._continuation_reference.consume(plan.reference, plan_ns, now_ns, command_identity=(offer,))
+    if not check.valid:
+      return False, check.reason
+    failed_intent = MotionIntent.from_message(plan.motionIntent)
+    if (not failed_intent.is_braking_valid() or plan.shouldStop or failed_intent.reasons or failed_intent.rest_goal_rejected
+        or failed_intent.producer_instance_ns != reference.instance_ns):
+      return False, 'continuation_failed_intent_invalid'
+    donor = self._continuation_donor
+    if motion.continuationActive:
+      if (offer is None or motion.planMonoTime != plan_ns or motion.modelMonoTime != plan.modelMonoTime
+          or motion.referenceProducerMonoTime != reference.producer_ns
+          or motion.referenceSourceMonoTime != reference.source_ns
+          or motion.referenceProducerInstanceMonoTime != reference.instance_ns
+          or motion.continuationEpisodeMonoTime != offer.episode_start_ns
+          or motion.continuationDonorProducerMonoTime != offer.donor_producer_ns
+          or motion.continuationDonorSourceMonoTime != offer.donor_source_ns
+          or motion.continuationDonorModelMonoTime != offer.donor_model_ns
+          or motion.continuationValidUntilMonoTime != offer.valid_until_ns):
+        return False, 'continuation_receipt_mismatch'
+      # The current owner receipt independently proves that its earlier
+      # healthy native donor was actually accepted, including after a restart
+      # of this observer. It does not refresh any donor/episode timestamp.
+      donor = ContinuationDonor(offer.donor_producer_ns, offer.donor_source_ns, offer.donor_model_ns, reference.instance_ns)
+    state = self._continuation_history.current_state(now_ns)
+    if state is None:
+      return False, 'continuation_history_missing'
+    reason = validate_continuation(offer, donor=donor, reference=reference, budget=budget,
+                                   plan_ns=plan_ns, model_ns=plan.modelMonoTime, now_ns=now_ns, speed=state[0], accel=state[1],
+                                   cruise_kph=CS.vCruise)
+    if not reason:
+      reason = self._continuation_history.check(offer.candidate, reference, now_ns)
+    if reason:
+      return False, reason
+    target = execution_target(offer, reference, now_ns, self.CP.longitudinalActuatorDelay)
+    if target is None or model.action.desiredAcceleration < 0.0 and target > model.action.desiredAcceleration:
+      return False, 'continuation_current_braking_cap'
+    return True, 'owner_continuation' if motion.continuationActive else 'qualified_offer_before_owner'
 
   def update_events(self, CS):
     """Compute onroadEvents from carState"""
@@ -573,7 +688,8 @@ class SelfdriveD(CruiseHelper):
     no_system_errors = (not has_disable_events) or (len(self.events) == num_events)
     warmup_sec = 5.
     big_model_settling = self.big_model_loading or time.monotonic() < self.big_model_ready_t + warmup_sec
-    plan_failure = fresh_longitudinal_planning_failure(self.sm, self.CP, getattr(self, 'CP_SP', None), time.monotonic_ns())
+    event_now_ns = time.monotonic_ns()
+    plan_failure = fresh_longitudinal_planning_failure(self.sm, self.CP, getattr(self, 'CP_SP', None), event_now_ns)
     # The invalid plan still reaches its consumer as invalid. Only its event
     # classification changes; every independent transport failure retains the
     # generic alert. Compute these before adding the dedicated disable event.
@@ -625,7 +741,13 @@ class SelfdriveD(CruiseHelper):
     observe(getattr(self, "longitudinal_observation", None), "motion_check", controlstate)
     motion = controlstate.motionState
     motion_degraded = (self.CP.openpilotLongitudinalControl and motion.version == MOTION_INTENT_VERSION and motion.degraded)
-    longitudinal_unavailable = plan_failure or motion_degraded
+    continuation_active, continuation_reason = self._continuation_event_status(CS, event_now_ns, plan_failure, motion_degraded)
+    longitudinal_unavailable = (plan_failure and not continuation_active) or motion_degraded
+    if plan_failure and self.sm.logMonoTime['longitudinalPlan'] != getattr(self, '_logged_failed_plan_ns', 0):
+      self._logged_failed_plan_ns = self.sm.logMonoTime['longitudinalPlan']
+      cloudlog.event('longitudinalSolverFailure', solverStatus=int(self.sm['longitudinalPlan'].solverStatus),
+                     planMonoTime=int(self._logged_failed_plan_ns), continuation=continuation_active,
+                     continuationReason=continuation_reason, episodeStartMonoTime=self._longitudinal_failure_budget.episode_start_ns)
     if longitudinal_unavailable:
       self.events.add(EventName.longitudinalControlUnavailable)
       observe(getattr(self, "longitudinal_observation", None), "longitudinal_control_unavailable_added")
@@ -694,6 +816,9 @@ class SelfdriveD(CruiseHelper):
     # calls monitor_time(). Timed separately from everything after it so the wait is never read
     # as work: here wall is ~10 ms and CPU is ~0.
     _car_state = messaging.recv_one(self.car_state_sock)
+    if _car_state is not None:
+      self._car_state_mono_ns = int(_car_state.logMonoTime)
+      self._car_state_valid = bool(_car_state.valid)
     if self.prof:
       self.prof.mark("recv_carState")
     CS = _car_state.carState if _car_state else self.CS_prev
@@ -830,7 +955,8 @@ class SelfdriveD(CruiseHelper):
       self.prof.mark("update_events")
     observe(getattr(self, "longitudinal_observation", None), "state_machine_input", self)
     if not self.CP.passive and self.initialized:
-      self.enabled, self.active = self.state_machine.update(self.events)
+      self.enabled, self.active = self.state_machine.update(
+        self.events, soft_disable_remaining_ns=getattr(self, '_longitudinal_soft_disable_remaining_ns', None))
       observe(getattr(self, "longitudinal_observation", None), "state_machine_output", self)
     if self.prof:
       self.prof.mark("state_machine")

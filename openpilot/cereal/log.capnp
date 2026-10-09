@@ -1500,6 +1500,7 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   diagnostics @43 :LongitudinalPlanDiagnostics;
   objectInfluences @44 :List(Custom.LongitudinalObjectInfluence);
   radarRiskUnresolved @45 :Bool;  # current UNIFIED producer/consumer retained loss; requests the existing radar-unavailable event
+  continuation @46 :LongitudinalContinuation;  # separate bounded candidate; native validity/status remain unchanged
 
 
   solverExecutionTime @35 :Float32;
@@ -1543,6 +1544,35 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
     personality @36 :LongitudinalPersonality;
   }
 }
+struct LongitudinalContinuation {
+  version @0 :UInt8;
+  episodeStartMonoTime @1 :UInt64;
+  donorProducerMonoTime @2 :UInt64;
+  donorSourceMonoTime @3 :UInt64;
+  donorModelMonoTime @4 :UInt64;
+  validUntilMonoTime @5 :UInt64;
+  candidate @6 :Candidate;
+  # Diagnostic fields do not grant execution authority.
+  reason @7 :Text;
+  independentBrakingValid @8 :Bool;
+  independentBrakingAccel @9 :Float32;
+  tailExtensionSeconds @10 :Float32;
+  validationTime @11 :Float64;  # seconds spent revalidating; diagnostic only
+  valid @12 :Bool;  # publisher may revoke an expired offer; does not validate the native plan
+  sourceCruiseKph @13 :Float64;  # current producer cap; reducing cruise revokes the cached offer
+
+  struct Candidate {
+    targetAccel @0 :Float64;
+    # Version 1 uses the 13 native states at 10*(i/12)^2 seconds, with
+    # 12 piecewise-constant jerks. These are independent of the UI trajectory.
+    speeds @1 :List(Float64);
+    accels @2 :List(Float64);
+    jerks @3 :List(Float64);
+    speedTolerance @4 :Float64;  # producer-validated initial-state envelope; zero grants none
+    accelTolerance @5 :Float64;
+  }
+}
+
 struct LongitudinalMotionIntent {
   version @0 :UInt8;
   reasons @1 :UInt32;
@@ -1616,6 +1646,14 @@ struct LongitudinalMotionState {
   # Only the motion owner's adopted current-plan records; empty on rejection.
   # planMonoTime identifies the exact plan carrying these records.
   objectInfluences @19 :List(Custom.LongitudinalObjectInfluence);
+  continuationVersion @20 :UInt8;  # consumer support, including when inactive
+  continuationActive @21 :Bool;
+  continuationEpisodeMonoTime @22 :UInt64;
+  continuationDonorProducerMonoTime @23 :UInt64;
+  continuationDonorSourceMonoTime @24 :UInt64;
+  continuationDonorModelMonoTime @25 :UInt64;
+  continuationValidUntilMonoTime @26 :UInt64;
+  continuationReason @27 :Text;
 }
 
 struct UiPlan {

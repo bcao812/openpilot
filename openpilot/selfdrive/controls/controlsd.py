@@ -31,6 +31,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurv
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
+from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_VERSION, ContinuationOffer, execution_target
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent, StopReason
 from openpilot.selfdrive.controls.lib.object_influence import accepted_mitigation_influences, accepted_object_influences
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer
@@ -178,8 +179,13 @@ class Controls(ControlsExt):
         speeds, accels, ModelConstants.T_IDXS[:CONTROL_N], action_t, reference.constraintAccel))
       command_identity = (int(long_plan.modelMonoTime), float(long_plan.aTarget), bool(long_plan.shouldStop),
                           int(long_plan.solverStatus), intent, float(reference.accel),
-                          float(reference.constraintAccel), bool(reference.overridden), speeds, accels, action_t)
+                          float(reference.constraintAccel), bool(reference.overridden), speeds, accels, action_t,
+                          ContinuationOffer.from_message(long_plan.continuation))
       projection_numbers = (command_identity[1], command_identity[5], command_identity[6], action_t, *speeds, *accels)
+      offer = command_identity[-1]
+      if offer is not None:
+        projection_numbers += (offer.source_cruise_kph, offer.candidate.target_accel, offer.candidate.speed_tolerance, offer.candidate.accel_tolerance,
+                               *offer.candidate.speeds, *offer.candidate.accels, *offer.candidate.jerks)
     if recv_frame is not None and _has_received_reader_owner(long_plan):
       # Reusing a tuple containing NaN can change identity comparisons (NaN
       # is not equal to itself). Preserve the original decoding path for it.
@@ -283,12 +289,45 @@ class Controls(ControlsExt):
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, self.CP_SP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
     motion_input = {}
     if self.LoC.unified:
+      continuation = command_identity[-1]
+      force_decel = bool(self.sm['driverMonitoringState'].noResponseForceDecel or self.sm['selfdriveState'].state == State.softDisabling)
+      current_model_ns = self.sm.logMonoTime['modelV2']
+      # A new model requires a new producer risk check. Reusing an offer may
+      # never ignore stronger current braking/stop evidence between LP ticks.
+      continuation_inputs = bool(
+        reference_valid and not self.longitudinal_mode_mismatch and not force_decel
+        and (long_plan.solverStatus == 0 or self.sm.valid['longitudinalPlan'] is False)
+        and self.sm.all_checks(['modelV2', 'carState']) and CS.canValid
+        and all(getattr(self.sm, health).get('longitudinalPlan') is True for health in ('seen', 'alive', 'freq_ok'))
+        and 0 < current_model_ns == int(long_plan.modelMonoTime) <= now_ns
+        and now_ns - current_model_ns <= 250_000_000
+        and math.isfinite(CS.vCruise) and CS.vCruise != V_CRUISE_UNSET
+        and not model_v2.action.shouldStop and not model_v2.meta.hardBrakePredicted and not long_plan.fcw
+        and math.isfinite(model_v2.action.desiredAcceleration)
+      )
+      if (continuation is not None and continuation.valid is True and continuation.version == CONTINUATION_VERSION
+          and model_v2.action.desiredAcceleration < 0.0):
+        candidate_target = execution_target(continuation, self.reference_timing_check.timing if reference_valid else None,
+                                            now_ns, self.CP.longitudinalActuatorDelay)
+        continuation_inputs &= candidate_target is not None and candidate_target <= model_v2.action.desiredAcceleration
       motion_input = {
         'intent': motion_intent,
         'plan_time_ns': int(self.sm.logMonoTime['longitudinalPlan']),
         'model_time_ns': int(long_plan.modelMonoTime),
         'now_ns': now_ns,
         'standby_input': standby_input,
+        'continuation': continuation,
+        'continuation_input_valid': continuation_inputs,
+        'reference_check': self.reference_timing_check,
+        'force_decel': force_decel,
+        'car_state_ns': int(self.sm.logMonoTime['carState']),
+        'native_recovery_valid': bool(
+          reference_valid and not self.longitudinal_mode_mismatch and CS.canValid
+          and self.sm.all_checks(['modelV2', 'longitudinalPlan', 'carState'])
+          and all(getattr(self.sm, health).get(service) is True for service in ('modelV2', 'longitudinalPlan', 'carState')
+                  for health in ('seen', 'alive', 'freq_ok'))
+          and 0 < int(long_plan.modelMonoTime) <= current_model_ns <= now_ns
+          and now_ns - int(long_plan.modelMonoTime) <= 250_000_000),
         'plan_valid': (reference_valid and not self.longitudinal_mode_mismatch and self.sm.all_checks(['longitudinalPlan', 'carState'])
                        and math.isfinite(CS.vCruise) and CS.vCruise != V_CRUISE_UNSET),
         'braking_plan_valid': (reference_valid and not self.longitudinal_mode_mismatch and self.sm.valid.get('carState') is True and CS.canValid
@@ -429,6 +468,17 @@ class Controls(ControlsExt):
       motion.planMonoTime = int(self.sm.logMonoTime['longitudinalPlan'])
       motion.modelMonoTime = int(self.sm['longitudinalPlan'].modelMonoTime)
       motion.objectInfluences = getattr(self, '_object_influence_receipt', [])
+      if self.LoC.unified:
+        motion.continuationVersion = CONTINUATION_VERSION
+        motion.continuationActive = bool(self.LoC.motion_supervisor.continuation_active)
+        motion.continuationEpisodeMonoTime = self.LoC.continuation_budget.episode_start_ns
+        motion.continuationReason = self.LoC.continuation_reason
+        offer = self.LoC.continuation_offer
+        if offer is not None:
+          motion.continuationDonorProducerMonoTime = offer.donor_producer_ns
+          motion.continuationDonorSourceMonoTime = offer.donor_source_ns
+          motion.continuationDonorModelMonoTime = offer.donor_model_ns
+          motion.continuationValidUntilMonoTime = offer.valid_until_ns
       if self.reference_timing_check is not None:
         check = self.reference_timing_check
         motion.referenceTimingVersion = REFERENCE_TIMING_VERSION

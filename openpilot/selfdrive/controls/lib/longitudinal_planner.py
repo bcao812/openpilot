@@ -459,7 +459,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     longitudinalPlan.allowBrake = True
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)
     if self.unified:
-      self.reference_planner.publish(longitudinalPlan)
+      self.reference_planner.publish(longitudinalPlan, now_ns=int(plan_send.logMonoTime))
       self.reference_timing.publish(longitudinalPlan.reference)
       # Display evidence observes the completed arbitration. It never uses a
       # nearest-node source label as proof that an object changed this plan.

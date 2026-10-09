@@ -18,6 +18,7 @@ from openpilot.selfdrive.controls.lib.cruise_response import (
 from openpilot.selfdrive.controls.lib.drive_helpers import (CLOSE_LEAD_STOP_SPEED, CONTROL_N, CREEP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED,
                                                           get_departure_accel_from_plan, should_stop)
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
+from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_VERSION
 from openpilot.selfdrive.controls.lib.lead_qualification import control_leads, lead_identity, qualified_lead
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
@@ -38,7 +39,8 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VE
                                                                consumed_forward_reference)
 from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
 from openpilot.selfdrive.controls.lib.parking_approach import ParkingApproach
-from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION
+from openpilot.selfdrive.controls.lib.planner_continuation import PlannerContinuation
+from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
 from openpilot.selfdrive.controls.lib.turn_lead_guard import TurnLeadGuard
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource as LongitudinalPlanSourceSP
@@ -217,11 +219,14 @@ class UnifiedLongitudinalPlanner:
     self.cruise_initialized = False
     self.cold_standby_started = False
     self.standby = False
+    self.continuation = PlannerContinuation()
     planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), valid=False)
 
-  def invalidate(self, speed, reason):
+  def invalidate(self, speed, reason, *, preserve_continuation=False):
     planner = self.planner
-    self.cruise_response.clear()
+    self.continuation.invalidate(reason, now_ns=self._radar_update_ns, keep_offer=preserve_continuation)
+    if not preserve_continuation:
+      self.cruise_response.clear()
     self.turn_lead_guard.clear()
     self.turn_accel_limited = False
     self.caution_accel_limited = False
@@ -255,20 +260,28 @@ class UnifiedLongitudinalPlanner:
     planner.j_desired_trajectory = np.zeros(CONTROL_N)
     planner._observe(outcome=reason, constraintKnown=True, constraintAccel=float(self.constraint_accel))
 
-  def fail_mpc(self, state, speed, previous_request):
+  def fail_mpc(self, state, speed, previous_request, *, preserve_continuation=False):
     planner = self.planner
-    self.invalidate(speed, "mpc_" + planner.mpc.failure_reason)
+    continuation_reason = self.continuation.reason
+    self.invalidate(speed, "mpc_" + planner.mpc.failure_reason, preserve_continuation=preserve_continuation)
+    self.continuation.reason = continuation_reason
     if planner.mpc.solution_status == 0 or not state.all_checks(service_list=INPUT_SERVICES):
       return
     previous = float(previous_request) if math.isfinite(previous_request) else MPC_FAILURE_ACCEL
     request = min(previous, MPC_FAILURE_ACCEL)
+    independent = self.continuation.independent_braking_accel
+    if independent is not None and math.isfinite(independent):
+      request = min(request, independent)
     goal_braking = planner.mpc.rest_goal_braking_accel
     if goal_braking is not None and math.isfinite(goal_braking):
       request = min(request, goal_braking)
+      independent = goal_braking if independent is None else min(independent, goal_braking)
     self.e2e_allowed = planner.is_e2e(state)
     model_request = state['modelV2'].action.desiredAcceleration
     if self.e2e_allowed and self.model_reference_mode != 'invalid' and math.isfinite(model_request):
       request = min(request, model_request)
+      if model_request < 0.0:
+        independent = model_request if independent is None else min(independent, model_request)
     finite_braking = getattr(planner.mpc, 'finite_risk_braking_accel', None)
     finite_evidence = getattr(planner.mpc, 'finite_risk_evidence', ())
     if (finite_braking is not None and math.isfinite(finite_braking) and ACCEL_MIN <= finite_braking < request
@@ -278,7 +291,9 @@ class UnifiedLongitudinalPlanner:
       # The failed plan stays invalid and carries only the existing braking
       # envelope; this limits damage without claiming collision avoidance.
       request = float(finite_braking)
+      independent = request if independent is None else min(independent, request)
       self.mitigation_object_evidence = tuple(finite_evidence)
+    self.continuation.independent_braking_accel = independent
     request = float(np.clip(request, ACCEL_MIN, ACCEL_MAX))
     raw_kind = self.describe_motion_reference(state)
     evidence_goal = self.model_evidence.rest_goal if self.model_evidence is not None else None
@@ -492,7 +507,42 @@ class UnifiedLongitudinalPlanner:
       self.radar_held_identity = identity
       self.radar_release_identity = None
 
+  def independent_constraint(self, state, reference_accel, *, speed, maximum_accel, cruise_ceiling,
+                             cruise_speed, active, healthy, reset, forced_decel, caution_identities):
+    """The ordinary current caps, without the generic failed-solver baseline."""
+    planner = self.planner
+    model = state['modelV2']
+    coast_applicable = (
+      planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl
+      and active and healthy and not reset and not forced_decel and not self.e2e_allowed and planner.allow_throttle
+      and not planner.fcw and not should_stop(speed, reference_accel) and not model.action.shouldStop
+      and math.isfinite(reference_accel) and math.isfinite(model.action.desiredAcceleration)
+      and model.action.desiredAcceleration >= CRUISE_COAST_RISK_ACCEL
+      and planner.source == LongitudinalPlanSourceSP.cruise and cruise_ceiling <= reference_accel
+      and speed >= CRUISE_COAST_MIN_SPEED and abs(cruise_speed - speed) <= CRUISE_COAST_MAX_SPEED_ERROR
+      and not (state['radarState'].leadOne.present or state['radarState'].leadTwo.present)
+      and CRUISE_COAST_BP[0] < cruise_ceiling < CRUISE_COAST_BP[-1]
+    )
+    cruise_command = self.cruise_response.coast_command(cruise_ceiling, eligible=coast_applicable)
+    ceiling = min(maximum_accel, cruise_command)
+    source = LongitudinalPlanSource.cruise
+    if cruise_speed <= STOP_SPEED:
+      ceiling = min(ceiling, CarControllerParams.BOSCH_GAS_LOOKUP_BP[0])
+    if self.e2e_allowed and self.model_reference_mode != 'invalid' and model.action.desiredAcceleration < ceiling:
+      ceiling = float(model.action.desiredAcceleration)
+      source = LongitudinalPlanSource.e2e
+    evidence = self.model_evidence
+    model_stop_evidence = evidence is not None and (evidence.no_forward or evidence.has_rest_intent)
+    if model_stop_evidence and speed < STOP_SPEED and CarControllerParams.BOSCH_GAS_LOOKUP_BP[0] < ceiling:
+      ceiling = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
+      source = LongitudinalPlanSource.e2e
+    caution_limited = bool(caution_identities and min(reference_accel, ceiling) > 0.0)
+    if caution_limited:
+      ceiling, source = 0.0, LongitudinalPlanSource.cruise
+    return float(ceiling), source, caution_limited, cruise_command, coast_applicable
+
   def update(self, state, *, now_ns):
+    self.continuation.begin()
     self.radar_risk_unresolved = False
     self.caution_accel_limited = False
     self.caution_object_identities = ()
@@ -809,13 +859,29 @@ class UnifiedLongitudinalPlanner:
     if planner.trace is not None:
       observe_trace(planner.trace, "begin", planner, state, reset, cruise_speed, coast_accel)
     observe(planner.observation, "mpc_started", planner.observation_attempt, planner.mpc)
-    if getattr(state['radarState'], 'fusionActive', False):
-      planner.mpc.update(state['radarState'], personality=state['selfdriveState'].personality, reference=reference,
-                         now_ns=now_ns, reference_ns=source_epoch_ns)
-    else:
-      planner.mpc.update(state['radarState'], personality=state['selfdriveState'].personality, reference=reference)
+    continuation_permitted = bool(
+      planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl and planner.unified
+      and active and healthy and not reset and not forced_decel and not car_state.standstill
+      and speed >= CLOSE_LEAD_STOP_SPEED and not planner.fcw and not self.radar_consumption.degraded
+      and self.radar_held_identity is None and not self.turn_lead_guard.lost
+      and planner.source == LongitudinalPlanSourceSP.cruise and cruise_speed > STOP_SPEED
+      and not model.action.shouldStop and self.model_reference_mode != 'invalid'
+      and (not self.e2e_allowed or ordinary_model_motion)
+    )
+    continuation_scope = (self.e2e_allowed, self.fusion_admitted, bool(getattr(radar, 'fusionActive', False)),
+                          str(state['selfdriveState'].personality))
+    constraint_kwargs = dict(speed=speed, maximum_accel=maximum_accel, cruise_ceiling=cruise_ceiling,
+                             cruise_speed=cruise_speed, active=active, healthy=healthy, reset=reset,
+                             forced_decel=forced_decel, caution_identities=caution_identities)
+    planner.mpc.update(state['radarState'], personality=state['selfdriveState'].personality, reference=reference,
+                       now_ns=now_ns, reference_ns=source_epoch_ns)
     if planner.mpc.solution_status != 0:
-      self.fail_mpc(state, speed, planner.output_a_target)
+      offer = self.continuation.attempt(
+        planner.mpc, state, planner.reference_timing.pending, now_ns=now_ns,
+        permitted=continuation_permitted, scope=continuation_scope, action_t=delay + DT_MDL,
+        independent_ceiling=lambda value: self.independent_constraint(state, value, **constraint_kwargs)[0],
+      )
+      self.fail_mpc(state, speed, planner.output_a_target, preserve_continuation=offer is not None)
       return
     # Eligibility below consumes the current solve's collision warning, never
     # the preceding plan's flag.
@@ -837,41 +903,16 @@ class UnifiedLongitudinalPlanner:
     # The coast policy changes only this cruise candidate. Its raw response
     # and stop evidence remain separate, and stronger current references and
     # constraints still participate in the one arbitration below.
-    coast_applicable = (
-      planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl
-      and active and healthy and not reset and not forced_decel and not self.e2e_allowed and planner.allow_throttle
-      and not planner.fcw and not should_stop(speed, self.reference_accel) and not model.action.shouldStop
-      and math.isfinite(self.reference_accel) and math.isfinite(model.action.desiredAcceleration)
-      and model.action.desiredAcceleration >= CRUISE_COAST_RISK_ACCEL
-      and planner.source == LongitudinalPlanSourceSP.cruise and cruise_ceiling <= self.reference_accel
-      and speed >= CRUISE_COAST_MIN_SPEED and abs(cruise_speed - speed) <= CRUISE_COAST_MAX_SPEED_ERROR
-      and not (state['radarState'].leadOne.present or state['radarState'].leadTwo.present)
-      and CRUISE_COAST_BP[0] < cruise_ceiling < CRUISE_COAST_BP[-1]
-    )
-    cruise_command = self.cruise_response.coast_command(cruise_ceiling, eligible=coast_applicable)
     # The selected policy owns its response history. It supplies one current
     # target bound, without rewriting the measured MPC initial state or
     # introducing another final-output decision or stop owner.
-    self.constraint_accel = min(maximum_accel, cruise_command)
-    self.constraint_source = LongitudinalPlanSource.cruise
+    (self.constraint_accel, self.constraint_source, self.caution_accel_limited,
+     cruise_command, coast_applicable) = self.independent_constraint(
+      state, self.reference_accel, **constraint_kwargs)
     self.reference_source = planner.mpc.source
-    if cruise_speed <= STOP_SPEED:
-      self.constraint_accel = min(self.constraint_accel, CarControllerParams.BOSCH_GAS_LOOKUP_BP[0])
-    if self.e2e_allowed and self.model_reference_mode != 'invalid' and model.action.desiredAcceleration < self.constraint_accel:
-      self.constraint_accel = float(model.action.desiredAcceleration)
-      self.constraint_source = LongitudinalPlanSource.e2e
     evidence = self.model_evidence
     model_stop_evidence = evidence is not None and (evidence.no_forward or evidence.has_rest_intent)
-    if model_stop_evidence and speed < STOP_SPEED and CarControllerParams.BOSCH_GAS_LOOKUP_BP[0] < self.constraint_accel:
-      self.constraint_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
-      self.constraint_source = LongitudinalPlanSource.e2e
-    if caution_identities and min(self.reference_accel, self.constraint_accel) > 0.0:
-      # One final candidate arbitration: the caution purpose only removes an
-      # existing positive request. Stronger or tied independent requests, and
-      # all independently established stopping reasons, retain their meaning.
-      self.constraint_accel = 0.0
-      self.constraint_source = LongitudinalPlanSource.cruise
-      self.caution_accel_limited = True
+    if self.caution_accel_limited:
       self.caution_object_identities = caution_identities
     planner._observe(constraintKnown=True, constraintAccel=float(self.constraint_accel))
     output = float(np.clip(min(self.reference_accel, self.constraint_accel), ACCEL_MIN, ACCEL_MAX))
@@ -1102,11 +1143,16 @@ class UnifiedLongitudinalPlanner:
     self.reference_initialized = bool(healthy and not reset)
     self.reference_source_epoch_ns = source_epoch_ns if healthy else None
     planner.mpc.mark_reference_history(valid=bool(reference_qualified and self.reference_initialized))
+    self.continuation.native_success(
+      planner.mpc, state, planner.reference_timing.pending, now_ns=now_ns,
+      permitted=bool(continuation_permitted and planner.motion_intent.valid and planner.motion_intent.ready
+                     and not reasons and not planner.fcw and not self.reference_overridden), scope=continuation_scope,
+    )
     planner._observe(outcome="completed" if healthy else "completed_unhealthy_inputs")
     if planner.trace is not None:
       observe_trace(planner.trace, "finish_unified", planner, self.e2e_allowed)
 
-  def publish(self, message):
+  def publish(self, message, *, now_ns=None):
     intent = self.planner.motion_intent
     message.motionIntent.version = intent.version
     message.motionIntent.mode = intent.mode
@@ -1127,3 +1173,19 @@ class UnifiedLongitudinalPlanner:
     message.reference.overridden = self.reference_overridden
     message.reference.source = self.reference_source
     message.reference.constraintSource = self.constraint_source
+    continuation = self.continuation
+    offer = continuation.offer
+    message.continuation.version = CONTINUATION_VERSION
+    if offer is not None:
+      message.continuation = offer.to_dict()
+      timing = self.planner.reference_timing.pending
+      message.continuation.valid = bool(
+        timing is not None and valid_timestamp(now_ns)
+        and timing.producer_ns <= now_ns < offer.valid_until_ns)
+    message.continuation.reason = (continuation.reason if offer is None or message.continuation.valid
+                                   else 'expired_before_publication')
+    message.continuation.independentBrakingValid = continuation.independent_braking_accel is not None
+    message.continuation.independentBrakingAccel = (float(continuation.independent_braking_accel)
+                                                   if continuation.independent_braking_accel is not None else 0.0)
+    message.continuation.tailExtensionSeconds = float(continuation.tail_extension_s)
+    message.continuation.validationTime = float(continuation.validation_time)

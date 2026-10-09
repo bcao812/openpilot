@@ -12,6 +12,10 @@ from openpilot.selfdrive.controls.lib.launch_response import LaunchResponse, Res
 from openpilot.selfdrive.controls.lib.legacy_longcontrol import update_legacy
 from openpilot.selfdrive.controls.lib.legacy_longcontrol import long_control_state_trans as long_control_state_trans
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
+from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
+  CONTINUATION_STATUSES, ContinuationBudget, ContinuationDonor, ContinuationHistory, ContinuationOffer,
+  execution_target, validate_continuation,
+)
 from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MAX_CONTROL_GAP_NS, MotionPhase, MotionReferenceKind, MotionResponseKind,
                                                                MotionSupervisor, StopReason, ROLLING_STOP_ACCEL,
                                                                STARTING_ACCEL_RATE, STOPPING_DECEL_RATE)
@@ -36,6 +40,11 @@ class LongControl:
     self.unified = self.longitudinal_mode == LongitudinalMode.UNIFIED
     self.motion_supervisor = MotionSupervisor() if self.unified else None
     self.resolved_should_stop = False
+    self.continuation_budget = ContinuationBudget()
+    self.continuation_history = ContinuationHistory()
+    self.continuation_donor = None
+    self.continuation_offer = None
+    self.continuation_reason = 'none'
     # The host Bosch CAN encoder has no acceleration-error integrator. Do not
     # duplicate a tuned PID.
     response_feedback = self.unified and all(gain == 0.0 for gain in CP.longitudinalTuning.kiV)
@@ -78,13 +87,18 @@ class LongControl:
 
   def update(self, active, CS, a_target, should_stop, accel_limits, *,
              intent=None, plan_time_ns=None, model_time_ns=None, now_ns=None, plan_valid=True, solver_status=0, braking_plan_valid=False,
-             standby_input=False):
+             standby_input=False, continuation=None, continuation_input_valid=False, reference_check=None, force_decel=False,
+             car_state_ns=None, native_recovery_valid=False):
     """Run the UNIFIED owner; legacy capability binds its own update at construction."""
     plan_valid = plan_valid and solver_status == 0
     braking_plan_valid = braking_plan_valid is True
     active = active and not CS.gasPressed and not CS.brakePressed
     now_ns = time.monotonic_ns() if now_ns is None else now_ns
+    self.continuation_offer = None
+    self.continuation_reason = 'none'
+    history_valid = self.continuation_history.observe(car_state_ns, now_ns, CS.vEgo, CS.aEgo)
     if not active:
+      self.continuation_donor = None
       # Observe identities for rearm without bypassing the immediate
       # manual-override OFF/zero-output return below.
       self.motion_supervisor.update(False, CS.vEgo, CS.aEgo, CS.standstill, a_target, intent,
@@ -110,11 +124,63 @@ class LongControl:
     # fresh braking envelope is still usable without trusting that history.
     stop_accel_valid = (math.isfinite(self.CP.stopAccel)
                         and CarControllerParams.BOSCH_ACCEL_MIN <= self.CP.stopAccel <= DEGRADED_ACCEL)
+    reference = reference_check.timing if reference_check is not None and reference_check.valid else None
+    continuation_valid = False
+    continuation_target = None
+    if solver_status != 0:
+      episode = (continuation.episode_start_ns if isinstance(continuation, ContinuationOffer)
+                 and reference is not None else None)
+      clock_valid = self.continuation_budget.note_failure(now_ns, episode_start_ns=episode)
+      current_state = self.continuation_history.current_state(now_ns) if history_valid else None
+      if (clock_valid and current_state is not None and solver_status in CONTINUATION_STATUSES and continuation_input_valid is True
+          and limits_valid and last_output_valid and stop_accel_valid and not force_decel
+          and not should_stop and not CS.standstill and not CS.cruiseState.standstill and CS.vEgo >= CLOSE_LEAD_STOP_SPEED
+          and self.motion_supervisor.can_continue_track and intent is not None and intent.is_braking_valid()
+          and not intent.reasons and not intent.rest_goal_rejected):
+        self.continuation_reason = validate_continuation(
+          continuation, donor=self.continuation_donor, reference=reference, budget=self.continuation_budget,
+          plan_ns=plan_time_ns, model_ns=model_time_ns, now_ns=now_ns, speed=current_state[0], accel=current_state[1], cruise_kph=CS.vCruise,
+        )
+        if not self.continuation_reason:
+          self.continuation_reason = self.continuation_history.check(continuation.candidate, reference, now_ns)
+        if not self.continuation_reason:
+          continuation_target = execution_target(continuation, reference, now_ns, self.CP.longitudinalActuatorDelay)
+          if continuation_target is None:
+            self.continuation_reason = 'continuation_action_horizon_invalid'
+        continuation_valid = not self.continuation_reason
+      else:
+        self.continuation_reason = 'continuation_authority_unavailable'
+    if force_decel:
+      self.continuation_donor = None
     cold_standstill = self.motion_phase == MotionPhase.OFF and CS.standstill
     self.resolved_should_stop = self.motion_supervisor.update(
       active, CS.vEgo, CS.aEgo, CS.standstill, a_target, intent, plan_time_ns=plan_time_ns,
       model_time_ns=model_time_ns, now_ns=now_ns, plan_valid=plan_valid and limits_valid and last_output_valid and stop_accel_valid,
-      braking_plan_valid=braking_plan_valid and limits_valid and stop_accel_valid, solver_status=solver_status)
+      braking_plan_valid=braking_plan_valid and limits_valid and stop_accel_valid, solver_status=solver_status,
+      continuation_valid=continuation_valid)
+    if self.motion_supervisor.continuation_active:
+      self.continuation_offer = continuation
+      self.continuation_reason = 'accepted'
+      self.long_control_state = LongCtrlState.pid
+      self.starting = False
+      self.pid.neg_limit, self.pid.pos_limit = accel_limits
+      # This independent target was revalidated by the producer. Keep the
+      # actuator limits and the already executed stronger braking. It cannot
+      # raise positive output, change PID state or accumulate stop/departure
+      # confirmation evidence. Later stronger braking on the curve still runs.
+      self.last_output_accel = float(np.clip(min(continuation_target, self.last_output_accel),
+                                             accel_limits[0], accel_limits[1]))
+      return self.last_output_accel
+    if (solver_status == 0 and plan_valid and continuation_input_valid is True and reference is not None
+        and not force_decel and not should_stop and not CS.standstill and not CS.cruiseState.standstill
+        and self.motion_supervisor.can_continue_track):
+      self.continuation_donor = ContinuationDonor.from_reference(reference, model_time_ns)
+    if (solver_status == 0 and plan_valid and native_recovery_valid is True and reference is not None
+        and not self.motion_input_constrained and intent is not None and intent.is_valid() and intent.ready):
+      # Healthy executed HOLD/APPROACH and capped native outputs can establish
+      # stability without acquiring the separate moving-donor authority.
+      self.continuation_budget.note_success(now_ns, producer_ns=reference.producer_ns,
+                                             source_ns=reference.source_ns, model_ns=model_time_ns)
     if cold_standstill and self.resolved_should_stop:
       hold_accel = self.CP.stopAccel if stop_accel_valid else -2.0
       self.last_output_accel = min(self.last_output_accel, hold_accel)

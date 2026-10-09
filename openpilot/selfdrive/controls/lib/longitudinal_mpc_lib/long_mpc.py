@@ -14,7 +14,11 @@ from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, PREFERENCE_TIME_S
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_CONTROL_OBJECTS, MAX_PREDICTION_AGE_NS, control_leads, lead_identity, qualified_lead, valid_conflict_support,
+  MAX_CONTROL_OBJECTS, MAX_ESTIMATE_AGE_NS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS,
+  control_leads, lead_identity, qualified_lead, valid_conflict_support,
+)
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.continuation import (
+  ContinuationDonor, ContinuationProblem, ContinuationResult, build_candidate, frozen_array, valid_timestamp,
 )
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_MAX_AGE_NS
 
@@ -523,6 +527,8 @@ class LongitudinalMpc:
     self.diagnostic_rest_goal = None
     self.diagnostic_reference_weights = None
     self.diagnostic_reference_bounds = None
+    self.continuation_problem = None
+    self.continuation_donor_reason = 'not_captured'
     # timers
     self.solve_time = 0.0
     self.x0 = np.zeros(X_DIM)
@@ -598,6 +604,128 @@ class LongitudinalMpc:
     # this accepted reference rather than dating a later/failed solve as it.
     self._reference_acceleration = self.a_solution.copy()
     return True
+
+  def _capture_continuation_problem(self, *, reference_ns, now_ns):
+    """Keep this tick's installed problem before fail/reset can erase it."""
+    if (not all(valid_timestamp(stamp) for stamp in (reference_ns, now_ns))
+        or not 0 <= now_ns - reference_ns <= REFERENCE_MAX_AGE_NS
+        or self.diagnostic_reference_bounds is None):
+      return None
+    expiry = int(reference_ns) + REFERENCE_MAX_AGE_NS
+    for projection in self._fusion_projections:
+      evidence = projection.lead.evidence
+      age = MAX_PREDICTION_AGE_NS if evidence.coasting else MAX_MEASUREMENT_AGE_NS
+      expiry = min(expiry, int(evidence.estimateMonoTime) + MAX_ESTIMATE_AGE_NS,
+                   int(evidence.positionMonoTime) + age, int(evidence.velocityMonoTime) + age,
+                   int(evidence.modelMonoTime) + age)
+    # No message reader survives in the numerical certificate. Every array
+    # below is a private immutable copy, including the raw geometric profile.
+    projections = tuple(replace(projection, lead=None,
+                                trajectory=frozen_array(projection.trajectory),
+                                raw_trajectory=frozen_array(projection.raw_trajectory),
+                                occupied=frozen_array(projection.occupied, dtype=bool))
+                        for projection in self._fusion_projections)
+    reference = self._influence_problem[3] if self._influence_problem is not None else None
+    typed = reference.typed_model if reference is not None else None
+    forbidden = (self.rest_goal is not None or self.effective_rest_node is not None or self._passing_speed_limit is not None
+                 or any(projection.pass_before for projection in projections)
+                 or typed is not None and (typed.no_forward or typed.has_rest_intent))
+    lower, upper = self.diagnostic_reference_bounds
+    return ContinuationProblem(
+      int(reference_ns), int(now_ns), int(expiry), frozen_array(self.x0), frozen_array(self.params),
+      frozen_array(lower), frozen_array(upper),
+      tuple(tuple(frozen_array(value) for value in row) for row in self._rest_constraint_buffers),
+      projections, bool(forbidden),
+    )
+
+  @classmethod
+  def _continuation_trajectory_error(cls, problem, states, jerks):
+    """Independent candidate checks, never a substituted native-success bit.
+
+    Continuation has stricter admission than ordinary optimized soft distance:
+    every current risk row must be nonnegative. This may refuse a perfectly
+    useful native mitigation trajectory; a cached motion request is not
+    authority to spend a current distance deficit or an unverified stop.
+    """
+    tolerance = QP_FEASIBILITY_TOL
+    if problem.stop_or_passing:
+      return 'stop_or_passing'
+    parameters = problem.parameters
+    arrays = (problem.x0, states, jerks, parameters, problem.state_lower, problem.state_upper)
+    if (problem.x0.shape != (X_DIM,) or states.shape != (N+1, X_DIM) or jerks.shape != (N,)
+        or parameters.shape != (N+1, PARAM_DIM) or problem.state_lower.shape != (N+1, 2)
+        or problem.state_upper.shape != (N+1, 2) or len(problem.linear_constraints) != N
+        or not all(np.all(np.isfinite(value)) for value in arrays)):
+      return 'invalid_trajectory_or_problem'
+    if (np.any(parameters[:, 0] > parameters[:, 1]) or np.any(parameters[:, 5] <= 0.0) or np.any(parameters[:, 4] < 0.0)
+        or np.any(parameters[:, [COMFORT_NORMALIZER, RISK_NORMALIZER]] < 0.0)
+        or np.any(parameters[:, RISK_STOP_DISTANCE] < 4.0) or np.any(parameters[:, RISK_STOP_DISTANCE] > STOP_DISTANCE)):
+      return 'invalid_physical_or_risk_parameters'
+    if (np.max(np.abs(states[0] - problem.x0)) > tolerance
+        or np.max(np.abs(cls.trajectory_dynamics_defects(states, jerks))) > tolerance):
+      return 'dynamics_residual'
+    if (np.any(states[1:, 1:] < problem.state_lower[1:] - tolerance)
+        or np.any(states[1:, 1:] > problem.state_upper[1:] + tolerance)
+        or np.any(states[1:, 2] < parameters[1:, 0] - tolerance)
+        or np.any(states[1:, 2] > parameters[1:, 1] + tolerance)):
+      return 'physical_state_bound'
+    for stage, duration in enumerate(np.diff(T_IDXS)):
+      if cls.segment_minimum_velocity(states[stage], jerks[stage], duration) < -tolerance:
+        return 'continuous_negative_velocity'
+      C, D, lower, upper = problem.linear_constraints[stage]
+      if (C.shape != (2, X_DIM) or D.shape != (2, U_DIM) or lower.shape != (2,) or upper.shape != (2,)
+          or not all(np.all(np.isfinite(value)) for value in (C, D, lower, upper))):
+        return 'invalid_installed_row'
+      # This first continuation domain has only behind-position and forward
+      # speed rows. Nonnegative state coefficients make the all-up/all-down
+      # corners bounds for a consumer's history-based progress-error tube.
+      if np.any(C < 0.0):
+        return 'unsupported_signed_linear_row'
+      value = C @ states[stage] + D[:, 0] * jerks[stage]
+      if np.any(value < lower - tolerance) or np.any(value > upper + tolerance):
+        return 'installed_linear_bound'
+    # The current folded minimum includes persistent, ordinary and extra
+    # leads plus current cruise/model risk references. Its compact distance
+    # and new normalizer are exactly those installed for this failed tick.
+    risk_margin = parameters[:, 2] - states[:, 0] - parameters[:, 5] * (
+      get_safe_obstacle_distance(states[:, 1], parameters[:, 4]) - STOP_DISTANCE + parameters[:, RISK_STOP_DISTANCE])
+    denominator = np.where(parameters[:, RISK_NORMALIZER] > 0.0,
+                            parameters[:, RISK_NORMALIZER], states[:, 1] + 10.0)
+    if np.any(denominator <= 0.0) or np.any(risk_margin / denominator < -tolerance):
+      return 'current_risk_distance_deficit'
+    for projection in problem.projections:
+      if not projection.occupied.any():
+        continue
+      minimum, _ = cls.occupancy_clearance_extrema(projection, states, jerks, supported_only=not projection.persistent)
+      if minimum < CRASH_DISTANCE:
+        return 'current_object_clearance'
+    return ''
+
+  def snapshot_continuation_donor(self, source_ns, producer_ns, instance_ns):
+    """Call only after the producer has accepted its complete native output."""
+    problem = self.continuation_problem
+    if (self.solution_status != 0 or self.diagnostic_last_solver_return != 0 or not self.previous_solution_valid
+        or not isinstance(problem, ContinuationProblem)):
+      self.continuation_donor_reason = 'no_accepted_native_problem'
+      return None
+    if (not all(valid_timestamp(stamp) for stamp in (source_ns, producer_ns, instance_ns))
+        or source_ns != problem.reference_ns or producer_ns != problem.consumed_ns
+        or not source_ns <= producer_ns or not instance_ns <= producer_ns):
+      self.continuation_donor_reason = 'donor_clock_identity'
+      return None
+    if (reason := self._continuation_trajectory_error(problem, self.x_sol, self.j_solution)):
+      self.continuation_donor_reason = reason
+      return None
+    self.continuation_donor_reason = ''
+    return ContinuationDonor(int(source_ns), int(producer_ns), int(instance_ns),
+                              frozen_array(self.x_sol), frozen_array(self.j_solution), problem)
+
+  def continuation_candidate(self, donor, *, now_ns):
+    """Read-only numerical proposal; native status and sentinel stay intact."""
+    if self.solution_status not in (4, MPC_OCCUPANCY_UNSATISFIED):
+      return ContinuationResult(False, 'unsupported_failure_status')
+    return build_candidate(donor, self.continuation_problem, now_ns=now_ns, times=T_IDXS,
+                            integrate=self.integrate_jerk, validate=self._continuation_trajectory_error)
 
   def discard_prepared_reference_cost(self):
     """Reject the preceding semantics, retaining this qualified pending epoch.
@@ -2492,6 +2620,7 @@ class LongitudinalMpc:
 
   def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None, now_ns=None, reference_ns=None):
     self._occupancy_limit_cache = {}
+    self.continuation_problem = None
     self.params[:, COMFORT_NORMALIZER:RISK_NORMALIZER+1] = 0.0
     self.diagnostic_occupancy_refinement = None
     # Reading an unset struct through a capnp builder allocates it. MPC and
@@ -2696,6 +2825,7 @@ class LongitudinalMpc:
     except Exception:
       self.diagnostic_obstacle_failures += 1
 
+    self.continuation_problem = self._capture_continuation_problem(reference_ns=reference_ns, now_ns=now_ns)
     self.run()
     if self.solution_status != 0:
       return
@@ -2791,6 +2921,7 @@ class LongitudinalMpc:
       )
 
   def fail(self, status):
+    continuation_problem = self.continuation_problem if status in (4, MPC_OCCUPANCY_UNSATISFIED) else None
     failed_goal = self.rest_goal
     effective_node = self.effective_rest_node
     goal_diagnostic = self.diagnostic_rest_goal
@@ -2805,6 +2936,7 @@ class LongitudinalMpc:
       last_cloudlog_t = timestamp
       cloudlog.warning(f"Long mpc reset, solution_status: {status}")
     self.reset()
+    self.continuation_problem = continuation_problem
     self.solution_status = status
     self.last_solver_status = status
     self.failure_reason = {MPC_INVALID_INPUT: 'invalid_input', MPC_INVALID_SOLUTION: 'nonfinite_solution',

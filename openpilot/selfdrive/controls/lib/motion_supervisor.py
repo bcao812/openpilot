@@ -232,6 +232,9 @@ class MotionSupervisor:
     self._rest_braking_instance_high_ns = 0
     self._rest_braking_plan_high_ns = 0
     self._rest_braking_model_high_ns = 0
+    self._continuation_plan_time_ns = 0
+    self._continuation_model_time_ns = 0
+    self._continuation_recovery_required = False
     self.reset()
 
   @property
@@ -242,12 +245,20 @@ class MotionSupervisor:
   def motion_owner_established(self):
     return self.phase != MotionPhase.OFF and (self._last_plan_time_ns is not None or self._last_braking_plan_time_ns is not None)
 
+  @property
+  def can_continue_track(self):
+    return (self.phase == MotionPhase.TRACK and not self.reasons and not self.resolved_should_stop
+            and not self.degraded and not self.waiting_for_fresh_input
+            and not self._require_new_input and not self._rearm_after_fault
+            and self._last_plan_time_ns is not None and self.rest_braking_accel_limit is None)
+
   def reset(self):
     self.phase = MotionPhase.OFF
     self.reasons = StopReason.NONE
     self.degraded = False
     self.waiting_for_fresh_input = False
     self.degraded_braking_accel = None
+    self.continuation_active = False
     self.resolved_should_stop = False
     self.moving_lead_t = 0.0
     self.release_lead_t = 0.0
@@ -320,8 +331,10 @@ class MotionSupervisor:
       return False
 
   def _latest_input_ids(self):
-    return (max(self._last_plan_time_ns or 0, self._last_braking_plan_time_ns or 0, self._rearm_plan_time_ns),
-            max(self._last_model_time_ns or 0, self._last_braking_model_time_ns or 0, self._rearm_model_time_ns))
+    return (max(self._last_plan_time_ns or 0, self._last_braking_plan_time_ns or 0, self._rearm_plan_time_ns,
+                self._continuation_plan_time_ns),
+            max(self._last_model_time_ns or 0, self._last_braking_model_time_ns or 0, self._rearm_model_time_ns,
+                self._continuation_model_time_ns))
 
   def _remember_rearm_input(self, plan_time_ns, model_time_ns, now_ns, clock_valid):
     """Remember causal failed/OFF identities without accepting their payload."""
@@ -506,7 +519,8 @@ class MotionSupervisor:
 
   def update(self, active, v_ego, a_ego, standstill, a_target, intent, *,
              plan_time_ns=None, model_time_ns=None, now_ns=None, plan_valid=True, braking_plan_valid=False, solver_status=0,
-             standby_input=False):
+             standby_input=False, continuation_valid=False):
+    self.continuation_active = False
     self.degraded_braking_accel = None
     self._pending_rest_braking = None
     self.rest_braking_accel_limit = None
@@ -526,6 +540,21 @@ class MotionSupervisor:
     vehicle_values_valid = self._finite_values(v_ego, a_ego)
     if vehicle_values_valid:
       v_ego = max(0.0, v_ego)
+    if (continuation_valid is True and clock_valid and vehicle_values_valid and not standstill and v_ego >= CLOSE_LEAD_STOP_SPEED
+        and self.can_continue_track and solver_status in (4, -6)
+        and self._valid_braking_input(intent, a_target, plan_time_ns, model_time_ns, now_ns)):
+      # Execution is separately certified by LongControl. Do not count this
+      # as native success, refresh a donor, or accumulate stop/release proof.
+      self.continuation_active = True
+      self._continuation_plan_time_ns = int(plan_time_ns)
+      self._continuation_model_time_ns = int(model_time_ns)
+      self._continuation_recovery_required = True
+      self._clear_rest_braking()
+      return False
+    if (self._continuation_recovery_required
+        and (not self._timestamp_valid(plan_time_ns) or not self._timestamp_valid(model_time_ns)
+             or plan_time_ns <= self._continuation_plan_time_ns or model_time_ns <= self._continuation_model_time_ns)):
+      plan_valid = False
     if not (plan_valid and solver_status == 0 and clock_valid and vehicle_values_valid and self._finite_values(a_target)
             and self._valid_input(intent, a_target, plan_time_ns, model_time_ns, now_ns)):
       self._remember_rearm_input(plan_time_ns, model_time_ns, now_ns, clock_valid)
@@ -569,6 +598,7 @@ class MotionSupervisor:
       return self.resolved_should_stop
     self._require_new_input = False
     self._rearm_after_fault = False
+    self._continuation_recovery_required = False
     self._rearm_plan_time_ns = self._rearm_model_time_ns = 0
     self.waiting_for_fresh_input = False
     self.degraded = False
