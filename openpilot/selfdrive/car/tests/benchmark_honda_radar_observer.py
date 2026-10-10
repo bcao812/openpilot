@@ -81,17 +81,19 @@ def measure(slots, seconds, level, valid_slots=None):
 
 
 def measure_render_logic(slots, seconds):
-  """Measure the actual label layout loop at 60 FPS, without a display/GPU.
+  """Measure the actual overlay loop at 60 Hz, without a display/GPU.
 
-  Fixed text dimensions stand in for warmed font measurements; all rectangles,
-  collision searches, source-time selection and projection use production code.
-  The 16-slot case deliberately crowds the bottom edge to exercise separation.
+  Fixed text dimensions stand in for warmed font measurements. Source-time
+  selection, angular boundaries, layout and accepted control colors use production
+  code and native message readers. Fixture creation is outside the timed region.
   """
+  assert 1 <= slots <= 16
   os.environ.setdefault('SCALE', '1')
   import numpy as np
   import pyray as rl
   from openpilot.cereal import log, messaging
   from openpilot.selfdrive.ui.sunnypilot.onroad import honda_radar_overlay as renderer
+  from openpilot.selfdrive.ui.tests.test_honda_radar_boundaries import observation, publication, with_aux
 
   class ObservationSubMaster:
     def __init__(self):
@@ -107,10 +109,15 @@ def measure_render_logic(slots, seconds):
       return self.body
 
   sm = state(START)
+  sm['selfdriveState'].enabled = sm['carControl'].enabled = True
+  for service in ('controlsState', 'carState'):
+    sm[service] = getattr(messaging.new_message(service), service)
   calib = messaging.new_message('extrinsicsCalibration').extrinsicsCalibration
   calib.calStatus, calib.height = log.ExtrinsicsCalibration.Status.calibrated, [1.2]
   sm['extrinsicsCalibration'] = calib
-  sm.valid['extrinsicsCalibration'] = True
+  sm.valid = dict.fromkeys(sm, True)
+  for service, body in sm.items():
+    sm[service] = body.as_reader()
   observer_sm = ObservationSubMaster()
   overlay = renderer.HondaRadarOverlay()
   overlay.sm, overlay.enabled, overlay.font = observer_sm, True, object()
@@ -121,31 +128,59 @@ def measure_render_logic(slots, seconds):
   rect, size = rl.Rectangle(0, 0, 2160, 1080), rl.Vector2(120, 32)
   costs, cpu_ns = [], 0
   now = START
+  session = 'render-benchmark'
   with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', lambda: now), \
        patch.object(renderer, 'measure_text_cached', lambda *_: size), \
-       patch.object(rl, 'draw_rectangle_rec', lambda *_: None), patch.object(rl, 'draw_text_ex', lambda *_: None), \
-       patch.object(rl, 'draw_line_v', lambda *_: None):
+       patch.object(rl, 'draw_circle_v', lambda *_: None), patch.object(rl, 'draw_text_ex', lambda *_: None), \
+       patch.object(rl, 'draw_line_ex', lambda *_: None):
     for i in range(seconds * 60):
       now = START + i * 1_000_000_000 // 60
-      sm.logMonoTime = dict.fromkeys(sm.logMonoTime, now)
+      sm.logMonoTime = dict.fromkeys(sm, now)
       view.client.timestamp_eof = now
       observer_sm.updated[renderer.SERVICE] = i % 4 == 0
       if i % 4 == 0:
+        scan_ns = now
+        samples = [observation(slot=s, sequence=i * 32 + 2 * s + 1, generation=s + 1, stamp=now) for s in range(slots)]
+        tracks = [dict({field: sample[field] for field in ('slot', 'generation', 'positionSeq', 'positionMonoTime')},
+                       trackId=sample['slot'] + 1) for sample in samples]
         message = messaging.new_message(renderer.SERVICE)
-        body = getattr(message, renderer.SERVICE)
-        body.schemaVersion, body.sessionId, body.sequence, body.active = 1, 'render-benchmark', i // 4 + 1, True
-        body.scope = dict.fromkeys(('alphaLong', 'experimentalSetting', 'decSetting', 'experimentalActive', 'decEnabled', 'decActive'), True)
-        body.observations = [{'slot': s, 'positionSeq': i * 32 + 2 * s + 1, 'generation': s + 1,
-                              'positionMonoTime': now, 'dRel': 54.12, 'yRel': 0.0, 'positionValid': True}
-                             for s in range(slots) for _ in range(2)]
-        observer_sm.body, observer_sm.logMonoTime[renderer.SERVICE] = body.as_reader(), now
+        message.valid, message.logMonoTime = True, now
+        setattr(message, renderer.SERVICE, publication(
+          [event for sample in samples for event in (sample, with_aux(sample, now))], sequence=i // 4 + 1, session=session,
+          fusion={'version': 1, 'active': True, 'tracks': tracks}))
+        decoded = messaging.log_from_bytes(message.to_bytes())
+        observer_sm.body, observer_sm.logMonoTime[renderer.SERVICE] = getattr(decoded, renderer.SERVICE), decoded.logMonoTime
+        receipt = messaging.new_message('controlsState')
+        receipt.valid, receipt.logMonoTime = True, now
+        receipt.controlsState.longitudinalPlanMonoTime = now
+        receipt.controlsState.motionState = {
+          'enabled': True, 'planningMode': 2, 'phase': 'track', 'planMonoTime': now,
+          'objectInfluences': [{'version': 1, 'sessionId': session, 'trackId': s + 1, 'modelMonoTime': now,
+                                'visionIndex': -1, 'kind': 'braking', 'strength': 0.5} for s in range(slots)],
+        }
+        sm['controlsState'] = messaging.log_from_bytes(receipt.to_bytes()).controlsState
       start_cpu, begin = time.thread_time_ns(), time.perf_counter_ns()
       overlay._render(view, rect)  # exceptions must fail this benchmark
       costs.append(time.perf_counter_ns() - begin)
       cpu_ns += time.thread_time_ns() - start_cpu
+      # Coverage checks are untimed; an empty/stale fast path is not a result.
+      assert len(overlay.labels) == slots
+      assert all(label.point.time_ns == scan_ns for label in overlay.labels)
+      if i % 4 == 0:
+        influences = renderer.accepted_influences(sm, now)
+        coverage = dict(visible_labels=len(overlay.labels),
+                        boundary_labels=sum(label.point.boundary_laterals is not None for label in overlay.labels),
+                        boundary_lines=sum(len(label.lines) for label in overlay.labels),
+                        accepted_influences=len(influences),
+                        influenced_labels=sum(renderer.radar_influence_strength(label.point, influences) == 0.5
+                                              for label in overlay.labels))
+        assert coverage == dict(visible_labels=slots, boundary_labels=slots, boundary_lines=3 * slots,
+                                accepted_influences=slots, influenced_labels=slots), coverage
   assert len(overlay.state.points(now, now)) == slots
   return dict(slots=slots, simulated_seconds=seconds, frames=len(costs), viewport=[2160, 1080],
+              observation_hz=15, render_hz=60, verified_coverage=coverage,
               host_logic_one_core_percent_at_60fps=cpu_ns / (seconds * 1e9) * 100,
+              cpu_mean_us=cpu_ns / len(costs) / 1000,
               **percentiles(costs), mean_us=statistics.mean(costs) / 1000)
 
 
@@ -153,21 +188,24 @@ def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--seconds', type=int, default=30)
   parser.add_argument('--output', type=Path, required=True)
+  parser.add_argument('--render-only', action='store_true', help='Skip observer/serialization/zstd measurements.')
   args = parser.parse_args()
   if not 1 <= args.seconds <= 60:
     parser.error('Use 1..60 simulated seconds for this bounded fixture.')
-  header = (Path(BASEDIR) / 'openpilot/system/loggerd/logger.h').read_text()
-  level = int(re.search(r'LOG_COMPRESSION_LEVEL\s*=\s*(\d+)', header).group(1))
-  cases = [(0, 0), (1, 1), (16, 0), (16, 1), (16, 16)]
-  measurements = [measure(total, args.seconds, level, valid) for total, valid in cases]
+  level, measurements = None, []
+  if not args.render_only:
+    header = (Path(BASEDIR) / 'openpilot/system/loggerd/logger.h').read_text()
+    level = int(re.search(r'LOG_COMPRESSION_LEVEL\s*=\s*(\d+)', header).group(1))
+    cases = [(0, 0), (1, 1), (16, 0), (16, 1), (16, 16)]
+    measurements = [measure(total, args.seconds, level, valid) for total, valid in cases]
   with OpenpilotPrefix():  # UI module initialization must use a private host namespace
     render_costs = [measure_render_logic(slots, args.seconds) for slots in (1, 16)]
-  results = {'method': 'synthetic-15Hz-host-v2', 'zstd_level': level,
+  results = {'method': 'synthetic-15Hz-host-v3', 'render_only': args.render_only, 'zstd_level': level,
              'cases': measurements,
              'render_logic_60fps': render_costs,
              'limitations': ['Synthetic fields; real compression depends on traffic.',
-                             'Excludes CAN socket receive, loggerd queueing/fsync and actual GPU text drawing.',
-                             'Render loop uses fixed warmed text dimensions and no-op draw calls; not full UI frame cost.',
+                             'Excludes CAN socket receive, loggerd queueing/fsync and all GPU drawing.',
+                             'Render loop uses fixed warmed text dimensions and no-op draw calls; not full UI frame cost or device FPS.',
                              'Host measurements are not C3 CPU/load measurements.']}
   args.output.parent.mkdir(parents=True, exist_ok=True)
   args.output.write_text(json.dumps(results, indent=2) + '\n')

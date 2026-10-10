@@ -18,9 +18,11 @@ KINDS = ('follow', 'braking', 'hold', 'release', 'caution')
 def _read(value, field, default=None):
   if isinstance(value, dict):
     return value.get(field, default)
-  as_reader = getattr(value, 'as_reader', None)
+  # A Cap'n Proto reader treats unknown instance attributes as schema fields.
+  # Check the type to avoid a failing schema lookup for every field we read.
+  as_reader = getattr(type(value), 'as_reader', None)
   if callable(as_reader):
-    value = as_reader()
+    value = as_reader(value)
   return getattr(value, field, default)
 
 

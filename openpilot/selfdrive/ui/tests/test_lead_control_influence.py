@@ -3,9 +3,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from openpilot.cereal import log
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarLabelPoint
 from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import (
-  MESSAGE_MAX_AGE_NS, ObjectInfluence, accepted_influences, influence_rgb, lead_influence_strength, radar_influence_strength,
+  MESSAGE_MAX_AGE_NS, ObjectInfluence, _read, accepted_influences, influence_rgb, lead_influence_strength, radar_influence_strength,
 )
 
 
@@ -42,6 +43,99 @@ def lead(**changes):
   return {'present': True, 'dRel': 12.0, 'modelProb': 0.01,
           'evidence': dict({'version': 1, 'source': 'fused', 'sessionId': 'radar', 'trackId': 42,
                             'generation': 1, 'modelMonoTime': MODEL, 'visionIndex': 0}, **changes)}
+
+
+@pytest.fixture(params=('reader', 'builder'))
+def capnp_message(request):
+  def convert(service, fields):
+    message = getattr(log.Event.new_message(**{service: fields}), service)
+    return message.as_reader() if request.param == 'reader' else message
+  return convert
+
+
+def capnp_state(sm, capnp_message):
+  result = State({service: capnp_message(service, fields) for service, fields in sm.items()})
+  result.valid = sm.valid.copy()
+  result.logMonoTime = sm.logMonoTime.copy()
+  return result
+
+
+def test_field_reads_do_not_probe_dynamic_readers_for_builder_methods():
+  class Reader:
+    def __init__(self):
+      self.lookups = []
+
+    def __getattr__(self, field):
+      self.lookups.append(field)
+      if field == 'strength':
+        return 0.5
+      raise AttributeError(field)
+
+  reader = Reader()
+  assert _read(reader, 'strength') == 0.5
+  assert _read(reader, 'missing', 'fallback') == 'fallback'
+  assert reader.lookups == ['strength', 'missing']
+
+
+def test_capnp_reads_preserve_field_defaults(capnp_message):
+  message = capnp_message('selfdriveState', {'enabled': True})
+  assert _read(message, 'enabled') is True
+  assert _read(message, 'missing', 'fallback') == 'fallback'
+  assert _read(message, 'missing') is None
+
+
+@pytest.mark.parametrize(('version', 'kind', 'strength', 'phase'), (
+  (1, 'follow', 0.5, 'track'), (1, 'braking', 0.5, 'approach'), (1, 'hold', 0.5, 'hold'),
+  (1, 'release', 0.5, 'release'), (1, 'caution', 0.15, 'track'), (2, 'braking', 1.0, 'hold'),
+))
+def test_capnp_receipts_and_leads_preserve_control_colors(capnp_message, version, kind, strength, phase):
+  sm = state(influence(version=version, kind=kind, strength=strength))
+  sm['controlsState']['motionState']['phase'] = phase
+  items = accepted_influences(capnp_state(sm, capnp_message), NOW)
+  assert len(items) == 1
+  assert items[0].kind == kind
+  assert items[0].strength == pytest.approx(strength)
+  target = capnp_message('radarState', {'leadOne': lead()}).leadOne
+  point = RadarLabelPoint(2, 11.5, 0.1, MODEL, 3, 2, 'radar', 42)
+  assert radar_influence_strength(point, items) == lead_influence_strength(target, items)
+  assert influence_rgb(lead_influence_strength(target, items)) == influence_rgb(strength)
+  other = capnp_message('radarState', {'leadOne': lead(trackId=63)}).leadOne
+  assert lead_influence_strength(other, items) == 0.0
+
+
+@pytest.mark.parametrize(('service', 'field', 'value'), (
+  ('carControl', 'longActive', False), ('carControl', 'enabled', False), ('selfdriveState', 'enabled', False),
+  ('carState', 'gasPressed', True), ('carState', 'brakePressed', True),
+))
+def test_capnp_disengagement_and_driver_override_remove_control_colors(capnp_message, service, field, value):
+  sm = state(influence(version=2, strength=1.0))
+  sm[service][field] = value
+  assert accepted_influences(capnp_state(sm, capnp_message), NOW) == ()
+
+
+def test_capnp_receipts_keep_freshness_mode_and_constrained_motion_gates(capnp_message):
+  sm = state(influence(version=2, strength=1.0), influence(trackId=63, strength=0.5))
+  typed = capnp_state(sm, capnp_message)
+  assert len(accepted_influences(typed, NOW)) == 2
+  assert accepted_influences(typed, NOW + MESSAGE_MAX_AGE_NS + 1) == ()
+  typed.valid['controlsState'] = False
+  assert accepted_influences(typed, NOW) == ()
+  sm['controlsState']['motionState'].update(degraded=True, waitingForFreshInput=True)
+  assert accepted_influences(capnp_state(sm, capnp_message), NOW) == (ObjectInfluence('radar', 42, MODEL, 0, 'braking', 1.0),)
+  sm['controlsState']['motionState']['planningMode'] = 1
+  assert accepted_influences(capnp_state(sm, capnp_message), NOW) == ()
+
+
+def test_capnp_visual_identity_remains_bound_to_model_frame_and_slot(capnp_message):
+  sm = state(influence(sessionId='', trackId=0, strength=0.5))
+  items = accepted_influences(capnp_state(sm, capnp_message), NOW)
+  for changes, expected in (({}, 0.5), ({'modelMonoTime': MODEL + 1}, 0.0), ({'visionIndex': 1}, 0.0)):
+    visual = lead(source='vision', sessionId='', trackId=0, **changes)
+    target = capnp_message('radarState', {'leadOne': visual}).leadOne
+    assert lead_influence_strength(target, items) == expected
+  legacy = capnp_message('radarState', {'leadOne': {'present': True, 'radar': False}}).leadOne
+  assert lead_influence_strength(legacy, items, legacy_model_ns=MODEL, legacy_slot=0) == 0.5
+  assert lead_influence_strength(legacy, items, legacy_model_ns=MODEL + 1, legacy_slot=0) == 0.0
 
 
 def test_only_the_executed_receipt_colors_targets():

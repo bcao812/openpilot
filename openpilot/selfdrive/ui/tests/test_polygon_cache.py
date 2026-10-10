@@ -209,14 +209,49 @@ class TestModelPolygonCache(HeadlessUITestCase):
       self.assertEqual([shape.polygon for shape in self.shapes(renderer)], prepared)
       self.assertNotEqual(frames[0][2]['fillColor'], frames[14][2]['fillColor'])
 
+  def test_radar_updates_reuse_lanes_and_keep_path_lead_width_and_gradient_updates(self):
+    renderer, sm = self.make_renderer()
+    sm.valid['radarState'] = True
+    sm['radarState'] = SimpleNamespace(leadOne=SimpleNamespace(present=True, dRel=30.0))
+    sm['selfdriveState'].experimentalMode = True
+
+    with capture_polygons() as frames:
+      renderer._render(renderer.rect)
+      for distance, width in ((10.0, 0.8), (10.0, 0.7), (40.0, 0.7)):
+        old = [shape.polygon for shape in self.shapes(renderer)]
+        old_gradient = renderer._exp_gradient
+        width_calls = renderer._get_path_half_width.call_count
+        renderer._get_path_half_width.return_value = width
+        sm.updated['modelV2'] = False
+        sm.updated['radarState'] = True
+        sm['radarState'].leadOne.dRel = distance
+        with patch.object(renderer, "_map_line_to_polygon", wraps=renderer._map_line_to_polygon) as project:
+          renderer._render(renderer.rect)
+
+        self.assertEqual(project.call_count, 1)
+        self.assertEqual(renderer._get_path_half_width.call_count, width_calls + 1)
+        self.assertEqual([shape.polygon for shape in self.shapes(renderer)[:-1]], old[:-1])
+        self.assertIsNot(old[-1], renderer._path.polygon)
+        self.assertFalse(np.array_equal(prepared_points(old[-1]), prepared_points(renderer._path.polygon)))
+        self.assertIsNot(old_gradient, renderer._exp_gradient)
+
+        # Reusing lanes must draw exactly the same frame as a full projection refresh.
+        radar_frame = frames[-7:]
+        sm.updated['modelV2'] = True
+        renderer._render(renderer.rect)
+        self.assertEqual(radar_frame, frames[-7:])
+
   def test_model_transform_and_layout_changes_replace_geometry(self):
     renderer, sm = self.make_renderer()
     with capture_polygons():
       renderer._render(renderer.rect)
       old = [shape.polygon for shape in self.shapes(renderer)]
-      sm['modelV2'].position.y += 0.5
+      for line in (sm['modelV2'].position, *sm['modelV2'].laneLines, *sm['modelV2'].roadEdges):
+        line.y += 0.5
       renderer._render(renderer.rect)
-      self.assertFalse(np.array_equal(prepared_points(old[-1]), prepared_points(renderer._path.polygon)))
+      for before, shape in zip(old, self.shapes(renderer), strict=True):
+        self.assertIsNot(before, shape.polygon)
+        self.assertFalse(np.array_equal(prepared_points(before), prepared_points(shape.polygon)))
 
       sm.updated['modelV2'] = False
       old = [shape.polygon for shape in self.shapes(renderer)]
@@ -243,6 +278,45 @@ class TestModelPolygonCache(HeadlessUITestCase):
     gc.collect()
     self.assertEqual(sum(ref() is not None for ref in refs), 1)
     self.assertIs(refs[-1](), shape.polygon)
+
+
+class TestRainbowPolygonCache(HeadlessUITestCase):
+  def test_cached_path_reuses_vertices_and_keeps_animated_gradient(self):
+    from openpilot.selfdrive.ui.onroad.model_renderer import ModelPoints
+    from openpilot.selfdrive.ui.sunnypilot.onroad import rainbow_path
+
+    points = np.arange(12, dtype=np.float32).reshape(6, 2)
+    path = ModelPoints(projected_points=points)
+    prepared = path.polygon
+    rainbow = rainbow_path.RainbowPath()
+    rect = rl.Rectangle(0, 0, 100, 200)
+    with capture_polygons() as frames, patch.object(rainbow_path.time, "monotonic") as monotonic:
+      for timestamp in (1.0, 2.0):
+        monotonic.return_value = timestamp
+        polygon.draw_polygon(rect, points, gradient=rainbow.get_gradient())
+        with patch.object(polygon, "_triangle_strip_array", side_effect=AssertionError("rainbow draw rebuilt cached vertices")):
+          rainbow.draw_rainbow_path(rect, path)
+        self.assertEqual(frames[-2], frames[-1])
+    self.assertIs(path.polygon, prepared)
+    self.assertEqual(frames[0][0], frames[2][0])
+    self.assertNotEqual(frames[0][2]['gradientColors'], frames[2][2]['gradientColors'])
+
+  def test_mici_path_without_prepared_polygon_keeps_current_points_and_colors(self):
+    from openpilot.selfdrive.ui.mici.onroad.model_renderer import ModelPoints
+    from openpilot.selfdrive.ui.sunnypilot.onroad import rainbow_path
+
+    path = ModelPoints(projected_points=np.arange(12, dtype=np.float32).reshape(6, 2))
+    rainbow = rainbow_path.RainbowPath()
+    rect = rl.Rectangle(0, 0, 100, 200)
+    with capture_polygons() as frames, patch.object(rainbow_path.time, "monotonic") as monotonic:
+      for timestamp, offset in ((1.0, 0), (2.0, 50)):
+        monotonic.return_value = timestamp
+        path.projected_points += offset
+        polygon.draw_polygon(rect, path.projected_points, gradient=rainbow.get_gradient())
+        rainbow.draw_rainbow_path(rect, path)
+        self.assertEqual(frames[-2], frames[-1])
+    self.assertNotEqual(frames[0][0], frames[2][0])
+    self.assertNotEqual(frames[0][2]['gradientColors'], frames[2][2]['gradientColors'])
 
 
 class TestTorquePolygonCache(HeadlessUITestCase):

@@ -152,7 +152,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       if path_x_array.size == 0:
         return
 
-      self._update_model(lead_one, path_x_array)
+      self._update_model(lead_one, path_x_array, update_lane_geometry=model_updated or self._transform_dirty)
       gui_app.mark_phase('model_project')
       if render_lead_indicator:
         self._update_leads(radar_state, path_x_array)
@@ -200,20 +200,22 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
         if point:
           self._lead_vehicles[i] = self._update_lead_vehicle(d_rel, v_rel, point, self._rect)
 
-  def _update_model(self, lead, path_x_array):
+  def _update_model(self, lead, path_x_array, update_lane_geometry: bool = True):
     """Update model visualization data based on model message"""
     max_distance = clamp(path_x_array[-1], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE)
-    max_idx = self._get_path_length_idx(self._lane_lines[0].raw_points[:, 0], max_distance)
+    # Radar changes the path length, but lanes and road edges only depend on the model and projection.
+    if update_lane_geometry:
+      max_idx = self._get_path_length_idx(self._lane_lines[0].raw_points[:, 0], max_distance)
 
-    # Update lane lines using raw points
-    for i, lane_line in enumerate(self._lane_lines):
-      lane_line.set_projected_points(self._map_line_to_polygon(
-        lane_line.raw_points, 0.025 * self._lane_line_probs[i], 0.0, max_idx, max_distance
-      ))
+      # Update lane lines using raw points
+      for i, lane_line in enumerate(self._lane_lines):
+        lane_line.set_projected_points(self._map_line_to_polygon(
+          lane_line.raw_points, 0.025 * self._lane_line_probs[i], 0.0, max_idx, max_distance
+        ))
 
-    # Update road edges using raw points
-    for road_edge in self._road_edges:
-      road_edge.set_projected_points(self._map_line_to_polygon(road_edge.raw_points, 0.025, 0.0, max_idx, max_distance))
+      # Update road edges using raw points
+      for road_edge in self._road_edges:
+        road_edge.set_projected_points(self._map_line_to_polygon(road_edge.raw_points, 0.025, 0.0, max_idx, max_distance))
 
     # Update path using raw points
     if lead and lead.present:

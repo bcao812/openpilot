@@ -76,4 +76,5 @@ class RainbowPath:
 
   def draw_rainbow_path(self, rect, path):
     gradient = self.get_gradient()
-    draw_polygon(rect, path.projected_points, gradient=gradient)
+    # The mici renderer still supplies projected points without a prepared polygon.
+    draw_polygon(rect, getattr(path, "polygon", path.projected_points), gradient=gradient)

@@ -157,7 +157,7 @@ FRAME_TIMER_PERIOD = 1800        # 30 s at 60 Hz -- NOT selfdrived's 3000, which
 FRAME_PHASES = ("mouse_drain", "begin_drawing", "nav_ticks",
                 "onroad_pre", "camera",
                 "model_pre", "model_raw", "model_project", "model_leads",
-                "model_lanes", "model_path", "model_chevron", "model_rest",
+                "model_lanes", "model_path", "model_chevron", "model_rest", "honda_radar",
                 "hud_base", "hud_torque", "hud_devui", "hud_speedlimit",
                 "hud_scc", "hud_turnsig", "hud_alerts", "hud_rocketfuel", "hud_rest",
                 "alert", "driver_state", "widget_rest",

@@ -20,6 +20,34 @@ def load_render(globals_dict):
 
 
 class TestApplicationFrameTimer(unittest.TestCase):
+  def test_onroad_phase_marks_keep_the_timer_running(self):
+    from openpilot.sunnypilot.common.phase_timer import PhaseTimer
+
+    application = Path(__file__).resolve().parents[1] / "application.py"
+    source = ast.parse(application.read_text())
+    phases = next(ast.literal_eval(node.value) for node in source.body
+                  if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "FRAME_PHASES"
+                                                        for target in node.targets))
+    ui = Path(__file__).resolve().parents[4] / "selfdrive/ui"
+    sources = (application, ui / "onroad/augmented_road_view.py", ui / "onroad/model_renderer.py",
+               ui / "sunnypilot/onroad/hud_renderer.py")
+    marks = [node.args[0].value for path in sources for node in ast.walk(ast.parse(path.read_text()))
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+             and node.func.attr in ("mark", "mark_phase") and node.args
+             and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)]
+    timer = PhaseTimer("unused-test-marker", "test.ui.frame_timing", phases, 1800)
+    try:
+      timer.begin()
+      for phase in marks:
+        timer.mark(phase)
+      timer.end_frame()
+      self.assertTrue(timer._enabled, timer._failure)
+      self.assertEqual(timer.i, 1)
+      self.assertEqual(sum(map(sum, timer.wall.values())), len(marks))
+      self.assertEqual(sum(timer.wall["honda_radar"]), 1)
+    finally:
+      timer.stop()
+
   def test_only_rendered_frames_contribute_phase_samples(self):
     for pc in (False, True):
       with self.subTest(pc=pc):
