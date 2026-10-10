@@ -168,14 +168,14 @@ def measure_render_logic(slots, seconds):
       assert all(label.point.time_ns == scan_ns for label in overlay.labels)
       if i % 4 == 0:
         influences = renderer.accepted_influences(sm, now)
-        coverage = dict(visible_labels=len(overlay.labels),
-                        boundary_labels=sum(label.point.boundary_laterals is not None for label in overlay.labels),
-                        boundary_lines=sum(len(label.lines) for label in overlay.labels),
-                        accepted_influences=len(influences),
-                        influenced_labels=sum(renderer.radar_influence_strength(label.point, influences) == 0.5
-                                              for label in overlay.labels))
-        assert coverage == dict(visible_labels=slots, boundary_labels=slots, boundary_lines=3 * slots,
-                                accepted_influences=slots, influenced_labels=slots), coverage
+        coverage = {'visible_labels': len(overlay.labels),
+                    'boundary_labels': sum(label.point.boundary_laterals is not None for label in overlay.labels),
+                    'boundary_lines': sum(len(label.lines) for label in overlay.labels),
+                    'accepted_influences': len(influences),
+                    'influenced_labels': sum(renderer.radar_influence_strength(label.point, influences) == 0.5
+                                             for label in overlay.labels)}
+        assert coverage == {'visible_labels': slots, 'boundary_labels': slots, 'boundary_lines': 3 * slots,
+                            'accepted_influences': slots, 'influenced_labels': slots}, coverage
   assert len(overlay.state.points(now, now)) == slots
   return dict(slots=slots, simulated_seconds=seconds, frames=len(costs), viewport=[2160, 1080],
               observation_hz=15, render_hz=60, verified_coverage=coverage,
