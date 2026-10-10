@@ -166,7 +166,10 @@ class PlannerObservation:
           self.recorder.record_error()
         summary = planner.mpc.diagnostic_last_obstacle_summary
         if summary is not None:
-          analysis["obstacleSummary"] = dict(summary)
+          # Internal object metadata is not part of the wire schema.
+          analysis["obstacleSummary"] = {
+            name: summary[name] for name in ("known", "times", "sources", "distances", "sourceRule")
+          }
       except Exception:
         self.recorder.record_error()
     if not completed:

@@ -222,6 +222,26 @@ def test_regular_logging_enabled_by_marker_for_supported_vehicle(tmp_path):
   assert not observed.detailedTraceEnabled
 
 
+def test_regular_logging_preserves_diagnostics_with_internal_obstacle_metadata():
+  planner = make_planner()
+  state = make_state()
+  update_at_fixture_clock(planner, state)
+  internal_summary = deepcopy(planner.mpc.diagnostic_last_obstacle_summary)
+  assert {"objectIdentities", "objectCount"} <= internal_summary.keys()
+
+  observed = diagnostics(planner, state)
+  assert observed.context.version == 1 and observed.context.errors == 0
+  assert observed.updateCompleted and observed.outcome == "completed"
+  assert observed.mpcUpdated and observed.solverAttempted and observed.solverReturnKnown
+  summary = observed.analysis.obstacleSummary
+  assert summary.known == internal_summary["known"]
+  assert tuple(summary.times) == internal_summary["times"]
+  assert tuple(str(source) for source in summary.sources) == internal_summary["sources"]
+  assert tuple(summary.distances) == internal_summary["distances"]
+  assert summary.sourceRule == internal_summary["sourceRule"]
+  assert planner.mpc.diagnostic_last_obstacle_summary == internal_summary
+
+
 @pytest.mark.parametrize("platform,stock,interceptor", [
   (CAR.HONDA_CIVIC, False, False),
   (CAR.HONDA_CIVIC_BOSCH, False, False),
