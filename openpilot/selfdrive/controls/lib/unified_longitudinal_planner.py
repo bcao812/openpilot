@@ -48,6 +48,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import Lon
 
 
 INPUT_SERVICES = ['carState', 'radarState', 'modelV2', 'controlsState', 'carControl', 'selfdriveState', 'vehicleParameters']
+LEAD_DEPARTURE_MIN_GAP = 3.0  # m, base clearance for a qualified lead departure
 COMPATIBLE_MODEL_UNKNOWNS = frozenset({
   'model_proxy_after_initial_state', 'backward_then_forward_is_ambiguous', 'isolated_zero_has_no_rest_support',
 })
@@ -129,13 +130,13 @@ def cruise_accel_limit(params, speed, steering_angle, e2e_allowed, coast_accel, 
   return maximum
 
 
-def departing_lead_rejection(radar_state, speed, delay, *, minimum_gap_base=CREEP_FOLLOW_MIN_GAP, now_ns=None,
+def departing_lead_rejection(radar_state, speed, delay, *, minimum_gap_base=LEAD_DEPARTURE_MIN_GAP, now_ns=None,
                              held_identity=None, allow_unbound_physical=False):
   """Return the first failed departure gate and its object, or None."""
   if not (math.isfinite(speed) and 0.0 <= speed < STOP_SPEED and math.isfinite(delay)
           and 0.0 <= delay <= 1.0 and radar_state.leadOne.present
           and not isinstance(minimum_gap_base, bool) and math.isfinite(minimum_gap_base)
-          and 3.0 <= minimum_gap_base <= CREEP_FOLLOW_MIN_GAP):
+          and LEAD_DEPARTURE_MIN_GAP <= minimum_gap_base <= CREEP_FOLLOW_MIN_GAP):
     return 'departure_inputs', None
   minimum_gap = minimum_gap_base + speed * (delay + DT_MDL) + speed ** 2 / (2.0 * COMFORT_BRAKE)
   primary_identity = lead_identity(radar_state.leadOne)
@@ -181,7 +182,7 @@ def departing_lead_rejection(radar_state, speed, delay, *, minimum_gap_base=CREE
   return None
 
 
-def has_departing_lead(radar_state, speed, delay, *, minimum_gap_base=CREEP_FOLLOW_MIN_GAP, now_ns=None, held_identity=None):
+def has_departing_lead(radar_state, speed, delay, *, minimum_gap_base=LEAD_DEPARTURE_MIN_GAP, now_ns=None, held_identity=None):
   return departing_lead_rejection(radar_state, speed, delay, minimum_gap_base=minimum_gap_base,
                                   now_ns=now_ns, held_identity=held_identity) is None
 
@@ -821,7 +822,7 @@ class UnifiedLongitudinalPlanner:
     observed_departure = (bool(car_state.standstill) and not model.action.shouldStop
                           and model.action.desiredAcceleration >= STOP_RELEASE_ACCEL
                           and (self.model_evidence is None or self.model_evidence.allows_external_departure)
-                          and has_departing_lead(state['radarState'], speed, delay, minimum_gap_base=3.0,
+                          and has_departing_lead(state['radarState'], speed, delay, minimum_gap_base=LEAD_DEPARTURE_MIN_GAP,
                                                  now_ns=now_ns, held_identity=self.radar_held_identity))
     compact_activation = ((not car_state.standstill and state['controlsState'].longControlState == LongCtrlState.pid)
                           or observed_departure)

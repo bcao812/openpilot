@@ -351,6 +351,58 @@ def test_positive_forward_speed_does_not_discard_measured_braking():
   assert planner.mpc.x0[2] == -0.5
 
 
+@pytest.mark.parametrize('held', [False, True])
+@pytest.mark.parametrize('speed,delay,gap,allowed', [
+  (0.0, .5, 2.999, False), (0.0, .5, 3.0, True), (0.0, .5, 4.0, True),
+  (.2, .5, 3.0, False), (.2, .5, 3.117, False), (.2, .5, 3.119, True),
+  (.2, 1.0, 3.217, False), (.2, 1.0, 3.219, True),
+])
+def test_departure_default_gap_is_three_metres_with_reaction_and_braking_reserve(held, speed, delay, gap, allowed):
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, SESSION, radar_frame
+
+  primary = formal_lead(now_ns=PUBLICATION, dRel=gap, vLead=1.0, vLeadK=1.0, vRel=1.0 - speed,
+                        evidence={'trackId': 5})
+  radar = radar_frame(primary, display=(primary,))
+  identity = (SESSION, 5) if held else None
+  rejection = departing_lead_rejection(radar, speed, delay, now_ns=CONSUMPTION, held_identity=identity,
+                                       allow_unbound_physical=True)
+  assert rejection == (None if allowed else ('lead_gap', (SESSION, 5)))
+  if held:
+    assert has_departing_lead(radar, speed, delay, now_ns=CONSUMPTION, held_identity=identity) is allowed
+    assert not has_departing_lead(radar, speed, delay, minimum_gap_base=5.0, now_ns=CONSUMPTION, held_identity=identity)
+
+
+@pytest.mark.parametrize('defect,reason', [
+  ('qualification', 'lead_departure_unqualified'), ('stale', 'lead_departure_unqualified'),
+  ('lateral', 'lead_path_offset'), ('relative_speed', 'lead_departure_unqualified'),
+  ('lead_speed', 'lead_speed'), ('stopping', 'lead_stopping'), ('identity', 'held_identity_mismatch'),
+])
+def test_three_metre_departure_keeps_the_other_lead_guards(defect, reason):
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, SESSION, radar_frame
+
+  primary = formal_lead(now_ns=PUBLICATION, dRel=3.2, vLead=1.0, vLeadK=1.0, vRel=1.0, evidence={'trackId': 5})
+  identity = (SESSION, 5)
+  if defect == 'qualification':
+    primary.evidence.departureQualified = False
+  elif defect == 'stale':
+    primary.evidence.positionMonoTime = PUBLICATION - 200_000_000
+  elif defect == 'lateral':
+    primary.evidence.pathOffset = 1.81
+  elif defect == 'relative_speed':
+    primary.vRel = 0.0
+  elif defect == 'lead_speed':
+    primary.vLead = primary.vLeadK = primary.vRel = .49
+  elif defect == 'stopping':
+    primary.aLeadK = -.4
+  elif defect == 'identity':
+    identity = (SESSION, 7)
+  radar = radar_frame(primary, display=(primary,))
+  assert departing_lead_rejection(radar, 0.0, .5, now_ns=CONSUMPTION, held_identity=identity) == (reason, (SESSION, 5))
+  assert not has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION, held_identity=identity)
+
+
 @pytest.mark.parametrize('held', ['none', 'matching', 'different'])
 @pytest.mark.parametrize('other', ['none', 'departing', 'stationary', 'occluded', 'caution'])
 def test_unbound_physical_departure_requires_formal_leads_without_replacing_a_held_identity(held, other):
