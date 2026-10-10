@@ -31,6 +31,8 @@ def lead_fixture(index, source='fused', path_state='inPath'):
       'physicalConflictValid': not first,
       'physicalConflictStart': .123456789012345 + index / 8,
       'physicalConflictEnd': 1.987654321098765 + index / 8,
+      'conflictSupportVersion': 1,
+      'conflictSupportedEnd': .625 + index / 8,
       'pathState': path_state, 'pathOffset': -1.25 - index,
       'conflictStart': .25 + index, 'conflictEnd': 2.75 + index,
       'lateralSpeed': -.75 - index, 'pathSource': f'wire-path-{index}',

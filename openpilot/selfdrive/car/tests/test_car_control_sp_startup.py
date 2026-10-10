@@ -80,6 +80,8 @@ def startup_harness(*, lead_present, engaged, with_evidence):
         "physicalConflictValid": True,
         "physicalConflictStart": 0.375 * index,
         "physicalConflictEnd": 1.75 + index,
+        "conflictSupportVersion": 1,
+        "conflictSupportedEnd": 0.5 * index,
         "followGeometryMonoTime": 9_400_000_000 + index,
       }
     expected_evidence[name] = lead.evidence.to_dict()
