@@ -59,18 +59,20 @@ def failure_record(event):
 
 @pytest.mark.parametrize('kind,reason', [
   ('clock', 'Invalid fusion clock'),
-  ('expired', 'Unqualified admitted fusion object'),
-  ('edge', 'Invalid edge caution object'),
+  ('expired', 'Unqualified formal lead'),
+  ('invalid_velocity', 'Unqualified formal lead'),
 ])
 def test_pre_solve_rejection_records_exact_branch_and_offending_object(diagnosed_mpc, kind, reason):
   mpc, native, event = diagnosed_mpc
-  lead = object_lead(track=751, path='edge' if kind == 'edge' else 'inPath')
-  now_ns = 0 if kind == 'clock' else EPOCH_NS + 400_000_000
-  attempt(mpc, fused_state(lead), now_ns=now_ns)
+  lead = object_lead(track=751)
+  if kind == 'invalid_velocity':
+    lead.evidence.velocityValid = False
+  now_ns = 0 if kind == 'clock' else EPOCH_NS + 400_000_000 if kind == 'expired' else EPOCH_NS
+  attempt(mpc, fused_state(display=(lead,)), now_ns=now_ns)
   assert mpc.solution_status == MPC_INVALID_INPUT
   assert mpc.failure_reason == 'invalid_input'
   record = failure_record(event)
-  assert record['stage'] == 'fusion_projection'
+  assert record['stage'] == 'formal_lead'
   assert record['reason'] == reason and record['exception'] == 'ValueError'
   assert record['nativeReturn'] is None and not record['native']['known']
   assert record['x0'] == [0.0, 10.0, -0.25]

@@ -9,7 +9,7 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner_owner
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import CapturingPublisher
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
-from openpilot.selfdrive.controls.tests.test_radar_consumption import PUBLICATION, SESSION, coast, measured, native_frame, radar_frame
+from openpilot.selfdrive.controls.tests.test_radar_consumption import PUBLICATION, coast, measured, native_frame, radar_frame
 from openpilot.selfdrive.controls.tests.test_radard_publication import make_radard, publish_at, update_with_result
 from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import state_at
 
@@ -67,5 +67,5 @@ def test_expired_near_obstacle_does_not_turn_ongoing_braking_into_cruise(boundar
   assert max(commands) <= min(0.0, first_commands[-1])
   assert not after.motionIntent.releaseAllowed
   assert planner.reference_planner.radar_held_identity is None
-  ledger = rd.publication_expiry if boundary == 'publisher' else planner.reference_planner.radar_consumption
-  assert ledger.degraded and ledger.lost_identities == ((SESSION, 7),)
+  expiry = rd.publication_expiry if boundary == 'publisher' else planner.reference_planner.radar_consumption
+  assert expiry.degraded

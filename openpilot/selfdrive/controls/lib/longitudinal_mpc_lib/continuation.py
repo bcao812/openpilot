@@ -39,8 +39,8 @@ class ContinuationProblem:
   state_lower: np.ndarray
   state_upper: np.ndarray
   linear_constraints: tuple
-  projections: tuple
-  stop_or_passing: bool
+  lead_trajectories: tuple
+  stop_required: bool
 
 
 @dataclass(frozen=True)
@@ -114,8 +114,8 @@ def build_candidate(donor, problem, *, now_ns, times, integrate, validate):
     return reject('continuation_evidence_expired')
   if donor.problem.reference_ns != donor.source_ns:
     return reject('donor_source_identity_mismatch')
-  if donor.problem.stop_or_passing or problem.stop_or_passing:
-    return reject('continuation_stop_or_passing')
+  if donor.problem.stop_required or problem.stop_required:
+    return reject('continuation_stop_required')
   if problem.x0.shape != (3,) or not np.all(np.isfinite(problem.x0)):
     return reject('invalid_current_initial_state')
   times = np.asarray(times)

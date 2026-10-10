@@ -6,9 +6,8 @@ from dataclasses import replace
 import pytest
 
 from openpilot.selfdrive.car.honda_radar_control import (
-  COAST_NS, HORIZON, MAX_OBJECTS, MAX_TRACKS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _corridors, _qualified_path,
+  COAST_NS, HORIZON, MAX_TRACKS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _corridors, _qualified_path,
 )
-from openpilot.selfdrive.car.honda_radar_relevance import remaining_occupancy_window
 
 
 START = 10_000_000_000
@@ -67,8 +66,13 @@ def scene(frame=0, *, tracks=None, leads=None, bindings=None, ego=10.0, short_pa
           'observation_valid': True, 'model': model, 'model_ns': stamp, 'v_ego': ego, 'vision_leads': leads}
 
 
+def present_leads(result):
+  assert result.objects == []
+  return [lead for lead in result.leads if lead.get('present') is True]
+
+
 def evidence(result):
-  return result.objects[0]['evidence']
+  return present_leads(result)[0]['evidence']
 
 
 @pytest.mark.parametrize('points', [
@@ -89,9 +93,6 @@ def test_static_lane_comparison_preserves_consumed_full_relation_fields(points):
     samples.extend(((math.nextafter(x, -math.inf), y), (math.nextafter(x, math.inf), y)))
   for x, y in samples:
     full = corridor.relation(x, y, 0.0, 0.0)
-    current = corridor.relation(x, y, 0.0, 0.0, horizon=0.0)
-    # These are exactly the fields the lane/path disagreement gate consumes.
-    assert (current.state == 'unknown', current.offset) == (full.state == 'unknown', full.offset), (points, x, y)
     for limit in (0.0, .75, SWEPT_HALF_WIDTH, 2.0):
       expected = full.state != 'unknown' and abs(full.offset) > limit
       assert corridor.current_distance_exceeds(x, y, limit) is expected, (points, x, y, limit)
@@ -145,7 +146,7 @@ def test_static_lane_projection_still_rejects_invalid_lane_evidence(fault):
 def test_first_mature_radar_object_needs_no_visual_history_including_static(speed):
   result = HondaRadarControl().update(**scene(tracks=[radar(speed=speed)]))
   assert result.healthy and not result.degraded
-  assert len(result.objects) == 1
+  assert len(present_leads(result)) == 1
   assert result.leads[0]['present'] and result.leads[0]['modelProb'] == 0.0
   assert result.leads[0]['vLeadK'] == speed
   assert evidence(result)['source'] == 'radar'
@@ -181,23 +182,15 @@ def test_latest_fresh_geometry_survives_coast_without_renewing_components_or_pur
                                              'fcwQualified', 'accelerationValid', 'physicalConflictValid'))
 
 
-@pytest.mark.parametrize('change', ['opposing', 'disjoint', 'finite', 'entering', 'out'])
-def test_new_fresh_geometry_revocation_cannot_recover_an_older_follow_epoch(change):
-  # Three successive producer frames exercise revocation with real path
-  # calculation. They assert no frequency or likelihood of these transitions.
+@pytest.mark.parametrize('change', ['opposing', 'crossing', 'future_bend', 'out'])
+def test_new_current_geometry_revocation_cannot_recover_an_older_follow_epoch(change):
   controller = HondaRadarControl()
   initial, revised, coast = scene(), scene(1), scene(2, tracks=[])
   if change == 'opposing':
-    initial = scene(tracks=[radar(distance=90.0)])
-    revised = scene(1, tracks=[radar(1, distance=90.0, speed=-3.0)])
-  elif change == 'disjoint':
-    initial = scene(tracks=[radar(distance=1.0, speed=4.0)])
-    revised = scene(1, tracks=[radar(1, distance=1.0, speed=4.0)])
-    revised['model']['position'] = {'x': [1.52, 11.52, 21.52, 31.52, 51.52],
-                                   'y': [0.0, 0.0, -10.0, 0.0, 0.0]}
-  elif change == 'finite':
+    revised = scene(1, tracks=[radar(1, speed=-3.0)])
+  elif change == 'crossing':
     revised = scene(1, tracks=[radar(1, lateral_speed=2.0)])
-  elif change == 'entering':
+  elif change == 'future_bend':
     initial = scene(tracks=[radar(distance=5.0, speed=5.0, lateral=3.0)])
     initial['model']['position']['y'] = [-3.0] * 33
     revised = scene(1, tracks=[radar(1, distance=5.0, speed=5.0, lateral=3.0)])
@@ -208,17 +201,10 @@ def test_new_fresh_geometry_revocation_cannot_recover_an_older_follow_epoch(chan
   original = evidence(controller.update(**initial))
   assert original['followQualified'] and original['followGeometryMonoTime'] == START
   current = controller.update(**revised)
-  if change == 'out':
-    assert not current.objects and current.cleared == (1,)
-  else:
-    assert current.objects
-    claim = evidence(current)
-    assert claim['generation'] == original['generation'] and claim['positionMonoTime'] == START + STEP
-    assert not claim['coasting'] and not claim['followQualified']
-    assert claim['followGeometryMonoTime'] == 0
+  assert not present_leads(current)
+  assert current.cleared == ((1,) if change in ('future_bend', 'out') else ())
   predicted = controller.update(**coast)
-  assert bool(predicted.objects) is (change != 'out')
-  assert all(lead['evidence']['followGeometryMonoTime'] == 0 for lead in predicted.objects)
+  assert not present_leads(predicted) and not controller._tracks
 
 
 @pytest.mark.parametrize('changes', [
@@ -236,7 +222,7 @@ def test_coast_cannot_invent_geometry_from_missing_or_mismatched_provenance(chan
   if changes.get('followGeometryMonoTime', 0) is None:
     accepted.pop('followGeometryMonoTime')
   coast = controller.update(**scene(1, tracks=[]))
-  assert coast.objects and evidence(coast)['coasting']
+  assert present_leads(coast) and evidence(coast)['coasting']
   assert evidence(coast)['followGeometryMonoTime'] == 0
 
 
@@ -245,18 +231,10 @@ def test_new_immature_radar_waits_for_observer_maturity_not_visual_confirmation(
   for frame in range(3):
     sample = radar(frame, mature=frame == 2, observations=frame + 1)
     result = controller.update(**scene(frame, tracks=[sample]))
-    assert bool(result.objects) is (frame == 2)
+    assert bool(present_leads(result)) is (frame == 2)
 
 
-@pytest.mark.parametrize('start,end,age,expected', [
-  (0.0, HORIZON, .05, (0.0, HORIZON)),
-  (2.0, HORIZON, .25, (1.75, HORIZON)),
-  (0.0, .3, .35, (0.0, -.05)),
-  (.1, .3, .05, (.05, .25)),
-  (0.0, HORIZON - 1e-6, .25, (0.0, HORIZON - 1e-6 - .25)),
-])
-def test_occupancy_age_preserves_only_the_exact_forecast_boundary(start, end, age, expected):
-  assert remaining_occupancy_window(start, end, age) == pytest.approx(expected)
+
 
 
 def test_far_historical_path_does_not_invent_a_crossing_or_latch_a_later_invalid_position():
@@ -271,63 +249,74 @@ def test_far_historical_path_does_not_invent_a_crossing_or_latch_a_later_invalid
     assert not claim['physicalConflictValid']
     assert controller._tracks[1].path_ns == START and not controller._tracks[1].relevant
   result = controller.update(**scene(4, tracks=[radar(4, distance=90.0, active=False, lastInvalidReason='positionInnovation')]))
-  assert result.healthy and not result.degraded and not result.objects and not result.cleared
-  assert not controller._lost_tracks
+  assert result.healthy and not result.degraded and not present_leads(result) and not result.cleared
+  assert not controller._tracks
 
 
-@pytest.mark.parametrize('prediction_limited', [False, True])
-def test_genuine_finite_history_still_expires_even_with_a_quality_limit(prediction_limited):
+def test_short_coast_drops_a_lead_whose_current_projected_position_leaves_the_band():
   controller = HondaRadarControl()
   controller.update(**scene())
   memory = controller._tracks[1]
-  memory.path = replace(memory.path, end=.3, prediction_limited=prediction_limited)
+  memory.path = replace(memory.path, rate=6.0)
   path = controller._historical_path(memory, START + COAST_NS)
-  assert path.state == 'outOfPath' and not path.physical_valid
+  assert path.state == 'outOfPath'
   assert memory.path_ns == memory.position_ns == memory.velocity_ns == START
+
+
+def test_legacy_predicted_entry_history_cannot_become_current_occupancy():
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  memory = controller._tracks[1]
+  memory.path = replace(memory.path, state='entering', offset=1.5, rate=-5.0)
+  assert controller._historical_path(memory, START + STEP).state == 'unknown'
+  missing = controller.update(**scene(1, tracks=[]))
+  assert missing.healthy and not missing.degraded and not present_leads(missing) and not missing.cleared
+  assert not controller._tracks
 
 
 def test_unknown_horizon_never_extends_near_measurement_or_path_authority():
   controller = HondaRadarControl()
   controller.update(**scene())
   memory = controller._tracks[1]
-  assert controller._historical_path(memory, START + COAST_NS).end == HORIZON
+  assert controller._historical_path(memory, START + COAST_NS).state == 'inPath'
   assert controller._historical_path(memory, START + COAST_NS + 1).state == 'unknown'
   result = controller.update(**scene(6, tracks=[]))
-  assert not result.objects and result.degraded and not result.cleared
-  assert controller._lost_tracks[('control-fixture', 1)].position_ns == START
+  assert result.healthy and not result.degraded and not present_leads(result) and not result.cleared
+  assert not controller._tracks
 
 
 @pytest.mark.parametrize('previous_distance,previous_lateral,current_lateral,expected_degraded', [
-  (40.0, 1.6, 4.0, False),  # A roadside caution never had an independent braking obligation.
-  (40.0, 1.6, 0.0, True),  # The same object can acquire a new current in-path obligation.
-  (20.0, 0.0, 4.0, True),  # Bad velocity alone cannot clear a previously relevant obstacle.
-  (80.0, 0.0, 0.0, True),  # A current in-path object still needs a usable motion component.
-  (None, None, 0.0, True),  # No previous object is required for this current-position guard.
+  (40.0, 1.6, 4.0, False),  # An unselected side track had no control obligation.
+  (40.0, 1.6, 0.0, False),  # Bad velocity cannot first qualify an ordinary lead.
+  (20.0, 0.0, 4.0, True),  # Losing a previously selected near lead matters on this frame.
+  (80.0, 0.0, 0.0, False),  # The existing near-lead relevance bound is preserved.
+  (None, None, 0.0, False),
 ])
-def test_bad_velocity_only_degrades_for_a_prior_risk_or_current_path_object(
+def test_bad_velocity_only_degrades_an_existing_selected_near_lead(
     previous_distance, previous_lateral, current_lateral, expected_degraded):
   controller = HondaRadarControl()
   if previous_distance is not None:
     first = controller.update(**scene(tracks=[radar(distance=previous_distance, lateral=previous_lateral)]))
     assert first.healthy and not first.degraded
-    assert len(first.objects) == 1
-    assert controller._tracks[1].relevant is (previous_distance == 20.0)
+    assert len(present_leads(first)) == int(previous_lateral == 0.0)
+    if previous_lateral == 0.0:
+      assert controller._tracks[1].relevant is (previous_distance == 20.0)
+    else:
+      assert not controller._tracks
   # Beyond the old velocity's coast deadline, with independent fresh
   # positions but no qualified raw, visual, or position-derived velocity.
   for frame in (7, 8):
     current = radar(frame, distance=40.0, lateral=current_lateral, velocityGood=False, velocityVariance=5.0)
     result = controller.update(**scene(frame, tracks=[current]))
-    assert result.healthy and result.degraded is expected_degraded
-    assert not result.objects and not result.cleared
-  if previous_distance != 20.0:
-    assert not controller._lost_tracks
+    assert result.healthy and result.degraded is (expected_degraded and frame == 7)
+    assert not present_leads(result) and not result.cleared
 
 
 def test_same_identity_replaces_dva_with_radar_without_weighting():
   visual = vision(distance=23.0, speed=12.0, acceleration=.6)
   result = HondaRadarControl().update(**scene(tracks=[radar(distance=20.0, speed=8.0, acceleration=-1.2)],
                                                    leads=[visual, {'present': False}], bindings=[binding(bias_x=-3.0)]))
-  assert len(result.objects) == 1
+  assert len(present_leads(result)) == 1
   assert result.leads[0]['dRel'] == 20.0
   assert result.leads[0]['vLeadK'] == 8.0
   assert result.leads[0]['aLeadK'] == -1.2
@@ -340,36 +329,41 @@ def test_near_visual_cut_in_is_not_blended_with_far_radar(state):
   visual = vision(distance=7.0, speed=3.0)
   result = HondaRadarControl().update(**scene(tracks=[radar(distance=50.0)], leads=[visual, {'present': False}],
                                                    bindings=[binding(identityState=state, rejectionMonoTime=START)]))
-  assert len(result.objects) == 2
+  assert len(present_leads(result)) == 2
   assert result.leads[0]['dRel'] == 7.0 and result.leads[0]['vLeadK'] == 3.0
   assert result.leads[0]['evidence']['source'] == 'vision'
-  assert next(lead for lead in result.objects if lead['radar'])['dRel'] == 50.0
+  assert next(lead for lead in present_leads(result) if lead['radar'])['dRel'] == 50.0
   assert result.leads[0]['modelProb'] == .94
 
 
 def test_current_visual_identity_jump_cannot_reuse_observers_old_same_binding():
   result = HondaRadarControl().update(**scene(tracks=[radar(distance=40.0)],
                                                    leads=[vision(distance=8.0), {'present': False}], bindings=[binding()]))
-  assert len(result.objects) == 2 and result.leads[0]['dRel'] == 8.0
-  assert all(lead['evidence']['source'] != 'fused' for lead in result.objects)
+  assert len(present_leads(result)) == 2 and result.leads[0]['dRel'] == 8.0
+  assert all(lead['evidence']['source'] != 'fused' for lead in present_leads(result))
 
 
 def test_future_hypotheses_of_same_radar_track_are_one_object():
   result = HondaRadarControl().update(**scene(leads=[vision(), vision(distance=20.2)],
                                                    bindings=[binding(0), binding(1, bias_x=-.2)]))
-  assert len(result.objects) == 1
+  assert len(present_leads(result)) == 1
   assert evidence(result)['source'] == 'fused' and evidence(result)['trackId'] == 1
 
 
-def test_third_entering_object_survives_two_existing_far_leads():
-  result = HondaRadarControl().update(**scene(tracks=[radar(distance=18.0, speed=2.0, lateral=3.0, lateral_speed=-2.0)],
-                                                   leads=[vision(distance=50.0), vision(distance=70.0)]))
-  assert len(result.objects) == 3
-  entering = next(lead for lead in result.objects if lead['radar'])
-  assert entering['evidence']['pathState'] == 'entering'
-  assert entering['evidence']['brakeQualified']
-  assert not entering['evidence']['followQualified']
-  assert not entering['evidence']['stopQualified']
+def test_third_side_object_needs_current_ordinary_follow_motion_to_enter_a_lead_slot():
+  controller = HondaRadarControl()
+  visual = [vision(distance=50.0), vision(distance=70.0)]
+  for frame, lateral in enumerate((3.0, 1.0)):
+    result = controller.update(**scene(frame, tracks=[radar(frame, distance=18.0, speed=2.0,
+                                                           lateral=lateral, lateral_speed=-2.0)], leads=visual))
+    assert len(present_leads(result)) == 2 and all(not lead['radar'] for lead in present_leads(result))
+    assert not controller._tracks
+  current = controller.update(**scene(2, tracks=[radar(2, distance=18.0, speed=2.0, lateral=1.0)], leads=visual))
+  assert len(present_leads(current)) == 2
+  admitted = evidence(current)
+  assert admitted['trackId'] == 1 and admitted['pathState'] == 'inPath'
+  assert admitted['followQualified'] and admitted['brakeQualified'] and admitted['stopQualified']
+  assert current.leads[1]['dRel'] == 50.0
 
 
 def test_sloped_straight_path_uses_ground_velocity_normal_to_path():
@@ -382,20 +376,16 @@ def test_sloped_straight_path_uses_ground_velocity_normal_to_path():
   assert evidence(result)['followQualified']
 
 
-def test_current_outside_object_enters_a_later_bend_of_the_full_path():
+def test_current_outside_object_is_not_admitted_for_a_predicted_later_bend():
   values = scene(tracks=[radar(distance=5.0, lateral=3.0, speed=5.0)])
   # Radar coordinates: (0, 0) -> (10, 0) -> (20, 10). The object has
   # zero current cross-track velocity, but meets the bend at (13, 3), t=1.6.
   values['model']['position'] = {'x': [1.52, 11.52, 21.52], 'y': [0.0, 0.0, -10.0]}
   result = HondaRadarControl().update(**values)
-  assert len(result.objects) == 1
-  entry = evidence(result)
-  assert entry['pathState'] == 'entering' and entry['pathOffset'] == pytest.approx(3.0)
-  assert entry['lateralSpeed'] == 0.0
-  assert entry['conflictStart'] == pytest.approx((8.0 - SWEPT_HALF_WIDTH * math.sqrt(2.0)) / 5.0 - .15)
-  assert entry['conflictEnd'] == pytest.approx((8.0 + SWEPT_HALF_WIDTH * math.sqrt(2.0)) / 5.0 + .25)
-  assert entry['conflictStart'] < 1.6 < entry['conflictEnd']
-  assert entry['brakeQualified'] and not entry['followQualified']
+  assert result.healthy and not result.degraded and not present_leads(result)
+  assert result.cleared == (1,)
+  relation = _Corridor(((0.0, 0.0), (10.0, 0.0), (20.0, 10.0)), 'modelPath').relation(5.0, 3.0, 5.0, 0.0)
+  assert relation.state == 'outOfPath' and relation.offset == pytest.approx(3.0) and relation.rate == 0.0
 
 
 def test_prediction_does_not_extend_the_initial_tangent_past_a_turn():
@@ -406,12 +396,12 @@ def test_prediction_does_not_extend_the_initial_tangent_past_a_turn():
   assert result.state == 'outOfPath'
 
 
-def test_finite_bend_occupancy_does_not_fill_the_remaining_mpc_horizon():
+def test_current_bend_geometry_uses_the_nearest_supported_segment():
   corridor = _Corridor(((0.0, 0.0), (10.0, 10.0), (20.0, 10.0)), 'modelPath')
   result = corridor.relation(5.0, 3.0, 5.0, 0.0)
   assert result.state == 'inPath'
-  assert result.start == 0.0
-  assert result.end == pytest.approx((2.0 * math.sqrt(2.0) - 2.0) / 5.0 + .25)
+  assert result.offset == pytest.approx(-math.sqrt(2.0))
+  assert result.rate == pytest.approx(-5.0 / math.sqrt(2.0))
 
 
 def test_internal_corner_has_no_gap_between_the_finite_segment_strips():
@@ -421,30 +411,33 @@ def test_internal_corner_has_no_gap_between_the_finite_segment_strips():
   result = corridor.relation(10.5, -1.5, 0.0, 0.0)
   assert result.state == 'inPath'
   assert result.offset == pytest.approx(-math.sqrt(2.5))
-  assert result.start == 0.0 and result.end == 10.0
 
 
-def test_disjoint_bend_intervals_use_braking_envelope_without_permanent_follow():
+def test_later_bends_do_not_create_an_occupancy_window_for_a_current_follow_lead():
   values = scene(tracks=[radar(distance=1.0, speed=4.0)])
   values['model']['position'] = {'x': [1.52, 11.52, 21.52, 31.52, 51.52],
                                'y': [0.0, 0.0, -10.0, 0.0, 0.0]}
   result = HondaRadarControl().update(**values)
-  assert evidence(result)['conflictStart'] == 0.0 and evidence(result)['conflictEnd'] == 10.0
-  assert evidence(result)['brakeQualified']
-  assert not evidence(result)['followQualified'] and not evidence(result)['stopQualified']
-  assert 'disjointOccupancyEnvelope' in evidence(result)['reason']
+  claim = evidence(result)
+  assert claim['followQualified'] and claim['stopQualified']
+  assert claim['conflictStart'] == 0.0 and claim['conflictEnd'] == HORIZON
+  assert claim['conflictSupportVersion'] == 0 and not claim['physicalConflictValid']
 
 
-def test_short_crossing_interval_is_found_without_sampling_the_future():
+def test_fast_lateral_motion_is_only_current_geometry_without_future_intervals():
   corridor = _Corridor(((0.0, 0.0), (20.0, 0.0)), 'modelPath')
-  result = corridor.relation(10.0, -3.0, 0.0, 30.0)
-  assert result.state == 'entering'
-  assert result.start == 0.0 and result.end == pytest.approx(5.0 / 30.0 + .25)
+  outside = corridor.relation(10.0, -3.0, 0.0, 30.0)
+  assert outside.state == 'outOfPath'
+  current = corridor.relation(10.0, 0.0, 0.0, 30.0)
+  assert current.state == 'inPath' and current.rate == 30.0
+  assert corridor.relation(-1.0, 0.0, 10.0, 0.0).state == 'unknown'
+  result = HondaRadarControl().update(**scene(tracks=[radar(lateral_speed=30.0)]))
+  assert not present_leads(result)
 
 
 @pytest.mark.parametrize('changes', [
   {'lateralVelocityValid': False}, {'lateralVelocityVariance': 4.01},
-  {'lateralVelocityVariance': math.nan}, {'lateralPositionVariance': 4.0},
+  {'lateralVelocityVariance': math.nan},
 ])
 def test_lateral_prediction_limits_preserve_current_longitudinal_authority(changes):
   # Poor vy must not erase a newly observed stationary/forward-moving lead.
@@ -454,13 +447,12 @@ def test_lateral_prediction_limits_preserve_current_longitudinal_authority(chang
     assert claim['pathState'] == 'inPath' and claim['conflictEnd'] == 10.0
     assert all(claim[purpose + 'Qualified'] for purpose in ('follow', 'brake', 'stop', 'fcw'))
     assert claim['departureQualified'] is (speed > .5)
-    assert 'lateralPredictionLimited' in claim['reason']
 
 
 def test_lateral_position_uncertainty_cannot_create_or_clear_an_obstacle():
   invalid = radar(lateralPositionVariance=4.01)
   result = HondaRadarControl().update(**scene(tracks=[invalid]))
-  assert not result.objects and not result.cleared
+  assert not present_leads(result) and not result.cleared
   controller = HondaRadarControl()
   controller.update(**scene())
   uncertain = controller.update(**scene(1, tracks=[radar(1, lateral=1.0, lateralPositionVariance=4.01)]))
@@ -468,25 +460,23 @@ def test_lateral_position_uncertainty_cannot_create_or_clear_an_obstacle():
   assert uncertain.degraded and not uncertain.cleared
 
 
-def test_qualified_entry_is_not_cleared_when_its_lateral_prediction_budget_ends():
-  values = scene(tracks=[radar(distance=5.0, lateral=3.0, speed=5.0, lateralVelocityVariance=1.0)])
+@pytest.mark.parametrize('variance', [.01, 1.0, 4.01])
+def test_outside_object_stays_out_across_lateral_prediction_quality_limits(variance):
+  values = scene(tracks=[radar(distance=5.0, lateral=3.0, speed=5.0, lateralVelocityVariance=variance)])
   values['model']['position'] = {'x': [1.52, 11.52, 21.52], 'y': [0.0, 0.0, -10.0]}
   result = HondaRadarControl().update(**values)
-  # Trusted lateral horizon is (2 - sqrt(.04)) / sqrt(1) = 1.8 s;
-  # entry is inside it, the clearing time is outside it.
-  assert evidence(result)['pathState'] == 'entering'
-  assert evidence(result)['conflictStart'] < 1.8 and evidence(result)['conflictEnd'] == 10.0
-  assert evidence(result)['brakeQualified'] and not evidence(result)['departureQualified']
+  assert result.healthy and not result.degraded and not present_leads(result)
+  assert result.cleared == (1,)
 
 
-def test_entry_only_beyond_lateral_quality_horizon_is_unknown():
+def test_measured_outside_geometry_does_not_become_unknown_from_a_future_entry():
   corridor = _Corridor(((0.0, 0.0), (100.0, 0.0)), 'modelPath')
   result = _qualified_path((corridor,), 20.0, 4.0, 0.0, -.5, .04, 1.0, True)
-  assert result.state == 'unknown' and result.prediction_limited
+  assert result.state == 'outOfPath'
   assert result.observed_out  # current position remains measured geometry
   objects = HondaRadarControl().update(**scene(tracks=[radar(lateral=4.0, lateral_speed=-.5,
                                                            lateralVelocityVariance=1.0)]))
-  assert not objects.objects and not objects.cleared
+  assert not present_leads(objects) and objects.cleared == (1,)
 
 
 def test_fresh_measured_out_clears_old_lead_without_trusting_lateral_prediction():
@@ -495,7 +485,35 @@ def test_fresh_measured_out_clears_old_lead_without_trusting_lateral_prediction(
   controller.update(**scene(7, tracks=[]))
   result = controller.update(**scene(8, tracks=[radar(8, lateral=4.0, lateral_speed=-.5, lateralVelocityValid=False)]))
   assert result.healthy and not result.degraded
-  assert result.cleared == (1,) and not result.objects
+  assert result.cleared == (1,) and not present_leads(result)
+
+
+@pytest.mark.parametrize('expired', [False, True])
+def test_coasting_track_cannot_publish_clearance_from_new_model_geometry(expired):
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  if expired:
+    missing = controller.update(**scene(7, tracks=[]))
+    assert not present_leads(missing) and not missing.cleared and not controller._tracks
+  frame = 8 if expired else 1
+  values = scene(frame, tracks=[radar(frame, coasting=True)])
+  values['model']['position']['y'] = [-4.0] * 33
+  result = controller.update(**values)
+  assert result.healthy and not present_leads(result) and not result.cleared
+
+
+def test_new_model_geometry_with_reused_position_cannot_clear_tracked_obstacle():
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  values = scene(1, tracks=[radar()])
+  values['model']['position']['y'] = [-4.0] * 33
+  reused = controller.update(**values)
+  assert reused.healthy and reused.degraded and not present_leads(reused) and not reused.cleared
+  assert not controller._tracks
+  fresh = scene(2)
+  fresh['model']['position']['y'] = [-4.0] * 33
+  measured = controller.update(**fresh)
+  assert measured.healthy and not measured.degraded and not present_leads(measured) and measured.cleared == (1,)
 
 
 def test_finite_path_end_is_unknown_future_space_not_proof_of_departure():
@@ -504,24 +522,14 @@ def test_finite_path_end_is_unknown_future_space_not_proof_of_departure():
   result = HondaRadarControl().update(**values)
   assert evidence(result)['pathState'] == 'inPath' and evidence(result)['conflictEnd'] == 10.0
   assert evidence(result)['followQualified'] and evidence(result)['departureQualified']
-  assert 'lateralPredictionLimited' in evidence(result)['reason']
 
 
 @pytest.mark.parametrize('lateral', [-1.7, -1.6, -1.250001, 1.250001, 1.6, 1.7])
-def test_new_outer_only_stationary_object_is_caution_without_stop_or_fcw(lateral):
-  from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
-  result = HondaRadarControl().update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=lateral)], ego=4.0))
-  assert len(result.objects) == 1 and not result.leads[0]['present'] and not result.leads[1]['present']
-  target = result.objects[0]
-  claim = target['evidence']
-  assert target['dRel'] == 3.0 and target['vLeadK'] == 0.0 and target['modelProb'] == 0.0
-  assert claim['trackId'] == 1 and claim['positionMonoTime'] == START
-  assert claim['pathState'] == 'edge' and claim['cautionQualified']
-  assert qualified_lead(target, 'caution', now_ns=START + 2_000_000)
-  assert all(not claim[purpose + 'Qualified'] for purpose in ('brake', 'follow', 'stop', 'departure', 'fcw'))
-  assert not claim['physicalConflictValid']
-  assert claim['physicalConflictStart'] == claim['physicalConflictEnd'] == 0.0
-  assert 'edgePossibleBodyOverlap' in claim['reason']
+def test_new_outer_only_stationary_object_has_no_control_or_memory(lateral):
+  controller = HondaRadarControl()
+  result = controller.update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=lateral)], ego=4.0))
+  assert result.healthy and not result.degraded and not present_leads(result)
+  assert not controller._tracks and not result.cleared
 
 
 @pytest.mark.parametrize('lateral', [-1.25, -1.20, -1.0, 1.0, 1.20, 1.25])
@@ -531,61 +539,123 @@ def test_new_inner_stationary_radar_is_a_full_obstacle_without_vision(lateral):
   result = HondaRadarControl().update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=lateral)], ego=4.0))
   assert result.leads[0]['present'] and evidence(result)['source'] == 'radar'
   claim = evidence(result)
-  assert claim['pathState'] == 'inPath' and claim['physicalConflictValid']
-  assert claim['physicalConflictStart'] == 0.0 and claim['physicalConflictEnd'] == HORIZON
+  assert claim['pathState'] == 'inPath' and not claim['physicalConflictValid']
+  assert claim['physicalConflictStart'] == claim['physicalConflictEnd'] == 0.0
   assert all(claim[purpose + 'Qualified'] for purpose in ('brake', 'follow', 'stop', 'fcw'))
   assert not claim['cautionQualified'] and not claim['departureQualified']
 
 
-def test_outer_cut_in_is_sent_now_with_its_future_inner_occupancy():
-  result = HondaRadarControl().update(**scene(tracks=[radar(distance=8.0, speed=0.0, lateral=1.7, lateral_speed=-1.0)], ego=5.0))
-  claim = evidence(result)
-  assert claim['pathState'] == 'entering' and claim['brakeQualified'] and claim['fcwQualified']
-  assert not claim['cautionQualified'] and not claim['stopQualified']
-  # Outer overlap exists now; it is not a license to invent an inner obstacle
-  # at t=0. The MPC receives this interval now and can anticipate the cut-in.
-  assert claim['conflictStart'] == pytest.approx((1.7 - SWEPT_HALF_WIDTH) - .15)
-  assert claim['conflictEnd'] == pytest.approx((1.7 + SWEPT_HALF_WIDTH) + .25)
-  assert claim['conflictStart'] > 0.0
-  assert not result.leads[0]['present']
-
-
-def test_outer_unknown_inner_prediction_is_recorded_without_fake_clear():
-  result = HondaRadarControl().update(**scene(tracks=[radar(lateral=1.6, lateral_speed=-.1, lateralVelocityVariance=1.0)]))
-  assert evidence(result)['pathState'] == 'edge' and evidence(result)['cautionQualified']
-  assert 'edgeInnerUnknown' in evidence(result)['reason'] and not result.cleared
-
-
-def test_unknown_inner_does_not_retire_a_previous_future_collision_risk():
+def test_outer_object_waits_for_a_fresh_current_follow_lead():
   controller = HondaRadarControl()
-  first = controller.update(**scene(tracks=[radar(distance=8.0, speed=0.0, lateral=1.6, lateral_speed=-2.0)], ego=5.0))
-  assert evidence(first)['pathState'] == 'entering' and evidence(first)['brakeQualified']
-  later = controller.update(**scene(1, tracks=[radar(1, distance=8.0, speed=0.0, lateral=1.5, lateral_speed=-.1,
-                                                   lateralVelocityVariance=1.0)], ego=5.0))
-  assert evidence(later)['source'] == 'predicted' and evidence(later)['brakeQualified']
-  assert later.degraded and not later.cleared
+  outer = controller.update(**scene(tracks=[radar(distance=8.0, speed=0.0, lateral=1.7, lateral_speed=-1.0)], ego=5.0))
+  assert not present_leads(outer) and not controller._tracks and not outer.cleared
+  inside = controller.update(**scene(1, tracks=[radar(1, distance=8.0, speed=0.0, lateral=1.1, lateral_speed=-.1)], ego=5.0))
+  current = evidence(inside)
+  assert current['pathState'] == 'inPath' and current['followQualified'] and current['brakeQualified']
+  assert not current['cautionQualified'] and not current['coasting']
+  assert current['positionMonoTime'] == START + STEP
 
 
-def test_caution_only_loss_does_not_create_coasting_or_a_persistent_stop_latch():
+@pytest.mark.parametrize('source', ['position_coast', 'reused_position', 'missing_velocity'])
+def test_unselected_edge_cannot_supply_memory_for_first_lead_admission(source):
+  controller = HondaRadarControl()
+  first = controller.update(**scene(tracks=[radar(distance=8.0, speed=0.0, lateral=1.7)], ego=5.0))
+  assert not present_leads(first) and not controller._tracks
+  changes = {}
+  frame = 1
+  if source == 'position_coast':
+    changes['coasting'] = True
+  elif source == 'reused_position':
+    frame = 0
+  else:
+    changes.update(velocityGood=False, velocityMonoTime=START, observations=3,
+                   previousPositionMonoTime=0, previousPositionSeq=0)
+  current = radar(frame, distance=8.0, speed=0.0, lateral=1.1, **changes)
+  result = controller.update(**scene(1, tracks=[current], ego=5.0))
+  assert result.healthy and not result.cleared and not present_leads(result)
+  assert not controller._tracks
+
+
+@pytest.mark.parametrize('observation_gap', [False, True])
+def test_reused_outside_position_cannot_enter_only_through_camera_time_alignment(observation_gap):
+  controller = HondaRadarControl()
+  initial = scene(tracks=[radar(lateral=3.0, lateral_speed=-30.0)])
+  outside = controller.update(**initial)
+  assert not present_leads(outside) and outside.cleared == (1,)
+  if observation_gap:
+    missing = scene(1, tracks=[])
+    missing['observation_valid'] = False
+    gap = controller.update(**missing)
+    assert not gap.healthy and gap.degraded and not present_leads(gap) and not gap.cleared
+    assert controller._cleared == {1: START}
+  frame = 2 if observation_gap else 1
+  reused = scene(frame)
+  reused['observation'] = initial['observation']
+  reused['observation_ns'] = initial['observation_ns']
+  projected = controller.update(**reused)
+  assert projected.healthy and not projected.degraded and not present_leads(projected) and not projected.cleared
+  assert not controller._tracks
+  frame += 1
+  fresh = controller.update(**scene(frame, tracks=[radar(frame, lateral=.9, lateral_speed=0.0)]))
+  assert evidence(fresh)['pathState'] == 'inPath' and evidence(fresh)['brakeQualified']
+  assert evidence(fresh)['positionMonoTime'] == START + frame * STEP and not evidence(fresh)['coasting']
+  assert not controller._cleared
+
+
+@pytest.mark.parametrize('visual', [False, True])
+def test_position_coast_cannot_create_first_radar_occupancy_or_suppress_current_vision(visual):
+  values = scene(tracks=[radar(coasting=True)], leads=[vision()] if visual else None,
+                 bindings=[binding()] if visual else None)
+  controller = HondaRadarControl()
+  result = controller.update(**values)
+  assert result.healthy and not result.degraded and not result.cleared and not controller._tracks
+  assert len(present_leads(result)) == int(visual)
+  if visual:
+    assert evidence(result)['source'] == 'vision' and evidence(result)['brakeQualified']
+    assert result.leads[0]['present'] and not result.leads[0]['radar']
+
+
+def test_current_confirmed_visual_occupancy_does_not_require_a_new_radar_position():
+  controller = HondaRadarControl()
+  controller.update(**scene(tracks=[radar(lateral=1.7)]))
+  result = controller.update(**scene(1, tracks=[radar(lateral=1.7)], leads=[vision()], bindings=[binding(bias_y=1.7)]))
+  claim = evidence(result)
+  assert result.healthy and not result.degraded and len(present_leads(result)) == 1
+  assert claim['source'] == 'fused' and claim['pathState'] == 'inPath' and claim['pathSource'] == 'visionLead'
+  assert claim['brakeQualified'] and claim['positionMonoTime'] == START
+  assert claim['modelMonoTime'] == START + STEP and not claim['coasting']
+
+
+def test_outer_object_stays_unselected_when_lateral_motion_is_uncertain():
+  result = HondaRadarControl().update(**scene(tracks=[radar(lateral=1.6, lateral_speed=-.1, lateralVelocityVariance=1.0)]))
+  assert not present_leads(result) and not result.cleared
+
+
+def test_repeated_outer_measurements_do_not_accumulate_control_authority():
+  controller = HondaRadarControl()
+  for frame, lateral in enumerate((1.6, 1.5, 1.4)):
+    result = controller.update(**scene(frame, tracks=[radar(frame, distance=8.0, speed=0.0,
+                                                          lateral=lateral, lateral_speed=-.1)], ego=5.0))
+    assert not present_leads(result) and not controller._tracks
+    assert not result.degraded and not result.cleared
+
+
+def test_side_reflection_loss_does_not_create_coasting_or_a_persistent_stop_latch():
   controller = HondaRadarControl()
   first = controller.update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=1.6)], ego=4.0))
-  assert evidence(first)['cautionQualified']
-  missing = controller.update(**scene(1, tracks=[], ego=4.0))
-  assert missing.healthy and not missing.degraded and not missing.objects and not missing.cleared
-  expired = controller.update(**scene(7, tracks=[], ego=4.0))
-  assert not expired.degraded and not expired.objects
-  coast = HondaRadarControl().update(**scene(tracks=[radar(lateral=1.6, coasting=True)]))
-  assert not coast.objects
+  assert not present_leads(first) and not controller._tracks
+  for frame in (1, 7):
+    missing = controller.update(**scene(frame, tracks=[], ego=4.0))
+    assert missing.healthy and not missing.degraded and not present_leads(missing) and not missing.cleared
 
 
-def test_near_independent_visual_lead_retains_authority_beside_radar_caution():
+def test_near_independent_visual_lead_retains_authority_beside_a_side_reflection():
   visual = vision(distance=7.0, speed=3.0)
   result = HondaRadarControl().update(**scene(tracks=[radar(distance=3.0, speed=0.0, lateral=1.6)],
                                                    leads=[visual, {'present': False}]))
-  assert len(result.objects) == 2
+  assert len(present_leads(result)) == 1
   assert result.leads[0]['dRel'] == 7.0 and result.leads[0]['vLeadK'] == 3.0
-  assert result.leads[0]['evidence']['source'] == 'vision' and result.leads[0]['evidence']['brakeQualified']
-  assert next(lead for lead in result.objects if lead['radar'])['evidence']['cautionQualified']
+  assert evidence(result)['source'] == 'vision' and evidence(result)['brakeQualified']
 
 
 def test_confirmed_visual_body_occupancy_keeps_radar_motion_through_long_visual_gap():
@@ -612,9 +682,9 @@ def test_inner_confirmation_uses_two_metre_exit_hysteresis_then_resets():
   assert evidence(edge)['brakeQualified'] and evidence(edge)['stopQualified']
   assert not evidence(edge)['cautionQualified'] and not edge.cleared
   outside = controller.update(**scene(2, tracks=[radar(2, lateral=2.5, speed=0.0)]))
-  assert not outside.objects and outside.cleared == (1,)
+  assert not present_leads(outside) and outside.cleared == (1,)
   returned = controller.update(**scene(3, tracks=[radar(3, lateral=1.7, speed=0.0)]))
-  assert evidence(returned)['cautionQualified'] and not evidence(returned)['brakeQualified']
+  assert not present_leads(returned) and not controller._tracks
 
 
 def test_short_stop_trajectory_uses_quality_lanes_only_inside_spatial_support():
@@ -622,15 +692,15 @@ def test_short_stop_trajectory_uses_quality_lanes_only_inside_spatial_support():
   assert evidence(near)['pathSource'] == 'laneLines'
   assert evidence(near)['stopQualified']
   far = HondaRadarControl().update(**scene(tracks=[radar(distance=120.0, speed=0.0)], short_path=True, lanes=True))
-  assert not far.objects
+  assert not present_leads(far)
   bad = scene(short_path=True, lanes=True)
   bad['model']['laneLineProbs'][1] = .2
-  assert not HondaRadarControl().update(**bad).objects
+  assert not present_leads(HondaRadarControl().update(**bad))
 
 
 def test_unknown_geometry_does_not_create_new_in_path_target_or_fake_departure():
   unknown = HondaRadarControl().update(**scene(short_path=True))
-  assert not unknown.objects and not unknown.cleared
+  assert not present_leads(unknown) and not unknown.cleared
   controller = HondaRadarControl()
   controller.update(**scene())
   gap = controller.update(**scene(1, short_path=True))
@@ -639,38 +709,22 @@ def test_unknown_geometry_does_not_create_new_in_path_target_or_fake_departure()
   assert evidence(gap)['brakeQualified'] and not evidence(gap)['departureQualified']
   assert gap.degraded and not gap.cleared
   expired = controller.update(**scene(7, short_path=True))
-  assert not expired.objects and expired.degraded and not expired.cleared
+  assert not present_leads(expired) and expired.degraded and not expired.cleared
 
 
-def test_crossing_uses_finite_window_then_explicit_fresh_clear():
+def test_crossing_does_not_gain_extra_braking_or_follow_memory():
   controller = HondaRadarControl()
-  start = controller.update(**scene(tracks=[radar(lateral=3.0, lateral_speed=-2.0, speed=0.0)]))
-  assert evidence(start)['pathState'] == 'entering'
-  assert evidence(start)['conflictStart'] == pytest.approx((3.0 - SWEPT_HALF_WIDTH) / 2.0 - .15)
-  assert evidence(start)['conflictEnd'] == pytest.approx((3.0 + SWEPT_HALF_WIDTH) / 2.0 + .25)
-  assert not evidence(start)['stopQualified']
-  for frame in range(1, 44):
-    lateral = 3.0 - 2.0 * frame * STEP / 1e9
-    # Keep longitudinal range in front while the vehicle travels slowly past
-    # this finite corridor crossing; only the target lateral motion changes.
-    values = scene(frame, tracks=[radar(frame, lateral=lateral, lateral_speed=-2.0, speed=0.0)], ego=0.0)
-    result = controller.update(**values)
-    if result.objects:
-      assert evidence(result)['conflictEnd'] < 10.0
-      assert not evidence(result)['stopQualified']
-    if result.cleared:
-      assert result.cleared == (1,) and result.session_id == 'control-fixture'
-      break
-  else:
-    raise AssertionError('crossing target never produced observed departure')
+  for frame in range(44):
+    lateral = 1.0 - 2.0 * frame * STEP / 1e9
+    result = controller.update(**scene(frame, tracks=[radar(frame, lateral=lateral, lateral_speed=-2.0, speed=0.0)], ego=0.0))
+    assert not present_leads(result) and not controller._tracks
 
 
-def test_current_crossing_is_not_a_permanent_stationary_follow_lead():
-  result = HondaRadarControl().update(**scene(tracks=[radar(speed=0.0, lateral_speed=-2.0)]))
-  assert evidence(result)['pathState'] == 'inPath'
-  assert evidence(result)['conflictEnd'] == pytest.approx(SWEPT_HALF_WIDTH / 2.0 + .25)
-  assert not evidence(result)['followQualified'] and not evidence(result)['stopQualified']
-  assert evidence(result)['brakeQualified']
+@pytest.mark.parametrize('speed,lateral_speed', [(0.0, -2.0), (4.0, .5), (4.0, -.5), (-2.01, 0.0)])
+def test_current_crossing_or_opposing_motion_cannot_become_an_ordinary_lead(speed, lateral_speed):
+  controller = HondaRadarControl()
+  result = controller.update(**scene(tracks=[radar(speed=speed, lateral_speed=lateral_speed)]))
+  assert not present_leads(result) and not controller._tracks
 
 
 def test_alignment_rotates_velocity_without_creating_ground_motion_from_ego_turn():
@@ -700,8 +754,8 @@ def test_can_received_after_camera_eof_remains_valid_when_projected_back_to_eof(
   result = HondaRadarControl().update(**values)
   assert evidence(result)['estimateMonoTime'] == START
   assert evidence(result)['positionMonoTime'] == START + 30_000_000
-  assert qualified_lead(result.objects[0], 'brake', now_ns=values['now_ns'])
-  assert qualified_lead(result.objects[0], 'brake')
+  assert qualified_lead(present_leads(result)[0], 'brake', now_ns=values['now_ns'])
+  assert qualified_lead(present_leads(result)[0], 'brake')
 
 
 def test_position_new_velocity_old_cannot_renew_velocity_authority():
@@ -714,15 +768,15 @@ def test_position_new_velocity_old_cannot_renew_velocity_authority():
   assert evidence(result)['source'] == 'predicted' and evidence(result)['velocityMonoTime'] == START
   assert evidence(result)['brakeQualified'] and not evidence(result)['departureQualified']
   assert evidence(result)['followGeometryMonoTime'] == 0
-  assert result.objects[0]['aLeadK'] == 0.0
-  assert qualified_lead(result.objects[0], 'brake', now_ns=values['now_ns'])
+  assert present_leads(result)[0]['aLeadK'] == 0.0
+  assert qualified_lead(present_leads(result)[0], 'brake', now_ns=values['now_ns'])
   coast = controller.update(**scene(5, tracks=[]))
-  assert coast.objects and evidence(coast)['coasting']
+  assert present_leads(coast) and evidence(coast)['coasting']
   assert evidence(coast)['followGeometryMonoTime'] == 0
   values = scene(6, tracks=[radar(6, velocityMonoTime=START, velocityGood=False, observations=3,
                                 previousPositionMonoTime=0, previousPositionSeq=0)])
   result = controller.update(**values)
-  assert not result.objects and result.degraded
+  assert not present_leads(result) and result.degraded
 
 
 def test_component_fallback_uses_only_confirmed_same_visual_velocity():
@@ -735,7 +789,7 @@ def test_component_fallback_uses_only_confirmed_same_visual_velocity():
   values['observation']['fusion']['leads'][0]['identityState'] = 'different'
   values['observation']['fusion']['tracks'][0].update(observations=3, velocityVariance=25.0)
   result = HondaRadarControl().update(**values)
-  assert len(result.objects) == 1 and evidence(result)['source'] == 'vision'
+  assert len(present_leads(result)) == 1 and evidence(result)['source'] == 'vision'
 
 
 def test_position_history_can_supply_supported_velocity_not_zero_substitution():
@@ -752,7 +806,7 @@ def test_position_history_can_supply_supported_velocity_not_zero_substitution():
 ])
 def test_invalid_components_do_not_become_zero_speed_or_fake_close_obstacles(changes):
   result = HondaRadarControl().update(**scene(tracks=[radar(**changes)], leads=[vision(distance=8.0)]))
-  assert all(not lead['radar'] for lead in result.objects)
+  assert all(not lead['radar'] for lead in present_leads(result))
   assert result.leads[0]['dRel'] == 8.0
 
 
@@ -764,16 +818,16 @@ def test_duplicate_publication_cannot_extend_raw_measurement_age_or_coast_foreve
   coast['now_ns'] = START + 250_000_000
   coast['model_ns'] = coast['model']['timestampEof'] = START + 240_000_000
   result = controller.update(**coast)
-  assert result.objects and evidence(result)['source'] == 'predicted'
-  assert result.degraded and not result.risk_unresolved
+  assert present_leads(result) and evidence(result)['source'] == 'predicted'
+  assert result.degraded
   assert evidence(result)['positionMonoTime'] == START
   from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
-  assert qualified_lead(result.objects[0], 'brake', now_ns=coast['now_ns'])
+  assert qualified_lead(present_leads(result)[0], 'brake', now_ns=coast['now_ns'])
   coast['now_ns'] = START + COAST_NS + 1
   coast['model_ns'] = coast['model']['timestampEof'] = START + COAST_NS
   result = controller.update(**coast)
-  assert not result.objects and result.degraded and not result.cleared
-  assert result.risk_unresolved
+  assert not present_leads(result) and result.degraded and not result.cleared
+  assert not controller._tracks
 
 
 def test_same_sequence_changed_payload_is_rejected_and_new_sequence_recovers():
@@ -784,11 +838,11 @@ def test_same_sequence_changed_payload_is_rejected_and_new_sequence_recovers():
   changed['now_ns'] += 1
   changed['observation']['fusion']['tracks'][0]['dRel'] = 18.0
   result = controller.update(**changed)
-  assert not result.objects and result.reason == 'publicationOrder' and result.degraded
-  assert result.risk_unresolved
+  assert not present_leads(result) and result.reason == 'publicationOrder' and result.degraded
+  assert not controller._tracks
   restored = controller.update(**scene(1))
-  assert restored.healthy and not restored.degraded and restored.objects
-  assert not restored.risk_unresolved
+  assert restored.healthy and not restored.degraded and present_leads(restored)
+  assert evidence(restored)['positionMonoTime'] == START + STEP
 
 
 def test_out_of_order_source_rejects_without_giving_old_identity_new_lifetime():
@@ -798,7 +852,7 @@ def test_out_of_order_source_rejects_without_giving_old_identity_new_lifetime():
   old['now_ns'] = START + STEP + 3_000_000
   old['model_ns'] = old['model']['timestampEof'] = START + STEP
   result = controller.update(**old)
-  assert result.reason == 'publicationOrder' and not result.objects
+  assert result.reason == 'publicationOrder' and not present_leads(result)
   assert not result.cleared
 
 
@@ -808,29 +862,28 @@ def test_session_and_reset_clear_identity_before_accepting_new_source():
   restarted = scene(1)
   restarted['observation']['sessionId'] = 'new-session'
   result = controller.update(**restarted)
-  assert result.reason == 'observerReset' and not result.objects and not result.cleared
-  assert result.risk_unresolved
+  assert result.reason == 'observerReset' and not present_leads(result) and not result.cleared
+  assert not result.healthy and result.degraded and not controller._tracks
   recovered = scene(2)
   recovered['observation']['sessionId'] = 'new-session'
   result = controller.update(**recovered)
-  assert result.objects and evidence(result)['sessionId'] == 'new-session' and result.degraded
-  assert result.risk_unresolved
-  # An explicit adapter/configuration reset starts a new perception lifecycle.
-  # Driver longActive edges retain this history; observer restart and TTL do
-  # not prove that the old obstacle departed.
+  assert present_leads(result) and evidence(result)['sessionId'] == 'new-session'
+  assert result.healthy and not result.degraded
+  assert evidence(result)['positionMonoTime'] == START + 2 * STEP
+  # An explicit adapter/configuration reset also drops the active identity.
   controller.reset()
   reengaged = scene(3)
   reengaged['observation']['sessionId'] = 'new-session'
   result = controller.update(**reengaged)
-  assert result.objects and result.healthy and not result.degraded
-  assert not result.risk_unresolved
+  assert present_leads(result) and result.healthy and not result.degraded
+  assert evidence(result)['positionMonoTime'] == START + 3 * STEP
 
 
 def test_slot_generation_change_preserves_physical_track_without_reconfirmation():
   controller = HondaRadarControl()
   controller.update(**scene())
   result = controller.update(**scene(1, tracks=[radar(1, generation=9, slot=2)]))
-  assert result.objects and not result.degraded
+  assert present_leads(result) and not result.degraded
   assert evidence(result)['trackId'] == 1 and evidence(result)['generation'] == 9
   assert evidence(result)['followQualified']
 
@@ -839,15 +892,23 @@ def test_explicit_invalid_position_revokes_instead_of_coasting_corrupted_state()
   controller = HondaRadarControl()
   controller.update(**scene())
   result = controller.update(**scene(1, tracks=[radar(1, active=False, lastInvalidReason='positionInnovation')]))
-  assert not result.objects and result.degraded and not result.cleared
+  assert not present_leads(result) and result.degraded and not result.cleared
 
 
-def test_near_lost_target_not_cleared_by_an_unrelated_far_vehicle():
+@pytest.mark.parametrize('frame,coasting', [(1, True), (7, False)])
+def test_missing_near_target_has_only_bounded_coast_beside_new_far_vehicle(frame, coasting):
   controller = HondaRadarControl()
   controller.update(**scene(tracks=[radar(distance=10.0)]))
-  later = scene(7, tracks=[radar(7, identifier=2, oem=8, distance=60.0)])
+  later = scene(frame, tracks=[radar(frame, identifier=2, oem=8, distance=60.0)])
   result = controller.update(**later)
-  assert result.objects and result.degraded and not result.cleared
+  assert result.healthy and result.degraded is coasting and not result.cleared
+  assert {lead['evidence']['trackId'] for lead in present_leads(result)} == ({1, 2} if coasting else {2})
+  assert set(controller._tracks) == ({1, 2} if coasting else {2})
+  if coasting:
+    near = next(lead for lead in present_leads(result) if lead['evidence']['trackId'] == 1)
+    assert near['evidence']['coasting'] and near['evidence']['brakeQualified']
+    assert not near['evidence']['departureQualified']
+    assert near['evidence']['positionMonoTime'] == START
 
 
 @pytest.mark.parametrize('speed', [0.0, 10.0])
@@ -855,61 +916,76 @@ def test_far_irrelevant_target_loss_does_not_latch_acceleration_block(speed):
   controller = HondaRadarControl()
   controller.update(**scene(tracks=[radar(distance=100.0, speed=speed)]))
   result = controller.update(**scene(7, tracks=[]))
-  assert result.healthy and not result.degraded and not result.objects
-  assert not result.risk_unresolved
+  assert result.healthy and not result.degraded and not present_leads(result)
+  assert not controller._tracks
   assert not result.cleared  # no invented positive claim that the road cleared
 
 
-def test_lost_same_track_can_clear_with_fresh_out_of_path_even_after_memory_expiry():
+@pytest.mark.parametrize('lateral,clears', [(1.7, False), (4.0, True)])
+def test_expired_track_returning_with_fresh_outside_geometry_can_clear_same_identity(lateral, clears):
   controller = HondaRadarControl()
   controller.update(**scene())
   missing = controller.update(**scene(7, tracks=[]))
-  assert missing.degraded and missing.risk_unresolved
-  cleared = controller.update(**scene(8, tracks=[radar(8, lateral=4.0)]))
-  assert cleared.healthy and not cleared.degraded and cleared.cleared == (1,)
-  assert not cleared.risk_unresolved
+  assert missing.healthy and not missing.degraded and not present_leads(missing)
+  assert not controller._tracks
+  outside = controller.update(**scene(8, tracks=[radar(8, lateral=lateral)]))
+  assert outside.healthy and not outside.degraded and outside.session_id == 'control-fixture'
+  assert outside.cleared == ((1,) if clears else ())
+  assert not present_leads(outside) and not controller._tracks
 
 
-def test_unresolved_risk_survives_fresh_empty_packets_until_same_identity_recovers():
+def test_fresh_empty_packets_expire_missing_target_without_latching_risk():
   controller = HondaRadarControl()
   controller.update(**scene())
+  coast = controller.update(**scene(1, tracks=[]))
+  assert coast.healthy and coast.degraded and evidence(coast)['coasting']
+  assert evidence(coast)['positionMonoTime'] == START
   for frame in (7, 8, 100, 500):
     result = controller.update(**scene(frame, tracks=[]))
-    assert result.healthy and result.degraded and result.risk_unresolved
-    assert not result.objects and not result.cleared
+    assert result.healthy and not result.degraded
+    assert not present_leads(result) and not result.cleared
+    assert not controller._tracks
   recovered = controller.update(**scene(501))
-  assert recovered.objects and not recovered.degraded and not recovered.risk_unresolved
+  assert present_leads(recovered) and not recovered.degraded
+  assert evidence(recovered)['trackId'] == 1 and not evidence(recovered)['coasting']
+  assert evidence(recovered)['positionMonoTime'] == START + 501 * STEP
 
 
-def test_unresolved_loss_capacity_overflow_stays_explicit_until_lifecycle_reset():
+def test_distinct_expired_tracks_do_not_accumulate_or_latch_capacity_fault():
   controller = HondaRadarControl()
   tracks = [radar(identifier=i, oem=i, distance=10.0) for i in range(1, MAX_TRACKS + 1)]
   controller.update(**scene(tracks=tracks))
   missing = controller.update(**scene(7, tracks=[]))
-  assert missing.risk_unresolved and len(controller._lost_tracks) == MAX_TRACKS
-  controller.update(**scene(8, tracks=[radar(8, identifier=MAX_TRACKS + 1, distance=10.0)]))
-  overflow = controller.update(**scene(15, tracks=[]))
-  assert overflow.risk_unresolved and controller._unresolved_loss
+  assert missing.healthy and not missing.degraded and not present_leads(missing)
+  assert not controller._tracks
+  current = controller.update(**scene(8, tracks=[radar(8, identifier=MAX_TRACKS + 1, distance=10.0)]))
+  assert current.healthy and not current.degraded and len(present_leads(current)) == 1
+  assert set(controller._tracks) == {MAX_TRACKS + 1}
+  expired = controller.update(**scene(15, tracks=[]))
+  assert expired.healthy and not expired.degraded and not present_leads(expired)
+  assert not controller._tracks
   recovered = [radar(16, identifier=i, oem=i, distance=10.0) for i in range(1, MAX_TRACKS + 1)]
   result = controller.update(**scene(16, tracks=recovered))
-  assert not controller._lost_tracks and result.risk_unresolved and result.degraded
-  controller.reset()
-  result = controller.update(**scene(17, tracks=[]))
-  assert not result.risk_unresolved
+  assert result.healthy and not result.degraded and len(present_leads(result)) == 2
+  assert set(controller._tracks) == {1, 2}
 
 
 @pytest.mark.parametrize('boundary', ['disabled', 'core_invalid'])
-def test_producer_reset_early_returns_cannot_republish_previous_loss(boundary):
+def test_producer_reset_early_returns_drop_active_coast(boundary):
   controller = HondaRadarControl()
   controller.update(**scene())
-  assert controller.update(**scene(7, tracks=[])).risk_unresolved
-  values = scene(8, tracks=[])
+  coast = controller.update(**scene(1, tracks=[]))
+  assert evidence(coast)['coasting'] and set(controller._tracks) == {1}
+  values = scene(2, tracks=[])
   if boundary == 'disabled':
     values['enabled'] = False
   else:
     values['v_ego'] = math.nan
   result = controller.update(**values)
-  assert not result.risk_unresolved and not controller._lost_tracks and not controller._unresolved_loss
+  assert not present_leads(result) and not result.healthy
+  assert result.degraded is (boundary == 'core_invalid')
+  assert result.reason == ('disabled' if boundary == 'disabled' else 'coreInputInvalid')
+  assert not controller._tracks and not controller._cleared and controller._session == ''
 
 
 def test_same_confirmed_visual_stream_recovers_from_radar_loss_without_timeout():
@@ -921,11 +997,10 @@ def test_same_confirmed_visual_stream_recovers_from_radar_loss_without_timeout()
     values['observation_valid'] = False
     result = controller.update(**values)
     assert not result.healthy and not result.degraded
-    assert not result.risk_unresolved
-    assert len(result.objects) == 1 and evidence(result)['reason'] == 'visionFallback'
+    assert len(present_leads(result)) == 1 and evidence(result)['reason'] == 'visionFallback'
     assert evidence(result)['source'] == 'fused' and evidence(result)['trackId'] == 1
-    assert result.objects[0]['dRel'] == 20.0 and not result.objects[0]['radar']
-    assert qualified_lead(result.objects[0], 'brake', now_ns=values['now_ns'])
+    assert present_leads(result)[0]['dRel'] == 20.0 and not present_leads(result)[0]['radar']
+    assert qualified_lead(present_leads(result)[0], 'brake', now_ns=values['now_ns'])
 
 
 def test_different_far_visual_stream_cannot_claim_recovery_of_missing_near_radar():
@@ -935,7 +1010,7 @@ def test_different_far_visual_stream_cannot_claim_recovery_of_missing_near_radar
   changed['observation_valid'] = False
   result = controller.update(**changed)
   assert result.degraded
-  assert all(lead['evidence']['reason'] != 'visionFallback' for lead in result.objects)
+  assert all(lead['evidence']['reason'] != 'visionFallback' for lead in present_leads(result))
 
 
 def test_disabled_returns_exact_original_visual_fallback_and_clears_state():
@@ -944,52 +1019,144 @@ def test_disabled_returns_exact_original_visual_fallback_and_clears_state():
   values = scene(1, leads=[vision(distance=8.0), {'present': False}])
   values['enabled'] = False
   result = controller.update(**values)
-  assert result.leads == tuple(values['vision_leads']) and not result.objects and not result.degraded
+  assert result.leads == tuple(values['vision_leads']) and result.objects == [] and not result.degraded
   assert result.reason == 'disabled' and not result.cleared
   assert not controller._tracks
 
 
 def test_healthy_no_target_is_distinct_from_sensor_fault():
   empty = HondaRadarControl().update(**scene(tracks=[]))
-  assert empty.healthy and not empty.degraded and not empty.objects
+  assert empty.healthy and not empty.degraded and not present_leads(empty)
   assert empty.reason == 'noQualifiedObjects'
   failed = scene(tracks=[])
   failed['observation_valid'] = False
   failure = HondaRadarControl().update(**failed)
   assert not failure.healthy and failure.degraded and failure.reason == 'observationStale'
-  assert not empty.risk_unresolved and not failure.risk_unresolved
 
 
-def test_complete_collection_preserves_32_radar_objects_and_two_visual_candidates():
+def test_only_the_two_selected_ordinary_leads_are_published_and_can_coast():
+  controller = HondaRadarControl()
   tracks = [radar(identifier=i, oem=i, distance=40.0 + i) for i in range(1, 33)]
-  result = HondaRadarControl().update(**scene(tracks=tracks, leads=[vision(distance=7.0), vision(distance=9.0)]))
-  assert len(result.objects) == MAX_OBJECTS and result.healthy and not result.degraded
-  assert result.leads[0]['dRel'] == 7.0
-  assert {lead['evidence']['trackId'] for lead in result.objects if lead['radar']} == set(range(1, 33))
+  result = controller.update(**scene(tracks=tracks, leads=[vision(distance=7.0), vision(distance=9.0)]))
+  assert result.healthy and not result.degraded
+  assert [lead['dRel'] for lead in present_leads(result)] == [7.0, 9.0]
+  assert not controller._tracks
+  missing = controller.update(**scene(1, tracks=[]))
+  assert not present_leads(missing) and not controller._tracks
 
 
-def test_capacity_overlap_is_explicit_failure_not_unbounded_or_silent_truncation():
+def test_previously_unselected_third_lead_cannot_first_enter_via_component_coast():
+  controller = HondaRadarControl()
+  initial = [radar(identifier=i, oem=i, distance=10.0 * i) for i in range(1, 4)]
+  result = controller.update(**scene(tracks=initial))
+  assert [lead['evidence']['trackId'] for lead in present_leads(result)] == [1, 2]
+  assert 3 not in controller._tracks
+  # The two selected targets leave; the third has only a predicted position.
+  tracks = [radar(1, identifier=i, oem=i, distance=10.0 * i, lateral=4.0) for i in (1, 2)]
+  tracks.append(radar(1, identifier=3, oem=3, distance=30.0, coasting=True))
+  result = controller.update(**scene(1, tracks=tracks))
+  assert not present_leads(result) and 3 not in controller._tracks
+
+
+@pytest.mark.parametrize('visual_fallback', [False, True])
+def test_unselected_candidate_capacity_cannot_degrade_ordinary_follow_leads(visual_fallback):
   controller = HondaRadarControl()
   old = [radar(identifier=i, oem=i, distance=40.0 + i) for i in range(1, 33)]
-  controller.update(**scene(tracks=old))
+  visual = [vision(distance=41.0)] if visual_fallback else None
+  controller.update(**scene(tracks=old, leads=visual, bindings=[binding()] if visual_fallback else None))
+  assert len(controller._tracks) <= 2
   new = [radar(1, identifier=i + 32, oem=i, distance=40.0 + i) for i in range(1, 33)]
-  result = controller.update(**scene(1, tracks=new))
-  assert len(result.objects) <= MAX_OBJECTS and len(controller._tracks) <= 32
-  assert not result.healthy and result.degraded and result.reason == 'objectCapacity'
+  result = controller.update(**scene(1, tracks=new, leads=visual))
+  assert len(present_leads(result)) == 2 and len(controller._tracks) <= 2
+  assert result.healthy and not result.degraded
+  assert result.leads[0]['evidence']['followQualified'] and result.leads[0]['evidence']['departureQualified']
+  current = [radar(7, identifier=i + 32, oem=i, distance=40.0 + i) for i in range(1, 33)]
+  recovered = controller.update(**scene(7, tracks=current))
+  assert recovered.healthy and not recovered.degraded and len(present_leads(recovered)) == 2
+  assert set(controller._tracks) == {33, 34}
 
 
-def test_formal_cereal_schema_accepts_full_object_contract():
+@pytest.mark.parametrize('damage', ['lateral_nan', 'lateral_high', 'speed_nan', 'negative_projection',
+                                   'position_nan', 'bad_oem', 'bad_sequence'])
+def test_bad_unselected_side_track_cannot_change_ordinary_departure_or_health(damage):
+  values = scene(tracks=[radar(distance=5.0, speed=2.0)], ego=0.0)
+  values['observation']['fusion']['modelTimestampEof'] = START - 50_000_000
+  baseline = HondaRadarControl().update(**copy.deepcopy(values))
+  extra = radar(identifier=2, oem=8, distance=20.0, lateral=4.0)
+  if damage == 'lateral_nan':
+    extra['lateralSpeed'] = math.nan
+  elif damage == 'lateral_high':
+    extra['lateralSpeed'] = 31.0
+  elif damage == 'speed_nan':
+    extra['groundSpeed'] = math.nan
+  elif damage == 'negative_projection':
+    extra.update(dRel=.1, groundSpeed=-35.0)
+  elif damage == 'position_nan':
+    extra['dRel'] = math.nan
+  elif damage == 'bad_oem':
+    extra['oemTrackId'] = 0
+  else:
+    extra['positionSeq'] = 0
+  values['observation']['fusion']['tracks'].append(extra)
+  controller = HondaRadarControl()
+  result = controller.update(**values)
+  assert result.healthy and not result.degraded and result.leads == baseline.leads
+  assert evidence(result)['departureQualified'] and evidence(result)['followQualified']
+  assert set(controller._tracks) == {1}
+
+
+@pytest.mark.parametrize('damage', ['bad_order', 'expired', 'invalid_velocity'])
+def test_unselected_third_follow_candidate_cannot_retain_a_health_obligation(damage):
+  def run(extra):
+    controller = HondaRadarControl()
+    for frame in (0, 1):
+      tracks = [radar(frame, identifier=i, oem=i, distance=3.0 + i, speed=2.0) for i in (1, 2)]
+      if extra:
+        third = radar(frame, identifier=3, oem=3, distance=10.0, speed=2.0)
+        if frame:
+          if damage == 'bad_order':
+            third.update(positionSeq=9, positionMonoTime=START - STEP)
+          elif damage == 'expired':
+            third.update(active=False, lastInvalidReason='expired')
+          else:
+            third.update(lateralSpeed=math.nan)
+        tracks.append(third)
+      result = controller.update(**scene(frame, tracks=tracks, ego=0.0))
+      assert set(controller._tracks) == {1, 2}
+    return result
+  baseline, result = run(False), run(True)
+  assert result.healthy and not result.degraded and result.leads == baseline.leads
+  assert all(lead['evidence']['departureQualified'] for lead in present_leads(result))
+
+
+@pytest.mark.parametrize('fault', ['overflow', 'duplicate_identity', 'stale_observation'])
+def test_shared_observer_failures_still_degrade_the_ordinary_leads(fault):
+  values = scene(tracks=[radar(distance=5.0, speed=2.0)], ego=0.0)
+  if fault == 'overflow':
+    values['observation']['fusion']['tracks'] = [radar(identifier=i, oem=i) for i in range(1, MAX_TRACKS + 2)]
+  elif fault == 'duplicate_identity':
+    values['observation']['fusion']['tracks'].append(radar(identifier=1, oem=8))
+  else:
+    values['observation_valid'] = False
+  result = HondaRadarControl().update(**values)
+  assert not result.healthy and result.degraded and not present_leads(result)
+
+
+def test_formal_cereal_schema_publishes_ordinary_leads_and_no_extra_objects():
   from openpilot.cereal import log
   result = HondaRadarControl().update(**scene())
   state = log.RadarState.new_message()
   state.leadOne, state.leadTwo, state.radarObjects = result.leads[0], result.leads[1], result.objects
-  assert state.radarObjects[0].present
-  assert str(state.radarObjects[0].evidence.source) == 'radar'
-  assert state.radarObjects[0].evidence.conflictEnd == 10.0
+  assert state.leadOne.present and len(state.radarObjects) == 0
+  assert str(state.leadOne.evidence.source) == 'radar'
+  assert state.leadOne.evidence.conflictStart == 0.0 and state.leadOne.evidence.conflictEnd == HORIZON
+  assert state.leadOne.evidence.conflictSupportVersion == 0 and not state.leadOne.evidence.physicalConflictValid
 
 
-def test_retained_loss_capnp_wire_and_old_payload_defaults():
+def test_legacy_loss_wire_fields_remain_readable_and_default_false():
   from openpilot.cereal import messaging
+  # Old recordings may carry True; current producers leave these schema
+  # fields at False instead of retaining a loss state to populate them.
   for service, field in (('radarState', 'fusionRiskUnresolved'), ('longitudinalPlan', 'radarRiskUnresolved')):
     event = messaging.new_message(service, valid=True)
     assert not getattr(getattr(event, service), field)
@@ -1015,7 +1182,7 @@ def test_actual_shadow_producer_exports_qualified_acceleration_for_formal_adapte
                                observation_ns=stamp + 2_000_000, observation_valid=True, model=inputs['modelV2'],
                                model_ns=stamp, v_ego=10.0, vision_leads=[{'present': False}, {'present': False}])
   assert fusion['tracks'][0]['accelerationGood']
-  assert result.objects and evidence(result)['accelerationValid']
+  assert present_leads(result) and evidence(result)['accelerationValid']
   assert evidence(result)['source'] == 'radar' and result.leads[0]['modelProb'] == 0.0
 
 
@@ -1188,8 +1355,10 @@ _PILOT_SIDE_REFLECTIONS = [{'sample': 0,
 
 
 @pytest.mark.parametrize('sample', _PILOT_SIDE_REFLECTIONS, ids=lambda row: str(row['frame']))
-def test_recorded_side_reflection_uses_future_inner_interval_even_with_favorable_quality(sample):
+def test_recorded_side_reflection_has_no_control_even_with_favorable_motion_quality(sample):
   points = tuple((x - 1.52, -y) for x, y in zip(sample['path_x'], sample['path_y'], strict=True))
+  current = _Corridor(points, 'modelPath').relation(sample['x'], sample['y'], sample['vx'], 0.0)
+  assert abs(current.offset) > SWEPT_HALF_WIDTH
   # Invert the old producer's reported normal speed using its nearest segment;
   # no additional velocity samples or arbitrary zero-velocity prior are used.
   nearest = None
@@ -1214,12 +1383,5 @@ def test_recorded_side_reflection_uses_future_inner_interval_even_with_favorable
   values['observation']['fusion'].update(modelMonoTime=sample['model_ns'], modelTimestampEof=sample['eof_ns'],
                                          egoMonoTime=sample['model_ns'])
   result = HondaRadarControl().update(**values)
-  claim = evidence(result)
-  assert result.healthy and not result.degraded and len(result.objects) == 1
-  assert claim['trackId'] == 4 and claim['pathState'] == 'entering' and claim['brakeQualified']
-  # Widening the sweep advances entry, but the current reflection remains
-  # outside it and must only supply a future occupancy window.
-  assert abs(claim['pathOffset']) > SWEPT_HALF_WIDTH
-  assert 0.0 < claim['conflictStart'] < claim['conflictEnd'] <= HORIZON
-  assert not claim['followQualified'] and not claim['stopQualified'] and not claim['departureQualified']
-  assert not result.leads[0]['present']
+  assert result.healthy and not result.degraded and not present_leads(result)
+  assert not result.leads[0]['present'] and not result.leads[1]['present']

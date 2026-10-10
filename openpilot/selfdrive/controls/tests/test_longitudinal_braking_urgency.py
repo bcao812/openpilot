@@ -14,10 +14,12 @@ from openpilot.selfdrive.controls.tests.test_longitudinal_lead_state import clos
 from openpilot.selfdrive.controls.tests.test_lead_qualification import NOW, formal_lead
 
 
-def test_independent_third_radar_target_can_request_braking_urgency():
+def test_braking_urgency_requires_a_formal_lead_and_ignores_extra_radar_targets():
   far = formal_lead(dRel=80.0, vLead=20.0, vRel=0.0, evidence={'trackId': 8})
   danger = formal_lead(dRel=44.0, vLead=10.0, vRel=-10.0, aLeadK=-1.5)
   radar = SimpleNamespace(fusionActive=True, radarObjects=[far, danger], leadOne=far, leadTwo=SimpleNamespace(present=False))
+  assert get_lead_braking_urgency(20.0, -1.0, radar, .5, now_ns=NOW) == 0.0
+  radar.leadTwo = danger
   assert get_lead_braking_urgency(20.0, -1.0, radar, .5, now_ns=NOW) == 1.0
   # Selecting the distant display slot must not borrow the other car's response permission.
   assert get_lead_braking_urgency(20.0, -1.0, radar, .5, lead_index=0, now_ns=NOW) == 0.0

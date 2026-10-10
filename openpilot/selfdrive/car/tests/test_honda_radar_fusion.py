@@ -922,8 +922,8 @@ class TestHondaRadarFusion(unittest.TestCase):
   def test_curved_corridor_and_approaching_side_target(self):
     self.assertEqual(path_relation(18.48, 4, 10, 0, [0, 10, 20, 30], [0, -1, -4, -9])[0], 'inPath')
     relation, _, entry = path_relation(20, 4, 10, -2, [0, 10, 30, 60], [0, 0, 0, 0])
-    self.assertEqual(relation, 'entering')
-    self.assertAlmostEqual(entry, 1.1)
+    self.assertEqual(relation, 'outOfPath')
+    self.assertEqual(entry, 0.0)
     self.assertEqual(path_relation(80, 0, 10, 0, [0, 5, 10], [0, 0, 0])[0], 'unknown')
     self.assertEqual(path_relation(10, 0, 10, 0, [0, float('nan')], [0, 0])[0], 'unknown')
 
@@ -931,10 +931,10 @@ class TestHondaRadarFusion(unittest.TestCase):
     straight = ([0.0, 10.0, 20.0, 30.0], [0.0] * 4)
     cases = ((1.8, 0.0, 'unknown', 'inPath'), (math.nextafter(1.8, math.inf), 0.0, 'unknown', 'outOfPath'),
              (2.3, 0.0, 'inPath', 'inPath'), (math.nextafter(2.3, math.inf), 0.0, 'inPath', 'outOfPath'),
-             (2.0, -.5, 'unknown', 'entering'), (2.0, -.5, 'inPath', 'inPath'),
-             (1.9, -.2, 'unknown', 'outOfPath'), (1.9, math.nextafter(-.2, -math.inf), 'unknown', 'entering'),
-             (2.8, -.5, 'unknown', 'entering'), (math.nextafter(2.8, math.inf), -.5, 'unknown', 'outOfPath'),
-             (-4.0, 2.0, 'unknown', 'entering'))
+             (2.0, -.5, 'unknown', 'outOfPath'), (2.0, -.5, 'inPath', 'inPath'),
+             (1.9, -.2, 'unknown', 'outOfPath'), (1.9, math.nextafter(-.2, -math.inf), 'unknown', 'outOfPath'),
+             (2.8, -.5, 'unknown', 'outOfPath'), (math.nextafter(2.8, math.inf), -.5, 'unknown', 'outOfPath'),
+             (-4.0, 2.0, 'unknown', 'outOfPath'))
     for lateral, lateral_speed, previous, expected in cases:
       with self.subTest(lateral=lateral, lateral_speed=lateral_speed, previous=previous):
         self.assertEqual(path_relation(18.48, lateral, 10.0, lateral_speed, *straight, previous)[0], expected)

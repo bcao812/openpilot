@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS, _StructSnapshot, _finite, _integer,
-  control_leads, lead_identity, qualified_lead,
+  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS, _ControlLeadView, _StructSnapshot,
+  _finite, _integer, _qualified_lead_evidence, control_leads, lead_identity, qualified_lead, retired_future_entry,
 )
 
 
@@ -177,10 +177,22 @@ def test_new_can_sample_may_be_projected_back_to_the_common_camera_time():
   ('positionValid', False), ('velocityValid', False), ('brakeQualified', False),
   ('positionStd', 0.0), ('positionStd', float('nan')), ('velocityStd', float('inf')),
   ('pathState', 'unknown'), ('pathState', 'outOfPath'), ('pathSource', ''),
-  ('conflictStart', -.1), ('conflictEnd', 0.0), ('lateralSpeed', float('nan')),
+  ('pathOffset', float('nan')), ('pathSource', True),
 ])
 def test_malformed_evidence_cannot_grant_braking(field, value):
   assert not qualified_lead(formal_lead(evidence={field: value}), 'brake', now_ns=NOW)
+
+
+@pytest.mark.parametrize('field,value', [
+  ('conflictEnd', 0.0), ('conflictEnd', float('nan')), ('lateralSpeed', float('nan')),
+  ('conflictSupportVersion', 2), ('conflictSupportedEnd', float('nan')),
+  ('physicalConflictValid', True), ('physicalConflictEnd', -1.0),
+])
+def test_retired_occupancy_fields_do_not_change_a_current_formal_leads_authority(field, value):
+  lead = formal_lead(evidence={field: value})
+  assert qualified_lead(lead, 'brake', now_ns=NOW)
+  assert qualified_lead(lead, 'fcw', now_ns=NOW)
+  assert not qualified_lead(lead, 'brake', now_ns=NOW + MAX_MEASUREMENT_AGE_NS + 1)
 
 
 @pytest.mark.parametrize('field,value', [
@@ -209,15 +221,72 @@ def test_short_prediction_can_only_retain_braking_from_original_measurement_age(
   assert not qualified_lead(lead, 'brake', now_ns=NOW + 1)
 
 
-def test_entering_object_only_gets_risk_authority_during_its_occupancy():
-  lead = formal_lead(evidence={'pathState': 'entering', 'conflictStart': .05, 'conflictEnd': .1})
+@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('path_state,start', [('entering', 0.0), ('entering', .05), ('inPath', .05)])
+def test_future_entry_never_grants_a_control_or_fcw_purpose(source, path_state, start):
+  lead = formal_lead(source=source, evidence={'pathState': path_state, 'conflictStart': start, 'conflictEnd': .1})
+  assert _qualified_lead_evidence(lead, 'brake', now_ns=NOW)
+  assert retired_future_entry(lead, now_ns=NOW)
+  for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw', 'caution'):
+    for now in (NOW, NOW + 100_000_000, NOW + 200_000_001):
+      for active_window in (True, False):
+        assert not qualified_lead(lead, purpose, now_ns=now, require_active_window=active_window)
+
+
+@pytest.mark.parametrize('source', ['vision', 'legacy'])
+def test_future_entry_retirement_does_not_change_visual_or_legacy_qualification(source):
+  lead = formal_lead(source='vision', evidence={'pathState': 'entering', 'conflictStart': .05, 'conflictEnd': .1})
+  if source == 'legacy':
+    lead.evidence.version = 0
+  assert not retired_future_entry(lead, now_ns=NOW)
   assert qualified_lead(lead, 'brake', now_ns=NOW)
   assert qualified_lead(lead, 'fcw', now_ns=NOW)
-  for purpose in ('follow', 'stop', 'departure'):
-    assert not qualified_lead(lead, purpose, now_ns=NOW)
-  assert not qualified_lead(lead, 'brake', now_ns=NOW + 100_000_000)
-  assert qualified_lead(lead, 'brake', now_ns=NOW + 100_000_000, require_active_window=False)
-  assert not qualified_lead(lead, 'brake', now_ns=NOW + 200_000_001, require_active_window=False)
+
+
+@pytest.mark.parametrize('field,value', [
+  ('aLeadTau', -.1), ('aLeadTau', float('nan')), ('dRel', float('nan')),
+  ('conflictEnd', 11.0), ('conflictEnd', float('inf')), ('conflictStart', float('nan')),
+  ('positionValid', False), ('positionMonoTime', NOW - MAX_MEASUREMENT_AGE_NS - 1),
+  ('positionMonoTime', NOW + 1), ('modelMonoTime', NOW + 1), ('estimateMonoTime', NOW - 250_000_001),
+  ('physicalConflictValid', 1), ('physicalConflictStart', float('nan')), ('physicalConflictEnd', -.1),
+])
+def test_future_entry_label_does_not_hide_invalid_projection_evidence(field, value):
+  lead = formal_lead(evidence={'pathState': 'entering', 'conflictStart': .05, 'conflictEnd': .1,
+                               'physicalConflictValid': True, 'physicalConflictStart': .05, 'physicalConflictEnd': .1})
+  setattr(lead if field in ('aLeadTau', 'dRel') else lead.evidence, field, value)
+  radar = SimpleNamespace(fusionActive=True, radarObjects=[lead], leadOne=lead, leadTwo=SimpleNamespace(present=False))
+  assert not retired_future_entry(lead, now_ns=NOW)
+  assert control_leads(radar, now_ns=NOW) == (lead,)
+  assert not qualified_lead(lead, 'brake', now_ns=NOW)
+  assert not qualified_lead(lead, 'fcw', now_ns=NOW)
+
+
+@pytest.mark.parametrize('path_state,brake', [('inPath', True), ('entering', True), ('entering', False)])
+def test_future_entry_retirement_keeps_mixed_roles_and_nonedge_caution_visible(path_state, brake):
+  lead = caution_lead(evidence={'pathState': path_state, 'conflictStart': .5, 'brakeQualified': brake})
+  snapshot = _StructSnapshot({**vars(lead), 'evidence': vars(lead.evidence).copy()})
+  for candidate in (lead, snapshot):
+    radar = SimpleNamespace(fusionActive=True, radarObjects=[candidate], leadOne=candidate, leadTwo=SimpleNamespace(present=False))
+    assert not retired_future_entry(candidate, now_ns=NOW)
+    assert control_leads(radar, now_ns=NOW) == (candidate,)
+    assert not qualified_lead(candidate, 'caution', 0.0, now_ns=NOW)
+    assert not qualified_lead(candidate, 'brake', 0.0, now_ns=NOW)
+
+
+def test_cached_collection_cannot_add_control_objects_or_override_the_formal_slots():
+  class Collection(_ControlLeadView):
+    __slots__ = ('_control_objects', 'leadOne', 'leadTwo')
+
+  current = formal_lead(evidence={'trackId': 8})
+  future = formal_lead(evidence={'pathState': 'entering', 'conflictStart': .5})
+  radar = Collection()
+  radar._control_objects = tuple(_StructSnapshot({**vars(lead), 'evidence': vars(lead.evidence).copy()}) for lead in (future, current))
+  assert control_leads(radar) == ()
+  radar.leadOne, radar.leadTwo = current, SimpleNamespace(present=False)
+  for purpose in (None, 'brake', 'fcw'):
+    assert control_leads(radar, purpose, now_ns=NOW) == (current,)
+  radar.leadOne = future
+  assert control_leads(radar) == ()
 
 
 def test_departure_flag_needs_fresh_forward_motion_and_is_not_an_identity_proof():
@@ -251,22 +320,23 @@ def test_physical_identity_survives_slot_generation_but_not_restart_or_new_track
   assert lead_identity(formal_lead(source='vision')) is None
 
 
-def test_full_risk_collection_preserves_independent_targets_and_display_fallback():
+def test_raw_risk_collection_cannot_add_targets_to_the_two_formal_slots():
   far = formal_lead(dRel=70.0)
   nearby = formal_lead(dRel=10.0, evidence={'trackId': 8})
   crossing = formal_lead(dRel=25.0, evidence={'trackId': 9, 'pathState': 'entering'})
   visual = formal_lead(source='vision', dRel=8.0)
   radar = SimpleNamespace(fusionActive=True, radarObjects=[far, nearby, crossing, visual], leadOne=far, leadTwo=visual)
-  assert control_leads(radar, 'brake', now_ns=NOW) == (far, nearby, crossing, visual)
-  assert control_leads(radar, 'stop', now_ns=NOW) == (far, nearby, visual)
+  assert control_leads(radar) == (far, visual)
+  assert control_leads(radar, 'brake', now_ns=NOW) == (far, visual)
+  assert control_leads(radar, 'stop', now_ns=NOW) == (far, visual)
   radar.fusionActive = False
   assert control_leads(radar) == (far, visual)
 
 
-def test_equal_ranges_do_not_merge_distinct_tracks_and_oversize_is_not_silently_cut():
+def test_oversize_raw_collection_does_not_replace_distinct_formal_leads():
   leads = [formal_lead(evidence={'trackId': index + 1}) for index in range(MAX_CONTROL_OBJECTS + 1)]
   radar = SimpleNamespace(fusionActive=True, radarObjects=leads, leadOne=leads[0], leadTwo=leads[1])
-  assert control_leads(radar) == tuple(leads)
+  assert control_leads(radar) == tuple(leads[:2])
 
 
 def caution_lead(*, now_ns=NOW, evidence=None, **changes):
@@ -277,9 +347,9 @@ def caution_lead(*, now_ns=NOW, evidence=None, **changes):
   return formal_lead(now_ns=now_ns, evidence=flags, **changes)
 
 
-def test_fresh_edge_caution_never_grants_braking_stopping_departure_or_fcw():
+def test_retired_edge_caution_never_grants_any_control_purpose():
   lead = caution_lead(vRel=-10.0, vLead=0.0)
-  assert qualified_lead(lead, 'caution', now_ns=NOW)
+  assert not qualified_lead(lead, 'caution', now_ns=NOW)
   for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw'):
     assert not qualified_lead(lead, purpose, 0.0, now_ns=NOW)
   assert not qualified_lead(lead, 'caution', now_ns=NOW + MAX_MEASUREMENT_AGE_NS + 1)
@@ -308,6 +378,9 @@ def _assert_snapshot_matches_uncached(lead):
         for active_window in (True, False, 1):
           kwargs = {'now_ns': now_ns, 'require_active_window': active_window}
           assert qualified_lead(snapshot, purpose, probability, **kwargs) == qualified_lead(payload, purpose, probability, **kwargs)
+          assert (_qualified_lead_evidence(snapshot, purpose, probability, **kwargs)
+                  == _qualified_lead_evidence(payload, purpose, probability, **kwargs))
+    assert retired_future_entry(snapshot, now_ns=now_ns) == retired_future_entry(payload, now_ns=now_ns)
   assert lead_identity(snapshot) == lead_identity(payload)
   return snapshot
 
@@ -339,7 +412,7 @@ def test_snapshot_common_facts_never_cache_a_purpose_probability_time_or_window(
   ('evidence', 'positionStd', 0.0), ('evidence', 'velocityStd', float('nan')),
   ('evidence', 'pathState', 'entering'), ('evidence', 'pathState', 'edge'), ('evidence', 'pathState', 'unknown'),
   ('evidence', 'pathSource', ''), ('evidence', 'pathOffset', float('nan')),
-  ('evidence', 'conflictStart', -.1), ('evidence', 'conflictEnd', 0.0),
+  ('evidence', 'conflictStart', -.1), ('evidence', 'conflictStart', .05), ('evidence', 'conflictEnd', 0.0),
   ('evidence', 'conflictEnd', .1), ('evidence', 'lateralSpeed', float('inf')),
   ('evidence', 'brakeQualified', 1), ('evidence', 'cautionQualified', True),
 ])

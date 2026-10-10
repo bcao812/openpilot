@@ -9,22 +9,24 @@ import math
 from numbers import Integral, Real
 from types import MappingProxyType
 
+from openpilot.selfdrive.car.honda_radar_relevance import HORIZON
 
-MAX_CONTROL_OBJECTS = 34  # 32 independent radar tracks and two visual leads.
+
+MAX_CONTROL_OBJECTS = 34  # Historical wire/display bound; control uses only the two formal lead slots.
 MAX_MEASUREMENT_AGE_NS = 200_000_000
 MAX_ESTIMATE_AGE_NS = 250_000_000
 MAX_PREDICTION_AGE_NS = 350_000_000
 MAX_POSITION_STD = 20.0
 MAX_VELOCITY_STD = 20.0
 MIN_VISION_BRAKE_DISTANCE = -1.52  # Camera origin to the front bumper, as in radard.
-PURPOSES = ('follow', 'brake', 'stop', 'departure', 'fcw', 'caution')
+PURPOSES = ('follow', 'brake', 'stop', 'departure', 'fcw')
 SOURCES = ('vision', 'radar', 'fused', 'predicted')
 _UNREAD = object()
 _SCALAR_TYPES = (bool, int, float, str, type(None))
 
 
 class _ControlLeadView:
-  """Marker for a consumer view validated before installing its collection."""
+  """Marker for an immutable consumer view of the two formal leads."""
   __slots__ = ()
 
 
@@ -129,12 +131,12 @@ def _physical_identity(evidence):
 
 
 def valid_conflict_support(evidence):
-  """A support deadline bounds hard prediction, never the object's lifetime."""
+  """Validate retired window fields only when recognizing an old prediction."""
   version = _read(evidence, 'conflictSupportVersion', 0)
   if not _integer(version) or version not in (0, 1):
     return False
   if version == 0:
-    return True  # Old messages retain their complete hard occupancy window.
+    return True
   end, supported_end = _read(evidence, 'conflictEnd'), _read(evidence, 'conflictSupportedEnd')
   if not (_finite(end) and _finite(supported_end) and 0.0 <= supported_end <= end):
     return False
@@ -191,16 +193,13 @@ def _snapshot_facts(lead):
   a_valid = read('accelerationValid', False)
   if not isinstance(a_valid, bool) or not a_valid and acceleration != 0.0:
     return False
-  offset, start, end, lateral_speed = (read(field) for field in ('pathOffset', 'conflictStart', 'conflictEnd', 'lateralSpeed'))
+  offset = read('pathOffset')
   path_source = read('pathSource', '')
-  if (not all(_finite(value) for value in (offset, start, end, lateral_speed))
-      or not isinstance(path_source, str) or not path_source or not 0.0 <= start < end
-      or not valid_conflict_support(evidence)):
+  if not _finite(offset) or not isinstance(path_source, str) or not path_source:
     return False
   flags = tuple(read(purpose + 'Qualified', False) for purpose in PURPOSES)
-  caution_exclusive = all(flag is False for flag in flags[:-1])
-  return (1, probability, source, flags, caution_exclusive, coasting, estimate, earliest, latest,
-          distance, relative, ground, str(read('pathState', 'unknown')), end)
+  return (1, probability, source, flags, coasting, earliest, latest,
+          distance, relative, ground, str(read('pathState', 'unknown')))
 
 
 def _qualified_snapshot(lead, purpose, min_model_prob, now_ns, require_active_window):
@@ -215,11 +214,9 @@ def _qualified_snapshot(lead, purpose, min_model_prob, now_ns, require_active_wi
   if facts is False:
     return False
   if facts[0] == 0:
-    return purpose != 'caution' and facts[1] >= min_model_prob
-  _, probability, source, flags, caution_exclusive, coasting, estimate, earliest, latest, distance, relative, ground, path_state, end = facts
+    return facts[1] >= min_model_prob
+  _, probability, source, flags, coasting, earliest, latest, distance, relative, ground, path_state = facts
   if flags[PURPOSES.index(purpose)] is not True:
-    return False
-  if purpose == 'caution' and (source not in ('radar', 'fused') or not caution_exclusive):
     return False
   if source == 'vision' and probability < min_model_prob or coasting and purpose != 'brake':
     return False
@@ -228,13 +225,13 @@ def _qualified_snapshot(lead, purpose, min_model_prob, now_ns, require_active_wi
     return False
   if distance <= 0.0 and not (source == 'vision' and purpose in ('brake', 'fcw') and MIN_VISION_BRAKE_DISTANCE <= distance):
     return False
-  path_states = ('edge',) if purpose == 'caution' else ('inPath', 'entering') if purpose in ('brake', 'fcw') else ('inPath',)
-  if path_state not in path_states or require_active_window and (reference - estimate) / 1e9 >= end:
+  path_states = ('inPath', 'entering') if purpose in ('brake', 'fcw') else ('inPath',)
+  if path_state not in path_states:
     return False
   return purpose != 'departure' or ground > 0.0 and relative > 0.0
 
 
-def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_active_window=True):
+def _qualified_lead_evidence(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_active_window=True):
   """Check a purpose without granting another purpose's authority.
 
   ``now_ns`` is the caller's monotonic event time, never wall time. Omitting it
@@ -244,8 +241,8 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
   may project that measurement back to the common estimate time.
   A predicted object can retain a short braking constraint, but cannot confirm
   a fresh followed car, FCW, parking geometry or departure.
-  A planner projecting occupancy itself may set ``require_active_window=False``
-  to distinguish an expired occupancy window from invalid measurement evidence.
+  ``require_active_window`` remains a compatibility argument; retired occupancy
+  windows do not grant or expire an ordinary lead's measurement authority.
   """
   if type(lead) is _StructSnapshot and lead._cache_safe and (now_ns is None or type(now_ns) is int):
     return _qualified_snapshot(lead, purpose, min_model_prob, now_ns, require_active_window)
@@ -260,16 +257,11 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
   if not _integer(version):
     return False
   if version == 0:
-    # Legacy probability retains only its original five purposes. A visual
-    # compatibility slot has no physical identity or edge-caution evidence.
-    return purpose != 'caution' and probability >= min_model_prob
+    return probability >= min_model_prob
   if version != 1:
     return False
   source = str(_read(evidence, 'source', 'legacy'))
   if source not in SOURCES or _read(evidence, purpose + 'Qualified', False) is not True:
-    return False
-  if purpose == 'caution' and (source not in ('radar', 'fused') or any(
-      _read(evidence, name + 'Qualified', False) is not False for name in PURPOSES if name != 'caution')):
     return False
   if source == 'vision':
     vision_index = _read(evidence, 'visionIndex')
@@ -317,20 +309,59 @@ def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_a
   if not isinstance(acceleration_valid, bool) or (not acceleration_valid and values[4] != 0.0):
     return False
   path_state = str(_read(evidence, 'pathState', 'unknown'))
-  path_states = ('edge',) if purpose == 'caution' else ('inPath', 'entering') if purpose in ('brake', 'fcw') else ('inPath',)
+  path_states = ('inPath', 'entering') if purpose in ('brake', 'fcw') else ('inPath',)
   if path_state not in path_states:
     return False
-  path_values = tuple(_read(evidence, field) for field in ('pathOffset', 'conflictStart', 'conflictEnd', 'lateralSpeed'))
+  path_offset = _read(evidence, 'pathOffset')
   path_source = _read(evidence, 'pathSource', '')
-  if (not all(_finite(value) for value in path_values) or not isinstance(path_source, str) or not path_source
-      or not 0.0 <= path_values[1] < path_values[2] or not valid_conflict_support(evidence)):
-    return False
-  # An entering object is useful only during its predicted occupancy window.
-  if require_active_window and (reference - estimate) / 1e9 >= path_values[2]:
+  if not _finite(path_offset) or not isinstance(path_source, str) or not path_source:
     return False
   if purpose == 'departure' and (values[3] <= 0.0 or values[2] <= 0.0):
     return False
   return True
+
+
+def _future_entry(lead):
+  evidence = _read(lead, 'evidence')
+  version = _read(evidence, 'version', 0)
+  if (not _integer(version) or version != 1
+      or str(_read(evidence, 'source', 'legacy')) not in ('radar', 'fused', 'predicted')):
+    return False
+  start = _read(evidence, 'conflictStart')
+  return str(_read(evidence, 'pathState')) == 'entering' or _finite(start) and start > 0.0
+
+
+def retired_future_entry(lead, *, now_ns=None):
+  """Ignore a well-formed old prediction of an object entering the path.
+
+  This is a policy retirement, not an invalid sensor input. Keep malformed
+  records visible to existing failure handling, including projection fields
+  that the ordinary purpose check does not use. Without a caller clock,
+  evidence is validated at its own latest source time.
+  """
+  if _read(lead, 'present', False) is not True or not _future_entry(lead):
+    return False
+  evidence = _read(lead, 'evidence')
+  # This recognizes only the former braking-prediction format. A mixed or
+  # malformed formal lead remains visible to ordinary input-failure handling.
+  if (_read(evidence, 'cautionQualified', False) is not False
+      or not _qualified_lead_evidence(lead, 'brake', 0.0, now_ns=now_ns)):
+    return False
+  decay = _read(lead, 'aLeadTau')
+  start, end, lateral_speed = (_read(evidence, name) for name in ('conflictStart', 'conflictEnd', 'lateralSpeed'))
+  physical = _read(evidence, 'physicalConflictValid', False)
+  physical_start, physical_end = (_read(evidence, name, 0.0) for name in ('physicalConflictStart', 'physicalConflictEnd'))
+  return (_finite(decay) and decay >= 0.0 and all(_finite(value) for value in (start, end, lateral_speed))
+          and 0.0 <= start < end <= HORIZON and valid_conflict_support(evidence) and isinstance(physical, bool)
+          and _finite(physical_start) and _finite(physical_end)
+          and (not physical or 0.0 <= physical_start < physical_end <= end))
+
+
+def qualified_lead(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_active_window=True):
+  """Admit current-path evidence for a purpose without predicting a new entry."""
+  return (_qualified_lead_evidence(lead, purpose, min_model_prob, now_ns=now_ns,
+                                   require_active_window=require_active_window)
+          and not _future_entry(lead))
 
 
 def measurement_expired_since(lead, *, qualified_ns, now_ns):
@@ -347,8 +378,7 @@ def measurement_expired_since(lead, *, qualified_ns, now_ns):
   evidence = _read(lead, 'evidence')
   if str(_read(evidence, 'source')) not in ('radar', 'fused', 'predicted'):
     return False
-  if not (qualified_lead(lead, 'brake', 0.0, now_ns=qualified_ns, require_active_window=False)
-          or qualified_lead(lead, 'caution', 0.0, now_ns=qualified_ns, require_active_window=False)):
+  if not _qualified_lead_evidence(lead, 'brake', 0.0, now_ns=qualified_ns):
     return False
   maximum_age = MAX_PREDICTION_AGE_NS if _read(evidence, 'coasting') is True else MAX_MEASUREMENT_AGE_NS
   if (not 0 <= now_ns - _read(evidence, 'estimateMonoTime') <= MAX_ESTIMATE_AGE_NS
@@ -382,22 +412,17 @@ def _object_key(lead):
 
 
 def control_leads(radar_state, purpose=None, min_model_prob=0.95, *, now_ns=None):
-  """Return independent present objects, optionally admitted for one purpose.
+  """Return the two ordinary lead slots, deduplicated by explicit identity.
 
-  Display slots are retained as a compatibility fallback and deduplicated only
-  by explicit physical/visual identity. Unknown identities are not merged by
-  position. The producer owns the bounded list; malformed oversize lists remain
-  visible to a consumer's explicit input-failure handling, never silently cut.
+  Raw radarObjects and old cached object collections are observational data;
+  neither can add a braking, stop, departure or FCW candidate.
   """
-  if isinstance(radar_state, _ControlLeadView) and radar_state._control_objects is not None:
-    objects = radar_state._control_objects
-    return objects if purpose is None else tuple(
-      lead for lead in objects if qualified_lead(lead, purpose, min_model_prob, now_ns=now_ns))
-  display = (_read(radar_state, 'leadOne'), _read(radar_state, 'leadTwo'))
-  candidates = (*tuple(_read(radar_state, 'radarObjects', ())), *display) if _read(radar_state, 'fusionActive', False) is True else display
+  candidates = (_read(radar_state, 'leadOne'), _read(radar_state, 'leadTwo'))
   result, seen = [], set()
   for lead in candidates:
     if _read(lead, 'present', False) is not True:
+      continue
+    if retired_future_entry(lead, now_ns=now_ns):
       continue
     if purpose is not None and not qualified_lead(lead, purpose, min_model_prob, now_ns=now_ns):
       continue

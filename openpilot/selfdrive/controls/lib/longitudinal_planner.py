@@ -15,10 +15,10 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
-from openpilot.selfdrive.controls.lib.object_influence import mitigation_plan_object_influences, plan_object_influences
+from openpilot.selfdrive.controls.lib.object_influence import plan_object_influences
 from openpilot.selfdrive.controls.lib.lead_qualification import _read, control_leads, qualified_lead
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  COMFORT_BRAKE, LEAD_DANGER_FACTOR, REFERENCE_BOUND, STOP_DISTANCE, FiniteRiskEvidence, LongitudinalMpc,
+  COMFORT_BRAKE, LEAD_DANGER_FACTOR, REFERENCE_BOUND, STOP_DISTANCE, LongitudinalMpc,
   LongitudinalPlanSource as LongitudinalPlanSource,
   get_T_FOLLOW, get_safe_obstacle_distance, get_stopped_equivalence_factor,
 )
@@ -74,8 +74,8 @@ def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float, *, mi
     following_candidates = [lead for lead in leads if qualified_lead(lead, 'follow', 0.95, now_ns=now_ns)]
     if not following_candidates:
       return False
-    # The nearest current in-path car supplies moving-follow evidence. Other
-    # independent objects remain MPC risks; a distant stopped car need not
+    # The nearest current in-path car supplies moving-follow evidence. The
+    # other formal lead remains an MPC risk; a distant stopped car need not
     # depart before we can continue following the nearer moving vehicle.
     followed = (min(following_candidates, key=lambda lead: lead.dRel),)
   for lead in followed:
@@ -93,23 +93,11 @@ def has_safe_moving_lead(radar_state, v_ego: float, actuator_delay: float, *, mi
     for lead in leads:
       if lead is followed[0]:
         continue
-      if qualified_lead(lead, 'caution', 0.0, now_ns=now_ns):
-        # A qualified outer-edge return grants only the separate acceleration
-        # precaution. It cannot require a different in-lane car to stop/depart.
-        continue
       if not qualified_lead(lead, 'brake', 0.95, now_ns=now_ns):
         return False
-      evidence = _read(lead, 'evidence')
       horizon = CREEP_FINISH_T
-      if getattr(evidence, 'version', 0) == 1:
-        reference = max(evidence.estimateMonoTime, evidence.modelMonoTime, evidence.positionMonoTime,
-                        evidence.velocityMonoTime) if now_ns is None else now_ns
-        age = (reference - evidence.estimateMonoTime) / 1e9
-        horizon = min(horizon, evidence.conflictEnd - age)
-        if evidence.conflictStart - age > horizon:
-          continue
       # This is only a short creep-veto geometry check. It cannot produce
-      # acceleration or remove the independent obstacle from the MPC.
+      # acceleration or remove the other formal lead from the MPC.
       projected_gap = lead.dRel + min(lead.vRel, 0.0) * horizon + 0.5 * min(lead.aLeadK, 0.0) * horizon ** 2
       if projected_gap < minimum_gap or abs(lead.vLead - v_ego - lead.vRel) > CREEP_FOLLOW_MAX_CLOSING_SPEED:
         return False
@@ -454,7 +442,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     longitudinalPlan.hasLead = sm['radarState'].leadOne.present
     longitudinalPlan.longitudinalPlanSource = self.mpc.source
     longitudinalPlan.fcw = self.fcw
-    longitudinalPlan.radarRiskUnresolved = bool(self.unified and self.reference_planner.radar_risk_unresolved)
+    # Retired persistent-loss diagnostic; preserve the wire field for old logs.
+    longitudinalPlan.radarRiskUnresolved = False
 
     longitudinalPlan.aTarget = float(self.output_a_target)
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
@@ -480,18 +469,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                                   and ref.constraint_accel > ref.reference_accel + 1e-6),
           independent_stop=independent_stop, object_stop=bool(intent.reasons & (StopReason.MPC | StopReason.CLOSE_LEAD)),
           held_identity=ref.radar_held_identity, release_identity=ref.radar_release_identity,
-          caution_identities=getattr(ref, 'caution_object_identities', ()) if getattr(ref, 'caution_accel_limited', False) else (),
           standstill=bool(sm['carState'].standstill), target_accel=float(self.output_a_target), accel_min=ACCEL_MIN, accel_max=ACCEL_MAX,
         )
-        mitigation = getattr(ref, 'mitigation_object_evidence', ())
-        if mitigation and all(isinstance(proof, FiniteRiskEvidence) for proof in mitigation):
-          longitudinalPlan.objectInfluences = mitigation_plan_object_influences(
-            radar, mitigation,
-            selected=bool(ref.fusion_admitted and not plan_send.valid and self.mpc.solution_status != 0 and intent.is_braking_valid()),
-            now_ns=int(plan_send.logMonoTime), consumed_ns=int(longitudinalPlan.reference.producerMonoTime),
-            reference_ns=int(longitudinalPlan.reference.referenceMonoTime),
-            target_accel=float(self.output_a_target), braking_accel=intent.braking_accel, accel_min=ACCEL_MIN,
-          )
       except (AttributeError, TypeError, ValueError, OverflowError):
         # A display-only record cannot interrupt plan publication.
         longitudinalPlan.objectInfluences = []

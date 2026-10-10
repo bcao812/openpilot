@@ -106,7 +106,7 @@ def test_reading_old_capnp_inputs_does_not_allocate_evidence_or_influence_fields
   assert state.to_dict() == before
 
 
-def test_edge_caution_wire_defaults_and_actual_owner_zero_ceiling_receipt():
+def test_retired_edge_caution_wire_stays_readable_without_an_owner_receipt():
   evidence = custom.RadarLeadEvidence.new_message()
   assert not evidence.cautionQualified
   evidence.cautionQualified = True
@@ -121,9 +121,7 @@ def test_edge_caution_wire_defaults_and_actual_owner_zero_ceiling_receipt():
   assert motion.phase == 'track' and not motion.resolvedStop
   assert command.actuators.accel == 0.0
   assert consumer.control.LoC.long_control_state == LongCtrlState.pid
-  assert len(motion.objectInfluences) == 1
-  assert motion.objectInfluences[0].kind == 'caution'
-  assert motion.objectInfluences[0].strength == pytest.approx(0.15)
+  assert not motion.objectInfluences
 
 
 def test_real_numeric_pid_owner_acknowledges_following_without_a_braking_request():
@@ -154,7 +152,7 @@ def test_real_numeric_pid_owner_acknowledges_adopted_departure_during_brake_rele
   assert motion.objectInfluences[0].kind == 'release'
 
 
-def physical_braking_consumer(*, include_influence=True, warm_transport=True):
+def braking_only_consumer(*, include_influence=True, warm_transport=True):
   consumer = ControlsHarness()
   if warm_transport:
     # The independent braking envelope requires the real per-service
@@ -175,8 +173,8 @@ def physical_braking_consumer(*, include_influence=True, warm_transport=True):
   return consumer
 
 
-def test_cold_transport_cannot_acknowledge_a_physical_brake_before_owner_adoption():
-  consumer = physical_braking_consumer(warm_transport=False)
+def test_cold_transport_keeps_owner_braking_qualification_and_rejects_retired_extra_receipt():
+  consumer = braking_only_consumer(warm_transport=False)
   command, motion = consumer.step()
   assert not consumer.control.sm.freq_ok['longitudinalPlan']
   assert consumer.control.LoC.motion_supervisor.degraded_braking_accel is None
@@ -184,23 +182,20 @@ def test_cold_transport_cannot_acknowledge_a_physical_brake_before_owner_adoptio
   assert not motion.objectInfluences
 
 
-def test_independent_physical_brake_receipt_survives_invalid_main_plan_without_changing_actuation():
-  observed, baseline = physical_braking_consumer(), physical_braking_consumer(include_influence=False)
+def test_retired_extra_receipt_is_rejected_without_changing_braking_only_actuation():
+  observed, baseline = braking_only_consumer(), braking_only_consumer(include_influence=False)
   command, motion = observed.step()
   baseline_command, baseline_motion = baseline.step()
   assert command.to_dict() == baseline_command.to_dict()
   assert command.longActive and command.actuators.accel == -3.5
   assert motion.degraded and baseline_motion.degraded
   assert observed.control.LoC.motion_supervisor.degraded_braking_accel == -3.5
-  assert len(motion.objectInfluences) == 1
-  assert motion.objectInfluences[0].version == 2
-  assert motion.objectInfluences[0].kind == 'braking'
-  assert motion.objectInfluences[0].strength == 1.0
+  assert not motion.objectInfluences
   assert not baseline_motion.objectInfluences
 
 
-def test_generic_fault_with_old_normal_object_evidence_is_not_physical_mitigation():
-  consumer = physical_braking_consumer(include_influence=False)
+def test_generic_fault_with_old_normal_object_evidence_has_no_object_receipt():
+  consumer = braking_only_consumer(include_influence=False)
   consumer.plan.objectInfluences = [object_record('braking', 1.0)]
   command, motion = consumer.step()
   assert motion.degraded and command.actuators.accel == -3.5
@@ -208,14 +203,14 @@ def test_generic_fault_with_old_normal_object_evidence_is_not_physical_mitigatio
 
 
 @pytest.mark.parametrize('case', ['manual', 'bad_braking_contract', 'bad_key_message', 'expired_plan'])
-def test_physical_brake_receipt_does_not_bypass_owner_or_current_message_qualification(case):
-  consumer = physical_braking_consumer()
+def test_retired_extra_receipt_stays_cleared_across_owner_and_transport_changes(case):
+  consumer = braking_only_consumer()
   _, motion = consumer.step()
-  assert motion.objectInfluences
-  # Keep the accepted plan at 20 Hz so each following rejection exercises its
-  # intended cause, not an accidental 100 Hz plan-frequency violation.
+  assert not motion.objectInfluences
+  # Keep transport at 20 Hz while checking that no later owner or transport
+  # transition can revive the retired extra-object display record.
   for _ in range(4):
-    assert consumer.step(new_plan=False)[1].objectInfluences
+    assert not consumer.step(new_plan=False)[1].objectInfluences
   if case == 'manual':
     consumer.car_state.gasPressed = True
   elif case == 'bad_braking_contract':

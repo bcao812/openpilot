@@ -34,14 +34,17 @@ def test_distant_stopped_object_does_not_require_all_traffic_to_depart():
   assert not has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW)
 
 
-def test_near_crossing_risk_vetoes_creep_but_later_occupancy_remains_an_mpc_constraint():
+@pytest.mark.parametrize('path_state,start,end', [('entering', .3, 1.2), ('entering', 4.0, 5.0),
+                                                 ('leaving', 0.0, .3), ('inPath', 0.0, 10.0)])
+def test_extra_object_does_not_veto_safe_formal_moving_lead(path_state, start, end):
   moving = formal_lead(dRel=8.0, vLead=1.0, vRel=0.0)
   crossing = formal_lead(dRel=6.0, vLead=0.0, vRel=-1.0,
-                        evidence={'trackId': 8, 'pathState': 'entering', 'conflictStart': .3, 'conflictEnd': 1.2})
+                        evidence={'trackId': 8, 'pathState': path_state, 'conflictStart': start, 'conflictEnd': end})
   radar = SimpleNamespace(fusionActive=True, radarObjects=[moving, crossing], leadOne=moving, leadTwo=SimpleNamespace(present=False))
-  assert not has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW)
-  crossing.evidence.conflictStart, crossing.evidence.conflictEnd = 4.0, 5.0
   assert has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW)
+  # Ordinary current-lead risk still vetoes the moving-follow exception.
+  radar.leadTwo = formal_lead(dRel=6.0, vLead=0.0, vRel=-1.0, evidence={'trackId': 9})
+  assert not has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW)
 
 
 def following_state(v_ego=1.0, *, experimental=True):

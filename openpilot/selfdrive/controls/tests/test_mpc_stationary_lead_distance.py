@@ -36,7 +36,8 @@ def native_equations(monkeypatch):
 
 def test_three_meter_comfort_and_four_meter_risk_base_agree_at_rest(native_equations):
   evaluate, parameters = native_equations
-  assert parameters.shape == (PARAM_DIM,) == (12,)
+  assert parameters.shape == (PARAM_DIM,) == (14,)
+  np.testing.assert_array_equal(parameters[[long_mpc.COMFORT_NORMALIZER, long_mpc.RISK_NORMALIZER]], 0.0)
   assert parameters[COMFORT_STOP_DISTANCE] == parameters[RISK_STOP_DISTANCE] == STOP_DISTANCE
   parameters[2] = 3.0
   parameters[COMFORT_STOP_DISTANCE], parameters[RISK_STOP_DISTANCE] = 3.0, 4.0

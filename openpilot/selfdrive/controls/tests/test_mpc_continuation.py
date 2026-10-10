@@ -10,7 +10,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.continuation import (
   ContinuationDonor, ContinuationProblem, build_candidate, frozen_array,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  COMFORT_STOP_DISTANCE, MPC_OCCUPANCY_UNSATISFIED, N, PARAM_DIM, QP_FEASIBILITY_TOL, REFERENCE_BOUND,
+  COMFORT_STOP_DISTANCE, N, PARAM_DIM, QP_FEASIBILITY_TOL, REFERENCE_BOUND,
   RISK_STOP_DISTANCE, T_IDXS, LongitudinalMpc, MpcReference, get_safe_obstacle_distance,
 )
 from openpilot.selfdrive.controls.tests.test_mpc_problem_contract import NativeProblemRecorder
@@ -36,7 +36,7 @@ def integrate_profile(x0, acceleration):
   return states, jerks
 
 
-def problem_for(states, *, source=EPOCH, consumed=PRODUCER, margin=100.0, projections=()):
+def problem_for(states, *, source=EPOCH, consumed=PRODUCER, margin=100.0, lead_trajectories=()):
   parameters = np.zeros((N+1, PARAM_DIM))
   parameters[:, 0], parameters[:, 1] = ACCEL_MIN, ACCEL_MAX
   parameters[:, 4], parameters[:, 5] = 1.45, .75
@@ -47,7 +47,7 @@ def problem_for(states, *, source=EPOCH, consumed=PRODUCER, margin=100.0, projec
   rows = tuple((frozen_array(np.zeros((2, 3))), frozen_array(np.zeros((2, 1))),
                 frozen_array([-1.0, -1.0]), frozen_array([1.0, 1.0])) for _ in range(N))
   return ContinuationProblem(source, consumed, source + 250_000_000, frozen_array(states[0]), frozen_array(parameters),
-                              frozen_array(lower), frozen_array(upper), rows, tuple(projections), False)
+                              frozen_array(lower), frozen_array(upper), rows, tuple(lead_trajectories), False)
 
 
 def mathematical_donor(*, terminal_accel=0.0, terminal_jerk=0.0):
@@ -126,18 +126,18 @@ def test_current_measurement_deadline_and_geometry_are_frozen_before_failure_res
   planner.solver = recorder
   planner.set_cur_state(8.0, .3)
   planner.set_weights(prev_accel_constraint=False)
-  planner.update(fused_state(lead), reference=MpcReference(10.0), reference_ns=reference_ns, now_ns=now)
+  planner.update(fused_state(display=(lead,)), reference=MpcReference(10.0), reference_ns=reference_ns, now_ns=now)
   assert planner.solution_status == 4
   problem = planner.continuation_problem
   assert problem.evidence_expiry_ns == EPOCH + 110_000_000
-  assert problem.projections[0].lead is None
-  before = problem.projections[0].raw_trajectory.copy()
+  assert not problem.lead_trajectories[0].flags.writeable
+  before = problem.lead_trajectories[0].copy()
   lead.dRel = 2.0
   lead.evidence.positionMonoTime = reference_ns
   result = planner.continuation_candidate(donor, now_ns=now)
   assert result.accepted, result.reason
   assert result.evidence_expiry_ns == EPOCH + 110_000_000
-  np.testing.assert_array_equal(problem.projections[0].raw_trajectory, before)
+  np.testing.assert_array_equal(problem.lead_trajectories[0], before)
 
 
 @pytest.mark.parametrize('acceleration,jerk', [
@@ -157,7 +157,7 @@ def test_nonzero_but_qualified_terminal_precision_is_reintegrated_not_claimed_as
 @pytest.mark.parametrize('change,reason', [
   ('regressed_source', 'continuation_clock_order'), ('different_now', 'continuation_clock_order'),
   ('old_source', 'continuation_evidence_expired'), ('current_expiry', 'continuation_evidence_expired'),
-  ('stop', 'continuation_stop_or_passing'),
+  ('stop', 'continuation_stop_required'),
 ])
 def test_age_order_and_current_stop_cannot_be_renewed_by_a_new_candidate(change, reason):
   donor = mathematical_donor()
@@ -173,7 +173,7 @@ def test_age_order_and_current_stop_cannot_be_renewed_by_a_new_candidate(change,
   elif change == 'current_expiry':
     current = replace(current, evidence_expiry_ns=now)
   else:
-    current = replace(current, stop_or_passing=True)
+    current = replace(current, stop_required=True)
   result = candidate(donor, current=current, now=now)
   assert not result.accepted and result.reason == reason
 
@@ -199,27 +199,19 @@ def test_unknown_original_evidence_expiry_is_rejected():
   assert candidate(donor).reason == 'invalid_continuation_clock'
 
 
-@pytest.mark.parametrize('kind', ['ordinary_risk', 'persistent_risk', 'finite_geometry', 'accel_bound', 'linear_row'])
+@pytest.mark.parametrize('kind', ['ordinary_risk', 'lead_geometry', 'accel_bound', 'linear_row'])
 def test_current_tighter_problem_rejects_a_formerly_qualified_trajectory(kind):
   donor = mathematical_donor()
   current = replace(donor.problem, reference_ns=EPOCH + 50_000_000, consumed_ns=PRODUCER + 50_000_000)
-  if kind in ('ordinary_risk', 'persistent_risk'):
+  if kind == 'ordinary_risk':
     parameters = current.parameters.copy()
     parameters[:, 2] = 1.0
     current = replace(current, parameters=frozen_array(parameters))
-    if kind == 'persistent_risk':
-      projector = LongitudinalMpc()
-      projector.set_cur_state(*current.x0[1:])
-      lead = object_lead(distance=3.0, speed=0.0, ego_speed=8.0, persistent=True, epoch=current.reference_ns)
-      current = replace(current, projections=(projector.project_fusion_lead(lead, slot=None,
-                                                                            reference_ns=current.reference_ns),))
-  elif kind == 'finite_geometry':
-    projector = LongitudinalMpc()
-    projector.set_cur_state(*current.x0[1:])
-    lead = object_lead(distance=2.0, speed=0.0, ego_speed=8.0, start=.5, end=.6,
-                       path='entering', persistent=False, epoch=current.reference_ns)
-    geometry = projector.project_fusion_lead(lead, slot=None, reference_ns=current.reference_ns)
-    current = replace(current, projections=(geometry,))
+  elif kind == 'lead_geometry':
+    # A newly measured formal front vehicle invalidates the donor independently
+    # of the soft risk row and process_lead's numerical close-distance floor.
+    trajectory = np.column_stack((np.full(N+1, 2.0), np.zeros(N+1)))
+    current = replace(current, lead_trajectories=(frozen_array(trajectory),))
   elif kind == 'accel_bound':
     parameters = current.parameters.copy()
     parameters[:, 1] = -.2
@@ -235,6 +227,40 @@ def test_current_tighter_problem_rejects_a_formerly_qualified_trajectory(kind):
   assert not result.accepted and result.reason.startswith('current_')
 
 
+def test_captured_geometry_preserves_observed_distance_before_native_floor():
+  planner = LongitudinalMpc()
+  recorder = NativeProblemRecorder(planner.solver)
+  recorder.failure = 'solver_status'
+  planner.solver = recorder
+  planner.set_cur_state(15.0, 0.0)
+  lead = object_lead(distance=2.0, speed=0.0, ego_speed=15.0)
+  assert planner.process_lead(lead)[0, 0] > lead.dRel
+  planner.update(fused_state(display=(lead,)), reference=MpcReference(20.0), reference_ns=EPOCH, now_ns=PRODUCER)
+  problem = planner.continuation_problem
+  assert problem is not None and planner.solution_status == 4
+  np.testing.assert_array_equal(problem.lead_trajectories[0][:, 0], lead.dRel)
+  np.testing.assert_array_equal(problem.lead_trajectories[0][:, 1], 0.0)
+
+
+@pytest.mark.parametrize('slot', [0, 1])
+def test_each_formal_lead_keeps_its_original_measurement_deadline(slot):
+  reference = EPOCH + 50_000_000
+  now = PRODUCER + 50_000_000
+  lead = object_lead(distance=100.0, speed=10.0, ego_speed=8.0, epoch=reference)
+  lead.evidence.velocityMonoTime = EPOCH - 90_000_000
+  state = fused_state()
+  setattr(state, ('leadOne', 'leadTwo')[slot], lead)
+  planner = LongitudinalMpc()
+  recorder = NativeProblemRecorder(planner.solver)
+  recorder.failure = 'solver_status'
+  planner.solver = recorder
+  planner.set_cur_state(8.0, 0.0)
+  planner.update(state, reference=MpcReference(10.0), reference_ns=reference, now_ns=now)
+  assert planner.solution_status == 4
+  assert planner.continuation_problem.evidence_expiry_ns == EPOCH + 110_000_000
+  assert len(planner.continuation_problem.lead_trajectories) == 1
+
+
 def test_positive_nodes_do_not_hide_between_node_reverse_motion():
   accelerations = np.full(N+1, -.1 + 5.0*T_IDXS[1])
   accelerations[0] = -.1
@@ -243,25 +269,12 @@ def test_positive_nodes_do_not_hide_between_node_reverse_motion():
   assert LongitudinalMpc._continuation_trajectory_error(problem_for(states), states, jerks) == 'continuous_negative_velocity'
 
 
-@pytest.mark.parametrize('status', [-1, -2, -3, -4, -5, 0, 1, 2, 3])
+@pytest.mark.parametrize('status', [-1, -2, -3, -4, -5, -6, 0, 1, 2, 3])
 def test_unapproved_native_or_input_status_never_receives_a_candidate(status):
   planner = LongitudinalMpc()
   planner.solution_status = status
   result = planner.continuation_candidate(mathematical_donor(), now_ns=PRODUCER + 50_000_000)
   assert not result.accepted and result.reason == 'unsupported_failure_status'
-
-
-def test_minus_six_keeps_problem_but_does_not_turn_cached_motion_into_native_success():
-  donor = mathematical_donor()
-  planner = LongitudinalMpc()
-  current = replace(donor.problem, reference_ns=EPOCH + 50_000_000, consumed_ns=PRODUCER + 50_000_000)
-  planner.continuation_problem = current
-  planner.fail(MPC_OCCUPANCY_UNSATISFIED)
-  result = planner.continuation_candidate(donor, now_ns=current.consumed_ns)
-  assert result.accepted, result.reason
-  assert planner.solution_status == planner.last_solver_status == MPC_OCCUPANCY_UNSATISFIED
-  np.testing.assert_array_equal(planner.x_sol, 0.0)
-  assert planner.continuation_problem is current
 
 
 def test_reported_envelope_is_proved_with_one_common_jerk_for_all_corners():

@@ -10,7 +10,7 @@ from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE
 from openpilot.selfdrive.controls.radard import RadarD
 from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
 from openpilot.selfdrive.controls.tests.test_radar_consumption import (
-  CONSUMPTION, PUBLICATION, SESSION, coast, measured, native_frame, radar_frame,
+  CONSUMPTION, PUBLICATION, SESSION, coast, future_entry, measured, native_frame, radar_frame,
 )
 
 
@@ -34,8 +34,8 @@ def update_with_result(rd, frame, now=PUBLICATION, *, enabled=True, scope_missin
   payload = native_frame(frame).to_dict()
   rd.fusion_control = SimpleNamespace(update=Mock(return_value=SimpleNamespace(
     leads=(payload['leadOne'], payload['leadTwo']), objects=payload['radarObjects'], healthy=True,
-    degraded=False, risk_unresolved=False, reason='active', cleared=frame.fusionClearedTracks, session_id=SESSION,
-  )), _unresolved_loss=False, _lost_tracks={}, _session=SESSION)
+    degraded=False, reason='active', cleared=frame.fusionClearedTracks, session_id=SESSION,
+  )), _session=SESSION)
   rd.control_enabled = Mock(return_value=enabled)
   rd.control_scope_unavailable = scope_missing
   inputs = Inputs(now)
@@ -61,7 +61,7 @@ def make_radard():
 
 
 @pytest.mark.parametrize('source,caution', [
-  ('radar', False), ('fused', False), ('predicted', False), ('radar', True), ('fused', True),
+  ('radar', False), ('fused', False), ('predicted', False),
 ])
 @pytest.mark.parametrize('after_deadline', [0, 1])
 def test_publisher_removes_only_naturally_expired_measurement_at_actual_event_time(source, caution, after_deadline):
@@ -76,17 +76,33 @@ def test_publisher_removes_only_naturally_expired_measurement_at_actual_event_ti
   assert rd.radar_qualified_ns == PUBLICATION and event.logMonoTime == actual_publication
   assert event.valid and event.radarState.leadTwo.evidence.trackId == 9
   assert event.radarState.leadOne.present is (after_deadline == 0)
-  expected_tracks = [9] if after_deadline else [7, 9]
-  assert [lead.evidence.trackId for lead in event.radarState.radarObjects] == expected_tracks
+  assert not event.radarState.radarObjects
   assert event.radarState.leadOne.evidence.to_dict() == before['leadOne']['evidence']
   assert not event.radarState.fusionClearedTracks and not event.radarState.fusionRiskUnresolved
   assert rd.radar_state.to_dict() == before
 
 
 @pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+def test_publisher_retires_future_entry_from_objects_and_display_without_degradation(source):
+  future = future_entry(source=source)
+  current = formal_lead(now_ns=PUBLICATION, evidence={'trackId': 9})
+  rd = make_radard()
+  update_with_result(rd, radar_frame(future, current, display=(future, current)))
+  before = rd.radar_state.to_dict()
+  event = publish_at(rd, CONSUMPTION)
+  assert event.valid and not event.radarState.leadOne.present
+  assert event.radarState.leadTwo.present and event.radarState.leadTwo.evidence.trackId == 9
+  assert not event.radarState.radarObjects
+  assert rd.publication_expiry.retired_identities == ((SESSION, 7),)
+  assert not rd.publication_expiry.expired_identities and not rd.publication_expiry.degraded
+  assert not event.radarState.fusionDegraded and not event.radarState.fusionRiskUnresolved
+  assert not event.radarState.fusionClearedTracks
+  assert rd.radar_state.to_dict() == before
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
 @pytest.mark.parametrize('defect', [
-  'old_at_qualification', 'old_model_at_publication', 'different_display', 'invalid_position', 'future_measurement',
-  'support_version', 'support_nonfinite', 'support_outside_window',
+  'old_at_qualification', 'old_model_at_publication', 'different_formal_slot', 'invalid_position', 'future_measurement',
 ])
 def test_publication_expiry_cannot_erase_malformed_or_previously_stale_objects(source, defect):
   old = coast() if source == 'predicted' else measured(source=source)
@@ -96,51 +112,62 @@ def test_publication_expiry_cannot_erase_malformed_or_previously_stale_objects(s
     old.evidence.positionMonoTime = PUBLICATION - maximum_age - 1
   elif defect == 'old_model_at_publication':
     old.evidence.modelMonoTime = PUBLICATION - maximum_age + 50_000_000
-  elif defect == 'different_display':
+  elif defect == 'different_formal_slot':
     from copy import deepcopy
-    frame.leadOne = deepcopy(old)
-    frame.leadOne.dRel += 1.0
+    frame.leadTwo = deepcopy(old)
+    frame.leadTwo.dRel += 1.0
   elif defect == 'invalid_position':
     old.evidence.positionValid = False
-  elif defect.startswith('support_'):
-    old.evidence.conflictSupportVersion = 2 if defect == 'support_version' else 1
-    old.evidence.conflictSupportedEnd = float('nan') if defect == 'support_nonfinite' else 11.0
   else:
     old.evidence.velocityMonoTime = PUBLICATION + 1
   rd = make_radard()
   update_with_result(rd, frame)
   event = publish_at(rd, CONSUMPTION)
   assert event.logMonoTime == CONSUMPTION
-  assert event.radarState.leadOne.present and len(event.radarState.radarObjects) == 1
+  assert event.radarState.leadOne.present and not event.radarState.radarObjects
   assert not rd.publication_expiry.expired_identities
 
 
+def test_publisher_keeps_normal_leads_and_never_publishes_an_extra_object_list():
+  lead = formal_lead(now_ns=PUBLICATION, evidence={'trackId': 9})
+  extra = measured(relevant=True)
+  extra.dRel = float('nan')
+  rd = make_radard()
+  update_with_result(rd, radar_frame(extra, display=(lead,)))
+  assert rd.radar_state.leadOne.present and not rd.radar_state.radarObjects
+  event = publish_at(rd, CONSUMPTION)
+  assert event.radarState.leadOne.evidence.trackId == 9 and not event.radarState.radarObjects
+  assert not rd.publication_expiry.degraded and not event.radarState.fusionDegraded
+
+
 @pytest.mark.parametrize('source', ['radar', 'predicted'])
-def test_publication_loss_survives_scope_gap_and_empty_messages_until_fresh_same_identity(source):
+def test_publication_expiry_does_not_survive_scope_gap_or_empty_messages(source):
   rd = make_radard()
   old = coast(relevant=True) if source == 'predicted' else measured(relevant=True)
   update_with_result(rd, radar_frame(old, display=(old,)))
   event = publish_at(rd, CONSUMPTION)
-  assert event.radarState.leadOne.present and event.radarState.fusionRiskUnresolved
+  assert event.radarState.leadOne.present and not event.radarState.fusionRiskUnresolved
   assert not rd.publication_expiry.expired_identities
   assert event.radarState.fusionDegraded and not event.radarState.fusionClearedTracks
-  assert rd.publication_expiry.lost_identities == ((SESSION, 7),)
+  assert rd.publication_expiry.degraded
   now = CONSUMPTION + 50_000_000
   update_with_result(rd, radar_frame(publication=now), now, enabled=False, scope_missing=True)
   gap = publish_at(rd, now + 1)
-  assert not gap.radarState.fusionActive and gap.radarState.fusionRiskUnresolved
+  assert not gap.radarState.fusionActive and not gap.radarState.fusionRiskUnresolved
+  assert gap.radarState.fusionDegraded and not rd.publication_expiry.degraded
   now += 50_000_000
   update_with_result(rd, radar_frame(publication=now), now)
   empty = publish_at(rd, now + 1)
-  assert empty.radarState.fusionRiskUnresolved and not empty.radarState.fusionClearedTracks
+  assert not empty.radarState.fusionRiskUnresolved and not empty.radarState.fusionClearedTracks
+  assert not empty.radarState.fusionDegraded and not rd.publication_expiry.degraded
   now += 50_000_000
-  fresh = formal_lead(now_ns=now)
+  fresh = formal_lead(now_ns=now, evidence={'trackId': 9})
   update_with_result(rd, radar_frame(fresh, publication=now, display=(fresh,)), now)
   recovered = publish_at(rd, now + 1)
   assert not recovered.radarState.fusionRiskUnresolved and not rd.publication_expiry.degraded
 
 
-def test_explicit_configuration_exit_clears_only_the_publication_ledger_lifecycle():
+def test_configuration_exit_does_not_reuse_previous_publication_expiry():
   rd = make_radard()
   old = coast(relevant=True)
   update_with_result(rd, radar_frame(old, display=(old,)))

@@ -353,7 +353,7 @@ def test_positive_forward_speed_does_not_discard_measured_braking():
 
 @pytest.mark.parametrize('held', ['none', 'matching', 'different'])
 @pytest.mark.parametrize('other', ['none', 'departing', 'stationary', 'occluded', 'caution'])
-def test_unbound_physical_departure_requires_all_obstacles_without_replacing_a_held_identity(held, other):
+def test_unbound_physical_departure_requires_formal_leads_without_replacing_a_held_identity(held, other):
   from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
   from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, SESSION, radar_frame
 
@@ -366,7 +366,7 @@ def test_unbound_physical_departure_requires_all_obstacles_without_replacing_a_h
     if other == 'occluded':
       objects[-1].evidence.source = 'predicted'
       objects[-1].evidence.coasting = True
-  radar = radar_frame(*objects, display=(primary,))
+  radar = radar_frame(*objects, display=(primary,) if other == 'caution' else tuple(objects))
   identity = None if held == 'none' else (SESSION, 5 if held == 'matching' else 7)
   rejection = departing_lead_rejection(radar, 0.0, .5, now_ns=CONSUMPTION, held_identity=identity, allow_unbound_physical=True)
   assert (rejection is None) is (held != 'different' and (held == 'matching' or other not in ('stationary', 'occluded')))
@@ -402,16 +402,20 @@ def test_radar_consumption_uses_only_stopped_arithmetic_roundoff_without_mutatin
 
 
 @pytest.mark.parametrize('defect', [
-  'none', 'unconsumed', 'wrong_tick', 'wrong_publication', 'unhealthy', 'degraded', 'producer_risk',
-  'consumer_loss', 'overflow', 'wrong_session', 'not_standstill', 'invalid_message',
+  'none', 'previous_expiry', 'legacy_producer_risk', 'unconsumed', 'wrong_tick', 'wrong_publication',
+  'unhealthy', 'degraded', 'current_expiry', 'wrong_session', 'not_standstill', 'invalid_message',
 ])
-def test_unbound_radar_departure_requires_known_current_health_and_no_persistent_loss(defect):
+def test_unbound_radar_departure_uses_current_health_without_retaining_previous_expiry(defect):
   from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
   from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, coast, native_frame, radar_frame
   from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
 
   primary = formal_lead(now_ns=PUBLICATION, dRel=15.0, vLead=1.0, vLeadK=1.0, vRel=1.0)
-  radar = radar_frame(primary, display=(primary,), degraded=defect == 'degraded', risk_unresolved=defect == 'producer_risk')
+  objects = [primary]
+  if defect == 'current_expiry':
+    objects.append(coast(publication=PUBLICATION, relevant=True, track=99))
+  radar = radar_frame(*objects, display=tuple(objects), degraded=defect == 'degraded',
+                      risk_unresolved=defect == 'legacy_producer_risk')
   if defect == 'unhealthy':
     radar.fusionHealthy = False
   if defect == 'wrong_session':
@@ -421,14 +425,12 @@ def test_unbound_radar_departure_requires_known_current_health_and_no_persistent
     state['carState'].standstill = False
   planner = enabled_planner(0.0)
   reference = planner.reference_planner
-  if defect == 'consumer_loss':
+  if defect == 'previous_expiry':
     old = PUBLICATION - 100_000_000
     lost = coast(publication=old, relevant=True, track=99)
-    reference.radar_consumption.update(native_frame(radar_frame(lost, publication=old)),
+    reference.radar_consumption.update(native_frame(radar_frame(lost, publication=old, display=(lost,))),
                                        publication_ns=old, now_ns=old + 60_000_000, speed=10.0)
-    assert reference.radar_consumption.lost_identities
-  elif defect == 'overflow':
-    reference.radar_consumption._overflow_loss = True
+    assert reference.radar_consumption.degraded
   with patch.object(planner.dec, 'enabled', return_value=True):
     view = state if defect == 'unconsumed' else reference.radar_input_state(state, CONSUMPTION)
   if defect == 'wrong_publication':
@@ -436,12 +438,13 @@ def test_unbound_radar_departure_requires_known_current_health_and_no_persistent
   elif defect == 'invalid_message':
     state.valid['radarState'] = False
   rejection = reference.unbound_radar_departure_rejection(view, now_ns=CONSUMPTION + (defect == 'wrong_tick'))
-  assert (rejection is None) is (defect == 'none')
-  if defect in ('consumer_loss', 'overflow'):
-    assert rejection == 'radar_consumer_loss'
+  assert (rejection is None) is (defect in ('none', 'previous_expiry', 'legacy_producer_risk'))
+  assert reference.radar_consumption.degraded is (defect == 'current_expiry')
+  if defect == 'current_expiry':
+    assert rejection == 'radar_measurement_expired'
 
 
-@pytest.mark.parametrize('field', ['fusionHealthy', 'fusionDegraded', 'fusionRiskUnresolved'])
+@pytest.mark.parametrize('field', ['fusionHealthy', 'fusionDegraded'])
 def test_unknown_radar_health_cannot_be_interpreted_as_clear(field):
   from types import SimpleNamespace
   from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
@@ -455,7 +458,7 @@ def test_unknown_radar_health_cannot_be_interpreted_as_clear(field):
   with patch.object(planner.dec, 'enabled', return_value=True):
     view = reference.radar_input_state(state, CONSUMPTION)
   assert reference.unbound_radar_departure_rejection(view, now_ns=CONSUMPTION) is None
-  fields = ('leadOne', 'mdMonoTime', 'fusionSessionId', 'fusionActive', 'fusionHealthy', 'fusionDegraded', 'fusionRiskUnresolved')
+  fields = ('leadOne', 'mdMonoTime', 'fusionSessionId', 'fusionActive', 'fusionHealthy', 'fusionDegraded')
   # A consumer adapter with unknown metadata must fail even after a prior
   # healthy consumption. Preserve the receipt to isolate that metadata gate.
   unknown = SimpleNamespace(**{name: getattr(view['radarState'], name) for name in fields if name != field})
@@ -478,12 +481,12 @@ def run_unbound_physical_departure(condition='none', *, frames=24):
   state['carState'].vEgo = -1.9180846832417676e-23
   if condition == 'held_mismatch':
     reference.radar_held_identity = (SESSION, 7)
-  elif condition == 'consumer_loss':
+  elif condition == 'previous_expiry':
     old = 1_800_000_000
     lost = coast(publication=old, relevant=True, track=99)
-    reference.radar_consumption.update(native_frame(radar_frame(lost, publication=old)),
+    reference.radar_consumption.update(native_frame(radar_frame(lost, publication=old, display=(lost,))),
                                        publication_ns=old, now_ns=old + 60_000_000, speed=10.0)
-    assert reference.radar_consumption.lost_identities
+    assert reference.radar_consumption.degraded
   elif condition == 'model_stop':
     state['modelV2'].action.shouldStop = True
   records = []
@@ -499,7 +502,7 @@ def run_unbound_physical_departure(condition='none', *, frames=24):
         if condition == 'occluded_other':
           other.evidence.source, other.evidence.coasting = 'predicted', True
         objects.append(other)
-      radar = radar_frame(*objects, publication=now, display=(primary,), risk_unresolved=condition == 'producer_risk')
+      radar = radar_frame(*objects, publication=now, display=tuple(objects), risk_unresolved=condition == 'legacy_producer_risk')
       if condition == 'unhealthy':
         radar.fusionHealthy = False
       state['radarState'] = native_frame(radar)
@@ -507,21 +510,26 @@ def run_unbound_physical_departure(condition='none', *, frames=24):
       state['controlsState'].motionState.phase = owner.motion_phase.text
       state['controlsState'].motionState.resolvedStop = owner.resolved_should_stop
       plan, outputs = consume(planner, owner, state, frame)
-      assert plan.solverStatus == 0 and plan.motionIntent.valid
-      assert not owner.motion_degraded
+      if condition == 'side_primary':
+        assert plan.solverStatus != 0 and not plan.motionIntent.valid
+        assert owner.motion_degraded
+      else:
+        assert plan.solverStatus == 0 and plan.motionIntent.valid
+        assert not owner.motion_degraded
       records.append((plan.aTarget, plan.motionIntent.releaseAllowed, owner.resolved_should_stop, tuple(outputs)))
   return reference, records
 
 
 @pytest.mark.parametrize('condition', [
-  'none', 'held_mismatch', 'consumer_loss', 'stationary_other', 'occluded_other', 'side_primary',
-  'model_stop', 'producer_risk', 'unhealthy',
+  'none', 'previous_expiry', 'legacy_producer_risk', 'held_mismatch', 'stationary_other', 'occluded_other',
+  'side_primary', 'model_stop', 'unhealthy',
 ])
 def test_actual_hold_uses_unbound_departure_only_when_all_independent_guards_hold(condition):
   reference, records = run_unbound_physical_departure(condition)
-  if condition == 'none':
+  if condition in ('none', 'previous_expiry', 'legacy_producer_risk'):
     assert any(released and not held and max(outputs) > 0.0 for _, released, held, outputs in records)
     assert reference.radar_held_identity is None  # current evidence never invents an adopted physical barrier
+    assert not reference.radar_consumption.degraded
   else:
     assert all(not released and held and max(outputs) <= 0.0 for _, released, held, outputs in records)
 

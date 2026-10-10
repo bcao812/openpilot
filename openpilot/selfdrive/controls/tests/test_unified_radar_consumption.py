@@ -94,7 +94,8 @@ def test_mutable_builder_keeps_the_original_publication_path():
 def test_irrelevant_coast_expiry_does_not_veto_primary_follow_or_departure(speed):
   primary = formal_lead(now_ns=PUBLICATION, vLead=speed + 1.0, vLeadK=speed + 1.0, vRel=1.0,
                         evidence={'trackId': 5})
-  raw = radar_frame(primary, coast(), display=(primary,))
+  expired = coast()
+  raw = radar_frame(primary, expired, display=(primary, expired))
   planner = enabled_planner(speed)
   state = state_at(raw, speed=speed)
   with patch.object(planner.dec, 'enabled', return_value=True):
@@ -109,9 +110,10 @@ def test_irrelevant_coast_expiry_does_not_veto_primary_follow_or_departure(speed
     assert has_departing_lead(view, speed, .3, now_ns=CONSUMPTION, held_identity=(SESSION, 5))
 
 
-@pytest.mark.parametrize('kind,expected', [('caution', True), ('bad_caution', False), ('inner', False)])
+@pytest.mark.parametrize('kind', ['caution', 'bad_caution', 'inner'])
+@pytest.mark.parametrize('formal_secondary', [False, True])
 @pytest.mark.parametrize('speed', [0.0, 1.0])
-def test_only_valid_edge_caution_can_be_ignored_for_another_cars_departure(kind, expected, speed):
+def test_only_the_formal_secondary_lead_can_veto_the_primary_departure(kind, formal_secondary, speed):
   primary = formal_lead(now_ns=PUBLICATION, vLead=speed + 1.0, vLeadK=speed + 1.0, vRel=1.0,
                         evidence={'trackId': 5})
   if kind == 'inner':
@@ -120,7 +122,9 @@ def test_only_valid_edge_caution_can_be_ignored_for_another_cars_departure(kind,
   else:
     other = caution_lead(now_ns=PUBLICATION, dRel=2.0, vLead=0.0, vLeadK=0.0, vRel=-speed,
                          evidence={'trackId': 12, 'positionValid': kind != 'bad_caution'})
-  frame = native_frame(radar_frame(primary, other, display=(primary,)))
+  slots = (primary, other) if formal_secondary else (primary,)
+  frame = native_frame(radar_frame(primary, other, display=slots))
+  expected = not formal_secondary
   if speed:
     assert has_safe_moving_lead(frame, speed, .3, now_ns=CONSUMPTION) is expected
   else:
@@ -150,13 +154,40 @@ def test_unified_expiry_matches_the_surviving_collection_without_changing_origin
   np.testing.assert_array_equal(outputs[0][1], outputs[1][1])
 
 
+@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('path,start', [('entering', 0.0), ('entering', .5), ('inPath', .5)])
+def test_retired_predicted_entry_matches_no_object_without_failure_braking_or_fcw(source, path, start):
+  candidate = formal_lead(now_ns=PUBLICATION, source=source, dRel=6.0, vLead=0.0, vLeadK=0.0, vRel=-10.0,
+                          evidence={'pathState': path, 'conflictStart': start, 'conflictEnd': 2.0,
+                                    'followQualified': False, 'stopQualified': False, 'departureQualified': False,
+                                    'fcwQualified': source != 'predicted', 'accelerationValid': source != 'predicted'})
+  outputs = []
+  for include_candidate in (False, True):
+    objects = (candidate,) if include_candidate else ()
+    state = state_at(radar_frame(*objects, display=objects), speed=10.0, target=20.0)
+    planner = enabled_planner(10.0)
+    with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
+      planner.update(state, now_ns=CONSUMPTION)
+    assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
+    assert planner.mpc.source_object_identity is None and not planner.fcw
+    assert not planner.reference_planner.radar_consumption.degraded
+    assert planner.output_a_target > 0.0 and not planner.output_should_stop
+    intent = planner.motion_intent
+    outputs.append((planner.output_a_target, planner.mpc.params.copy(), planner.mpc.x_sol.copy(),
+                    (intent.release_allowed, intent.moving_lead, intent.reasons)))
+  assert outputs[0][0] == outputs[1][0] and outputs[0][3] == outputs[1][3]
+  np.testing.assert_array_equal(outputs[0][1], outputs[1][1])
+  np.testing.assert_array_equal(outputs[0][2], outputs[1][2])
+
+
 @pytest.mark.parametrize('initial_publication', [PUBLICATION, CONSUMPTION])
-def test_loss_of_an_already_adopted_hold_target_does_not_release_that_hold(initial_publication):
+def test_expiry_diagnostic_clears_without_releasing_an_already_adopted_hold(initial_publication):
   planner = enabled_planner(1.0)
   # This component starts with an established object barrier. Acquisition and
   # actual braking are verified by the rolling owner/CAN pipeline below.
   planner.reference_planner.radar_held_identity = (SESSION, 7)
-  raw = radar_frame(coast(relevant=True))
+  expired = coast(relevant=True)
+  raw = radar_frame(expired, display=(expired,))
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
     for elapsed in (0, 100_000_000, 5_000_000_000):
       now = CONSUMPTION + elapsed
@@ -164,62 +195,64 @@ def test_loss_of_an_already_adopted_hold_target_does_not_release_that_hold(initi
       frame = raw if elapsed == 0 else radar_frame(publication=publication)
       state = state_at(frame, now=now, publication=publication)
       planner.update(state, now_ns=now)
-      assert planner.reference_planner.radar_consumption.degraded
-      assert planner.reference_planner.radar_consumption.lost_identities == ((SESSION, 7),)
       assert planner.reference_planner.radar_held_identity == (SESSION, 7)
       assert planner.reference_planner.radar_release_identity is None
       if elapsed == 0:
         # Keeping the relevant expired object invalid intentionally uses the
         # failure braking path; this must not erase the accepted obstacle.
+        assert planner.reference_planner.radar_consumption.degraded
         assert planner.mpc.solution_status != 0 and not planner.motion_intent.valid
-      assert planner.reference_planner.radar_risk_unresolved
+        assert planner.output_a_target < 0.0
+      else:
+        # Fresh empty publications carry no persistent loss diagnostic, but
+        # the already executed stop still needs its own departure evidence.
+        assert not planner.reference_planner.radar_consumption.degraded
+        assert planner.reference_planner._radar_consumed_ns == now
       assert not state['radarState'].fusionRiskUnresolved
       publisher = CapturingPublisher()
       with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=now):
         planner.publish(state, publisher)
-      assert publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
+      assert not publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
       # A positive planner target is not permission for the owner to release.
       assert not publisher.messages['longitudinalPlan'].longitudinalPlan.motionIntent.releaseAllowed
       assert not planner.motion_intent.moving_lead and not planner.motion_intent.release_allowed
     state['carState'].gasPressed = True
     planner.update(state, now_ns=now + 1_000_000)
   assert not planner.reference_planner.radar_consumption.degraded
-  assert not planner.reference_planner.radar_consumption.lost_identities
-  assert not planner.reference_planner.radar_risk_unresolved
   assert planner.reference_planner.radar_held_identity is None
 
 
 @pytest.mark.parametrize('degraded,risk_unresolved', [(False, False), (True, False), (False, True), (True, True)])
-def test_producer_loss_remains_diagnostic_without_invalidating_a_healthy_main_plan(degraded, risk_unresolved):
+def test_legacy_producer_loss_flag_is_not_republished_or_used_to_invalidate_a_healthy_plan(degraded, risk_unresolved):
   planner = enabled_planner(5.0)
   state = state_at(radar_frame(degraded=degraded, risk_unresolved=risk_unresolved), speed=5.0)
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
     planner.update(state, now_ns=CONSUMPTION)
   assert planner.motion_intent.valid and not planner.reference_planner.radar_consumption.degraded
-  assert planner.reference_planner.radar_risk_unresolved is risk_unresolved
+  assert state['radarState'].fusionRiskUnresolved is risk_unresolved
   publisher = CapturingPublisher()
   with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
     planner.publish(state, publisher)
   assert publisher.messages['longitudinalPlan'].valid
-  assert publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved is risk_unresolved
+  assert not publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
 
 
 @pytest.mark.parametrize('source', ['vision', 'radar'])
 def test_history_flags_do_not_change_healthy_lead_acceleration_or_motion_intent(source):
   outputs = []
-  for diagnostic in ('none', 'degraded', 'producer_loss', 'consumer_loss'):
+  for diagnostic in ('none', 'degraded', 'legacy_loss_flag', 'prior_expiry'):
     planner = enabled_planner(5.0)
-    if diagnostic == 'consumer_loss':
+    if diagnostic == 'prior_expiry':
       old = PUBLICATION - 100_000_000
-      lost = coast(publication=old, relevant=True, track=99)
+      expired = coast(publication=old, relevant=True, track=99)
       planner.reference_planner.radar_consumption.update(
-        native_frame(radar_frame(lost, publication=old)), publication_ns=old, now_ns=old + 60_000_000, speed=10.0,
+        native_frame(radar_frame(expired, publication=old, display=(expired,))), publication_ns=old, now_ns=old + 60_000_000, speed=10.0,
       )
       assert planner.reference_planner.radar_consumption.degraded
     primary = formal_lead(now_ns=PUBLICATION, source=source, dRel=40.0, vLead=5.5, vLeadK=5.5, vRel=.5,
                           evidence={'trackId': 5})
     state = state_at(radar_frame(primary, display=(primary,), degraded=diagnostic == 'degraded',
-                                 risk_unresolved=diagnostic == 'producer_loss'), speed=5.0)
+                                 risk_unresolved=diagnostic == 'legacy_loss_flag'), speed=5.0)
     with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
       planner.update(state, now_ns=CONSUMPTION)
     assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
@@ -227,11 +260,10 @@ def test_history_flags_do_not_change_healthy_lead_acceleration_or_motion_intent(
     with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
       planner.publish(state, publisher)
     plan = publisher.messages['longitudinalPlan'].longitudinalPlan
-    assert plan.radarRiskUnresolved is (diagnostic in ('producer_loss', 'consumer_loss'))
+    assert not plan.radarRiskUnresolved
     assert planner.output_a_target > 0.0 and not planner.output_should_stop
     assert planner.reference_planner.radar_held_identity is None
-    if diagnostic == 'consumer_loss':
-      assert planner.reference_planner.radar_consumption.degraded
+    assert not planner.reference_planner.radar_consumption.degraded
     outputs.append((planner.output_a_target, planner.mpc.params.copy(), plan.motionIntent.to_dict(),
                     [row.to_dict() for row in plan.objectInfluences]))
   for actual in outputs[1:]:
@@ -472,42 +504,40 @@ def test_red_light_stop_does_not_assign_a_far_stationary_detection_a_hold_that_b
   assert outputs[0] > 0.0 and outputs[1] == pytest.approx(outputs[0], abs=1e-6, rel=0.0)
 
 
-@pytest.mark.parametrize('consumer_loss', [False, True])
-def test_scope_exit_clears_only_producer_claim_while_retained_consumer_risk_needs_driver_reset(consumer_loss):
+@pytest.mark.parametrize('current_expiry', [False, True])
+def test_scope_exit_discards_current_expiry_without_a_driver_reset(current_expiry):
   planner = enabled_planner(1.0)
-  objects = (coast(relevant=True),) if consumer_loss else ()
-  state = state_at(radar_frame(*objects, degraded=True, risk_unresolved=True))
+  ref = planner.reference_planner
+  objects = (coast(relevant=True),) if current_expiry else ()
+  state = state_at(radar_frame(*objects, display=objects, degraded=True, risk_unresolved=True))
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
     planner.update(state, now_ns=CONSUMPTION)
-    assert planner.reference_planner.radar_risk_unresolved
-    assert planner.reference_planner.radar_consumption.lost_identities == (((SESSION, 7),) if consumer_loss else ())
+    assert ref.fusion_admitted
+    assert ref.radar_consumption.degraded is current_expiry
+    if current_expiry:
+      assert planner.mpc.solution_status != 0 and not planner.motion_intent.valid
     now = CONSUMPTION + 100_000_000
     state = state_at(radar_frame(publication=now, risk_unresolved=True), now=now, publication=now)
     state['selfdriveState'].experimentalMode = False
     planner.update(state, now_ns=now)
-    assert not planner.reference_planner.fusion_admitted
-    assert planner.reference_planner.radar_risk_unresolved is consumer_loss
-    assert planner.reference_planner.radar_consumption.degraded is consumer_loss
-    assert planner.reference_planner.radar_consumption.lost_identities == (((SESSION, 7),) if consumer_loss else ())
-    state['carState'].gasPressed = True
-    planner.update(state, now_ns=now + 1_000_000)
-  assert not planner.reference_planner.radar_risk_unresolved
-  assert not planner.reference_planner.radar_consumption.degraded
-  assert not planner.reference_planner.radar_consumption.lost_identities
+  assert not ref.fusion_admitted and not ref.radar_consumption.degraded
+  assert ref.radar_consumption.publication_view is None
+  assert ref._radar_consumed_ns is None and ref._radar_consumed_view is None
+  assert not state['carState'].gasPressed and not state['carState'].brakePressed
 
 
-@pytest.mark.parametrize('consumer_loss', [False, True])
+@pytest.mark.parametrize('prior_expiry', [False, True])
 @pytest.mark.parametrize('failure', ['source_epoch', 'owner', 'model_shape', 'pitch', 'throttle', 'mpc'])
-def test_invalid_early_returns_clear_the_current_plan_claim(failure, consumer_loss):
+def test_invalid_current_plan_does_not_reuse_previous_expiry_diagnostic(failure, prior_expiry):
   planner = enabled_planner(5.0)
   ref = planner.reference_planner
-  if consumer_loss:
-    # This loss was observed by the real consumer independently of the new
-    # plan's validity. Invalidating a plan is not a sensor-clear receipt.
-    ref.radar_consumption.update(native_frame(radar_frame(coast(relevant=True))),
+  if prior_expiry:
+    # Seed a real earlier consumption result. The next attempt must derive
+    # its own input validity rather than inherit this expired object.
+    expired = coast(relevant=True)
+    ref.radar_consumption.update(native_frame(radar_frame(expired, display=(expired,))),
                                  publication_ns=PUBLICATION, now_ns=CONSUMPTION, speed=5.0)
-    assert ref.radar_consumption.lost_identities == ((SESSION, 7),)
-  ref.radar_risk_unresolved = True
+    assert ref.radar_consumption.degraded
   state = state_at(radar_frame(degraded=True, risk_unresolved=True), speed=5.0)
   if failure == 'source_epoch':
     state.logMonoTime['carState'] = CONSUMPTION + 1
@@ -525,19 +555,18 @@ def test_invalid_early_returns_clear_the_current_plan_claim(failure, consumer_lo
         planner.update(state, now_ns=CONSUMPTION)
     else:
       planner.update(state, now_ns=CONSUMPTION)
-  assert ref.radar_risk_unresolved is consumer_loss
-  assert ref.radar_consumption.lost_identities == (((SESSION, 7),) if consumer_loss else ())
+  assert not ref.radar_consumption.degraded
   assert not planner.motion_intent.valid
+  assert not planner.motion_intent.release_allowed and planner.output_a_target <= 0.0
   publisher = CapturingPublisher()
   with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
     planner.publish(state, publisher)
-  assert publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved is consumer_loss
+  assert not publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
 
 
-def test_non_unified_main_plan_publishes_false_even_after_a_retained_claim():
+def test_non_unified_main_plan_publishes_false_for_a_legacy_risk_wire_flag():
   planner = enabled_planner(5.0)
-  state = state_at(radar_frame(), speed=5.0)
-  planner.reference_planner.radar_risk_unresolved = True
+  state = state_at(radar_frame(risk_unresolved=True), speed=5.0)
   publisher = CapturingPublisher()
   with patch.object(planner, 'unified', False), \
        patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
@@ -545,20 +574,26 @@ def test_non_unified_main_plan_publishes_false_even_after_a_retained_claim():
   assert not publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
 
 
-def test_invalid_radar_transport_cannot_clear_a_consumption_loss():
+def test_invalid_radar_transport_cannot_confirm_departure_after_previous_expiry():
   planner = enabled_planner(1.0)
+  ref = planner.reference_planner
   with patch.object(planner.dec, 'enabled', return_value=True):
-    state = state_at(radar_frame(coast(relevant=True)))
-    planner.reference_planner.radar_input_state(state, CONSUMPTION)
-    assert planner.reference_planner.radar_consumption.degraded
+    expired = coast(relevant=True)
+    state = state_at(radar_frame(expired, display=(expired,)))
+    ref.radar_input_state(state, CONSUMPTION)
+    assert ref.radar_consumption.degraded
     now = CONSUMPTION + 100_000_000
-    state = state_at(radar_frame(publication=now, cleared=(7,)), now=now, publication=now)
+    primary = formal_lead(now_ns=now, vLead=1.0, vLeadK=1.0, vRel=1.0, evidence={'trackId': 9})
+    state = state_at(radar_frame(primary, publication=now, display=(primary,)), speed=0.0, now=now, publication=now)
     state.valid['radarState'] = False
-    planner.reference_planner.radar_input_state(state, now)
-    assert planner.reference_planner.radar_consumption.degraded
+    unconfirmed = ref.radar_input_state(state, now)
+    assert not ref.radar_consumption.degraded
+    assert ref.radar_consumption.publication_view is None
+    assert ref.unbound_radar_departure_rejection(unconfirmed, now_ns=now) == 'radar_consumption_unconfirmed'
     state.valid['radarState'] = True
-    planner.reference_planner.radar_input_state(state, now)
-    assert not planner.reference_planner.radar_consumption.degraded
+    confirmed = ref.radar_input_state(state, now)
+    assert not ref.radar_consumption.degraded
+    assert ref.unbound_radar_departure_rejection(confirmed, now_ns=now) is None
 
 
 def test_scope_exit_sensor_view_requires_no_car_or_control_inputs():
@@ -592,28 +627,30 @@ def test_legacy_vision_in_startup_or_scope_fallback_cannot_be_treated_as_edge(fa
     sensor_view = planner.reference_planner.radar_input_state(state, CONSUMPTION)['radarState']
     assert not control_leads(sensor_view, 'caution', 0.0, now_ns=CONSUMPTION)
     planner.update(state, now_ns=CONSUMPTION)
-  assert not planner.reference_planner.caution_accel_limited
-  assert planner.reference_planner.caution_object_identities == ()
+  assert planner.mpc.solution_status == 0 and planner.output_a_target < 0.0
 
 
-@pytest.mark.parametrize('distance,closing,should_limit', [(20.0, 10.0, True), (20.01, 10.0, False), (10.0, 0.0, False)])
-def test_edge_ttc_precaution_limits_only_positive_requests(distance, closing, should_limit):
-  planner = enabled_planner(10.0)
+@pytest.mark.parametrize('distance,closing', [(20.0, 10.0), (20.01, 10.0), (10.0, 0.0)])
+def test_retired_edge_ttc_cannot_limit_acceleration_or_publish_a_control_influence(distance, closing):
   edge = caution_lead(now_ns=PUBLICATION, dRel=distance, vLead=10.0-closing, vLeadK=10.0-closing, vRel=-closing,
                        evidence={'trackId': 12})
-  state = state_at(radar_frame(edge), speed=10.0, target=20.0)
-  with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
-    planner.update(state, now_ns=CONSUMPTION)
-  assert planner.mpc.solution_status == 0
-  assert planner.reference_planner.caution_accel_limited is should_limit
-  assert not planner.fcw and not planner.output_should_stop
-  assert planner.reference_planner.radar_held_identity is None
-  if should_limit:
-    assert planner.output_a_target == 0.0
-    assert not planner.motion_intent.release_allowed
-    assert planner.reference_planner.caution_object_identities == ((SESSION, 12),)
-  else:
+  outputs = []
+  for extras in ((), (edge,)):
+    planner = enabled_planner(10.0)
+    state = state_at(radar_frame(*extras), speed=10.0, target=20.0)
+    with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
+      planner.update(state, now_ns=CONSUMPTION)
+    assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
+    assert not planner.fcw and not planner.output_should_stop
+    assert planner.reference_planner.radar_held_identity is None
     assert planner.output_a_target > 0.0
+    publisher = CapturingPublisher()
+    with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
+      planner.publish(state, publisher)
+    plan = publisher.messages['longitudinalPlan'].longitudinalPlan
+    assert not plan.objectInfluences
+    outputs.append((plan.aTarget, plan.motionIntent.to_dict()))
+  assert outputs[0] == outputs[1]
 
 
 def test_edge_dropout_has_no_persistent_loss_and_does_not_weaken_stronger_inner_braking():
@@ -626,17 +663,15 @@ def test_edge_dropout_has_no_persistent_loss_and_does_not_weaken_stronger_inner_
     state = state_at(radar_frame(edge, inner, display=(inner,)), speed=10.0)
     planner.update(state, now_ns=CONSUMPTION)
     assert planner.output_a_target < 0.0
-    assert planner.reference_planner.caution_object_identities == ()
     assert not planner.reference_planner.radar_consumption.degraded
     now = CONSUMPTION + 100_000_000
     state = state_at(radar_frame(publication=now), speed=10.0, now=now, publication=now, target=20.0)
     planner.update(state, now_ns=now)
   assert not planner.reference_planner.radar_consumption.degraded
-  assert planner.reference_planner.caution_object_identities == ()
 
 
 @pytest.mark.parametrize('speed', [0.0, .2])
-def test_edge_cap_does_not_create_a_stop_preference_or_new_hold_near_rest(speed):
+def test_extra_edge_has_no_acceleration_stop_or_new_hold_authority_near_rest(speed):
   arms = []
   for include_edge in (False, True):
     edge = caution_lead(now_ns=PUBLICATION, dRel=1.0, vLead=speed - 1.0, vLeadK=speed - 1.0, vRel=-1.0,
@@ -650,13 +685,13 @@ def test_edge_cap_does_not_create_a_stop_preference_or_new_hold_near_rest(speed)
     assert planner.reference_planner.radar_held_identity is None
     arms.append(planner)
   before, after = arms
-  # The native goal, cruise history and stop reasons are identical; only an
-  # already positive final acceleration may be capped by the edge return.
+  # The native goal, cruise history, final command and stop reasons all match.
   np.testing.assert_array_equal(before.mpc.params, after.mpc.params)
   np.testing.assert_allclose(before.mpc.v_solution, after.mpc.v_solution, atol=1e-9, rtol=0.0)
   assert before.motion_intent.reasons == after.motion_intent.reasons
   assert before.output_should_stop == after.output_should_stop
-  assert after.output_a_target == min(before.output_a_target, 0.0)
+  assert after.output_a_target == before.output_a_target
+  assert after.motion_intent.release_allowed == before.motion_intent.release_allowed
 
 
 def test_edge_caution_preserves_an_existing_model_stop_and_held_vehicle():
@@ -674,8 +709,6 @@ def test_edge_caution_preserves_an_existing_model_stop_and_held_vehicle():
       planner.update(state, now_ns=CONSUMPTION)
     assert planner.output_a_target <= -2.0 and planner.output_should_stop
     assert planner.reference_planner.radar_held_identity == (SESSION, 5)
-    assert not planner.reference_planner.caution_accel_limited
-    assert planner.reference_planner.caution_object_identities == ()
     arms.append(planner)
   assert arms[0].motion_intent.reasons == arms[1].motion_intent.reasons
   assert arms[0].motion_intent.release_allowed == arms[1].motion_intent.release_allowed

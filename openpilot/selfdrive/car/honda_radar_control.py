@@ -1,8 +1,8 @@
-"""Admit Accord radar objects into the ordinary longitudinal object interface.
+"""Fuse qualified Accord radar leads into the two ordinary lead slots.
 
 The observer owns decoding, motion compensation and physical track identity.
 This consumer checks its evidence, aligns estimates to the current camera frame,
-and assigns separate following, braking, stopping and departure qualifications.
+and assigns ordinary following, stopping and departure qualifications.
 It does not publish messages, read settings or own actuation. In particular, a
 missing visual detection is not evidence that a radar obstacle does not exist.
 
@@ -13,15 +13,12 @@ this version therefore makes no speculative stationary-object class rejection.
 from dataclasses import dataclass, field, replace
 import math
 from numbers import Real
-import struct
-
-from openpilot.selfdrive.car.honda_radar_relevance import loss_relevant, remaining_occupancy_window
+from openpilot.selfdrive.car.honda_radar_relevance import loss_relevant
 
 
 VERSION = 1
 FUSION_VERSION = 'bosch-a-shadow-3'
 MAX_TRACKS = 32
-MAX_OBJECTS = MAX_TRACKS + 2
 MAX_AGE_NS = 200_000_000
 COAST_NS = 350_000_000
 MIN_OBSERVATIONS = 3
@@ -29,8 +26,8 @@ MIN_SPAN_NS = 120_000_000
 HORIZON = 10.0
 RADAR_TO_CAMERA = 1.52
 # A single radar reflection is not proven to be a vehicle's body center.
-# Keep possible body overlap as a candidate, but grant new hard-constraint
-# authority only for the measured point entering the ego's swept footprint.
+# A new radar lead needs a measured point in the ego's swept footprint. A
+# confirmed lead retains current geometric hysteresis through the outer band.
 OVERLAP_HALF_WIDTH = 2.0
 SWEPT_HALF_WIDTH = 1.25  # 1.10 m ego half-width + .15 m geometric margin
 LANE_SUPPORT_M = 60.0
@@ -41,7 +38,6 @@ VELOCITY_MAX_VARIANCE = 9.0
 POSITION_SPEED_MAX_VARIANCE = 4.0
 LATERAL_POSITION_MAX_VARIANCE = 4.0
 LATERAL_VELOCITY_MAX_VARIANCE = 4.0
-LATERAL_PREDICTION_BUDGET = 2.0
 
 
 def _read(obj, name, default=None):
@@ -109,7 +105,6 @@ class RadarControlResult:
   reason: str
   cleared: tuple[int, ...] = ()
   session_id: str = ''
-  risk_unresolved: bool = False
 
 
 @dataclass(frozen=True)
@@ -117,59 +112,11 @@ class _Path:
   state: str = 'unknown'
   offset: float = 0.0
   rate: float = 0.0
-  start: float = 0.0
-  end: float = 0.0
   source: str = 'unavailable'
-  continuous: bool = True
-  prediction_limited: bool = False
+  lateral_motion_valid: bool = False
   observed_out: bool = False
   confirmed: bool = False
   authority_reason: str = ''
-  physical_valid: bool = False
-  physical_start: float = 0.0
-  physical_end: float = 0.0
-  supported_end: float = 0.0
-
-
-def _without_physical_conflict(path):
-  return replace(path, physical_valid=False, physical_start=0.0, physical_end=0.0)
-
-
-def _merge_raw_intervals(intervals):
-  """Merge only actual overlap/touching; timing margins cannot bridge a gap."""
-  merged = []
-  for start, end in sorted(intervals):
-    if merged and start <= merged[-1][1]:
-      merged[-1] = merged[-1][0], max(merged[-1][1], end)
-    else:
-      merged.append((start, end))
-  return merged
-
-
-def _clip_band(interval, position, velocity, lower, upper):
-  """Intersect a time interval with lower <= position + velocity*t <= upper."""
-  if interval is None:
-    return None
-  if abs(velocity) < 1e-9:
-    return interval if lower <= position <= upper else None
-  a, b = (lower - position) / velocity, (upper - position) / velocity
-  start, end = max(interval[0], min(a, b)), min(interval[1], max(a, b))
-  return (start, end) if start <= end else None
-
-
-def _disk_interval(interval, x, y, vx, vy, half_width):
-  """Times a constant-velocity point occupies one finite polyline corner."""
-  a = vx * vx + vy * vy
-  b = x * vx + y * vy
-  c = x * x + y * y - half_width**2
-  if a < 1e-12:
-    return interval if c <= 0 else None
-  discriminant = b * b - a * c
-  if discriminant < 0:
-    return None
-  root = math.sqrt(discriminant)
-  start, end = max(interval[0], (-b - root) / a), min(interval[1], (-b + root) / a)
-  return (start, end) if start <= end else None
 
 
 @dataclass(frozen=True)
@@ -204,112 +151,35 @@ class _Corridor:
         return False
     return True
 
-  def relation(self, x, y, vx, vy, horizon=HORIZON, half_width=OVERLAP_HALF_WIDTH):
-    if not self.points:
+  def relation(self, x, y, vx, vy, half_width=OVERLAP_HALF_WIDTH):
+    """Current point-to-polyline relation and motion normal to that segment."""
+    if not self.points or not self.points[0][0] <= x <= self.points[-1][0]:
       return _Path()
-    # Test the entire finite polyline, rather than extending the currently
-    # nearest segment's tangent. A target presently beside a straight section
-    # can occupy a later bend even when its present lateral rate is zero.
-    # Restrict prediction to the path's actual longitudinal spatial support.
-    support = _clip_band((0.0, horizon), x, vx, self.points[0][0], self.points[-1][0])
-    if support is None:
-      return _Path()
-    current_supported = self.points[0][0] <= x <= self.points[-1][0]
-    best, intervals = None, []
+    best = None
     for px, py, dx, dy, length in self._segments:
       along = (x - px) * dx + (y - py) * dy
-      along_rate = vx * dx + vy * dy
       offset = (y - py) * dx - (x - px) * dy
-      rate = vy * dx - vx * dy
       nearest = min(length, max(0.0, along))
       distance = math.hypot(x - px - nearest * dx, y - py - nearest * dy)
       if best is None or distance < abs(best[0]):
-        best = math.copysign(distance, offset), rate
-      if horizon == 0:
-        continue
-      interval = _clip_band(support, along, along_rate, 0.0, length)
-      interval = _clip_band(interval, offset, rate, -half_width, half_width)
-      if interval is not None:
-        intervals.append(interval)
+        best = math.copysign(distance, offset), vy * dx - vx * dy
     if best is None:
       return _Path()
     offset, rate = best
-    inside = current_supported and abs(offset) <= half_width
-    if horizon == 0:
-      return _Path('inPath' if inside else 'outOfPath', offset, rate, source=self.source)
-    # Round joins and finite ends inside the actual longitudinal support,
-    # without inventing another segment beyond either path endpoint.
-    for px, py in self.points:
-      interval = _disk_interval(support, x - px, y - py, vx, vy, half_width)
-      if interval is not None:
-        intervals.append(interval)
-    if not intervals:
-      return _Path('outOfPath', offset, rate, source=self.source) if current_supported else _Path()
-    # Save the original geometric union before timing padding and merging.
-    # Reversing padding later is not equivalent: clipping at t=0 loses the
-    # original entry, and overlapping margins can conceal a real clear gap.
-    physical_intervals = _merge_raw_intervals(intervals)
-    # At most 65 analytic intervals (32 strips plus 33 vertices). Merge their
-    # short timing margins; a single message window uses the conservative
-    # envelope of any remaining disjoint intervals. A gap in that envelope
-    # cannot promote a crossing object into an enduring follow/stop lead.
-    intervals = sorted((max(support[0], start - .15), min(support[1], end + .25)) for start, end in intervals)
-    merged = [intervals[0]]
-    for start, end in intervals[1:]:
-      if start <= merged[-1][1]:
-        merged[-1] = merged[-1][0], max(merged[-1][1], end)
-      else:
-        merged.append((start, end))
-    start, end = merged[0][0], merged[-1][1]
-    spatial_limit = support[1] < horizon and end >= support[1] - 1e-6
-    physical_valid = (half_width == SWEPT_HALF_WIDTH and not spatial_limit and len(physical_intervals) == 1
-                      and physical_intervals[0][0] < physical_intervals[0][1])
-    physical_start, physical_end = physical_intervals[0] if physical_valid else (0.0, 0.0)
-    return _Path('inPath' if inside else 'entering', offset, rate, start, end, self.source, len(merged) == 1, spatial_limit,
-                 physical_valid=physical_valid, physical_start=physical_start, physical_end=physical_end, supported_end=end)
+    state = 'inPath' if abs(offset) <= half_width else 'outOfPath'
+    return _Path(state, offset, rate, source=self.source)
 
 
 def _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_variance, velocity_valid, half_width=SWEPT_HALF_WIDTH):
-  """Separate measured current occupancy from qualified lateral prediction.
-
-  These covariance limits and the displacement budget are engineering bounds,
-  not calibrated sensor probabilities. Unsupported lateral extrapolation cannot
-  erase an observed in-path obstacle or authorize its departure. Its measured
-  longitudinal motion still retains the ordinary following/stopping authority.
-  """
+  """Qualify current geometry and lateral motion without forecasting occupancy."""
   if not _finite(position_variance) or not 0 <= position_variance <= LATERAL_POSITION_MAX_VARIANCE:
     return _Path()
-  horizon = 0.0
-  if velocity_valid is True and _finite(velocity_variance) and 0 <= velocity_variance <= LATERAL_VELOCITY_MAX_VARIANCE:
-    budget = max(0.0, LATERAL_PREDICTION_BUDGET - math.sqrt(position_variance))
-    horizon = min(HORIZON, budget / max(1e-9, math.sqrt(velocity_variance)))
+  motion_valid = (velocity_valid is True and _finite(velocity_variance)
+                  and 0 <= velocity_variance <= LATERAL_VELOCITY_MAX_VARIANCE)
   for corridor in corridors:
-    prediction = corridor.relation(x, y, vx, vy, horizon, half_width)
-    if prediction.state == 'inPath':
-      if prediction.end < horizon - 1e-6 and not prediction.prediction_limited:
-        return prediction
-      # Reaching the quality/spatial bound is not a predicted clearing event.
-      # Keep a currently occupied object through the MPC horizon; a subsequent
-      # measured OUT can clear it even when lateral velocity remains untrusted.
-      # The original end remains the supported hard-constraint prefix. The
-      # extension carries ordinary obstacle/risk pressure, not fictitious
-      # evidence that the predicted point occupies every later hard row.
-      limited = horizon < HORIZON or prediction.prediction_limited
-      occupied = replace(prediction, start=0.0, end=HORIZON, prediction_limited=limited)
-      return _without_physical_conflict(occupied) if limited else occupied
-    if prediction.state == 'entering' and prediction.end > prediction.start:
-      limited = prediction.prediction_limited or prediction.end >= horizon - 1e-6 and horizon < HORIZON
-      entering = replace(prediction, end=HORIZON if limited else prediction.end, prediction_limited=limited)
-      return _without_physical_conflict(entering) if limited else entering
-    if prediction.state == 'outOfPath':
-      # A mean trajectory that intersects only beyond its quality bound is an
-      # unknown future candidate, not a qualified entry. Current geometry can
-      # nevertheless prove an independently observed departure of an old lead.
-      unbounded_quality = corridor.relation(x, y, vx, vy, half_width=half_width) if horizon < HORIZON else prediction
-      if horizon < HORIZON and unbounded_quality.state == 'entering':
-        return _Path('unknown', prediction.offset, prediction.rate, source=prediction.source,
-                     prediction_limited=True, observed_out=True)
-      return _Path('outOfPath', prediction.offset, prediction.rate, source=prediction.source, observed_out=True)
+    current = corridor.relation(x, y, vx, vy, half_width)
+    if current.state != 'unknown':
+      return replace(current, lateral_motion_valid=motion_valid, observed_out=current.state == 'outOfPath')
   return _Path()
 
 
@@ -318,27 +188,19 @@ def _object_path(corridors, x, y, vx, vy, position_variance, velocity_variance, 
   if inner.state == 'inPath':
     return replace(inner, confirmed=True)
   if vision:
-    # A currently confirmed same-car visual lead establishes body occupancy
-    # independently of which body surface supplies the radar reflection. Its
-    # radar d/v remain the motion components of this one physical object.
-    return _Path('inPath', inner.offset, inner.rate, 0.0, HORIZON, 'visionLead', confirmed=True,
-                 authority_reason='confirmedVisionPath', supported_end=HORIZON)
+    # Same-car visual identity can place the vehicle body in path even when
+    # its radar reflection is offset from that body's center.
+    return _Path('inPath', inner.offset, inner.rate, source='visionLead', confirmed=True,
+                 authority_reason='confirmedVisionPath')
   outer = _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_variance, velocity_valid,
                            half_width=OVERLAP_HALF_WIDTH)
-  if confirmed and outer.state == 'inPath':
-    # Geometric hysteresis: enter at a measured 1.25 m sweep (or independently
-    # confirmed visual body occupancy), leave after measured 2 m occupancy is
-    # gone. Every extension still requires this same fresh track and valid
-    # current geometry; losing vision alone is not an object disappearance.
-    return _without_physical_conflict(replace(outer, confirmed=True, authority_reason='confirmedOccupancyHysteresis'))
-  if inner.state == 'entering':
-    # Publish its actual future INNER interval now, so the MPC can anticipate
-    # entry. Outer current overlap must never invent inner occupancy at t=0.
-    return inner
-  if outer.state in ('inPath', 'entering'):
-    return _without_physical_conflict(replace(outer, state='edge', confirmed=False, observed_out=inner.state == 'outOfPath',
-                                              authority_reason='edgeInnerUnknown' if inner.state == 'unknown' else 'edgePossibleBodyOverlap'))
-  return outer if confirmed else inner
+  if confirmed:
+    if outer.state == 'inPath':
+      return replace(outer, confirmed=True, authority_reason='confirmedOccupancyHysteresis')
+    return outer
+  # An unconfirmed outer-band reflection has no lead authority. It also does
+  # not prove that a previously held vehicle body has left the whole band.
+  return replace(inner, observed_out=outer.state == 'outOfPath')
 
 
 def _points(line, limit=math.inf):
@@ -403,6 +265,7 @@ class _Memory:
   path: _Path
   path_ns: int
   accepted: dict | None = None
+  selected_follow: bool = False
   raw_velocity_ns: int = 0
   relevant: bool = False
   last_vision: dict | None = None
@@ -429,22 +292,11 @@ class HondaRadarControl:
     self._publication = None
     self._last_now_ns = self._model_ns = self._eof = 0
     self._session = ''
-    self._unresolved_loss = False
-    self._lost_tracks: dict[tuple[str, int], _Memory] = {}
     self._cleared: dict[int, int] = {}
-
-  def _lost(self, memory):
-    if memory is not None and memory.accepted is not None and memory.relevant:
-      key = self._session, memory.track_id
-      if key in self._lost_tracks or len(self._lost_tracks) < MAX_TRACKS:
-        self._lost_tracks[key] = memory
-      else:
-        self._unresolved_loss = True
 
   @staticmethod
   def _relevant(memory, path, speed):
-    return loss_relevant(distance=memory.x, ground_speed=memory.vx, ego_speed=speed, path_state=path.state,
-                         conflict_start=path.start, conflict_end=path.end, lateral_speed=path.rate, horizon=HORIZON)
+    return loss_relevant(distance=memory.x, ego_speed=speed, path_state=path.state)
 
   def _visual_fallback(self, memory, visions, eof, speed, yaw):
     previous = memory.last_vision
@@ -498,7 +350,7 @@ class HondaRadarControl:
             'cautionQualified': False,
             'physicalConflictValid': False, 'physicalConflictStart': 0.0, 'physicalConflictEnd': 0.0,
             'coasting': False, 'pathState': 'inPath', 'pathOffset': 0.0, 'conflictStart': 0.0, 'conflictEnd': HORIZON,
-            'conflictSupportVersion': 1, 'conflictSupportedEnd': HORIZON,
+            'conflictSupportVersion': 0, 'conflictSupportedEnd': 0.0,
             'lateralSpeed': 0.0, 'pathSource': 'visionLead', 'visionIndex': index, 'reason': 'vision',
           }
       result.append(lead)
@@ -562,30 +414,23 @@ class HondaRadarControl:
 
   @staticmethod
   def _historical_path(memory, eof):
-    if memory is None or not _fresh(memory.path_ns, eof, COAST_NS) or memory.path.state not in ('inPath', 'entering'):
+    if (memory is None or not memory.selected_follow or not _fresh(memory.path_ns, eof, COAST_NS)
+        or memory.path.state != 'inPath'):
       return _Path()
-    dt = (eof - memory.path_ns) / 1e9
     path = memory.path
-    start, end = remaining_occupancy_window(path.start, path.end, dt, horizon=HORIZON)
-    if end <= start:
-      return _Path('outOfPath', path.offset + path.rate * dt, path.rate, source='previousPath')
-    offset = path.offset + path.rate * dt
+    offset = path.offset + path.rate * (eof - memory.path_ns) / 1e9
     half_width = OVERLAP_HALF_WIDTH if path.confirmed else SWEPT_HALF_WIDTH
-    state = 'inPath' if abs(offset) <= half_width else 'entering'
-    supported_end = max(0.0, min(path.supported_end, path.end) - dt)
-    return _without_physical_conflict(replace(path, state=state, offset=offset, start=start, end=end, source='previousPath',
-                                              supported_end=min(end, supported_end)))
+    if abs(offset) > half_width:
+      return _Path('outOfPath', offset, path.rate, source='previousPath')
+    return replace(path, offset=offset, source='previousPath')
 
   @staticmethod
-  def _limit_predicted_support(path, memory, eof):
-    """Age the last accepted support; a new prediction cannot renew it."""
-    previous = memory.accepted['evidence'] if memory is not None and memory.accepted is not None else None
-    supported_end = 0.0
-    if previous is not None and 0 < previous['estimateMonoTime'] <= eof:
-      end = (previous['conflictSupportedEnd'] if previous.get('conflictSupportVersion', 0) == 1
-             else previous['conflictEnd'])
-      supported_end = max(0.0, end - (eof - previous['estimateMonoTime']) / 1e9)
-    return replace(path, supported_end=min(path.supported_end, path.end, supported_end))
+  def _follow_geometry(memory, path):
+    # Current crossing/opposing motion does not become an ordinary lead just
+    # because its reflection is currently inside the path. Unqualified lateral
+    # speed cannot by itself erase an otherwise qualified longitudinal lead.
+    return (path.state == 'inPath' and memory.vx >= -2.0
+            and (abs(path.rate) < .5 or not path.lateral_motion_valid or path.source == 'visionLead'))
 
   def _make_lead(self, memory, path, eof, model_ns, speed, *, vision=None, vision_index=-1, predicted=False, reason='radar',
                  follow_geometry_ns=0):
@@ -595,25 +440,10 @@ class HondaRadarControl:
     # Reuse the observer's -2 m/s opposing-motion boundary. Small negative
     # estimates of a stopped target retain stopping authority, without ever
     # treating a negative velocity as departure evidence.
-    caution = path.state == 'edge'
-    enduring = (path.state == 'inPath' and path.continuous and path.end >= HORIZON - 1e-6
-                and (abs(path.rate) < .5 or path.prediction_limited or path.source == 'visionLead') and memory.vx >= -2.0)
-    if path.prediction_limited:
-      reason += '+lateralPredictionLimited'
-    if not path.continuous:
-      reason += '+disjointOccupancyEnvelope'
+    following = self._follow_geometry(memory, path)
     if path.authority_reason:
       reason += '+' + path.authority_reason
     acceleration_valid = memory.acceleration_good and not predicted
-    physical_valid = (path.physical_valid is True and not predicted and not caution and not path.prediction_limited
-                      and memory.path_ns == eof and memory.epoch_ns == eof
-                      and _finite(path.physical_start, path.physical_end)
-                      and 0.0 <= path.physical_start < path.physical_end <= HORIZON)
-    # The legacy envelope is Float32 on the wire. Match that representation
-    # before publishing Float64 support, so a fully supported finite window
-    # stays equal after serialization instead of accidentally exceeding it.
-    conflict_end = struct.unpack('<f', struct.pack('<f', path.end))[0]
-    supported_end = conflict_end if path.supported_end == path.end else min(path.supported_end, conflict_end)
     return {
       'dRel': float(memory.x), 'yRel': float(memory.y), 'vRel': float(memory.vx - speed),
       'vLead': float(memory.vx), 'vLeadK': float(memory.vx), 'aLeadK': 0.0 if predicted else float(memory.acceleration),
@@ -625,26 +455,26 @@ class HondaRadarControl:
         'positionMonoTime': memory.position_ns, 'velocityMonoTime': memory.velocity_ns,
         'estimateMonoTime': eof, 'modelMonoTime': model_ns, 'positionStd': math.sqrt(max(.01, memory.position_variance)),
         'velocityStd': math.sqrt(max(.01, memory.velocity_variance)), 'positionValid': True, 'velocityValid': True,
-        'accelerationValid': acceleration_valid, 'followQualified': enduring and not predicted,
+        'accelerationValid': acceleration_valid, 'followQualified': following and not predicted,
         # The old epoch describes geometry only. Predicted objects retain all
         # their existing restricted purpose flags and raw component stamps.
-        'followGeometryMonoTime': (follow_geometry_ns if predicted else eof) if enduring else 0,
-        'brakeQualified': not caution, 'stopQualified': enduring and not predicted,
-        'departureQualified': enduring and not predicted and memory.vx > .5,
-        'fcwQualified': not caution and not predicted and memory.position_variance <= 2.25 and memory.velocity_variance <= 6.25,
-        'cautionQualified': caution and not predicted,
-        'physicalConflictValid': physical_valid,
-        'physicalConflictStart': float(path.physical_start) if physical_valid else 0.0,
-        'physicalConflictEnd': float(path.physical_end) if physical_valid else 0.0,
+        'followGeometryMonoTime': (follow_geometry_ns if predicted else eof) if following else 0,
+        'brakeQualified': following, 'stopQualified': following and not predicted,
+        'departureQualified': following and not predicted and memory.vx > .5,
+        'fcwQualified': following and not predicted and memory.position_variance <= 2.25 and memory.velocity_variance <= 6.25,
+        'cautionQualified': False,
+        'physicalConflictValid': False, 'physicalConflictStart': 0.0, 'physicalConflictEnd': 0.0,
         'coasting': predicted, 'pathState': path.state, 'pathOffset': path.offset,
-        'conflictStart': path.start, 'conflictEnd': conflict_end, 'lateralSpeed': path.rate,
-        'conflictSupportVersion': 1, 'conflictSupportedEnd': supported_end,
+        # Retired occupancy fields retain neutral values for old log readers.
+        'conflictStart': 0.0, 'conflictEnd': HORIZON, 'lateralSpeed': path.rate,
+        'conflictSupportVersion': 0, 'conflictSupportedEnd': 0.0,
         'pathSource': path.source, 'visionIndex': vision_index, 'reason': reason,
       },
     }
 
   def _coast(self, memory, eof, model_ns, now_ns, speed, yaw, corridors, reason):
-    if (memory.accepted is None or not memory.accepted['evidence']['brakeQualified']
+    if (not memory.selected_follow or memory.path.state != 'inPath' or memory.accepted is None
+        or not memory.accepted['evidence']['brakeQualified']
         or not _fresh(memory.position_ns, now_ns, COAST_NS)
         or not _fresh(memory.velocity_ns, now_ns, COAST_NS) or not memory.epoch_ns <= eof):
       return None
@@ -657,23 +487,13 @@ class HondaRadarControl:
       memory.lateral_velocity_variance, dt, yaw)
     path = _object_path(corridors, x, y, vx, vy, lateral_position_variance, lateral_velocity_variance,
                         memory.lateral_velocity_valid, confirmed=memory.path.confirmed)
-    old_window = self._historical_path(memory, eof)
-    if path.state == 'outOfPath' or path.observed_out or old_window.state == 'outOfPath':
+    previous_path = self._historical_path(memory, eof)
+    if path.state == 'outOfPath' or previous_path.state == 'outOfPath':
       return None
     if path.state == 'unknown':
-      path = old_window
-    if path.state not in ('inPath', 'entering'):
+      path = previous_path
+    if not self._follow_geometry(memory, path):
       return None
-    path = _without_physical_conflict(path)
-    # A coast cannot stretch a crossing's previously observed clearing time.
-    if old_window.end > 0:
-      path = replace(path, start=max(path.start, old_window.start), end=min(path.end, old_window.end),
-                     continuous=path.continuous and old_window.continuous,
-                     prediction_limited=path.prediction_limited or old_window.prediction_limited,
-                     supported_end=min(path.supported_end, old_window.supported_end))
-      if path.end <= path.start:
-        return None
-    path = self._limit_predicted_support(path, memory, eof)
     projected = _Memory(memory.track_id, memory.oem_id, memory.generation, memory.position_seq, memory.position_ns,
                         memory.velocity_ns, eof, x, y, vx, vy, memory.acceleration, False,
                         memory.position_variance + .5 * dt + 4 * dt * dt,
@@ -691,30 +511,29 @@ class HondaRadarControl:
             and accepted.get('trackId') == memory.track_id and accepted.get('generation') == memory.generation
             and accepted.get('positionMonoTime') == memory.position_ns and accepted.get('velocityMonoTime') == memory.velocity_ns
             and _integer(geometry_ns) and 0 < geometry_ns <= eof
-            and geometry_ns == accepted.get('estimateMonoTime') == memory.epoch_ns
-            and 0.0 <= path.start <= 1e-6):
+            and geometry_ns == accepted.get('estimateMonoTime') == memory.epoch_ns):
       geometry_ns = 0
     return self._make_lead(projected, path, eof, model_ns, speed, predicted=True, reason=reason,
                            follow_geometry_ns=geometry_ns)
 
   @staticmethod
-  def _select(objects):
-    # Independent near visual cut-ins remain in the complete object set even
-    # when a farther radar target supplies the compatible display lead slot.
-    unique = []
-    for lead in objects:
-      evidence = lead['evidence']
-      if evidence['source'] == 'vision' and any(
-          other['evidence']['source'] == 'vision'
-          and all(abs(lead[k] - other[k]) < .01 for k in ('dRel', 'yRel', 'vLeadK', 'aLeadK')) for other in unique):
+  def _select(candidates, coast_identities=()):
+    qualified = []
+    for lead in candidates:
+      claim = lead['evidence']
+      identity = claim['sessionId'], claim['trackId'], claim['generation']
+      continuation = (identity in coast_identities and claim['source'] == 'predicted'
+                      and claim['coasting'] is True and claim['brakeQualified'] is True)
+      if claim['pathState'] != 'inPath' or not (claim['followQualified'] or continuation):
         continue
-      unique.append(lead)
-    unique.sort(key=lambda lead: (lead['evidence']['conflictStart'], lead['dRel'], lead['evidence']['trackId']))
-    compatible = [lead for lead in unique if lead['evidence']['pathState'] == 'inPath'
-                  and (lead['evidence']['brakeQualified'] or lead['evidence']['followQualified'])]
-    compatible.sort(key=lambda lead: lead['dRel'])
-    leads = (compatible + [{'present': False}, {'present': False}])[:2]
-    return (leads[0], leads[1]), unique
+      if claim['source'] == 'vision' and any(
+          other['evidence']['source'] == 'vision'
+          and all(abs(lead[k] - other[k]) < .01 for k in ('dRel', 'yRel', 'vLeadK', 'aLeadK')) for other in qualified):
+        continue
+      qualified.append(lead)
+    qualified.sort(key=lambda lead: lead['dRel'])
+    leads = (qualified + [{'present': False}, {'present': False}])[:2]
+    return (leads[0], leads[1]), []
 
   def update(self, *, now_ns, enabled, observation, observation_ns, observation_valid, model, model_ns, v_ego, vision_leads):
     raw_visions = tuple(dict(v) if isinstance(v, dict) else v.to_dict() for v in vision_leads)
@@ -734,6 +553,9 @@ class HondaRadarControl:
     visions = self._vision(raw_visions, model, model_ns, eof)
     identity_visions = self._identity_visions(visions, model)
     previous_tracks = dict(self._tracks)
+    previous_positions = ({row[0]: (row[4], row[5]) for row in self._publication[-1][0]
+                           if all(_integer(row[index]) for index in (0, 4, 5))}
+                          if self._publication is not None else {})
     corridors = _corridors(model)
     fusion = _read(observation, 'fusion')
     reason, healthy, fault = 'active', True, False
@@ -765,8 +587,6 @@ class HondaRadarControl:
         elif self._publication is not None:
           old_session, old_seq, old_ns, old_model, old_eof, old_counters, _ = self._publication
           if session != old_session or counters != old_counters:
-            for memory in self._tracks.values():
-              self._lost(memory)
             self._tracks.clear()
             self._cleared.clear()
             reason, healthy, fault = 'observerReset', False, True
@@ -782,8 +602,6 @@ class HondaRadarControl:
         if len({t['trackId'] for t in tracks if _integer(t['trackId'])}) != len(tracks):
           reason, healthy, fault = 'trackIdentity', False, True
     if fault:
-      for memory in self._tracks.values():
-        self._lost(memory)
       self._tracks.clear()
       self._cleared.clear()
       tracks = []
@@ -793,21 +611,18 @@ class HondaRadarControl:
       # Revoke before processing active tracks: otherwise their new memory can
       # retain the old visual identity and revive it on a later observer gap.
       # The only way to establish it again is a current qualified _binding.
-      memories = list(self._tracks.values()) + [memory for (session, _), memory in self._lost_tracks.items()
-                                               if session == self._session]
-      for memory in memories:
+      for memory in self._tracks.values():
         if self._binding_contradicted(memory, bindings, source_model):
           memory.last_vision = None
     radar_objects, used_visions, touched, cleared = [], set(), set(), set()
-    degraded = not healthy
+    failed_leads, predicted_leads = set(), set()
     for track in tracks:
       identifier, oem, generation = (track[k] for k in ('trackId', 'oemTrackId', 'generation'))
       if (not all(_integer(value) for value in (identifier, oem, generation)) or identifier <= 0
           or not 1 <= oem <= 63 or generation < 0):
-        degraded = True
         continue
       touched.add(identifier)
-      previous = self._tracks.get(identifier) or self._lost_tracks.get((self._session, identifier))
+      previous = self._tracks.get(identifier)
       p_ns, p_seq, v_ns = (track[k] for k in ('positionMonoTime', 'positionSeq', 'velocityMonoTime'))
       x, y, vx, vy, p_var, v_var = (track[k] for k in
                                   ('dRel', 'yRel', 'groundSpeed', 'lateralSpeed', 'positionVariance', 'velocityVariance'))
@@ -820,20 +635,21 @@ class HondaRadarControl:
         or p_seq == previous.position_seq and p_ns != previous.position_ns
         or p_seq > previous.position_seq and p_ns <= previous.position_ns)
       if invalid_position or bad_order:
-        self._lost(previous)
         self._tracks.pop(identifier, None)
-        degraded |= previous is not None and previous.relevant
+        if previous is not None and previous.selected_follow and previous.relevant:
+          failed_leads.add(identifier)
         continue
       if track['active'] is not True or not _fresh(p_ns, now_ns):
         allow_coast = track['active'] is True or track['lastInvalidReason'] in ('expired', 'slotReassigned')
         coast = self._coast(previous, eof, model_ns, now_ns, speed, yaw, corridors, 'radarGap') if previous and allow_coast else None
         if coast is not None:
           radar_objects.append(coast)
-        else:
-          self._lost(previous)
+          if previous.relevant:
+            predicted_leads.add(identifier)
         if not allow_coast:
           self._tracks.pop(identifier, None)
-        degraded |= previous is not None and previous.relevant
+        if coast is None and previous is not None and previous.selected_follow and previous.relevant:
+          failed_leads.add(identifier)
         continue
       if track['mature'] is not True or not _integer(track['observations']) or track['observations'] < MIN_OBSERVATIONS:
         continue
@@ -841,16 +657,15 @@ class HondaRadarControl:
       # Determine association in the current frame before borrowing any visual
       # component. The unresolved/different hypothesis is never a fallback.
       if not _finite(vy) or abs(vy) > 30:
-        self._lost(previous)
         self._tracks.pop(identifier, None)
-        degraded = True
+        if previous is not None and previous.selected_follow and previous.relevant:
+          failed_leads.add(identifier)
         continue
       if not _finite(vx) or not -35 <= vx <= 80:
         # Only an established estimate may bridge the preliminary association
         # projection. With a simultaneous frame no velocity is needed to
         # compare position; a current confirmed visual match can then supply it.
         if previous is None and source_eof != eof:
-          degraded = True
           continue
         vx = previous.vx if previous else 0.0
       px, py, pvx, pvy = _project(x, y, vx, vy, (eof - source_eof) / 1e9, speed, yaw)
@@ -878,12 +693,11 @@ class HondaRadarControl:
           lateral_velocity_valid = previous.lateral_velocity_valid
           predicted, component_reason = True, 'velocityCoast'
         else:
-          self._lost(previous)
-          # An unusable roadside velocity is not a sensor-wide control fault.
-          position_path = next((relation for corridor in corridors
-                                if (relation := corridor.relation(px, py, 0.0, 0.0, half_width=SWEPT_HALF_WIDTH)).state != 'unknown'), _Path())
-          prior_risk = previous is not None and previous.accepted is not None and previous.relevant
-          degraded |= prior_risk or position_path.state == 'inPath'
+          # A bad component on an unselected raw track is not a failure of
+          # either ordinary lead. Only a previously selected near lead can
+          # carry an existing measurement obligation into this frame.
+          if previous is not None and previous.selected_follow and previous.relevant:
+            failed_leads.add(identifier)
           continue
       # A borrowed component must also drive alignment of position over the
       # same interval; otherwise d and v would describe different trajectories.
@@ -891,47 +705,59 @@ class HondaRadarControl:
       px += (pvx - projected_vx) * projection_dt
       py += (pvy - projected_vy) * projection_dt
       if not _finite(px, py, pvx, pvy, v_var) or px <= 0 or v_var < 0:
-        degraded = True
+        if previous is not None and previous.selected_follow and previous.relevant:
+          failed_leads.add(identifier)
         continue
       lateral_position_variance, lateral_velocity_variance = _lateral_variances(
         p_var, lateral_position_variance, v_var, lateral_velocity_variance, projection_dt, yaw)
       if previous is not None and 0 <= eof - previous.epoch_ns <= COAST_NS:
         expected = _project(previous.x, previous.y, previous.vx, previous.vy, (eof - previous.epoch_ns) / 1e9, speed, yaw)
         if abs(px - expected[0]) > max(3.0, 3 * math.sqrt(p_var + previous.position_variance)) or abs(py - expected[1]) > 2.0:
-          self._lost(previous)
           self._tracks.pop(identifier, None)
-          degraded = True
+          if previous.selected_follow and previous.relevant:
+            failed_leads.add(identifier)
           continue
       path = _object_path(corridors, px, py, pvx, pvy, lateral_position_variance, lateral_velocity_variance,
                           lateral_velocity_valid, confirmed=previous is not None and previous.path.confirmed,
                           vision=vision is not None)
+      old_position = previous_positions.get(identifier)
+      independent = ((old_position is None or p_seq > old_position[0] and p_ns > old_position[1])
+                     if previous is None else p_ns > previous.position_ns and p_seq > previous.position_seq)
+      occupied_before = (previous is not None and previous.path.state == 'inPath' and previous.accepted is not None
+                         and previous.accepted['evidence']['brakeQualified']
+                         and _fresh(previous.position_ns, now_ns, COAST_NS) and _fresh(previous.path_ns, eof, COAST_NS))
+      if (path.state == 'inPath' and not occupied_before
+          and (track['coasting'] is True
+               or vision is None and (not independent or p_ns <= self._cleared.get(identifier, 0)))):
+        # Position prediction or a reused sample cannot establish first
+        # occupancy. Fresh positions may enter even while velocity coasts;
+        # an independently confirmed current visual lead retains its path.
+        continue
       direct_path = path.state != 'unknown' or path.observed_out
-      if path.state == 'edge' and path.authority_reason == 'edgeInnerUnknown' and previous and previous.relevant:
-        history = self._historical_path(previous, eof)
-        if history.state in ('inPath', 'entering'):
-          path, direct_path = history, False
-          component_reason += '+edgeInnerUnknown'
-        else:
-          self._lost(previous)
       if not direct_path:
         path = self._historical_path(previous, eof)
         predicted = True
         component_reason += '+pathPrediction'
       if path.state == 'outOfPath' or path.observed_out:
-        independent = previous is not None and p_ns > previous.position_ns and p_seq > previous.position_seq
         known = (previous is not None and previous.accepted is not None and previous.accepted['evidence']['brakeQualified']
-                 or identifier in self._cleared or (self._session, identifier) in self._lost_tracks)
-        if known and not predicted and (independent or identifier in self._cleared and p_ns >= self._cleared[identifier]):
+                 or identifier in self._cleared)
+        # The planner may still hold this physical identity after our coast
+        # expires. A current measured OUT can clear that binding without a
+        # retained loss record. Model geometry alone cannot refresh a known
+        # position, and an outer-band point does not prove body clearance.
+        measured_out = (direct_path and path.observed_out
+                        and not predicted and track['coasting'] is not True and independent
+                        and p_ns >= self._cleared.get(identifier, 0))
+        if measured_out:
           self._cleared[identifier] = p_ns
           cleared.add(identifier)
           self._tracks.pop(identifier, None)
-          self._lost_tracks.pop((self._session, identifier), None)
         elif known:
           # A changed plan geometry may withdraw a candidate immediately, but
           # a fresh independent radar position must corroborate a HOLD release.
-          degraded = True
-        if path.state != 'edge':
-          continue
+          if previous is not None and previous.selected_follow and previous.relevant:
+            failed_leads.add(identifier)
+        continue
       acceleration = track['acceleration']
       acceleration_good = direct_velocity and track['accelerationGood'] is True and _finite(acceleration) and -10 <= acceleration <= 5
       if not acceleration_good:
@@ -947,27 +773,30 @@ class HondaRadarControl:
       if track['coasting'] is True:
         predicted = True
         component_reason += '+positionCoast'
-      if predicted:
-        path = self._limit_predicted_support(path, previous, eof)
+      if predicted and (previous is None or not previous.selected_follow):
+        # A stale candidate that was never a selected ordinary lead cannot
+        # acquire its first control authority through extrapolation.
+        self._tracks.pop(identifier, None)
+        if path.state == 'unknown' and previous is not None and previous.selected_follow and previous.relevant:
+          failed_leads.add(identifier)
+        continue
       memory = _Memory(identifier, oem, generation, p_seq, p_ns, v_ns, eof, px, py, pvx, pvy,
                        float(acceleration), acceleration_good, float(p_var), float(v_var),
                        path if direct_path else previous.path if previous else _Path(),
                        eof if direct_path else previous.path_ns if previous else 0,
+                       selected_follow=previous.selected_follow if previous else False,
                        raw_velocity_ns=track['velocityMonoTime'] if direct_velocity else previous.raw_velocity_ns if previous else 0,
                        last_vision=vision if vision is not None else previous.last_vision if previous else None,
                        lateral_position_variance=lateral_position_variance, lateral_velocity_variance=lateral_velocity_variance,
                        lateral_velocity_valid=lateral_velocity_valid)
       memory.relevant = self._relevant(memory, path, speed)
-      if (path.state in ('inPath', 'entering') or path.state == 'edge' and not predicted) and path.end > path.start:
-        if path.state != 'edge':
-          self._cleared.pop(identifier, None)
+      if self._follow_geometry(memory, path):
+        self._cleared.pop(identifier, None)
         lead = self._make_lead(memory, path, eof, model_ns, speed, vision=vision,
                                vision_index=vision_index, predicted=predicted, reason=component_reason)
         memory.accepted = lead
         radar_objects.append(lead)
-        if not predicted and path.state != 'edge':
-          self._lost_tracks.pop((self._session, identifier), None)
-        if vision_index >= 0 and not predicted and path.state != 'edge':
+        if vision_index >= 0 and not predicted:
           used_visions.add(vision_index)
           # Model's future hypotheses matched to this same track are not new
           # physical obstacles and must not dilute the radar replacement.
@@ -975,15 +804,23 @@ class HondaRadarControl:
             candidate = self._binding(identifier, [b for b in bindings if b['modelIndex'] == other], identity_visions, px, py, source_eof)
             if candidate >= 0:
               used_visions.add(candidate)
-      elif previous is not None and previous.accepted is not None:
-        self._lost(previous)
+      else:
+        # Crossing/opposing/unqualified geometry has no extra braking path
+        # and cannot retain memory that might later manufacture a lead coast.
+        self._tracks.pop(identifier, None)
+        if path.state == 'unknown' and previous is not None and previous.selected_follow and previous.relevant:
+          failed_leads.add(identifier)
+        continue
       self._tracks[identifier] = memory
-      degraded |= predicted and memory.accepted is not None and memory.relevant
+      if predicted and memory.accepted is not None and memory.relevant:
+        predicted_leads.add(identifier)
     visual_recoveries = set()
     if not fault:
       # Preserve a proven same-car visual stream during an optional observer
-      # loss. An unrelated visual lead cannot remove another target's barrier.
+      # gap. An unrelated visual lead cannot replace another target's coast.
       for identifier, memory in previous_tracks.items():
+        if not memory.selected_follow:
+          continue
         active = next((lead for lead in radar_objects if lead['evidence']['trackId'] == identifier), None)
         if identifier in cleared or active is not None and not active['evidence']['coasting']:
           continue
@@ -1002,52 +839,43 @@ class HondaRadarControl:
           visual_recoveries.add(identifier)
           touched.add(identifier)
           self._tracks[identifier] = memory
-          self._lost_tracks.pop((self._session, identifier), None)
     for identifier, memory in tuple(self._tracks.items()):
       if identifier in touched:
         continue
       coast = self._coast(memory, eof, model_ns, now_ns, speed, yaw, corridors, 'observerGap' if not healthy else 'trackMissing')
       if coast is not None:
         radar_objects.append(coast)
-        degraded |= memory.relevant
+        if memory.relevant:
+          predicted_leads.add(identifier)
       else:
-        if memory.accepted is not None:
-          # Expiry is loss of evidence, not proof that the road is clear.
-          self._lost(memory)
+        # A missed target expires with its bounded coast. This does not emit
+        # a measured clearance for a controller's existing stop binding.
         del self._tracks[identifier]
-    if len(radar_objects) > MAX_TRACKS:
-      # The producer has 32 live tracks. If replacement tracks overlap more
-      # than that many retained losses, keep the most immediate constraints
-      # and report an explicit incomplete-set failure, never silently PASS.
-      radar_objects.sort(key=lambda lead: (lead['evidence']['conflictStart'],
-                                          lead['dRel'] / max(.1, -lead['vRel']), lead['dRel']))
-      for lead in radar_objects[MAX_TRACKS:]:
-        self._lost(self._tracks.get(lead['evidence']['trackId']))
-      radar_objects = radar_objects[:MAX_TRACKS]
-      reason, healthy, degraded = 'objectCapacity', False, True
-    if len(self._tracks) > MAX_TRACKS:
-      retained = {lead['evidence']['trackId'] for lead in radar_objects}
-      order = sorted(self._tracks, key=lambda key: (key not in retained, -self._tracks[key].position_ns))
-      for identifier in order[MAX_TRACKS:]:
-        self._lost(self._tracks[identifier])
-        del self._tracks[identifier]
-      reason, healthy, degraded = 'objectCapacity', False, True
     remaining = [lead for index, lead in enumerate(visions) if lead.get('present') is True and index not in used_visions]
-    leads, objects = self._select(remaining + radar_objects)
-    self._cleared = {key: stamp for key, stamp in self._cleared.items() if key in touched and _fresh(stamp, now_ns)}
-    # A valid observation with no targets is healthy sensor transport. It does
-    # not erase an unresolved loss of a previously admitted object. A fresh
-    # unrelated farther obstacle cannot prove that the lost near one cleared.
-    if visual_recoveries and not fault and not self._unresolved_loss and not self._lost_tracks:
+    coast_identities = {(self._session, memory.track_id, memory.generation)
+                        for memory in previous_tracks.values() if memory.selected_follow}
+    leads, objects = self._select(remaining + radar_objects, coast_identities)
+    selected = {lead['evidence']['trackId'] for lead in leads if lead.get('present') is True}
+    # Only selected ordinary leads retain consumer memory. The observer still
+    # retains raw tracks; discarded candidates cannot create coast/degraded
+    # authority or cause a control failure through candidate capacity.
+    self._tracks = {identifier: memory for identifier, memory in self._tracks.items() if identifier in selected}
+    for memory in self._tracks.values():
+      memory.selected_follow = True
+    degraded = not healthy or bool(failed_leads - visual_recoveries) or bool(predicted_leads & selected)
+    # Preserve measured OUT timestamps across packet gaps for their existing
+    # freshness window, so the same sample cannot gain IN authority by reuse.
+    self._cleared = {key: stamp for key, stamp in self._cleared.items() if _fresh(stamp, now_ns)}
+    # Current same-car visual measurements can replace a missing radar
+    # component while other relevant current/coasting objects remain checked.
+    if visual_recoveries and not fault:
       unresolved = any(memory.relevant and identifier not in visual_recoveries
                        and not any(lead['evidence']['trackId'] == identifier and not lead['evidence']['coasting'] for lead in radar_objects)
                        for identifier, memory in previous_tracks.items())
       if not unresolved:
         degraded = False
-    risk_unresolved = self._unresolved_loss or bool(self._lost_tracks)
-    degraded |= risk_unresolved
     if reason == 'active' and degraded:
       reason = 'objectDegraded'
-    elif reason == 'active' and not objects:
+    elif reason == 'active' and not any(lead.get('present') is True for lead in leads):
       reason = 'noQualifiedObjects'
-    return RadarControlResult(leads, objects, healthy, degraded, reason, tuple(sorted(cleared)), self._session, risk_unresolved)
+    return RadarControlResult(leads, objects, healthy, degraded, reason, tuple(sorted(cleared)), self._session)

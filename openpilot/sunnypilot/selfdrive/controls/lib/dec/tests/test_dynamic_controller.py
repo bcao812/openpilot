@@ -67,20 +67,20 @@ def fusion_sm(*, model_stop=False):
   sm = default_sm()
   lead = formal_lead(vLead=10.0)
   sm['radarState'] = SimpleNamespace(fusionActive=True, fusionHealthy=True, radarObjects=[lead],
-                                     leadOne=SimpleNamespace(present=False), leadTwo=SimpleNamespace(present=False))
+                                     leadOne=lead, leadTwo=SimpleNamespace(present=False))
   sm['modelV2'].position.x = [0.0 if model_stop else float(index) * 10.0 for index in range(33)]
   return sm
 
 
 @pytest.mark.parametrize('radar_unavailable', [False, True])
-def test_fusion_uses_all_admitted_risks_without_reinterpreting_the_platform_parser(radar_unavailable):
+def test_fusion_uses_ordinary_leads_without_reinterpreting_the_platform_parser(radar_unavailable):
   cp = mock_cp()
   cp.radarUnavailable = radar_unavailable
   controller = DynamicExperimentalController(cp, mock_mpc(), params=MockParams())
   sm = fusion_sm()
   controller.update(sm)
   assert controller._has_lead_filtered
-  assert controller._fusion_risks == tuple(sm['radarState'].radarObjects)
+  assert controller._fusion_risks == (sm['radarState'].leadOne,)
   assert controller.mode() == 'acc'
   assert cp.radarUnavailable is radar_unavailable
 
@@ -100,10 +100,42 @@ def test_fusion_leads_never_mask_model_stop_fcw_or_standstill_mode(reason):
 def test_invalid_formal_radar_object_does_not_create_a_detected_lead():
   controller = DynamicExperimentalController(mock_cp(), mock_mpc(), params=MockParams())
   sm = fusion_sm()
-  sm['radarState'].radarObjects[0].evidence.positionMonoTime -= 300_000_000
+  sm['radarState'].leadOne.evidence.positionMonoTime -= 300_000_000
   controller.update(sm)
   assert not controller._has_lead_filtered
   assert controller._fusion_risks == ()
+
+
+@pytest.mark.parametrize('malformed', [False, True])
+def test_extra_raw_radar_objects_cannot_make_dec_detect_a_lead(malformed):
+  sm = fusion_sm()
+  sm['radarState'].leadOne = SimpleNamespace(present=False)
+  if malformed:
+    sm['radarState'].radarObjects[0].dRel = float('nan')
+  controller = DynamicExperimentalController(mock_cp(), mock_mpc(), params=MockParams())
+  for _ in range(20):
+    controller.update(sm)
+  assert not controller._has_lead_filtered and controller._fusion_risks == ()
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('path,start', [('entering', 0.0), ('entering', .5), ('inPath', .5)])
+def test_predicted_adjacent_entry_is_not_a_lead_until_currently_in_path(source, path, start):
+  sm = fusion_sm()
+  candidate = formal_lead(source=source, vLead=10.0,
+                          evidence={'pathState': path, 'conflictStart': start, 'conflictEnd': 2.0,
+                                    'followQualified': False, 'stopQualified': False, 'departureQualified': False,
+                                    'fcwQualified': source != 'predicted', 'accelerationValid': source != 'predicted'})
+  sm['radarState'].radarObjects = [candidate]
+  sm['radarState'].leadOne = candidate
+  controller = DynamicExperimentalController(mock_cp(), mock_mpc(), params=MockParams())
+  controller.update(sm)
+  assert not controller._has_lead_filtered and controller._fusion_risks == ()
+  candidate.evidence.pathState, candidate.evidence.conflictStart = 'inPath', 0.0
+  for _ in range(20):
+    controller.update(sm)
+  assert controller._has_lead_filtered and controller._fusion_risks == (candidate,)
+
 
 class TestDynamicExperimentalController(OpenpilotTestCase):
   def test_initial_mode_is_acc(self, mock_cp, mock_mpc):

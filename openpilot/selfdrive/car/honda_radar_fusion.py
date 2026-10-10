@@ -428,19 +428,14 @@ def _prepared_path_relation(x, y, vx, vy, path, previous='unknown'):
       continue
     length = math.sqrt(length_sq)
     lateral = ((point[1] + u) * dx - (point[0] - a) * dy) / length
-    if best is None or abs(lateral) < abs(best[0]):
-      lateral_rate = (vy * dx - vx * dy) / length
-      best = lateral, lateral_rate
+    if best is None or abs(lateral) < abs(best):
+      best = lateral
   if best is None:
     return 'unknown', 0.0, 0.0
-  lateral, lateral_rate = best
+  lateral = best
   half_width = CORRIDOR_HALF_WIDTH + (.5 if previous == 'inPath' else 0)
   if abs(lateral) <= half_width:
     return 'inPath', lateral, 0.0
-  if lateral * lateral_rate < 0 and abs(lateral_rate) > .2:
-    entry_time = (abs(lateral) - CORRIDOR_HALF_WIDTH) / abs(lateral_rate)
-    if 0 < entry_time <= 2:
-      return 'entering', lateral, entry_time
   return 'outOfPath', lateral, 0.0
 
 
@@ -448,7 +443,8 @@ def path_relation(x, y, vx, vy, path_x, path_y, previous='unknown'):
   """Finite spatial support is required for OUT; a stopped path gives UNKNOWN.
 
   Candidate state is in the radar/left-positive frame. Model position is in the
-  device/right-positive frame. Incoming objects are retained outside the path.
+  device/right-positive frame. Only the current geometry is classified; the
+  legacy entry-time output remains zero for wire compatibility.
   """
   return _prepared_path_relation(x, y, vx, vy, _prepare_path(path_x, path_y), previous)
 
@@ -825,7 +821,7 @@ class HondaRadarFusion:
       # Ingest appends only independent, accepted position sequences. AUX may
       # refine longitudinal velocity, but cannot supply lateral history or
       # refresh its last position time. These are engineering covariances,
-      # not calibrated accuracy; the consumer owns its prediction budget.
+      # not calibrated accuracy; the consumer checks current motion quality.
       position_times = tuple(sample[0] for sample in track.positions)
       lateral_velocity_valid = bool(
         track.active and track.mature and len(position_times) >= MIN_OBSERVATIONS

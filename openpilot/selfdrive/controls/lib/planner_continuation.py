@@ -170,8 +170,7 @@ class PlannerContinuation:
     donor_times = dict(donor_producer_ns=donor.producer_ns, donor_source_ns=donor.source_ns, donor_model_ns=donor.model_ns)
     if not self.budget.allows(now_ns, **donor_times):
       return reject('continuation_budget_exhausted')
-    if (mpc.rest_goal is not None or mpc.rest_goal_braking_accel is not None
-        or getattr(mpc, 'finite_risk_braking_accel', None) is not None):
+    if mpc.rest_goal is not None or mpc.rest_goal_braking_accel is not None:
       return reject('current_stop_or_imminent_risk')
     started = time.perf_counter()
     result = mpc.continuation_candidate(donor.trajectory, now_ns=now_ns)

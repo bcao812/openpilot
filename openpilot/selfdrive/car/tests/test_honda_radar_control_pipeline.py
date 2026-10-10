@@ -14,7 +14,8 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 
 
 def objects(row):
-  return row['radar'].get('radarObjects', [])
+  assert row['radar'].get('radarObjects', []) == []
+  return [row['radar'][name] for name in ('leadOne', 'leadTwo') if row['radar'][name].get('present')]
 
 
 def record(record_property, name, rows):
@@ -100,7 +101,7 @@ def test_confirmed_body_history_still_yields_to_current_out_or_identity_change(c
       assert rows[-1]['radar']['fusionSessionId'] == identity[0]
       assert identity[1] in rows[-1]['radar']['fusionClearedTracks']
       assert identity[1] in adapter._cleared and identity[1] not in adapter._tracks
-      assert identity not in adapter._lost_tracks
+      assert not rows[-1]['radar']['fusionRiskUnresolved']
       assert not any(lead['evidence']['trackId'] == identity[1] and lead['evidence']['brakeQualified'] for lead in objects(rows[-1]))
     else:
       replacement = Target(target.distance, target.speed, lateral=target.lateral, slot=target.slot, oem_id=17)
@@ -108,11 +109,8 @@ def test_confirmed_body_history_still_yields_to_current_out_or_identity_change(c
       tracks = [track for track in pipeline.state[SERVICE].fusion.tracks if track.active and track.oemTrackId == 17]
       track, = tracks
       assert track.trackId != identity[1]
-      memory = pipeline.radard.fusion_control._tracks[int(track.trackId)]
-      assert not memory.path.confirmed
-      for lead in objects(rows[-1]):
-        if lead['evidence']['trackId'] == track.trackId:
-          assert not lead['evidence']['followQualified'] and not lead['evidence']['stopQualified']
+      assert int(track.trackId) not in pipeline.radard.fusion_control._tracks
+      assert not any(lead['evidence']['trackId'] == track.trackId for lead in objects(rows[-1]))
     record(record_property, f'confirmed_body_revocation_{change}', rows)
 
 
@@ -193,8 +191,8 @@ def test_same_car_uses_radar_motion_and_brakes_through_long_visual_gap(record_pr
 
 
 @pytest.mark.parametrize('recovery', ['same_identity', 'missing_aux', 'different_oem'])
-def test_saturation_reacquisition_clears_only_the_proven_identity_loss(recovery, monkeypatch, record_property):
-  """Fresh CAN recovery clears only its identity's diagnostic loss history."""
+def test_saturation_reacquisition_requires_fresh_components_without_latched_loss(recovery, monkeypatch, record_property):
+  """Missing components revoke authority without making an old ID a later veto."""
   rows = []
   with control_pipeline() as pipeline:
     original_scan = pipeline_support.scan_frames
@@ -221,6 +219,7 @@ def test_saturation_reacquisition_clears_only_the_proven_identity_loss(recovery,
       observation = pipeline.state[SERVICE]
       row['fusion_tracks'] = [track.to_dict() for track in observation.fusion.tracks]
       row['raw_observations'] = [sample.to_dict() for sample in observation.observations]
+      row['consumer_degraded'] = pipeline.planner.reference_planner.radar_consumption.degraded
       rows.append(row)
   record(record_property, f'saturation_reacquisition_{recovery}', rows)
 
@@ -228,28 +227,26 @@ def test_saturation_reacquisition_clears_only_the_proven_identity_loss(recovery,
   identity = initial['evidence']['sessionId'], initial['evidence']['trackId']
   assert initial['present'] and initial['evidence']['source'] == 'radar'
   assert initial['evidence']['followQualified'] and initial['evidence']['brakeQualified']
-  assert not rows[23]['radar']['fusionRiskUnresolved']
+  assert not any(row['radar']['fusionRiskUnresolved'] for row in rows)
   assert rows[23]['fusion_tracks'][0]['lifecycleRaw'] == 4093
   invalid = rows[24]
   assert invalid['fusion_tracks'][0]['trackId'] == identity[1]
   assert not invalid['fusion_tracks'][0]['active']
   assert invalid['fusion_tracks'][0]['lastInvalidReason'] == 'invalidGeometry'
-  assert all(row['radar']['fusionRiskUnresolved'] for row in rows[24:26])
+  assert invalid['radar']['fusionDegraded']
   position = next(sample for sample in rows[25]['raw_observations'] if sample['positionValid'])
   assert position['raw']['lifecycleRaw'] == 4094 and not position['velocityValid']
-  unresolved = rows[25:26] if recovery == 'same_identity' else rows[25:]
-  for row in unresolved:
-    # The old identity has no fresh following/departure authority. Its loss
-    # history does not revoke the independent healthy model's permissions.
-    assert row['radar']['fusionRiskUnresolved']
+  unrefreshed = rows[25:26] if recovery == 'same_identity' else rows[25:]
+  for row in unrefreshed:
+    # An incomplete scan or another OEM cannot refresh the old object's
+    # measurements or grant it following/departure authority.
     for track in row['fusion_tracks']:
       if track['trackId'] == identity[1]:
         assert not track['active'] and not track['velocityGood']
     for obj in objects(row):
       evidence = obj['evidence']
       if (evidence['sessionId'], evidence['trackId']) == identity:
-        # A retained risk may still brake by prediction. Another OEM must
-        # neither refresh its measurements nor grant it follow/departure.
+        # A bounded prediction can still brake using the original stamps.
         assert evidence['source'] == 'predicted' and evidence['coasting']
         assert evidence['positionMonoTime'] == initial['evidence']['positionMonoTime']
         assert evidence['velocityMonoTime'] == initial['evidence']['velocityMonoTime']
@@ -262,7 +259,8 @@ def test_saturation_reacquisition_clears_only_the_proven_identity_loss(recovery,
     assert restored['positionMonoTime'] == position['positionMonoTime']
     assert restored['velocityMonoTime'] == rows[26]['source_ns']
     for row in rows[26:]:
-      assert not row['radar']['fusionRiskUnresolved']
+      assert row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
+      assert not row['consumer_degraded']
       lead = row['radar']['leadOne']
       assert lead['present'] and lead['evidence']['source'] == 'radar'
       assert (lead['evidence']['sessionId'], lead['evidence']['trackId']) == identity
@@ -271,14 +269,23 @@ def test_saturation_reacquisition_clears_only_the_proven_identity_loss(recovery,
     assert rows[-1]['target'] < -.1
     assert any(sample['active'] and sample['brake'] and sample['accel'] < -.1
                for row in rows[-6:] for sample in row['can'])
-  else:
-    # Neither expiry nor a fully qualified replacement can erase the old
-    # physical identity's risk. This extends beyond fusion's 500 ms history.
-    assert all(row['radar']['fusionRiskUnresolved'] for row in rows[26:])
-    if recovery == 'different_oem':
-      replacement = rows[-1]['radar']['leadOne']
+  elif recovery == 'different_oem':
+    # Once the replacement has its own fresh qualified measurements, the
+    # missing old identity does not keep either consumer degraded.
+    for row in rows[-6:]:
+      assert row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
+      assert not row['consumer_degraded']
+      replacement = row['radar']['leadOne']
       assert replacement['present'] and replacement['evidence']['brakeQualified']
+      assert replacement['evidence']['followQualified'] and not replacement['evidence']['coasting']
       assert (replacement['evidence']['sessionId'], replacement['evidence']['trackId']) != identity
+    assert rows[-1]['target'] < -.1
+    assert any(sample['active'] and sample['brake'] and sample['accel'] < -.1
+               for row in rows[-6:] for sample in row['can'])
+  else:
+    # Missing velocity never grants authority; expired predictions disappear
+    # without leaving an unresolved-ID risk on later publications.
+    assert objects(rows[-1]) == []
 
 
 def test_near_visual_cut_in_is_not_diluted_by_a_different_far_radar_car(record_property):
@@ -304,30 +311,37 @@ def test_near_visual_cut_in_is_not_diluted_by_a_different_far_radar_car(record_p
   assert any(sample['accel'] < -.5 and sample['brake'] for row in candidate[-6:] for sample in row['can'])
 
 
-def test_third_entering_object_brakes_while_two_distant_visual_leads_remain(record_property):
+def test_third_lateral_object_cannot_brake_via_future_entry_or_extra_object(record_property):
   arms = {}
   for crossing in (False, True):
     with control_pipeline(speed=8.0) as pipeline:
       rows = []
-      for frame in range(24):
+      for frame in range(72):
         timestamp = frame * .05
-        radar = [Target(27.0 - 8.0 * timestamp, 0.0, 4.5 - 1.2 * timestamp)] if crossing else []
+        # The same fresh track spends many frames outside both body bands,
+        # then overlaps the outer body band and finally the inner sweep.
+        radar = [Target(45.0 - 8.0 * timestamp, 0.0, 3.0 - .6 * timestamp)] if crossing else []
         rows.append(pipeline.step(speed=8.0, radar=radar, visual=[Target(35.0, 8.0), Target(50.0, 8.0)]))
       arms[crossing] = rows
       record(record_property, f'third_crossing_{crossing}', rows)
   baseline, candidate = arms[False], arms[True]
-  entering = [row for row in candidate if any(obj['evidence']['pathState'] == 'entering' for obj in objects(row))]
-  assert entering
-  for row in entering:
+  outside = [row for row in candidate[8:] if row['sensor_targets'][0]['lateral'] > 2.1]
+  assert len(outside) >= 12
+  for row in outside:
     assert row['radar']['leadOne']['present'] and row['radar']['leadTwo']['present']
     assert row['radar']['leadOne']['dRel'] >= 34.9 and row['radar']['leadTwo']['dRel'] >= 49.9
-    assert len(objects(row)) == 3
-    risk = next(obj for obj in objects(row) if obj['evidence']['pathState'] == 'entering')
-    assert risk['evidence']['brakeQualified'] and not risk['evidence']['departureQualified']
-    assert 0.0 < risk['evidence']['conflictStart'] < risk['evidence']['conflictEnd'] <= 10.0
-    assert abs(risk['yRel']) > 2.0  # The response precedes actual lane occupancy.
-  assert candidate[-1]['target'] < baseline[-1]['target'] - .2
-  assert any(sample['brake'] and sample['accel'] < -.1 for row in entering for sample in row['can'])
+    assert len(objects(row)) == 2 and all(obj['evidence']['source'] == 'vision' for obj in objects(row))
+    assert row['target'] == pytest.approx(baseline[row['frame']]['target'], abs=1e-6)
+    assert [sample['accel'] for sample in row['can']] == pytest.approx(
+      [sample['accel'] for sample in baseline[row['frame']]['can']], abs=1e-6)
+  # Even after current lateral overlap, its measured crossing motion is not
+  # an ordinary forward follow lead. No third-object braking path remains.
+  for row in candidate[8:]:
+    assert len(objects(row)) == 2
+    assert all(obj['evidence']['source'] == 'vision' for obj in objects(row))
+    assert row['target'] == pytest.approx(baseline[row['frame']]['target'], abs=1e-6)
+    assert [sample['accel'] for sample in row['can']] == pytest.approx(
+      [sample['accel'] for sample in baseline[row['frame']]['can']], abs=1e-6)
 
 
 @pytest.mark.parametrize('outcome', ['dropout', 'departure'])
@@ -352,8 +366,18 @@ def test_established_radar_hold_survives_dropout_and_releases_for_same_car_depar
   if outcome == 'dropout':
     frozen = rows[27]['observer_ns'], rows[27]['observer_position_ns']
     assert all((row['observer_ns'], row['observer_position_ns']) == frozen for row in rows[28:])
+    coasts = [obj for row in rows[28:36] for obj in objects(row) if obj['evidence']['coasting']]
+    assert coasts
+    for obj in coasts:
+      evidence = obj['evidence']
+      assert evidence['source'] == 'predicted' and evidence['brakeQualified']
+      assert not evidence['followQualified'] and not evidence['departureQualified']
+      assert evidence['positionMonoTime'] == held['evidence']['positionMonoTime']
+      assert evidence['velocityMonoTime'] == held['evidence']['velocityMonoTime']
     assert any(row['radar'].get('fusionDegraded', False) for row in rows[36:])
-    assert all(row['radar']['fusionRiskUnresolved'] for row in rows[36:])
+    assert not any(row['radar']['fusionRiskUnresolved'] for row in rows)
+    # The executed object-specific HOLD remains its own state. Sensor loss
+    # cannot release it even though no persistent missing-ID risk is kept.
     for row in rows[36:]:
       assert not row['release']
       assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
@@ -491,7 +515,7 @@ def test_scope_feedback_failure_is_distinct_from_an_explicit_exit(scope, enabled
 
 
 @pytest.mark.parametrize('feedback_fault', ['invalid', 'invalid_dec_off', 'stale', 'future', 'unseen'])
-def test_feedback_gap_preserves_real_radar_hold_and_perception_loss_history(feedback_fault, record_property):
+def test_feedback_gap_preserves_real_radar_hold_without_latched_loss(feedback_fault, record_property):
   """Invalid scope cannot remove the explicitly established object-hold premise."""
   rows = []
   with control_pipeline(speed=0.0) as pipeline:
@@ -502,8 +526,7 @@ def test_feedback_gap_preserves_real_radar_hold_and_perception_loss_history(feed
     for _ in range(10):
       rows.append(pipeline.step(speed=0.0, observer_online=False))
     adapter = pipeline.radard.fusion_control
-    retained = set(adapter._lost_tracks)
-    assert retained and held in retained and rows[-1]['radar']['fusionRiskUnresolved']
+    assert rows[-1]['radar']['fusionDegraded'] and not rows[-1]['radar']['fusionRiskUnresolved']
     for _ in range(12):
       state = pipeline.state
       if feedback_fault in ('invalid', 'invalid_dec_off'):
@@ -523,25 +546,39 @@ def test_feedback_gap_preserves_real_radar_hold_and_perception_loss_history(feed
       # prove departure of the previously adopted stopped radar vehicle.
       row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
       rows.append(row)
-      assert pipeline.radard.fusion_control is adapter and set(adapter._lost_tracks) == retained
+      assert pipeline.radard.fusion_control is adapter
       assert not row['radar']['fusionActive'] and row['radar']['fusionReason'] == 'controlScopeUnavailable'
-      assert row['radar']['fusionRiskUnresolved'] and row['radar'].get('radarObjects', []) == []
+      assert row['radar']['fusionDegraded'] and not row['radar']['fusionRiskUnresolved']
+      assert row['radar'].get('radarObjects', []) == []
       assert row['radar']['leadOne'] == row['radar']['visionLeadOne'] and row['radar']['leadOne']['present']
       assert pipeline.planner.reference_planner.radar_held_identity == held
       assert not row['release']
       assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
       assert all(sample['brake'] and not sample['release'] and sample['accel'] <= 0.0 for sample in row['can'])
-    # A successful new plan alone is not a fresh measurement of the lost
-    # obstacle. Normal sensing recovery must still resolve its identity.
+    # Scope recovery alone leaves the current observer stale and does not
+    # release the explicitly established object HOLD.
     row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
     rows.append(row)
-    assert row['radar']['fusionActive'] and row['radar']['fusionRiskUnresolved']
-    assert set(adapter._lost_tracks) == retained and not row['release']
+    assert row['radar']['fusionActive'] and row['radar']['fusionDegraded']
+    assert not row['radar']['fusionRiskUnresolved'] and not row['release']
+    # Fresh sensing restores current object authority independently of the
+    # old HOLD. A stationary close lead still supplies no departure proof.
+    for _ in range(12):
+      row = pipeline.step(speed=0.0, radar=[Target(3.0, 0.0)])
+      rows.append(row)
+    assert row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
+    assert not row['radar']['fusionRiskUnresolved']
+    assert not pipeline.planner.reference_planner.radar_consumption.degraded
+    assert pipeline.planner.reference_planner.radar_held_identity == held
+    lead = row['radar']['leadOne']
+    assert lead['present'] and lead['evidence']['brakeQualified'] and lead['evidence']['stopQualified']
+    assert not lead['evidence']['coasting'] and not row['release']
+    assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
+    assert all(sample['brake'] and not sample['release'] and sample['accel'] <= 0.0 for sample in row['can'])
     # A fresh explicit configuration exit is a different lifecycle boundary.
     pipeline.params.put_bool('ExperimentalMode', False, block=True)
     for _ in range(21):  # allow the ordinary one-second settings refresh
       row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
       rows.append(row)
     assert not row['radar']['fusionActive'] and not row['radar']['fusionRiskUnresolved']
-    assert not adapter._lost_tracks
   record(record_property, f'scope_feedback_{feedback_fault}', rows)
