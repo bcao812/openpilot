@@ -297,16 +297,43 @@ def test_near_visual_cut_in_is_not_diluted_by_a_different_far_radar_car(record_p
         visual = [Target(50.0, 10.0)]
         if cut_in and frame >= 16:
           visual = [Target(16.0 - 8.0 * (frame - 16) * .05, 2.0), *visual]
-        rows.append(pipeline.step(speed=10.0, radar=[Target(50.0, 10.0)], visual=visual))
+        row = pipeline.step(speed=10.0, radar=[Target(50.0, 10.0)], visual=visual)
+        row['far_binding'] = next(({
+          'track_id': int(lead.trackId), 'candidate_track_id': int(lead.candidateTrackId),
+          'state': str(lead.identityState), 'rejection_ns': int(lead.rejectionMonoTime),
+        } for lead in pipeline.state[SERVICE].fusion.leads if lead.modelIndex == 1), {})
+        rows.append(row)
       arms[cut_in] = rows
       record(record_property, f'visual_cut_in_{cut_in}', rows)
   baseline, candidate = arms[False], arms[True]
+  original = candidate[15]['radar']['leadOne']
+  assert original['evidence']['source'] == 'fused' and original['radar']
+  far_identity = original['evidence']['trackId']
+  waiting, rebound = [], []
   for row in candidate[16:]:
     near = row['radar']['leadOne']
     expected = 16.0 - 8.0 * (row['frame'] - 16) * .05
     assert near['evidence']['source'] == 'vision' and not near['radar']
     assert abs(near['dRel'] - expected) < .001
-    assert any(obj['evidence']['source'] in ('radar', 'fused') and obj['dRel'] > 45.0 for obj in objects(row))
+    assert len(objects(row)) == 2 and row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
+    far = row['radar']['leadTwo']
+    assert far['dRel'] == pytest.approx(50.0, abs=.02) and far['vLeadK'] == pytest.approx(10.0)
+    assert far['evidence']['followQualified'] and far['evidence']['brakeQualified']
+    binding = row['far_binding']
+    assert binding['track_id'] == binding['candidate_track_id'] == far_identity
+    assert binding['rejection_ns'] == 0
+    # Moving the far car from visual slot 0 to slot 1 needs a new same-car
+    # confirmation. Until then its 50 m visual lead remains ahead of the
+    # 50.007 m unbound radar candidate in the two ordinary lead slots.
+    if binding['state'] == 'same':
+      rebound.append(row['frame'])
+      assert far['evidence']['source'] == 'fused' and far['radar']
+      assert far['evidence']['trackId'] == far_identity and far['evidence']['visionIndex'] == 1
+    else:
+      waiting.append(row['frame'])
+      assert binding['state'] == 'unresolved'
+      assert far['evidence']['source'] == 'vision' and not far['radar']
+  assert waiting and rebound and max(waiting) < min(rebound)
   assert candidate[-1]['target'] < baseline[-1]['target'] - .5
   assert any(sample['accel'] < -.5 and sample['brake'] for row in candidate[-6:] for sample in row['can'])
 

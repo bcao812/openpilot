@@ -530,14 +530,18 @@ class LongitudinalMpc:
     self._reference_acceleration = self.a_solution.copy()
     return True
 
-  def _capture_continuation_problem(self, *, reference_ns, now_ns):
+  def _capture_continuation_problem(self, *, reference_ns, now_ns, fusion_active):
     """Keep this tick's installed problem before fail/reset can erase it."""
     if (not all(valid_timestamp(stamp) for stamp in (reference_ns, now_ns))
         or not 0 <= now_ns - reference_ns <= REFERENCE_MAX_AGE_NS
         or self.diagnostic_reference_bounds is None):
       return None
     expiry = int(reference_ns) + REFERENCE_MAX_AGE_NS
-    for lead in self._source_leads:
+    # The former projection certificates existed only with fusionActive.
+    # Keep the non-fusion continuation contract unchanged while retaining
+    # every formal fusion lead's measurement deadline and physical geometry.
+    fusion_leads = self._source_leads if fusion_active else ()
+    for lead in fusion_leads:
       evidence = getattr(lead, 'evidence', None)
       if evidence is None or evidence.version == 0:
         continue
@@ -547,7 +551,7 @@ class LongitudinalMpc:
                    int(evidence.modelMonoTime) + age)
     # Geometry starts at the observed distance, before process_lead's numerical
     # distance floor. No message reader or writable array survives this capture.
-    lead_trajectories = tuple(frozen_array(trajectory) for trajectory in self._lead_trajectories)
+    lead_trajectories = tuple(frozen_array(trajectory) for trajectory in self._lead_trajectories) if fusion_active else ()
     reference = self._influence_problem[3] if self._influence_problem is not None else None
     typed = reference.typed_model if reference is not None else None
     forbidden = (self.rest_goal is not None or self.effective_rest_node is not None
@@ -1863,9 +1867,9 @@ class LongitudinalMpc:
       self.fail(MPC_INVALID_INPUT, stage='formal_lead', detail=error)
       return
 
-    # Continuation keeps independent physical geometry and the contributing
-    # measurement deadlines. process_lead's close-distance floor aids native
-    # convergence and cannot authorize a cached trajectory through a real lead.
+    # Rest scheduling keeps the actual front geometry. Fusion continuation
+    # additionally captures it with measurement deadlines; process_lead's
+    # numerical distance floor cannot authorize passing through a real lead.
     self._lead_trajectories = tuple(
       np.column_stack((trajectory[:, 0] + (self.lead_initial_state(lead, reference_ns=reference_ns)[0] - trajectory[0, 0]),
                        trajectory[:, 1]))
@@ -1931,7 +1935,8 @@ class LongitudinalMpc:
       self.observe_obstacles(x_obstacles, sources, ordinary_continuation=ordinary_continuation)
     except Exception:
       self.diagnostic_obstacle_failures += 1
-    self.continuation_problem = self._capture_continuation_problem(reference_ns=reference_ns, now_ns=now_ns)
+    self.continuation_problem = self._capture_continuation_problem(reference_ns=reference_ns, now_ns=now_ns,
+                                                                  fusion_active=fusion_active)
     self.run()
     if self.solution_status != 0:
       return

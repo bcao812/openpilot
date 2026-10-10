@@ -10,9 +10,10 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.continuation import (
   ContinuationDonor, ContinuationProblem, build_candidate, frozen_array,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  COMFORT_STOP_DISTANCE, N, PARAM_DIM, QP_FEASIBILITY_TOL, REFERENCE_BOUND,
+  COMFORT_STOP_DISTANCE, CRASH_DISTANCE, N, PARAM_DIM, QP_FEASIBILITY_TOL, REFERENCE_BOUND,
   RISK_STOP_DISTANCE, T_IDXS, LongitudinalMpc, MpcReference, get_safe_obstacle_distance,
 )
+from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_MAX_AGE_NS
 from openpilot.selfdrive.controls.tests.test_mpc_problem_contract import NativeProblemRecorder
 from openpilot.selfdrive.controls.tests.test_radar_fusion_mpc import fused_state, object_lead
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
@@ -138,6 +139,41 @@ def test_current_measurement_deadline_and_geometry_are_frozen_before_failure_res
   assert result.accepted, result.reason
   assert result.evidence_expiry_ns == EPOCH + 110_000_000
   np.testing.assert_array_equal(problem.lead_trajectories[0], before)
+
+
+@pytest.mark.parametrize('source,fusion_active', [
+  ('legacy', None), ('legacy', False), ('vision', False), ('radar', False), ('vision', True), ('radar', True),
+])
+def test_continuation_retains_the_original_fusion_scope_without_changing_rest_geometry(source, fusion_active):
+  reference_ns, now_ns = EPOCH + 50_000_000, PRODUCER + 50_000_000
+  if source == 'legacy':
+    state = radar_state(distance=2.0, speed=0.0)
+  else:
+    lead = object_lead(distance=2.0, speed=0.0, ego_speed=15.0, source=source, epoch=reference_ns)
+    lead.evidence.positionMonoTime = EPOCH - 90_000_000
+    state = fused_state(display=(lead,))
+  if fusion_active is not None:
+    state.fusionActive = fusion_active
+  planner = LongitudinalMpc()
+  recorder = NativeProblemRecorder(planner.solver)
+  recorder.failure = 'solver_status'
+  planner.solver = recorder
+  planner.set_cur_state(15.0, 0.0)
+  recovery_limits = []
+  recorder.before_solve = lambda: recovery_limits.append(planner.rest_recovery_position_limit)
+  assert planner.process_lead(state.leadOne)[0, 0] > state.leadOne.dRel
+  planner.update(state, reference=MpcReference(20.0), reference_ns=reference_ns, now_ns=now_ns)
+  assert planner.solution_status == 4 and planner.continuation_problem is not None
+  # Ordinary rest scheduling still sees the actual measured front distance.
+  assert recovery_limits == [2.0 - CRASH_DISTANCE]
+  problem = planner.continuation_problem
+  if fusion_active:
+    assert problem.evidence_expiry_ns == EPOCH + 110_000_000
+    assert len(problem.lead_trajectories) == 1
+    np.testing.assert_array_equal(problem.lead_trajectories[0][:, 0], 2.0)
+  else:
+    assert problem.evidence_expiry_ns == reference_ns + REFERENCE_MAX_AGE_NS
+    assert problem.lead_trajectories == ()
 
 
 @pytest.mark.parametrize('acceleration,jerk', [

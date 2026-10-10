@@ -531,7 +531,7 @@ def test_extra_objects_cannot_invalidate_or_replace_a_current_formal_lead(extra_
     extra = future_entry()
   objects = [extra] * (40 if extra_kind == 'oversize' else 1)
   native = native_frame(radar_frame(*objects, display=(current,)))
-  before, wire = native.to_dict(), native.to_bytes()
+  wire = native.to_bytes()
   native.clear_write_flag()
   consumer = RadarConsumption()
   view = consume_frame(consumer, native)
@@ -539,7 +539,8 @@ def test_extra_objects_cannot_invalidate_or_replace_a_current_formal_lead(extra_
   assert qualified_lead(view.leadOne, 'brake', 0.0, now_ns=CONSUMPTION)
   assert not view.radarObjects and not consumer.degraded
   assert not consumer.expired_identities and not consumer.retired_identities
-  assert native.to_dict() == before and native.to_bytes() == wire
+  # Byte equality also checks the unchanged NaN payload, without NaN != NaN.
+  assert native.to_bytes() == wire
 
 
 def test_extra_wire_decode_errors_are_not_control_input_errors():
