@@ -744,7 +744,7 @@ struct RadarState @0x9a185389d6fdd05f {
   visionLeadTwo @20 :LeadData;
   fusionClearedTracks @21 :List(UInt64);  # fresh geometry proved exit, never expiry
   fusionSessionId @22 :Text;
-  fusionRiskUnresolved @23 :Bool;  # retained relevant loss beyond usable prediction; not ordinary coasting/quality degradation
+  fusionRiskUnresolved @23 :Bool;  # retired persistent-loss diagnostic; new publications leave false
 
   struct LeadData {
     dRel @0 :Float32;  # m from the front bumper of the car
@@ -1499,7 +1499,7 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   solverStatus @42 :Int32;
   diagnostics @43 :LongitudinalPlanDiagnostics;
   objectInfluences @44 :List(Custom.LongitudinalObjectInfluence);
-  radarRiskUnresolved @45 :Bool;  # current UNIFIED producer/consumer retained loss; requests the existing radar-unavailable event
+  radarRiskUnresolved @45 :Bool;  # retired persistent-loss diagnostic; new publications leave false
   continuation @46 :LongitudinalContinuation;  # separate bounded candidate; native validity/status remain unchanged
 
 

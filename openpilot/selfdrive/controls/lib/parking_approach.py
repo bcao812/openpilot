@@ -18,7 +18,6 @@ from openpilot.selfdrive.controls.lib.low_speed_stop_distance import (
 )
 
 
-CUT_IN_RESERVE = 3.0
 RESIDUAL_DISTANCE = 2.0
 DISTANCE_UNCERTAINTY = 0.5
 SPEED_UNCERTAINTY = 0.1
@@ -294,7 +293,7 @@ class ParkingApproach:
     response_time = float(actuator_delay) + BRAKE_BUILD_TIME + DT_MDL + observation_age
     speed_upper = float(speed) + SPEED_UNCERTAINTY
     response_accel_upper = max(RESPONSE_ACCEL_FLOOR, float(measured_accel))
-    clearance_lower = raw_gap - CUT_IN_RESERVE - RESIDUAL_DISTANCE - uncertainty.distance_uncertainty
+    clearance_lower = raw_gap - RESIDUAL_DISTANCE - uncertainty.distance_uncertainty
     response_distance = speed_upper * response_time + 0.5 * response_accel_upper * response_time ** 2
     terminal_speed = speed_upper + response_accel_upper * response_time
     stopping_distance = response_distance + terminal_speed * terminal_speed / (2.0 * MIN_NET_BRAKING)

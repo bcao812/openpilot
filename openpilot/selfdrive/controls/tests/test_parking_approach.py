@@ -156,7 +156,7 @@ def test_margin_monotonicity(variable, values, increasing):
 
 
 def test_budget_deficit_rejects_compact_geometry_without_adding_stop_evidence():
-  _, _, decision, _, _ = qualified_approach(gaps=(5.0, 20.0))
+  _, _, decision, _, _ = qualified_approach(gaps=(4.0, 20.0))
   assert decision.eligible and decision.margin < 0.0
   assert not decision.allow_compact and not decision.require_stop
   assert decision.accel_cap is None
@@ -167,7 +167,7 @@ def test_every_present_slot_limits_admission_and_raw_nearest_slot_defines_margin
   assert decision.eligible and decision.limiting_lead == 1
   assert decision.raw_gap == pytest.approx(8.0)
   assert decision.distance_uncertainty == pytest.approx(1.5)
-  assert decision.clearance_lower == pytest.approx(1.5)
+  assert decision.clearance_lower == pytest.approx(4.5)
   invalid = qualified_approach(present=(True, True), stds=(.1, 1000.0))[2]
   assert not invalid.eligible and not invalid.allow_compact and invalid.accel_cap is None
 

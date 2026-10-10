@@ -83,7 +83,7 @@ def test_admitted_compact_geometry_reaches_native_parameters_without_scalar_cap(
 
 
 def test_deficient_margin_tightens_native_geometry_without_inventing_stop_evidence():
-  planner, _, _ = warm_parking(final_gap=5.0)
+  planner, _, _ = warm_parking(final_gap=4.0)
   producer = planner.reference_planner
   decision = producer.parking_approach.decision
   assert decision.eligible and decision.margin < 0.0 and not decision.allow_compact
