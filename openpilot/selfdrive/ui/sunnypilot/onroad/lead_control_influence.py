@@ -27,6 +27,8 @@ def _read(value, field, default=None):
 
 
 def _integer(value, minimum=0):
+  if type(value) is int:
+    return value >= minimum
   return isinstance(value, Integral) and not isinstance(value, bool) and value >= minimum
 
 

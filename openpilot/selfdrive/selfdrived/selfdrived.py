@@ -318,7 +318,6 @@ class SelfdriveD(CruiseHelper):
     plan, motion = self.sm['longitudinalPlan'], self.sm['controlsState'].motionState
     plan_ns = self.sm.logMonoTime['longitudinalPlan']
     controls_ns = self.sm.logMonoTime['controlsState']
-    offer = ContinuationOffer.from_message(plan.continuation)
     reference = continuation_reference(plan.reference, plan_ns=plan_ns, now_ns=now_ns)
     owner_available = bool(
       all(getattr(self.sm, health).get(service) is True for service in ('controlsState', 'carControl')
@@ -353,6 +352,7 @@ class SelfdriveD(CruiseHelper):
                           and plan.motionIntent.valid and plan.motionIntent.ready
                           and self.sm.all_checks(['modelV2', 'longitudinalPlan']))
     if plan_failure or motion_degraded:
+      offer = ContinuationOffer.from_message(plan.continuation)
       episode = offer.episode_start_ns if offer is not None and offer.version == CONTINUATION_VERSION and reference is not None else None
       budget.note_failure(now_ns, episode_start_ns=episode)
     elif (owner_reference_healthy and not motion.continuationActive and native_healthy

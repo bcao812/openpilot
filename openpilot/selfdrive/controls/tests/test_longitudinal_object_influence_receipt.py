@@ -1,9 +1,11 @@
+from types import SimpleNamespace as NS
+
 import pytest
 
 from openpilot.cereal import custom, log
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
-from openpilot.selfdrive.controls.lib.object_influence import plan_object_influences
+from openpilot.selfdrive.controls.lib.object_influence import accepted_object_influences, plan_object_influences
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness
 
 
@@ -92,18 +94,38 @@ def test_real_owner_hold_has_maximum_strength_and_rejected_release_is_not_red():
   assert not motion.objectInfluences
 
 
-def test_reading_old_capnp_inputs_does_not_allocate_evidence_or_influence_fields():
+@pytest.mark.parametrize('input_kind', ['builder', 'reader'])
+def test_reading_old_capnp_inputs_does_not_allocate_evidence_or_influence_fields(input_kind):
   state = log.RadarState.new_message(mdMonoTime=2_000_000_000)
   state.leadTwo.present = True
   before = state.to_dict()
+  source = state if input_kind == 'builder' else state.as_reader()
   records = plan_object_influences(
-    state, active_identities=(('vision', 2_000_000_000, 1),), now_ns=2_000_000_000,
+    source, active_identities=(('vision', 2_000_000_000, 1),), now_ns=2_000_000_000,
     permitted=True, fusion_admitted=False, reference_accepted=True, independent_stop=False, object_stop=False,
     held_identity=None, release_identity=None, standstill=False, target_accel=-1.0, accel_min=-3.5, accel_max=2.0,
   )
   assert len(records) == 1
   assert records[0]['visionIndex'] == 1
   assert state.to_dict() == before
+
+
+@pytest.mark.parametrize('input_kind', ['builder', 'reader'])
+def test_native_plan_readers_and_builders_preserve_the_accepted_receipt(input_kind):
+  now = 2_000_000_000
+  expected = object_record(strength=0.5)
+  plan = log.LongitudinalPlan.new_message(modelMonoTime=now, solverStatus=0, aTarget=-1.0,
+                                        motionIntent={'valid': True, 'ready': True, 'releaseAllowed': False},
+                                        objectInfluences=[expected])
+  owner = NS(unified=True, motion_input_constrained=False, motion_phase=NS(text='track'), resolved_should_stop=False,
+             motion_supervisor=NS(rest_braking_accel_limit=None))
+  car_state = NS(gasPressed=False, brakePressed=False)
+  before = plan.to_dict()
+  source = plan if input_kind == 'builder' else plan.as_reader()
+  records = accepted_object_influences(source, owner, car_state, long_active=True, plan_valid=True,
+                                      plan_ns=now, now_ns=now + 10_000_000, output_accel=-1.0, owner_tracking=True)
+  assert records == [expected]
+  assert plan.to_dict() == before
 
 
 def test_retired_edge_caution_wire_stays_readable_without_an_owner_receipt():

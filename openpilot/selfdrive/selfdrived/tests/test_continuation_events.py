@@ -4,6 +4,9 @@ from unittest.mock import patch
 import pytest
 
 from openpilot.cereal import log
+from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
+  NATIVE_RECOVERY_NS, UNSTABLE_DISABLE_NS, ContinuationOffer,
+)
 from openpilot.selfdrive.controls.tests.test_continuation_control_chain import ContinuationChain, START
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import new_event, serialized, selfdrive_event_harness
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
@@ -55,13 +58,17 @@ def test_qualified_offer_before_owner_ack_and_current_receipt_both_keep_existing
   event = chain.produce(START + 100_000_000, 4)
   assert event.longitudinalPlan.continuation.valid
   consumed_before = daemon.sm['controlsState'].motionState.planMonoTime
-  observe_at(daemon, chain, START + 100_000_000, offset_ns=2_000_000)
+  with patch.object(ContinuationOffer, 'from_message', wraps=ContinuationOffer.from_message) as decode:
+    observe_at(daemon, chain, START + 100_000_000, offset_ns=2_000_000)
+    decode.assert_called_once()
   assert consumed_before != event.logMonoTime and not daemon.sm['controlsState'].motionState.continuationActive
   assert not daemon.events.names
   assert daemon._longitudinal_failure_budget.episode_start_ns == event.longitudinalPlan.continuation.episodeStartMonoTime
   assert not daemon.sm.valid['longitudinalPlan'] and not daemon.sm['longitudinalPlan'].motionIntent.valid
   chain.consume(START + 100_000_000)
-  observe_at(daemon, chain, START + 100_000_000, offset_ns=6_000_000)
+  with patch.object(ContinuationOffer, 'from_message', wraps=ContinuationOffer.from_message) as decode:
+    observe_at(daemon, chain, START + 100_000_000, offset_ns=6_000_000)
+    decode.assert_called_once()
   assert daemon.sm['controlsState'].motionState.continuationActive
   assert not daemon.events.names
   # A cached offer is not entry permission after a driver/configuration exit.
@@ -71,6 +78,67 @@ def test_qualified_offer_before_owner_ack_and_current_receipt_both_keep_existing
   assert daemon.events.contains(ET.NO_ENTRY)
   daemon.events.add(EventName.buttonEnable)
   assert daemon.state_machine.update(daemon.events) == (False, False)
+
+
+def test_healthy_frames_skip_offer_decode_while_preserving_history_donor_and_budget_recovery():
+  daemon, chain = established_events()
+  failed = chain.produce(START + 100_000_000, 4)
+  chain.consume(START + 100_000_000)
+  observe_at(daemon, chain, START + 100_000_000)
+  episode = failed.longitudinalPlan.continuation.episodeStartMonoTime
+  assert episode > 0 and daemon._longitudinal_failure_budget.episode_start_ns == episode
+
+  recovery_start = START + 150_000_000
+  for elapsed in range(0, NATIVE_RECOVERY_NS + 1, 50_000_000):
+    event = chain.produce(recovery_start + elapsed)
+    assert event.valid and event.longitudinalPlan.solverStatus == 0
+    # This harness only publishes plan/model/owner messages. Keep its fixed
+    # ancillary inputs alive while those real clocks span the recovery window.
+    for service in daemon.sm.services:
+      if service not in ('longitudinalPlan', 'modelV2', 'controlsState', 'carControl'):
+        daemon.sm.recv_time[service] = (recovery_start + elapsed) / 1e9
+    for tick in range(5):
+      sample = recovery_start + elapsed + tick * 10_000_000
+      _, motion, _ = chain.consume(sample)
+      assert not motion.degraded and not motion.continuationActive
+      # Limit the spy to selfdrived's observation, excluding producer/owner decoding.
+      with patch.object(ContinuationOffer, 'from_message', wraps=ContinuationOffer.from_message) as decode:
+        now = observe_at(daemon, chain, sample)
+        decode.assert_not_called()
+      assert not daemon.events.names
+      assert daemon._continuation_history.samples[-1][0] == sample
+      assert daemon._continuation_history.current_state(now) is not None
+      assert daemon._continuation_donor.model_ns == chain.model_ns
+      assert daemon._continuation_donor.producer_ns == motion.referenceProducerMonoTime
+      if elapsed < NATIVE_RECOVERY_NS:
+        assert daemon._longitudinal_failure_budget.episode_start_ns == episode
+        assert daemon._longitudinal_soft_disable_remaining_ns == episode + UNSTABLE_DISABLE_NS - now
+      else:
+        assert daemon._longitudinal_failure_budget.episode_start_ns == 0
+        assert daemon._longitudinal_soft_disable_remaining_ns is None
+
+
+def test_healthy_plan_with_degraded_owner_still_decodes_the_original_failure_episode():
+  daemon, chain = established_events()
+  failed = chain.produce(START + 100_000_000, 4)
+  assert failed.longitudinalPlan.continuation.valid
+  chain.consume(START + 100_000_000)
+  healthy = chain.produce(START + 150_000_000).as_builder()
+  # Preserve the old envelope to exercise its deadline even with native success.
+  healthy.longitudinalPlan.continuation = failed.longitudinalPlan.continuation
+  chain.plan_event = serialized(healthy)
+  chain.consume(START + 150_000_000)
+  owner = chain.controls.control.pm.messages['controlsState'].as_builder()
+  owner.controlsState.motionState.degraded = True
+  chain.controls.control.pm.messages['controlsState'] = serialized(owner)
+  assert chain.plan_event.valid and chain.plan_event.longitudinalPlan.solverStatus == 0
+  with patch.object(ContinuationOffer, 'from_message', wraps=ContinuationOffer.from_message) as decode:
+    now = observe_at(daemon, chain, START + 150_000_000)
+    decode.assert_called_once()
+  episode = failed.longitudinalPlan.continuation.episodeStartMonoTime
+  assert daemon._longitudinal_failure_budget.episode_start_ns == episode
+  assert daemon._longitudinal_soft_disable_remaining_ns == episode + UNSTABLE_DISABLE_NS - now
+  assert EventName.longitudinalControlUnavailable in daemon.events.names
 
 
 def test_first_unavailable_event_spends_remaining_time_from_the_first_failed_solve():

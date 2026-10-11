@@ -8,7 +8,7 @@ No helper in this module can change a plan, an owner, or an acceleration.
 import math
 from numbers import Integral, Real
 
-from openpilot.selfdrive.controls.lib.lead_qualification import MAX_CONTROL_OBJECTS, _read, control_leads, lead_identity
+from openpilot.selfdrive.controls.lib.lead_qualification import MAX_CONTROL_OBJECTS, _as_reader as _reader, _read, control_leads, lead_identity
 
 
 INFLUENCE_VERSION = 1
@@ -28,11 +28,6 @@ def _finite(value):
     return math.isfinite(value)
   except (OverflowError, ValueError):
     return False
-
-
-def _reader(value):
-  as_reader = getattr(value, 'as_reader', None)
-  return as_reader() if callable(as_reader) else value
 
 
 def _identity_record(lead, model_ns, index):

@@ -1,18 +1,23 @@
 from copy import deepcopy
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from openpilot.cereal import log
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarLabelPoint
 from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import (
-  MESSAGE_MAX_AGE_NS, ObjectInfluence, _read, accepted_influences, influence_rgb, lead_influence_strength, radar_influence_strength,
+  MESSAGE_MAX_AGE_NS, ObjectInfluence, _integer, _read, accepted_influences, influence_rgb, lead_influence_strength, radar_influence_strength,
 )
 
 
 NOW = 1_000_000_000
 MODEL = NOW - 70_000_000
 PLAN = NOW - 40_000_000
+
+
+class IntSubclass(int):
+  pass
 
 
 class State(dict):
@@ -58,6 +63,32 @@ def capnp_state(sm, capnp_message):
   result.valid = sm.valid.copy()
   result.logMonoTime = sm.logMonoTime.copy()
   return result
+
+
+@pytest.mark.parametrize(('value', 'minimum', 'expected'), (
+  (-2, -1, False), (-1, -1, True), (-1, 0, False), (0, 0, True), (0, 1, False), (1, 1, True),
+  (2 ** 64 - 1, 1, True), (2 ** 64 - 1, 2 ** 64, False),
+  (IntSubclass(-1), -1, True), (IntSubclass(0), 1, False), (IntSubclass(42), 1, True),
+  (np.int32(-1), -1, True), (np.int64(-1), 0, False), (np.int64(42), 1, True),
+  (np.uint64(0), 1, False), (np.uint64(2 ** 64 - 1), 1, True),
+  (True, 0, False), (False, -1, False), (np.bool_(True), 0, False),
+  (1.0, 0, False), ('1', 0, False), (None, 0, False),
+))
+def test_integer_types_and_minimum_boundaries(value, minimum, expected):
+  assert _integer(value, minimum) == expected
+
+
+@pytest.mark.parametrize('integer', (int, IntSubclass, np.int64, np.uint64))
+def test_integral_message_fields_preserve_receipts_and_control_colors(integer):
+  fields = {'version': integer(1), 'trackId': integer(42), 'modelMonoTime': integer(MODEL), 'visionIndex': integer(0)}
+  sm = state(influence(**fields))
+  sm.logMonoTime = {service: integer(stamp) for service, stamp in sm.logMonoTime.items()}
+  sm['controlsState']['longitudinalPlanMonoTime'] = integer(PLAN)
+  sm['controlsState']['motionState']['planMonoTime'] = integer(PLAN)
+  items = accepted_influences(sm, integer(NOW))
+  assert items == (ObjectInfluence('radar', 42, MODEL, 0, 'braking', 0.6),)
+  assert all(type(value) is int for value in (items[0].track_id, items[0].model_ns, items[0].vision_index))
+  assert influence_rgb(lead_influence_strength(lead(**fields), items)) == (219, 74, 83)
 
 
 def test_field_reads_do_not_probe_dynamic_readers_for_builder_methods():
@@ -107,8 +138,9 @@ def test_capnp_receipts_and_leads_preserve_control_colors(capnp_message, version
   ('carControl', 'longActive', False), ('carControl', 'enabled', False), ('selfdriveState', 'enabled', False),
   ('carState', 'gasPressed', True), ('carState', 'brakePressed', True),
 ))
-def test_capnp_disengagement_and_driver_override_remove_control_colors(capnp_message, service, field, value):
-  sm = state(influence(version=2, strength=1.0))
+@pytest.mark.parametrize('version', (1, 2))
+def test_capnp_disengagement_and_driver_override_remove_control_colors(capnp_message, service, field, value, version):
+  sm = state(influence(version=version, strength=1.0))
   sm[service][field] = value
   assert accepted_influences(capnp_state(sm, capnp_message), NOW) == ()
 
@@ -116,8 +148,10 @@ def test_capnp_disengagement_and_driver_override_remove_control_colors(capnp_mes
 def test_capnp_receipts_keep_freshness_mode_and_constrained_motion_gates(capnp_message):
   sm = state(influence(version=2, strength=1.0), influence(trackId=63, strength=0.5))
   typed = capnp_state(sm, capnp_message)
-  assert len(accepted_influences(typed, NOW)) == 2
-  assert accepted_influences(typed, NOW + MESSAGE_MAX_AGE_NS + 1) == ()
+  items = accepted_influences(typed, NOW)
+  assert len(items) == 2
+  assert accepted_influences(typed, PLAN + MESSAGE_MAX_AGE_NS) == items
+  assert accepted_influences(typed, PLAN + MESSAGE_MAX_AGE_NS + 1) == ()
   typed.valid['controlsState'] = False
   assert accepted_influences(typed, NOW) == ()
   sm['controlsState']['motionState'].update(degraded=True, waitingForFreshInput=True)

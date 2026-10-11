@@ -15,11 +15,16 @@ REFERENCE_MAX_AGE_NS = 250_000_000
 
 
 def valid_timestamp(value):
+  # Wire timestamps are ordinary Python ints. Keep the general numeric
+  # protocol for other callers without paying its ABC dispatch every tick.
+  if type(value) is int:
+    return 0 < value < (1 << 64)
   return isinstance(value, Integral) and not isinstance(value, bool) and 0 < value < (1 << 64)
 
 
 def finite_state(values):
-  return all(isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value) for value in values)
+  return all((type(value) is float or type(value) is int or isinstance(value, Real) and not isinstance(value, bool))
+             and math.isfinite(value) for value in values)
 
 
 @dataclass(frozen=True)

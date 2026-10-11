@@ -182,6 +182,21 @@ def test_receipt_is_bounded_deduplicated_and_observational():
   assert state == before_state
 
 
+def test_instance_reader_adapters_preserve_plan_attribution_and_owner_receipts():
+  state = radar(lead(1, source='fused', index=0))
+  before = deepcopy(state)
+  adapter = NS(as_reader=lambda: state)
+  identities = (('session-a', 1),)
+  assert plan_records(adapter, identities) == plan_records(state, identities)
+  assert state == before
+
+  plan = NS(objectInfluences=[record()], modelMonoTime=NOW, solverStatus=0, aTarget=-1.0,
+            motionIntent=NS(valid=True, ready=True, releaseAllowed=False))
+  before_plan = deepcopy(plan)
+  assert receipt([], plan_as_reader=lambda: plan) == [record()]
+  assert plan == before_plan
+
+
 def test_extra_object_cannot_claim_plan_influence_or_a_departure_barrier():
   state = radar(lead(1), lead(2), lead(3))
   extra_identity = ('session-a', 3)
