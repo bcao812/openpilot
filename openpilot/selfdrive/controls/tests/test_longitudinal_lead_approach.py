@@ -11,6 +11,7 @@ import pytest
 from opendbc.car.honda.values import CAR
 from openpilot.cereal import log
 from openpilot.common.realtime import DT_MDL
+from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MEASUREMENT_AGE_NS
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   A_CHANGE_COST, LEAD_DANGER_FACTOR, get_T_FOLLOW, get_safe_obstacle_distance, get_stopped_equivalence_factor,
 )
@@ -34,7 +35,7 @@ def test_radar_only_approach_keeps_response_before_a_negative_target():
   lead = formal_lead(dRel=54.0, vLead=19.4, vRel=-5.6)
   radar = SimpleNamespace(fusionActive=True, radarObjects=[lead], leadOne=lead, leadTwo=SimpleNamespace(present=False))
   assert get_lead_approach_urgency(25.0, radar, .5, personality=PERSONALITIES[1], now_ns=NOW) > 0.0
-  lead.evidence.velocityMonoTime = NOW - 200_000_001
+  lead.evidence.velocityMonoTime = NOW - MAX_MEASUREMENT_AGE_NS - 1
   assert get_lead_approach_urgency(25.0, radar, .5, personality=PERSONALITIES[1], now_ns=NOW) == 0.0
 
 

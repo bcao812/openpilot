@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan
-from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
+from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MEASUREMENT_AGE_NS, qualified_lead
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_STOP_DISTANCE, CRASH_DISTANCE, FCW_IDXS, MPC_INVALID_INPUT, N,
   RISK_STOP_DISTANCE, T_IDXS,
@@ -356,7 +356,7 @@ def test_formal_measurements_align_to_ego_epoch_without_changing_source_identity
     np.diff(T_IDXS, prepend=0.0) * -np.exp(-lead.aLeadTau*(T_IDXS + elapsed)**2/2.0))), atol=1e-12, rtol=0.0)
   assert vars(lead) == original
   assert planner.diagnostic_last_obstacle_summary['objectCount'] == 1
-  assert planner.continuation_problem.evidence_expiry_ns <= EPOCH_NS + 200_000_000
+  assert planner.continuation_problem.evidence_expiry_ns <= EPOCH_NS + MAX_MEASUREMENT_AGE_NS
 
 
 @pytest.mark.parametrize('elapsed', [-.250000001, .350000001])

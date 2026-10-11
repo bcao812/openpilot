@@ -14,11 +14,13 @@ from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, PREFERENCE_TIME_S
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_ESTIMATE_AGE_NS, MAX_MEASUREMENT_AGE_NS, lead_identity, qualified_lead,
+  MAX_ESTIMATE_AGE_NS, MAX_MEASUREMENT_AGE_NS, MAX_MODEL_AGE_NS, lead_identity, qualified_lead,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.continuation import (
+  MAX_STALE_PREDICTION_NS, STALE_MEASUREMENT_STATUS,
   ContinuationDonor, ContinuationProblem, ContinuationResult, build_candidate, frozen_array, valid_timestamp,
 )
+from openpilot.selfdrive.controls.lib.radar_consumption import _measurement_expired_at
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_MAX_AGE_NS
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.interval_rest import IntervalRest
 
@@ -82,6 +84,7 @@ MPC_INVALID_SOLUTION = -2
 MPC_SOLVER_ERROR = -3
 MPC_GOAL_INFEASIBLE = -4
 MPC_GOAL_UNSATISFIED = -5
+MPC_STALE_MEASUREMENT = STALE_MEASUREMENT_STATUS
 REFERENCE_BOUND = 1e4
 REST_STATE_TOL = 1e-3
 # A numerical repair requires observed residuals this small. This is not the
@@ -475,7 +478,7 @@ class LongitudinalMpc:
     # that could survive a reset or a producer's later input rejection.
     if self.solution_status == 0:
       return MpcOutcome.ACCEPTED if self.previous_solution_valid else MpcOutcome.NOT_SOLVED
-    if self.solution_status == MPC_INVALID_INPUT:
+    if self.solution_status in (MPC_INVALID_INPUT, MPC_STALE_MEASUREMENT):
       return MpcOutcome.INPUT_REJECTED
     if self.rest_goal is not None and (
       self.solution_status == MPC_GOAL_INFEASIBLE and self.rest_goal_state in ('infeasible', 'unverified')
@@ -550,6 +553,7 @@ class LongitudinalMpc:
         or self.diagnostic_reference_bounds is None):
       return None
     expiry = int(reference_ns) + REFERENCE_MAX_AGE_NS
+    prediction_expiry = expiry
     # The former projection certificates existed only with fusionActive.
     # Keep the non-fusion continuation contract unchanged while retaining
     # every formal fusion lead's measurement deadline and physical geometry.
@@ -559,9 +563,12 @@ class LongitudinalMpc:
       if evidence is None or evidence.version == 0:
         continue
       age = MAX_MEASUREMENT_AGE_NS
-      expiry = min(expiry, int(evidence.estimateMonoTime) + MAX_ESTIMATE_AGE_NS,
-                   int(evidence.positionMonoTime) + age, int(evidence.velocityMonoTime) + age,
-                   int(evidence.modelMonoTime) + age)
+      other_expiry = min(int(evidence.estimateMonoTime) + MAX_ESTIMATE_AGE_NS,
+                         int(evidence.modelMonoTime) + MAX_MODEL_AGE_NS)
+      measurement_expiry = min(int(evidence.positionMonoTime), int(evidence.velocityMonoTime)) + age
+      expiry = min(expiry, other_expiry, measurement_expiry)
+      extension = MAX_STALE_PREDICTION_NS if str(evidence.source) in ('radar', 'fused') else 0
+      prediction_expiry = min(prediction_expiry, other_expiry, measurement_expiry + extension)
     # Geometry starts at the observed distance, before process_lead's numerical
     # distance floor. No message reader or writable array survives this capture.
     lead_trajectories = tuple(frozen_array(trajectory) for trajectory in self._lead_trajectories) if fusion_active else ()
@@ -574,7 +581,7 @@ class LongitudinalMpc:
       int(reference_ns), int(now_ns), int(expiry), frozen_array(self.x0), frozen_array(self.params),
       frozen_array(lower), frozen_array(upper),
       tuple(tuple(frozen_array(value) for value in row) for row in self._rest_constraint_buffers),
-      lead_trajectories, bool(forbidden),
+      lead_trajectories, bool(forbidden), int(prediction_expiry),
     )
 
   @classmethod
@@ -695,10 +702,11 @@ class LongitudinalMpc:
 
   def continuation_candidate(self, donor, *, now_ns):
     """Read-only numerical proposal; native status and sentinel stay intact."""
-    if self.solution_status != 4:
+    if self.solution_status not in (4, MPC_STALE_MEASUREMENT):
       return ContinuationResult(False, 'unsupported_failure_status')
     return build_candidate(donor, self.continuation_problem, now_ns=now_ns, times=T_IDXS,
-                            integrate=self.integrate_jerk, validate=self._continuation_trajectory_error)
+                            integrate=self.integrate_jerk, validate=self._continuation_trajectory_error,
+                            allow_stale_prediction=self.solution_status == MPC_STALE_MEASUREMENT)
 
   def discard_prepared_reference_cost(self):
     """Reject the preceding semantics, retaining this qualified pending epoch.
@@ -790,6 +798,60 @@ class LongitudinalMpc:
     a_lead = np.clip(a_lead, -10., 5.)
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau, elapsed=elapsed)
     return lead_xv
+
+  @staticmethod
+  def _stale_prediction_eligible(lead, *, now_ns, reference_ns):
+    """Only an unchanged, source-qualified in-path measurement may age out.
+
+    This is a separate hypothesis gate, never ordinary lead qualification.
+    Unknown/entering paths, backward lead motion and any other evidence defect
+    retain the normal invalid-input path.
+    """
+    if (not valid_timestamp(now_ns) or not valid_timestamp(reference_ns)
+        or not _measurement_expired_at(lead, now_ns)
+        or not qualified_lead(lead, 'brake', 0.0)
+        or str(lead.evidence.pathState) != 'inPath' or lead.vLead < 0.0):
+      return False
+    deadline = min(lead.evidence.positionMonoTime, lead.evidence.velocityMonoTime)
+    return now_ns < deadline + MAX_MEASUREMENT_AGE_NS + MAX_STALE_PREDICTION_NS
+
+  def _stale_prediction_trajectory(self, lead, *, reference_ns, now_ns):
+    """A conservative finite prediction, without mutating the measured lead.
+
+    Subtract three position/velocity standard deviations and allow at least
+    10 m/s^2 lead braking throughout the unobserved interval. Positive reported
+    acceleration increases that uncertainty allowance, never predicted speed.
+    Continue that braking until this hypothesis's absolute deadline (or rest),
+    then hold the resulting speed solely for the numerical horizon. There is
+    no execution authority beyond the short prediction lease. These bounded
+    uncertainty/braking assumptions are not a new measurement or stop witness.
+    """
+    evidence = lead.evidence
+    elapsed = (int(reference_ns) - int(evidence.estimateMonoTime)) / 1e9
+    measurement = min(int(evidence.positionMonoTime), int(evidence.velocityMonoTime))
+    unobserved = (int(now_ns) - measurement) / 1e9 + abs(elapsed)
+    brake = max(10.0, -float(lead.aLeadK))
+    allowance = brake + max(0.0, float(lead.aLeadK))
+    position_std, velocity_std = 3.0 * evidence.positionStd, 3.0 * evidence.velocityStd
+    distance = (float(lead.dRel) + (float(lead.vLead) - self.x0[1]) * elapsed + 0.5 * self.x0[2] * elapsed**2
+                - position_std - velocity_std * unobserved - 0.5 * allowance * unobserved**2)
+    speed = max(0.0, float(lead.vLead) - velocity_std - allowance * unobserved)
+    deadline = min(int(reference_ns) + REFERENCE_MAX_AGE_NS,
+                   int(evidence.estimateMonoTime) + MAX_ESTIMATE_AGE_NS,
+                   int(evidence.modelMonoTime) + MAX_MODEL_AGE_NS,
+                   measurement + MAX_MEASUREMENT_AGE_NS + MAX_STALE_PREDICTION_NS)
+    horizon = (deadline - int(reference_ns)) / 1e9
+    if not np.all(np.isfinite([distance, speed, brake, horizon])) or horizon <= 0.0:
+      raise ValueError('Invalid stale prediction geometry or deadline')
+    brake_times = np.minimum(T_IDXS, min(horizon, speed / brake))
+    velocity = speed - brake * brake_times
+    position = distance + speed * brake_times - 0.5 * brake * brake_times**2 + velocity * (T_IDXS - brake_times)
+    trajectory = np.column_stack((position, np.maximum(velocity, 0.0)))
+    if not np.all(np.isfinite(trajectory)):
+      raise ValueError('Nonfinite stale prediction geometry')
+    # No process_lead distance floor: a close/uncertain obstacle must be able
+    # to veto the candidate even when the ordinary native QP would soften it.
+    return trajectory
 
   @staticmethod
   def lead_clearance_minimum(trajectory, states, jerks, *, times=T_IDXS):
@@ -1921,7 +1983,8 @@ class LongitudinalMpc:
       self.rest_goal_braking_accel = None
       self.failure_reason = ''
 
-  def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None, now_ns=None, reference_ns=None):
+  def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None, now_ns=None, reference_ns=None,
+             allow_stale_prediction=False, retained_loss_reason=None):
     if self.solution_status == 0:
       self._failure_log_key = None
     self._failure_diagnosed = False
@@ -1957,29 +2020,42 @@ class LongitudinalMpc:
     t_follow = get_T_FOLLOW(personality)
     self.solve_time = 0.0
 
+    if retained_loss_reason is not None:
+      self.fail(MPC_INVALID_INPUT, stage='retained_stale_lead', detail=retained_loss_reason)
+      return
     if not np.all(np.isfinite(self.x0)):
       self.fail(MPC_INVALID_INPUT, stage='initial_state', detail='Nonfinite initial state')
       return
     fusion_active = bool(getattr(radarstate, 'fusionActive', False))
+    stale_permitted = getattr(radarstate, 'fusionActive', False) is True and allow_stale_prediction is True
     if fusion_active != self._was_fusion_active:
       self.reset_fcw()
     self._was_fusion_active = fusion_active
     leads = (radarstate.leadOne, radarstate.leadTwo)
+    stale_slots = set()
     try:
       if fusion_active:
+        if stale_permitted and not all(valid_timestamp(stamp) for stamp in (now_ns, reference_ns)):
+          raise ValueError('Stale prediction requires current fusion clocks')
         if any(stamp is not None and not valid_timestamp(stamp) for stamp in (now_ns, reference_ns)):
           raise ValueError('Invalid fusion clock')
         if (now_ns is not None and reference_ns is not None
             and not 0 <= now_ns - reference_ns <= REFERENCE_MAX_AGE_NS):
           raise ValueError('Fusion initial state is not current at the consumer')
       signatures = {}
-      for lead in leads:
+      for slot, lead in enumerate(leads):
         if not lead.present:
           continue
         if (not np.all(np.isfinite([lead.dRel, lead.vLead, lead.aLeadK, lead.aLeadTau]))
-            or lead.aLeadTau < 0.0 or not qualified_lead(lead, 'brake', 0.0, now_ns=now_ns)):
+            or lead.aLeadTau < 0.0):
           self._diagnostic_rejected_lead = lead
           raise ValueError('Unqualified formal lead')
+        if not qualified_lead(lead, 'brake', 0.0, now_ns=now_ns):
+          if stale_permitted and self._stale_prediction_eligible(lead, now_ns=now_ns, reference_ns=reference_ns):
+            stale_slots.add(slot)
+          else:
+            self._diagnostic_rejected_lead = lead
+            raise ValueError('Unqualified formal lead')
         evidence = getattr(lead, 'evidence', None)
         identity = lead_identity(lead)
         if evidence is not None and evidence.version == 1 and str(evidence.source) == 'vision':
@@ -1999,7 +2075,11 @@ class LongitudinalMpc:
           signatures[identity] = signature
       self._source_leads = tuple(lead for lead in leads if lead.present)
       with np.errstate(over='ignore', invalid='ignore'):
-        lead_trajectories = tuple(self.process_lead(lead, reference_ns=reference_ns) for lead in leads)
+        lead_trajectories = tuple(
+          self._stale_prediction_trajectory(lead, reference_ns=reference_ns, now_ns=now_ns) if slot in stale_slots
+          else self.process_lead(lead, reference_ns=reference_ns)
+          for slot, lead in enumerate(leads)
+        )
     except (AttributeError, TypeError, ValueError, FloatingPointError, OverflowError) as error:
       self.fail(MPC_INVALID_INPUT, stage='formal_lead', detail=error)
       return
@@ -2008,9 +2088,9 @@ class LongitudinalMpc:
     # additionally captures it with measurement deadlines; process_lead's
     # numerical distance floor cannot authorize passing through a real lead.
     self._lead_trajectories = tuple(
-      np.column_stack((trajectory[:, 0] + (self.lead_initial_state(lead, reference_ns=reference_ns)[0] - trajectory[0, 0]),
-                       trajectory[:, 1]))
-      for lead, trajectory in zip(leads, lead_trajectories, strict=True) if lead.present
+      trajectory if slot in stale_slots else
+      np.column_stack((trajectory[:, 0] + (self.lead_initial_state(lead, reference_ns=reference_ns)[0] - trajectory[0, 0]), trajectory[:, 1]))
+      for slot, (lead, trajectory) in enumerate(zip(leads, lead_trajectories, strict=True)) if lead.present
     )
     recovery_leads = tuple(zip(self._source_leads, self._lead_trajectories, strict=True))
     if recovery_leads and all(lead.vLead >= 0.0 for lead, _ in recovery_leads):
@@ -2073,6 +2153,10 @@ class LongitudinalMpc:
       self.diagnostic_obstacle_failures += 1
     self.continuation_problem = self._capture_continuation_problem(reference_ns=reference_ns, now_ns=now_ns,
                                                                   fusion_active=fusion_active)
+    if stale_slots:
+      self._diagnostic_rejected_lead = leads[min(stale_slots)]
+      self.fail(MPC_STALE_MEASUREMENT, stage='stale_measurement', detail='Expired measurement: bounded prediction only')
+      return
     self.run()
     if self.solution_status != 0:
       return
@@ -2278,7 +2362,7 @@ class LongitudinalMpc:
 
   def fail(self, status, *, stage='unspecified', detail=''):
     self._log_failure(status, stage, detail)
-    continuation_problem = self.continuation_problem if status == 4 else None
+    continuation_problem = self.continuation_problem if status in (4, MPC_STALE_MEASUREMENT) else None
     failed_goal = self.rest_goal
     effective_node = self.effective_rest_node
     goal_diagnostic = self.diagnostic_rest_goal
@@ -2296,7 +2380,7 @@ class LongitudinalMpc:
     self.solution_status = status
     self.last_solver_status = status
     self.failure_reason = {MPC_INVALID_INPUT: 'invalid_input', MPC_INVALID_SOLUTION: 'nonfinite_solution',
-                           MPC_SOLVER_ERROR: 'solver_exception'}.get(status, 'solver_status')
+                           MPC_SOLVER_ERROR: 'solver_exception', MPC_STALE_MEASUREMENT: 'stale_measurement'}.get(status, 'solver_status')
     if failed_goal is not None:
       self.rest_goal = failed_goal
       self.rest_goal_state, self.rest_goal_reason = 'solver_failure', self.failure_reason

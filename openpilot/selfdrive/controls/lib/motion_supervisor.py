@@ -8,6 +8,7 @@ from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import (CREEP_ACCEL, CREEP_FINISH_T, CREEP_MAX_T, CREEP_SPEED,
                                                           CREEP_STOP_T, CLOSE_LEAD_STOP_SPEED, STOP_RELEASE_ACCEL, STOP_SPEED)
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
+from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_STATUSES
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
 
 MOTION_INTENT_VERSION = 10
@@ -565,7 +566,7 @@ class MotionSupervisor:
     if vehicle_values_valid:
       v_ego = max(0.0, v_ego)
     if (continuation_valid is True and clock_valid and vehicle_values_valid and not standstill and v_ego >= CLOSE_LEAD_STOP_SPEED
-        and self.can_continue_track and solver_status in (4, -6)
+        and self.can_continue_track and solver_status in CONTINUATION_STATUSES
         and self._valid_braking_input(intent, a_target, plan_time_ns, model_time_ns, now_ns)):
       # Execution is separately certified by LongControl. Do not count this
       # as native success, refresh a donor, or accumulate stop/release proof.

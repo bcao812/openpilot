@@ -13,7 +13,8 @@ from openpilot.selfdrive.car.honda_radar_relevance import HORIZON
 
 
 MAX_CONTROL_OBJECTS = 34  # Historical wire/display bound; control uses only the two formal lead slots.
-MAX_MEASUREMENT_AGE_NS = 200_000_000
+MAX_MEASUREMENT_AGE_NS = 230_000_000
+MAX_MODEL_AGE_NS = 200_000_000
 MAX_ESTIMATE_AGE_NS = 250_000_000
 MAX_POSITION_STD = 20.0
 MAX_VELOCITY_STD = 20.0
@@ -179,7 +180,7 @@ def _snapshot_facts(lead):
   if abs(estimate - position) > age or abs(estimate - velocity) > age:
     return False
   earliest = max(estimate, position, velocity, model)
-  latest = min(estimate + MAX_ESTIMATE_AGE_NS, position + age, velocity + age, model + age)
+  latest = min(estimate + MAX_ESTIMATE_AGE_NS, position + age, velocity + age, model + MAX_MODEL_AGE_NS)
   if read('positionValid', False) is not True or read('velocityValid', False) is not True:
     return False
   p_std, v_std = read('positionStd'), read('velocityStd')
@@ -282,7 +283,7 @@ def _qualified_lead_evidence(lead, purpose, min_model_prob=0.95, *, now_ns=None,
   maximum_age = MAX_MEASUREMENT_AGE_NS
   if (not 0 <= reference - estimate <= MAX_ESTIMATE_AGE_NS
       or any(not 0 <= reference - stamp <= maximum_age or abs(estimate - stamp) > maximum_age for stamp in (position, velocity))
-      or not 0 <= reference - model <= maximum_age):
+      or not 0 <= reference - model <= MAX_MODEL_AGE_NS):
     return False
   if _read(evidence, 'positionValid', False) is not True or _read(evidence, 'velocityValid', False) is not True:
     return False
@@ -377,7 +378,7 @@ def measurement_expired_since(lead, *, qualified_ns, now_ns):
     return False
   maximum_age = MAX_MEASUREMENT_AGE_NS
   if (not 0 <= now_ns - _read(evidence, 'estimateMonoTime') <= MAX_ESTIMATE_AGE_NS
-      or not 0 <= now_ns - _read(evidence, 'modelMonoTime') <= maximum_age):
+      or not 0 <= now_ns - _read(evidence, 'modelMonoTime') <= MAX_MODEL_AGE_NS):
     return False
   return any(now_ns - _read(evidence, field) > maximum_age
              for field in ('positionMonoTime', 'velocityMonoTime'))

@@ -15,12 +15,14 @@ from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_l
 PUBLICATION = 10_000_000_000
 CONSUMPTION = PUBLICATION + 60_000_000
 SESSION = 'radar-session-a'
+# The shared fixture expires 50 ms after publication, before default consumption.
+MEASUREMENT_AGE_AT_PUBLICATION_NS = MAX_MEASUREMENT_AGE_NS - 50_000_000
 
 
 def expiring_lead(*, publication=PUBLICATION, relevant=False, track=7):
   return formal_lead(now_ns=publication, source='radar', dRel=6.6 if relevant else 100.0, vLead=0.0, vLeadK=0.0, vRel=-10.0,
-                     evidence={'trackId': track, 'positionMonoTime': publication - 150_000_000,
-                               'velocityMonoTime': publication - 150_000_000, 'generation': 7,
+                     evidence={'trackId': track, 'positionMonoTime': publication - MEASUREMENT_AGE_AT_PUBLICATION_NS,
+                               'velocityMonoTime': publication - MEASUREMENT_AGE_AT_PUBLICATION_NS, 'generation': 7,
                                'followQualified': False, 'stopQualified': False, 'departureQualified': False,
                                'fcwQualified': False, 'accelerationValid': False,
                                'pathState': 'inPath', 'conflictStart': 0.0, 'conflictEnd': 10.0, 'lateralSpeed': 0.0})
@@ -44,7 +46,7 @@ def consume_frame(consumer, frame, *, publication=PUBLICATION, now=CONSUMPTION, 
   return consumer.update(frame, publication_ns=publication, now_ns=now, speed=speed)
 
 
-def test_200ms_boundary_is_inclusive_and_removal_does_not_refresh_a_stamp():
+def test_measurement_deadline_is_inclusive_and_removal_does_not_refresh_a_stamp():
   expiring = expiring_lead()
   raw = radar_frame(expiring, display=(expiring,))
   consumer = RadarConsumption()
@@ -67,15 +69,15 @@ def measured(*, source='radar', caution=False, publication=PUBLICATION, relevant
   factory = caution_lead if caution else formal_lead
   changes = {'source': source} if not caution else {}
   result = factory(now_ns=publication, dRel=6.6 if relevant else 100.0, vLead=0.0, vLeadK=0.0, vRel=-10.0,
-                   evidence={'trackId': track, 'positionMonoTime': publication - 150_000_000,
-                             'velocityMonoTime': publication - 150_000_000}, **changes)
+                   evidence={'trackId': track, 'positionMonoTime': publication - MEASUREMENT_AGE_AT_PUBLICATION_NS,
+                             'velocityMonoTime': publication - MEASUREMENT_AGE_AT_PUBLICATION_NS}, **changes)
   result.evidence.source = source
   return result
 
 
 @pytest.mark.parametrize('source,caution', [('radar', False), ('fused', False)])
 @pytest.mark.parametrize('oldest', ['positionMonoTime', 'velocityMonoTime'])
-def test_measured_200ms_deadline_retires_every_view_and_preserves_other_objects(source, caution, oldest):
+def test_measured_deadline_retires_every_view_and_preserves_other_objects(source, caution, oldest):
   old = measured(source=source, caution=caution)
   other_stamp = 'velocityMonoTime' if oldest == 'positionMonoTime' else 'positionMonoTime'
   setattr(old.evidence, other_stamp, PUBLICATION)
@@ -116,7 +118,7 @@ def test_measured_expiry_does_not_hide_other_invalid_evidence(source, caution, d
   elif defect == 'future_model':
     old.evidence.modelMonoTime = PUBLICATION + 1
   elif defect == 'expired_model':
-    old.evidence.modelMonoTime = PUBLICATION - 150_000_000
+    old.evidence.modelMonoTime = PUBLICATION - MEASUREMENT_AGE_AT_PUBLICATION_NS
   elif defect == 'expired_estimate':
     old.evidence.estimateMonoTime = PUBLICATION - 200_000_000
   elif defect == 'invalid_position':
@@ -264,7 +266,7 @@ def test_pilot_sample_9_extra_future_entry_never_enters_control_or_expiry_risk()
   assert publication - measurement == 307_876_771
   assert consumption - publication == 65_574_531
   assert consumption - measurement == 373_451_302
-  # The recorded measurement already exceeded the 200 ms lifetime at publication.
+  # The recorded measurement already exceeded the measurement lifetime at publication.
   assert not _qualified_lead_evidence(expiring, 'brake', now_ns=publication)
   assert not qualified_lead(expiring, 'brake', now_ns=publication)
   assert not qualified_lead(expiring, 'brake', now_ns=consumption)
@@ -349,7 +351,7 @@ def test_bad_or_already_stale_publication_is_not_hidden_by_expiry(defect, future
   elif defect == 'future_measurement':
     expiring.evidence.velocityMonoTime = PUBLICATION + 1
   elif defect == 'old_model':
-    expiring.evidence.modelMonoTime = PUBLICATION - 150_000_000
+    expiring.evidence.modelMonoTime = PUBLICATION - MEASUREMENT_AGE_AT_PUBLICATION_NS
   elif defect == 'old_estimate':
     expiring.evidence.estimateMonoTime = PUBLICATION - 220_000_000
   elif defect == 'invalid_position':
@@ -414,7 +416,7 @@ def test_consumption_age_does_not_turn_a_forecast_boundary_into_a_far_crossing(d
   assert consumer.expired_identities == (() if expected_loss else ((SESSION, 7),))
   assert consumer.degraded is expected_loss
   assert frame.fusionClearedTracks == view.fusionClearedTracks == ()
-  assert expiring.evidence.positionMonoTime == PUBLICATION - 150_000_000
+  assert expiring.evidence.positionMonoTime == PUBLICATION - MEASUREMENT_AGE_AT_PUBLICATION_NS
   assert expiring.evidence.estimateMonoTime == PUBLICATION
 
 
@@ -609,7 +611,6 @@ def test_native_tick_snapshot_freezes_values_without_caching_qualification():
     assert qualified_lead(candidate, 'brake', .95, now_ns=boundary)
     assert not qualified_lead(candidate, 'brake', .95, now_ns=boundary + 1)
     assert not qualified_lead(candidate, 'brake', .95, now_ns=boundary + 1, require_active_window=False)
-    assert not qualified_lead(candidate, 'brake', .95, now_ns=PUBLICATION + 200_000_001, require_active_window=False)
   with pytest.raises(AttributeError):
     frozen.dRel = 0.0
   with pytest.raises(AttributeError):

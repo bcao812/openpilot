@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
+from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MEASUREMENT_AGE_NS
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.continuation import (
   MAX_DONOR_SOURCE_AGE_NS, STATE_ENVELOPE_LEVELS, TERMINAL_ACCEL_TOL, TERMINAL_JERK_TOL,
   ContinuationDonor, ContinuationProblem, build_candidate, frozen_array,
@@ -130,14 +131,14 @@ def test_current_measurement_deadline_and_geometry_are_frozen_before_failure_res
   planner.update(fused_state(display=(lead,)), reference=MpcReference(10.0), reference_ns=reference_ns, now_ns=now)
   assert planner.solution_status == 4
   problem = planner.continuation_problem
-  assert problem.evidence_expiry_ns == EPOCH + 110_000_000
+  assert problem.evidence_expiry_ns == EPOCH - 90_000_000 + MAX_MEASUREMENT_AGE_NS
   assert not problem.lead_trajectories[0].flags.writeable
   before = problem.lead_trajectories[0].copy()
   lead.dRel = 2.0
   lead.evidence.positionMonoTime = reference_ns
   result = planner.continuation_candidate(donor, now_ns=now)
   assert result.accepted, result.reason
-  assert result.evidence_expiry_ns == EPOCH + 110_000_000
+  assert result.evidence_expiry_ns == EPOCH - 90_000_000 + MAX_MEASUREMENT_AGE_NS
   np.testing.assert_array_equal(problem.lead_trajectories[0], before)
 
 
@@ -168,7 +169,7 @@ def test_continuation_retains_the_original_fusion_scope_without_changing_rest_ge
   assert recovery_limits == [2.0 - CRASH_DISTANCE]
   problem = planner.continuation_problem
   if fusion_active:
-    assert problem.evidence_expiry_ns == EPOCH + 110_000_000
+    assert problem.evidence_expiry_ns == EPOCH - 90_000_000 + MAX_MEASUREMENT_AGE_NS
     assert len(problem.lead_trajectories) == 1
     np.testing.assert_array_equal(problem.lead_trajectories[0][:, 0], 2.0)
   else:

@@ -8,6 +8,7 @@ import pytest
 
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
+from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MEASUREMENT_AGE_NS
 from openpilot.selfdrive.controls.lib.longitudinal_planner import has_safe_moving_lead
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionReferenceKind
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_handover_state, make_planner_owner
@@ -22,7 +23,7 @@ def test_formal_moving_follow_does_not_need_invented_visual_confidence(source):
   lead = formal_lead(source=source, dRel=7.0, vLead=.8, vRel=-.2)
   radar = SimpleNamespace(fusionActive=True, radarObjects=[lead], leadOne=lead, leadTwo=SimpleNamespace(present=False))
   assert has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW)
-  assert not has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW + 200_000_001)
+  assert not has_safe_moving_lead(radar, 1.0, .5, now_ns=NOW + MAX_MEASUREMENT_AGE_NS + 1)
 
 
 def test_distant_stopped_object_does_not_require_all_traffic_to_depart():

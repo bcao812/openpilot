@@ -149,6 +149,26 @@ def test_republishing_old_measurements_does_not_refresh_their_control_age(field)
   assert not qualified_lead(lead, 'brake')
 
 
+@pytest.mark.parametrize('field', ['positionMonoTime', 'velocityMonoTime'])
+@pytest.mark.parametrize('age_ns,expected', [
+  (202_280_000, True), (213_990_000, True), (224_140_000, True),
+  (230_000_000, True), (230_000_001, False),
+])
+def test_measurement_deadline_admits_recorded_consumer_ages_and_expires_after_230ms(field, age_ns, expected):
+  lead = formal_lead(evidence={field: NOW - age_ns})
+  snapshot = _StructSnapshot({**vars(lead), 'evidence': vars(lead.evidence).copy()})
+  for candidate in (lead, snapshot):
+    assert qualified_lead(candidate, 'brake', now_ns=NOW) is expected
+    assert getattr(candidate.evidence, field) == NOW - age_ns
+
+
+def test_measurement_extension_does_not_extend_model_lifetime():
+  lead = formal_lead(evidence={'modelMonoTime': NOW - 200_000_001})
+  snapshot = _StructSnapshot({**vars(lead), 'evidence': vars(lead.evidence).copy()})
+  assert not qualified_lead(lead, 'brake', now_ns=NOW)
+  assert not qualified_lead(snapshot, 'brake', now_ns=NOW)
+
+
 @pytest.mark.parametrize('field', ['positionMonoTime', 'velocityMonoTime', 'estimateMonoTime', 'modelMonoTime'])
 @pytest.mark.parametrize('stamp', [0, -1, True, NOW + 1])
 def test_invalid_or_future_times_do_not_inherit_boolean_authority(field, stamp):
@@ -371,7 +391,7 @@ def test_edge_caution_keeps_full_source_and_role_validation(field, value):
 def _assert_snapshot_matches_uncached(lead):
   payload = {**vars(lead), 'evidence': vars(lead.evidence).copy()}
   snapshot = _StructSnapshot(payload)
-  times = (None, NOW - 1, NOW, NOW + 100_000_000, NOW + 200_000_000, NOW + 200_000_001,
+  times = (None, NOW - 1, NOW, NOW + 100_000_000, NOW + MAX_MEASUREMENT_AGE_NS, NOW + MAX_MEASUREMENT_AGE_NS + 1,
            NOW + 250_000_000, NOW + 350_000_000, NOW + 350_000_001, True, float(NOW))
   for now_ns in times:
     for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw', 'caution', 'invalid'):
@@ -430,7 +450,7 @@ def test_snapshot_close_visual_risk_retains_its_distinct_purpose_gates(distance)
 
 def test_snapshots_of_the_same_identity_keep_independent_evidence_and_age():
   fresh = formal_lead(vRel=.5)
-  old = formal_lead(vRel=.5, evidence={'positionMonoTime': NOW - 200_000_001, 'departureQualified': False})
+  old = formal_lead(vRel=.5, evidence={'positionMonoTime': NOW - MAX_MEASUREMENT_AGE_NS - 1, 'departureQualified': False})
   snapshots = [_StructSnapshot({**vars(lead), 'evidence': vars(lead.evidence).copy()}) for lead in (fresh, old)]
   assert lead_identity(snapshots[0]) == lead_identity(snapshots[1])
   for _ in range(2):

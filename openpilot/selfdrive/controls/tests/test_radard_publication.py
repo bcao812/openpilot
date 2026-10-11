@@ -7,6 +7,7 @@ import pytest
 from opendbc.car.structs import car
 from openpilot.cereal import messaging
 from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE
+from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MEASUREMENT_AGE_NS
 from openpilot.selfdrive.controls.radard import RadarD
 from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
 from openpilot.selfdrive.controls.tests.test_radar_consumption import (
@@ -71,7 +72,7 @@ def test_publisher_removes_only_naturally_expired_measurement_at_actual_event_ti
   rd = make_radard()
   update_with_result(rd, frame)
   before = rd.radar_state.to_dict()
-  actual_publication = PUBLICATION + 50_000_000 + after_deadline
+  actual_publication = old.evidence.positionMonoTime + MAX_MEASUREMENT_AGE_NS + after_deadline
   event = publish_at(rd, actual_publication)
   assert rd.radar_qualified_ns == PUBLICATION and event.logMonoTime == actual_publication
   assert event.valid and event.radarState.leadTwo.evidence.trackId == 9
@@ -107,7 +108,7 @@ def test_publisher_retires_future_entry_from_objects_and_display_without_degrada
 def test_publication_expiry_cannot_erase_malformed_or_previously_stale_objects(source, defect):
   old = measured(source=source)
   frame = radar_frame(old, display=(old,))
-  maximum_age = 200_000_000
+  maximum_age = MAX_MEASUREMENT_AGE_NS
   if defect == 'old_at_qualification':
     old.evidence.positionMonoTime = PUBLICATION - maximum_age - 1
   elif defect == 'old_model_at_publication':

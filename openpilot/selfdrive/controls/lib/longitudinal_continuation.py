@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from opendbc.car.honda.values import CarControllerParams
 from opendbc.car.structs import car
 from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.continuation import STALE_MEASUREMENT_STATUS
 from openpilot.selfdrive.controls.lib.reference_timing import (
   REFERENCE_MAX_AGE_NS, REFERENCE_TIMING_VERSION, ReferenceTiming, finite_state, valid_timestamp,
 )
@@ -22,7 +23,7 @@ from openpilot.selfdrive.modeld.constants import index_function
 CONTINUATION_VERSION = 1
 # Match the native proposal gate. The retired occupancy status (-6) must not
 # authorize a received offer after its producer path has been removed.
-CONTINUATION_STATUSES = (4,)
+CONTINUATION_STATUSES = (4, STALE_MEASUREMENT_STATUS)
 CONTINUATION_EPISODE_NS = 100_000_000
 CONTINUATION_DONOR_SOURCE_NS = 200_000_000
 NATIVE_RECOVERY_NS = 500_000_000
@@ -61,6 +62,18 @@ class ContinuationCandidate:
   jerks: tuple[float, ...]
   speed_tolerance: float = 0.0
   accel_tolerance: float = 0.0
+
+
+def braking_only_continuation(offer):
+  """The stale-measurement path cannot offer positive future acceleration.
+
+  The measured initial acceleration remains untouched. All later knots and
+  the sampled action must be nonpositive; the ordinary candidate validation
+  independently checks shape, dynamics, finite values and state tolerances.
+  """
+  return (isinstance(offer, ContinuationOffer) and valid_candidate(offer.candidate)
+          and offer.candidate.target_accel <= 0.0
+          and all(value <= 0.0 for value in offer.candidate.accels[1:]))
 
 
 @dataclass(frozen=True)

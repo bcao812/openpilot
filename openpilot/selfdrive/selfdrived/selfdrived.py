@@ -25,7 +25,8 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
 from openpilot.selfdrive.controls.lib.motion_supervisor import MODEL_LEASE_NS, MOTION_INTENT_VERSION, PLAN_LEASE_NS, MotionIntent
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
   CONTINUATION_STATUSES, CONTINUATION_VERSION, UNSTABLE_DISABLE_NS, ContinuationBudget, ContinuationDonor,
-  ContinuationHistory, ContinuationOffer, continuation_reference, execution_target, inactive_native_recovery, validate_continuation,
+  ContinuationHistory, ContinuationOffer, STALE_MEASUREMENT_STATUS, braking_only_continuation,
+  continuation_reference, execution_target, inactive_native_recovery, validate_continuation,
 )
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer, valid_timestamp
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
@@ -368,6 +369,8 @@ class SelfdriveD(CruiseHelper):
       self._longitudinal_soft_disable_remaining_ns = max(0, budget.episode_start_ns + UNSTABLE_DISABLE_NS - now_ns)
     if not plan_failure or plan.solverStatus not in CONTINUATION_STATUSES:
       return False, 'not_continuable_failure'
+    if plan.solverStatus == STALE_MEASUREMENT_STATUS and not braking_only_continuation(offer):
+      return False, 'stale_continuation_not_braking_only'
     # A continuation can keep established healthy TRACK running. It can
     # never open NO_ENTRY, restart a degraded owner, or suppress forceDecel.
     machine = getattr(self, 'state_machine', None)

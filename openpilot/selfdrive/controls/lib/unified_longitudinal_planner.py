@@ -20,7 +20,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import (CLOSE_LEAD_STOP_SPEE
                                                           get_departure_accel_from_plan, should_stop)
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_VERSION
-from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MEASUREMENT_AGE_NS, control_leads, lead_identity, qualified_lead
+from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MODEL_AGE_NS, control_leads, lead_identity, qualified_lead
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
@@ -470,9 +470,9 @@ class UnifiedLongitudinalPlanner:
         or state.valid.get('radarState') is not True or not state.all_checks(service_list=['radarState'])):
       return 'radar_consumption_unconfirmed'
     if (not valid_timestamp(now_ns) or not valid_timestamp(publication_ns)
-        or not 0 <= now_ns - publication_ns <= MAX_MEASUREMENT_AGE_NS
+        or not 0 <= now_ns - publication_ns <= MAX_MODEL_AGE_NS
         or not valid_timestamp(getattr(radar, 'mdMonoTime', None))
-        or not 0 <= now_ns - radar.mdMonoTime <= MAX_MEASUREMENT_AGE_NS
+        or not 0 <= now_ns - radar.mdMonoTime <= MAX_MODEL_AGE_NS
         or radar.mdMonoTime > publication_ns):
       return 'radar_publication_stale'
     if (getattr(radar, 'fusionActive', None) is not True or getattr(radar, 'fusionHealthy', None) is not True
@@ -665,6 +665,11 @@ class UnifiedLongitudinalPlanner:
       # evidence that an already executed physical stop obstacle departed.
       self._radar_stop_candidate = None
       self._radar_stop_pending.clear()
+    retention_reason = self.continuation.retain_measurement_loss(
+      radar, now_ns, active=bool(active and not scope_exit),
+      healthy=bool(healthy and getattr(radar, 'fusionHealthy', False) and not getattr(radar, 'fusionDegraded', False)),
+      speed=speed,
+    )
     if self.fusion_admitted:
       clear_session = getattr(radar, 'fusionSessionId', '')
       cleared = getattr(radar, 'fusionClearedTracks', ())
@@ -880,10 +885,10 @@ class UnifiedLongitudinalPlanner:
     continuation_permitted = bool(
       planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl and planner.unified
       and active and healthy and not reset and not forced_decel and not car_state.standstill
-      and speed >= CLOSE_LEAD_STOP_SPEED and not planner.fcw and not self.radar_consumption.degraded
+      and speed >= CLOSE_LEAD_STOP_SPEED and not planner.fcw and not retention_reason
       and self.radar_held_identity is None and not self.turn_lead_guard.lost
       and planner.source == LongitudinalPlanSourceSP.cruise and cruise_speed > STOP_SPEED
-      and not model.action.shouldStop and self.model_reference_mode != 'invalid'
+      and not model.action.shouldStop and not model.meta.hardBrakePredicted and self.model_reference_mode != 'invalid'
       and (not self.e2e_allowed or ordinary_model_motion)
     )
     continuation_scope = (self.e2e_allowed, self.fusion_admitted, bool(getattr(radar, 'fusionActive', False)),
@@ -891,9 +896,20 @@ class UnifiedLongitudinalPlanner:
     constraint_kwargs = dict(speed=speed, maximum_accel=maximum_accel, cruise_ceiling=cruise_ceiling,
                              cruise_speed=cruise_speed, active=active, healthy=healthy, reset=reset,
                              forced_decel=forced_decel)
+    if retention_reason:
+      ceiling = self.independent_constraint(state, planner.output_a_target, **constraint_kwargs)[0]
+      self.continuation.independent_braking_accel = ceiling if math.isfinite(ceiling) and ceiling < 0.0 else None
     planner.mpc.update(state['radarState'], personality=state['selfdriveState'].personality, reference=reference,
-                       now_ns=now_ns, reference_ns=source_epoch_ns)
+                       now_ns=now_ns, reference_ns=source_epoch_ns,
+                       retained_loss_reason=(f'{retention_reason}: {self.continuation.retained_measurements}' if retention_reason else None),
+                       allow_stale_prediction=bool(continuation_permitted and self.radar_consumption.degraded
+                                                   and getattr(radar, 'fusionHealthy', False) and not getattr(radar, 'fusionDegraded', False)
+                                                   and self.continuation.donor is not None))
     if planner.mpc.solution_status != 0:
+      if retention_reason:
+        self.continuation.reason = retention_reason
+        self.fail_mpc(state, speed, planner.output_a_target)
+        return
       offer = self.continuation.attempt(
         planner.mpc, state, planner.reference_timing.pending, now_ns=now_ns,
         permitted=continuation_permitted, scope=continuation_scope, action_t=delay + DT_MDL,
