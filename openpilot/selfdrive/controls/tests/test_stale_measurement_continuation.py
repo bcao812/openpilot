@@ -209,7 +209,7 @@ def test_stale_measurement_keeps_original_status_and_braking_without_a_takeover_
     assert not event.valid and plan.solverStatus == STALE_MEASUREMENT_STATUS
     assert plan.continuation.valid, carry.reason
     assert not plan.motionIntent.valid and not plan.motionIntent.releaseAllowed
-    assert all(accel <= 0.0 for accel in plan.continuation.candidate.accels[1:])
+    assert all(accel <= 0.0 for accel in tuple(plan.continuation.candidate.accels)[1:])
     assert not qualified_lead(raw.leadOne, 'brake', 0.0, now_ns=FIRST_STALE + 500_000)
     assert raw.to_dict() == original
     observe_at(daemon, chain, FIRST_STALE, offset_ns=2_000_000)
