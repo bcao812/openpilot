@@ -13,8 +13,11 @@ class StateMachine:
     self.current_alert_types = [ET.PERMANENT]
     self.state = State.disabled
     self.soft_disable_timer = 0
+    self.holding_for_takeover = False
 
-  def update(self, events: Events, *, soft_disable_remaining_ns=None):
+  def update(self, events: Events, *, soft_disable_remaining_ns=None, hold_for_takeover=False):
+    was_holding = self.holding_for_takeover
+    self.holding_for_takeover = False
     # decrement the soft disable timer at every step, as it's reset on
     # entrance in SOFT_DISABLING state
     self.soft_disable_timer = max(0, self.soft_disable_timer - 1)
@@ -37,6 +40,19 @@ class StateMachine:
       elif events.contains(ET.USER_DISABLE):
         self.state = State.disabled
         self.current_alert_types.append(ET.USER_DISABLE)
+
+      elif hold_for_takeover is True and self.state == State.softDisabling:
+        # The independent policy qualifies an already held stop and owns one
+        # absolute extension. Keep forceDecel and the urgent alert throughout.
+        self.holding_for_takeover = True
+        self.soft_disable_timer = 0
+        self.current_alert_types.append(ET.SOFT_DISABLE)
+
+      elif was_holding:
+        # Expiry or lost qualification ends this engagement, even if the
+        # original planner fault disappeared during the stopped handoff.
+        self.state = State.disabled
+        self.current_alert_types.append(ET.SOFT_DISABLE)
 
       elif maximum_timer == 0 and events.contains(ET.SOFT_DISABLE):
         # Includes preEnabled losing PRE_ENABLE at an already expired fault

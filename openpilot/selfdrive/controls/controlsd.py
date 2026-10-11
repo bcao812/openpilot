@@ -19,7 +19,9 @@ from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
+from opendbc.car.honda.values import CAR
 from opendbc.car.vehicle_model import VehicleModel
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, clip_curvature, get_departure_accel_from_plan
 from openpilot.selfdrive.controls.lib.control_observation import ControlObservation
@@ -28,6 +30,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
+from openpilot.selfdrive.controls.lib.lateral_takeover import LateralTakeoverLatch
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_VERSION, ContinuationOffer, execution_target
@@ -126,6 +129,7 @@ class Controls(ControlsExt):
     self.calibrated_pose: Pose | None = None
 
     self.LoC = LongControl(self.CP, self.CP_SP)
+    self.lateral_takeover = LateralTakeoverLatch()
     self._longitudinal_plan_cache = None
     self.reference_timing = ReferenceTimingConsumer()
     self.reference_timing_check = None
@@ -235,6 +239,18 @@ class Controls(ControlsExt):
 
     CC.latActive = _lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
+    if (self.LoC.unified and self.CP.carFingerprint == CAR.HONDA_ACCORD and self.CP.openpilotLongitudinalControl
+        and self.CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ENABLE_MADS):
+      # A cleared EPS bit must not reuse the MADS active message from before
+      # the takeover. Keep all existing lateral gates, then only remove permission.
+      if not hasattr(self, 'lateral_takeover'):
+        self.lateral_takeover = LateralTakeoverLatch()
+      mads = self.sm['selfdriveStateSP'].mads
+      CC.latActive = self.lateral_takeover.update(
+        CC.latActive, enabled=True, mads_available=mads.available, mads_state=str(mads.state), mads_active=mads.active,
+        permanent_fault=CS.steerFaultPermanent, temporary_fault=CS.steerFaultTemporary,
+        mads_mono_ns=int(self.sm.logMonoTime['selfdriveStateSP']), car_state_mono_ns=int(self.sm.logMonoTime['carState']),
+        now_ns=time.monotonic_ns(), inputs_valid=self.sm.all_checks(['selfdriveStateSP', 'carState']) and CS.canValid)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and \
                     (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
     expected_version = MOTION_INTENT_VERSION if self.LoC.unified else 0

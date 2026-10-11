@@ -34,8 +34,12 @@ def make_event(event_types):
 
 class MockMADS:
   def __init__(self, mocker):
+    self.longitudinal_failure_isolated = False
     self.selfdrive = mocker.MagicMock()
+    self.selfdrive.enabled = False
     self.selfdrive.state_machine = mocker.MagicMock()
+    self.selfdrive.state_machine.current_alert_types = []
+    self.selfdrive.state_machine.soft_disable_timer = 0
     self.selfdrive.events = Events()
     self.selfdrive.events_sp = EventsSP()
 
@@ -43,11 +47,13 @@ class MockMADS:
 class TestMADSStateMachine(OpenpilotTestCase):
   def setup_method(self):
     mocker = self._fixture("mocker")
+    # Synthetic event 0 must not replace the real lkasEnable for later tests.
+    mocker.patch.dict(EVENTS_SP, {})
     self.mads = MockMADS(mocker)
     self.state_machine = StateMachine(self.mads)
     self.events = self.mads.selfdrive.events
     self.events_sp = self.mads.selfdrive.events_sp
-    self.mads.selfdrive.state_machine.soft_disable_timer = int(SOFT_DISABLE_TIME / DT_CTRL)
+    self.state_machine.soft_disable_timer = int(SOFT_DISABLE_TIME / DT_CTRL)
 
   def clear_events(self):
     self.events.clear()
@@ -90,7 +96,8 @@ class TestMADSStateMachine(OpenpilotTestCase):
         self.events_sp.add(make_event([et, ET.SOFT_DISABLE]))
         self.state_machine.state = state
         self.state_machine.update()
-        assert self.state_machine.state == State.disabled if state == State.disabled else State.softDisabling
+        expected = state if state in (State.disabled, State.paused) else State.softDisabling
+        assert self.state_machine.state == expected
         self.clear_events()
 
   def test_soft_disable_timer(self):
@@ -99,7 +106,6 @@ class TestMADSStateMachine(OpenpilotTestCase):
     self.state_machine.update()
     for _ in range(int(SOFT_DISABLE_TIME / DT_CTRL)):
       assert self.state_machine.state == State.softDisabling
-      self.mads.selfdrive.state_machine.soft_disable_timer -= 1
       self.state_machine.update()
 
     assert self.state_machine.state == State.disabled

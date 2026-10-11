@@ -519,7 +519,7 @@ class MotionSupervisor:
 
   def update(self, active, v_ego, a_ego, standstill, a_target, intent, *,
              plan_time_ns=None, model_time_ns=None, now_ns=None, plan_valid=True, braking_plan_valid=False, solver_status=0,
-             standby_input=False, continuation_valid=False):
+             standby_input=False, continuation_valid=False, hold_for_takeover=False):
     self.continuation_active = False
     self.degraded_braking_accel = None
     self._pending_rest_braking = None
@@ -527,6 +527,15 @@ class MotionSupervisor:
     if not active:
       self._observe_inactive(v_ego, a_ego, a_target, intent, plan_time_ns, model_time_ns, now_ns, plan_valid, solver_status, standby_input)
       return False
+
+    # The main state machine owns the takeover deadline and existing authority.
+    # Constrain only an already held stop; do not arm OFF or create a new stop.
+    # A standstill observation can briefly move that same owned stop to APPROACH.
+    hold_for_takeover = (hold_for_takeover is True
+                         and (self.phase == MotionPhase.HOLD
+                              or self.phase == MotionPhase.APPROACH and bool(self.reasons & StopReason.HOLD)))
+    if hold_for_takeover:
+      self.reasons |= StopReason.FORCE_DECEL | StopReason.HOLD
 
     elapsed_ns = round(DT_CTRL * 1e9)
     observation_clock_valid = self._advance_observation_clock(now_ns)
@@ -617,6 +626,10 @@ class MotionSupervisor:
       self.reasons = StopReason.HOLD
 
     raw_reasons = StopReason(intent.reasons)
+    if hold_for_takeover:
+      # A recovered producer may arrive before its forceDecel input. Keep this
+      # consumer veto separate from its identity and accept stronger braking.
+      raw_reasons |= StopReason.FORCE_DECEL
     stopped_phase = self.phase in (MotionPhase.APPROACH, MotionPhase.HOLD)
     held_stop = stopped_phase and bool(self.phase == MotionPhase.HOLD or self.reasons & StopReason.HOLD)
     moving_eligible = (intent.moving_lead and not raw_reasons and not stopped_phase and not standstill

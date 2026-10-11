@@ -30,6 +30,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer, valid_timestamp
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
+from openpilot.selfdrive.selfdrived.engagement_policy import EngagementPolicy, LongitudinalEvents
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.longitudinal_observation import SelfdriveObservation
 from openpilot.selfdrive.selfdrived.state import StateMachine
@@ -256,6 +257,7 @@ class SelfdriveD(CruiseHelper):
     self.dm_lockout_set = False
     self.dm_uncertain_alerted = False
     self.state_machine = StateMachine()
+    self.engagement_policy = EngagementPolicy()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
     # None unless /data/selfdrived_profile exists at start. Every timing call below is guarded by
@@ -869,6 +871,22 @@ class SelfdriveD(CruiseHelper):
 
     return CS
 
+  def update_engagement_state(self, CS):
+    if not hasattr(self, 'engagement_policy'):
+      self.engagement_policy = EngagementPolicy()
+    decision = self.engagement_policy.update(self, CS, time.monotonic_ns())
+    self.mads.longitudinal_failure_isolated = decision.preserve_lateral
+    self.enabled, self.active = self.state_machine.update(
+      LongitudinalEvents(self.events, decision.preserve_longitudinal),
+      soft_disable_remaining_ns=getattr(self, '_longitudinal_soft_disable_remaining_ns', None),
+      hold_for_takeover=decision.hold_for_takeover,
+    )
+    signature = (decision.preserve_lateral, decision.preserve_longitudinal, decision.hold_for_takeover)
+    if signature != getattr(self, '_takeover_signature', (False, False, False)):
+      cloudlog.event('controlTakeover', lateralRetained=signature[0], longitudinalRetained=signature[1],
+                     stoppedHandoff=signature[2], holdRemainingNs=decision.hold_remaining_ns)
+    self._takeover_signature = signature
+
   def update_alerts(self, CS):
     clear_event_types = set()
     if ET.WARNING not in self.state_machine.current_alert_types:
@@ -877,11 +895,27 @@ class SelfdriveD(CruiseHelper):
       clear_event_types.add(ET.NO_ENTRY)
 
     pers = LONGITUDINAL_PERSONALITY_MAP[self.personality]
-    callback_args = [self.CP, CS, self.sm, self.is_metric,
-                     self.state_machine.soft_disable_timer, pers]
+    # Each axis owns its deadline. Only a currently soft-disabling axis may
+    # determine the urgency of soft-disable alerts.
+    timers = []
+    if self.state_machine.state == State.softDisabling:
+      timers.append(self.state_machine.soft_disable_timer)
+    mads_machine = getattr(self.mads, 'state_machine', None)
+    if mads_machine is not None and mads_machine.state == custom.ModularAssistiveDrivingSystem.ModularAssistiveDrivingSystemState.softDisabling:
+      timers.append(mads_machine.soft_disable_timer)
+    callback_args = [self.CP, CS, self.sm, self.is_metric, min(timers, default=0), pers]
 
     alerts = self.events.create_alerts(self.state_machine.current_alert_types, callback_args)
     alerts_sp = self.events_sp.create_alerts(self.state_machine.current_alert_types, callback_args)
+
+    takeover_alert = self.engagement_policy.alert(self, CS) if hasattr(self, 'engagement_policy') else None
+    if takeover_alert is not None:
+      # Replace only the generic longitudinal warning with the explicit axis
+      # or stopped-handoff message; event types/NO_ENTRY/logging remain intact.
+      generic = 'longitudinalControlUnavailable/softDisable'
+      alerts = [alert for alert in alerts if alert.alert_type != generic]
+      self.AM.alerts.pop(generic, None)
+      alerts.append(takeover_alert)
 
     self.AM.add_many(self.sm.frame, alerts + alerts_sp)
     self.AM.process_alerts(self.sm.frame, clear_event_types)
@@ -955,13 +989,13 @@ class SelfdriveD(CruiseHelper):
       self.prof.mark("update_events")
     observe(getattr(self, "longitudinal_observation", None), "state_machine_input", self)
     if not self.CP.passive and self.initialized:
-      self.enabled, self.active = self.state_machine.update(
-        self.events, soft_disable_remaining_ns=getattr(self, '_longitudinal_soft_disable_remaining_ns', None))
+      self.update_engagement_state(CS)
       observe(getattr(self, "longitudinal_observation", None), "state_machine_output", self)
     if self.prof:
       self.prof.mark("state_machine")
     if not self.CP.notCar:
       self.mads.update(CS)
+    self.engagement_policy.observe_states(self, CS)
     if self.prof:
       self.prof.mark("mads")
     self.update_alerts(CS)

@@ -25,27 +25,37 @@ GEARS_ALLOW_PAUSED = [EventName.wrongGear, EventName.reverseGear, EventName.brak
 
 class StateMachine:
   def __init__(self, mads):
+    self.mads = mads
     self.selfdrive = mads.selfdrive
     self.ss_state_machine = mads.selfdrive.state_machine
     self._events = mads.selfdrive.events
     self._events_sp = mads.selfdrive.events_sp
 
     self.state = State.disabled
+    self.soft_disable_timer = 0
 
   def add_current_alert_types(self, alert_type):
     if not self.selfdrive.enabled:
       self.ss_state_machine.current_alert_types.append(alert_type)
 
   def check_contains(self, event_type: str) -> bool:
+    if (event_type == ET.SOFT_DISABLE and self.state in ACTIVE_STATES
+        and getattr(self.mads, 'longitudinal_failure_isolated', False) is True):
+      # Preserve established lateral authority only. Keep the original event,
+      # including its NO_ENTRY and alert types, for the other consumers.
+      mapping = self._events.get_events_mapping()
+      return (any(event_type in mapping.get(event, {}) for event in self._events.names
+                  if event != EventName.longitudinalControlUnavailable)
+              or self._events_sp.contains(event_type))
     return bool(self._events.contains(event_type) or self._events_sp.contains(event_type))
 
   def check_contains_in_list(self) -> bool:
     return bool(self._events.contains_in_list(GEARS_ALLOW_PAUSED) or self._events_sp.contains_in_list(GEARS_ALLOW_PAUSED_SILENT))
 
   def update(self):
-    # soft disable timer and current alert types are from the state machine of openpilot
-    # decrement the soft disable timer at every step, as it's reset on
-    # entrance in SOFT_DISABLING state
+    # Lateral faults own their deadline; a longitudinal fault cannot spend or
+    # reset it. Alert types are still merged into the main state machine.
+    self.soft_disable_timer = max(0, self.soft_disable_timer - 1)
 
     # ENABLED, SOFT DISABLING, PAUSED, OVERRIDING
     if self.state != State.disabled:
@@ -66,8 +76,8 @@ class StateMachine:
         if self.state == State.enabled:
           if self.check_contains(ET.SOFT_DISABLE):
             self.state = State.softDisabling
+            self.soft_disable_timer = int(SOFT_DISABLE_TIME / DT_CTRL)
             if not self.selfdrive.enabled:
-              self.ss_state_machine.soft_disable_timer = int(SOFT_DISABLE_TIME / DT_CTRL)
               self.ss_state_machine.current_alert_types.append(ET.SOFT_DISABLE)
 
           elif self.check_contains(ET.OVERRIDE_LATERAL):
@@ -80,10 +90,10 @@ class StateMachine:
             # no more soft disabling condition, so go back to ENABLED
             self.state = State.enabled
 
-          elif self.ss_state_machine.soft_disable_timer > 0:
+          elif self.soft_disable_timer > 0:
             self.add_current_alert_types(ET.SOFT_DISABLE)
 
-          elif self.ss_state_machine.soft_disable_timer <= 0:
+          elif self.soft_disable_timer <= 0:
             self.state = State.disabled
 
         # PAUSED
@@ -103,8 +113,8 @@ class StateMachine:
         elif self.state == State.overriding:
           if self.check_contains(ET.SOFT_DISABLE):
             self.state = State.softDisabling
+            self.soft_disable_timer = int(SOFT_DISABLE_TIME / DT_CTRL)
             if not self.selfdrive.enabled:
-              self.ss_state_machine.soft_disable_timer = int(SOFT_DISABLE_TIME / DT_CTRL)
               self.ss_state_machine.current_alert_types.append(ET.SOFT_DISABLE)
           elif not self.check_contains(ET.OVERRIDE_LATERAL):
             self.state = State.enabled

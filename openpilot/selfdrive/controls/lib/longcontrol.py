@@ -157,7 +157,7 @@ class LongControl:
       active, CS.vEgo, CS.aEgo, CS.standstill, a_target, intent, plan_time_ns=plan_time_ns,
       model_time_ns=model_time_ns, now_ns=now_ns, plan_valid=plan_valid and limits_valid and last_output_valid and stop_accel_valid,
       braking_plan_valid=braking_plan_valid and limits_valid and stop_accel_valid, solver_status=solver_status,
-      continuation_valid=continuation_valid)
+      continuation_valid=continuation_valid, hold_for_takeover=force_decel)
     if self.motion_supervisor.continuation_active:
       self.continuation_offer = continuation
       self.continuation_reason = 'accepted'

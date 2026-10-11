@@ -33,6 +33,7 @@ class ModularAssistiveDrivingSystem:
     self.enabled = False
     self.active = False
     self.available = False
+    self.longitudinal_failure_isolated = False
     self.lateral_mismatch_counter = 0
     self.allow_always = False
     self.no_main_cruise = False

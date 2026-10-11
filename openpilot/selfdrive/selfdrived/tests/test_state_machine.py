@@ -24,9 +24,13 @@ def make_event(event_types: list[str | None]):
 
 class TestStateMachine(OpenpilotTestCase):
   def setup_method(self):
+    self._original_event = EVENTS[0]
     self.events = Events()
     self.state_machine = StateMachine()
     self.state_machine.soft_disable_timer = int(SOFT_DISABLE_TIME / DT_CTRL)
+
+  def teardown_method(self):
+    EVENTS[0] = self._original_event
 
   def test_immediate_disable(self):
     for state in ALL_STATES:
@@ -54,7 +58,7 @@ class TestStateMachine(OpenpilotTestCase):
         self.events.add(make_event([et, ET.SOFT_DISABLE]))
         self.state_machine.state = state
         self.state_machine.update(self.events)
-        assert self.state_machine.state == State.disabled if state == State.disabled else State.softDisabling
+        assert self.state_machine.state == (State.disabled if state == State.disabled else State.softDisabling)
         self.events.clear()
 
   def test_soft_disable_timer(self):
