@@ -479,13 +479,13 @@ def test_radar_consumption_uses_only_stopped_arithmetic_roundoff_without_mutatin
 ])
 def test_unbound_radar_departure_uses_current_health_without_retaining_previous_expiry(defect):
   from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
-  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, coast, native_frame, radar_frame
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, expiring_lead, native_frame, radar_frame
   from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
 
   primary = formal_lead(now_ns=PUBLICATION, dRel=15.0, vLead=1.0, vLeadK=1.0, vRel=1.0)
   objects = [primary]
   if defect == 'current_expiry':
-    objects.append(coast(publication=PUBLICATION, relevant=True, track=99))
+    objects.append(expiring_lead(publication=PUBLICATION, relevant=True, track=99))
   radar = radar_frame(*objects, display=tuple(objects), degraded=defect == 'degraded',
                       risk_unresolved=defect == 'legacy_producer_risk')
   if defect == 'unhealthy':
@@ -499,7 +499,7 @@ def test_unbound_radar_departure_uses_current_health_without_retaining_previous_
   reference = planner.reference_planner
   if defect == 'previous_expiry':
     old = PUBLICATION - 100_000_000
-    lost = coast(publication=old, relevant=True, track=99)
+    lost = expiring_lead(publication=old, relevant=True, track=99)
     reference.radar_consumption.update(native_frame(radar_frame(lost, publication=old, display=(lost,))),
                                        publication_ns=old, now_ns=old + 60_000_000, speed=10.0)
     assert reference.radar_consumption.degraded
@@ -541,7 +541,7 @@ def test_unknown_radar_health_cannot_be_interpreted_as_clear(field):
 def run_unbound_physical_departure(condition='none', *, frames=24):
   from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume
   from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
-  from openpilot.selfdrive.controls.tests.test_radar_consumption import SESSION, coast, native_frame, radar_frame
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import SESSION, expiring_lead, native_frame, radar_frame
   from openpilot.selfdrive.controls.tests.test_stationary_lead_departure import held_recorded_departure_case
 
   Params().put_bool('DynamicExperimentalControl', False, block=True)
@@ -555,7 +555,7 @@ def run_unbound_physical_departure(condition='none', *, frames=24):
     reference.radar_held_identity = (SESSION, 7)
   elif condition == 'previous_expiry':
     old = 1_800_000_000
-    lost = coast(publication=old, relevant=True, track=99)
+    lost = expiring_lead(publication=old, relevant=True, track=99)
     reference.radar_consumption.update(native_frame(radar_frame(lost, publication=old, display=(lost,))),
                                        publication_ns=old, now_ns=old + 60_000_000, speed=10.0)
     assert reference.radar_consumption.degraded
@@ -582,7 +582,7 @@ def run_unbound_physical_departure(condition='none', *, frames=24):
       state['controlsState'].motionState.phase = owner.motion_phase.text
       state['controlsState'].motionState.resolvedStop = owner.resolved_should_stop
       plan, outputs = consume(planner, owner, state, frame)
-      if condition == 'side_primary':
+      if condition in ('side_primary', 'occluded_other'):
         assert plan.solverStatus != 0 and not plan.motionIntent.valid
         assert owner.motion_degraded
       else:

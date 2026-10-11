@@ -239,7 +239,9 @@ class MotionSupervisor:
 
   @property
   def can_standby(self):
-    return self.phase == MotionPhase.OFF and self._last_plan_time_ns is None and self._last_braking_plan_time_ns is None
+    # Standby describes an unarmed owner, including after a previous drive.
+    # It neither erases input identity nor clears a previously observed fault.
+    return self.phase == MotionPhase.OFF
 
   @property
   def motion_owner_established(self):
@@ -257,6 +259,7 @@ class MotionSupervisor:
     self.reasons = StopReason.NONE
     self.degraded = False
     self.waiting_for_fresh_input = False
+    self.inactive_input_valid = False
     self.degraded_braking_accel = None
     self.continuation_active = False
     self.resolved_should_stop = False
@@ -392,6 +395,11 @@ class MotionSupervisor:
     return (isinstance(intent, MotionIntent) and intent.is_braking_valid()
             and self._valid_transport(intent, a_target, plan_time_ns, model_time_ns, now_ns))
 
+  def valid_standby_input(self, intent, a_target, plan_time_ns, model_time_ns, now_ns):
+    return (self.can_standby and isinstance(intent, MotionIntent) and intent.is_standby_valid()
+            and self._finite_values(a_target)
+            and self._valid_transport(intent, a_target, plan_time_ns, model_time_ns, now_ns))
+
   def _constrain_motion(self, v_ego, standstill):
     retaining_stop = self.phase in (MotionPhase.APPROACH, MotionPhase.HOLD)
     if standstill:
@@ -489,12 +497,11 @@ class MotionSupervisor:
     """Record the rearm barrier while keeping execution reset and unarmed."""
     self.reset()
     clock_valid = self._advance_observation_clock(now_ns)
-    # The caller separately confirms healthy initialization because plan_valid
-    # also rejects an unset cruise speed. Standby has no execution intent and
-    # may preserve, but must never erase, a previously established fault cause.
-    if (standby_input is True and clock_valid and solver_status == 0 and self._finite_values(v_ego, a_ego, a_target)
-        and isinstance(intent, MotionIntent) and intent.is_standby_valid()
-        and self._valid_transport(intent, a_target, plan_time_ns, model_time_ns, now_ns)):
+    # Standby is healthy transport without an executable plan. Its retained
+    # solver status is historical; it cannot prove native recovery or erase a
+    # fault, even when returning to standby after an earlier drive.
+    if (standby_input is True and clock_valid and self._finite_values(v_ego, a_ego)
+        and self.valid_standby_input(intent, a_target, plan_time_ns, model_time_ns, now_ns)):
       return
     if not (clock_valid and plan_valid and solver_status == 0
             and self._finite_values(v_ego, a_ego, a_target)
@@ -509,6 +516,13 @@ class MotionSupervisor:
         self._rearm_after_fault = True
         self._require_new_input = bool(self._latest_input_ids()[0])
       return
+    latest_plan, latest_model = self._latest_input_ids()
+    if plan_time_ns > latest_plan and model_time_ns > latest_model:
+      # A genuinely new healthy pair can retire the old input fault while OFF.
+      # Re-entry still needs another pair beyond the OFF barrier below; this
+      # grants neither drive/release authority nor a reset of the fault budget.
+      self._rearm_after_fault = False
+    self.inactive_input_valid = not self._rearm_after_fault
     self._observe_rest_braking_identity(intent, plan_time_ns, model_time_ns)
     # Even an ineligible off sample establishes the rearm barrier. Repeated
     # inactive calls cannot erase it or turn this sample into a new drive plan.
@@ -521,6 +535,7 @@ class MotionSupervisor:
              plan_time_ns=None, model_time_ns=None, now_ns=None, plan_valid=True, braking_plan_valid=False, solver_status=0,
              standby_input=False, continuation_valid=False, hold_for_takeover=False):
     self.continuation_active = False
+    self.inactive_input_valid = False
     self.degraded_braking_accel = None
     self._pending_rest_braking = None
     self.rest_braking_accel_limit = None

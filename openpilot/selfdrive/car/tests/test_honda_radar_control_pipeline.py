@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from openpilot.cereal import messaging
-from openpilot.selfdrive.car.honda_radar_control import SWEPT_HALF_WIDTH
+from openpilot.selfdrive.car.honda_radar_control import CUT_IN_REASON, SWEPT_HALF_WIDTH
 from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, SCOPE_MAX_AGE_NS, ObserverSettings
 from openpilot.selfdrive.car.tests import honda_radar_control_test_support as pipeline_support
 from openpilot.selfdrive.car.tests.honda_radar_control_test_support import Target, control_pipeline
@@ -20,6 +20,99 @@ def objects(row):
 
 def record(record_property, name, rows):
   record_property(name, json.dumps(rows, separators=(',', ':'), allow_nan=False))
+
+
+def body_target(frame, kind, side):
+  elapsed = frame * .05
+  lateral = 1.8 if kind == 'parallel' else (4.0 if kind == 'side' else 2.2) - .4 * elapsed
+  extent = None if kind == 'no_edges' else ((.6, -.9) if side > 0 else (.9, -.6))
+  return Target(28.0 - 7.62 * elapsed, 13.3, lateral=side * lateral, oem_id=46, body_offsets=extent)
+
+
+def body_row(pipeline, kind, side):
+  """Capture unmodified producer and MPC receipts for one raw sensor scan."""
+  row = pipeline.step(speed=20.92, radar=[body_target(pipeline.frame, kind, side)])
+  observation = pipeline.state[SERVICE]
+  row['body_tracks'] = [track.to_dict() for track in observation.fusion.tracks]
+  row['body_scans'] = [sample.to_dict() for sample in observation.observations if sample.positionValid]
+  mpc, planner = pipeline.planner.mpc, pipeline.planner.reference_planner
+  body_leads = [lead for lead in mpc._source_leads if CUT_IN_REASON in str(lead.evidence.reason)]
+  row['mpc_body_tracks'] = [int(lead.evidence.trackId) for lead in body_leads]
+  row['mpc_body_follow_geometry'] = [int(lead.evidence.followGeometryMonoTime) for lead in body_leads]
+  row['fcw_count'], row['fcw'] = int(mpc.crash_cnt), bool(pipeline.planner.fcw)
+  row['consumer_degraded'] = planner.radar_consumption.degraded
+  assert planner.radar_held_identity is None and planner._radar_stop_candidate is None
+  assert not planner._radar_stop_pending and planner.radar_release_identity is None
+  return row
+
+
+@pytest.mark.parametrize('side', [-1, 1], ids=['right', 'left'])
+def test_raw_measured_body_cut_in_brakes_through_fusion_mpc_and_honda_can(side, record_property):
+  """Only sensor edges/motion differ; no formal lead or controller is patched."""
+  arms = {}
+  for kind in ('no_edges', 'side', 'parallel', 'intruding'):
+    with control_pipeline(speed=20.92, cruise=24.0) as pipeline:
+      rows = [body_row(pipeline, kind, side) for _ in range(34)]
+      arms[kind] = rows
+      record(record_property, f'raw_body_{side}_{kind}', rows)
+      if kind == 'intruding':
+        withdrawn = [body_row(pipeline, 'no_edges', side) for _ in range(3)]
+        record(record_property, f'raw_body_{side}_withdrawn', withdrawn)
+        for row in withdrawn:
+          assert row['body_tracks'] and all(not track['bodyValid'] for track in row['body_tracks'])
+          assert not objects(row) and not row['mpc_body_tracks']
+          assert not row['radar']['fusionClearedTracks']
+
+  baseline = arms['no_edges']
+  for kind, rows in arms.items():
+    mature = [track for row in rows for track in row['body_tracks']
+              if track['active'] and track['mature'] and track['velocityGood'] and track['lateralVelocityValid']]
+    assert mature, f'{kind}: the real producer never supplied mature motion evidence'
+    assert any(row['body_scans'] for row in rows)
+    if kind == 'no_edges':
+      assert all(not track['bodyValid'] for row in rows for track in row['body_tracks'])
+    else:
+      assert all(track['bodyValid'] for track in mature)
+      for row in rows:
+        for track in row['body_tracks']:
+          if not track['bodyValid']:
+            continue
+          scan = next(sample for sample in row['body_scans']
+                      if sample['positionSeq'] == track['positionSeq'] and sample['raw']['oemTrackId'] == track['oemTrackId'])
+          assert track['bodyMonoTime'] == track['positionMonoTime'] == scan['positionMonoTime'] == row['source_ns']
+          assert track['bodyAvailableMonoTime'] == row['source_ns']
+          assert scan['raw']['edgeARaw'] != scan['raw']['edgeBRaw']
+          assert track['bodyWidth'] == pytest.approx(1.5, abs=.06)  # Quantized angular CAN edges.
+    if kind != 'intruding':
+      assert all(not objects(row) and not row['mpc_body_tracks'] for row in rows)
+      # Side/parallel motion and a missing width must not create braking merely
+      # because radar reports a closing object outside the ordinary point path.
+      for row, expected in zip(rows, baseline, strict=True):
+        assert row['target'] == pytest.approx(expected['target'], abs=1e-6)
+        assert [sample['accel'] for sample in row['can']] == pytest.approx(
+          [sample['accel'] for sample in expected['can']], abs=1e-6)
+
+  admitted = [row for row in arms['intruding'] if objects(row)]
+  assert admitted, 'Fresh raw body intrusion never reached a formal brake-only lead'
+  for row in admitted:
+    lead, = objects(row)
+    claim = lead['evidence']
+    assert CUT_IN_REASON in claim['reason'] and claim['brakeQualified']
+    assert not any(claim[purpose + 'Qualified'] for purpose in ('follow', 'stop', 'departure', 'fcw'))
+    assert not claim['coasting'] and not claim['accelerationValid'] and lead['aLeadK'] == 0.0
+    assert claim['followGeometryMonoTime'] == 0 and row['mpc_body_follow_geometry'] == [0]
+    assert abs(lead['yRel']) > SWEPT_HALF_WIDTH  # The reflection has not entered the point path.
+    assert row['mpc_body_tracks'] == [claim['trackId']]
+    assert row['solver'] == 0 and row['radar']['fusionHealthy'] and not row['consumer_degraded']
+    assert row['fcw_count'] == 0 and not row['fcw'] and not row['moving']
+    assert all(owner['phase'] != 'hold' for owner in row['owner'])
+    assert all(not command['resume'] for command in row['can'])
+    if row['target'] < 0.0:
+      assert not row['release']
+    assert not row['reasons'] & int(StopReason.CLOSE_LEAD)
+  assert any(row['target'] < baseline[row['frame']]['target'] - .2 for row in admitted)
+  assert any(sample['active'] and sample['brake'] and sample['accel'] < -.2 and sample['gas'] == -30000
+             for row in admitted for sample in row['can'])
 
 
 def confirmed_offset_target(pipeline):
@@ -243,14 +336,8 @@ def test_saturation_reacquisition_requires_fresh_components_without_latched_loss
     for track in row['fusion_tracks']:
       if track['trackId'] == identity[1]:
         assert not track['active'] and not track['velocityGood']
-    for obj in objects(row):
-      evidence = obj['evidence']
-      if (evidence['sessionId'], evidence['trackId']) == identity:
-        # A bounded prediction can still brake using the original stamps.
-        assert evidence['source'] == 'predicted' and evidence['coasting']
-        assert evidence['positionMonoTime'] == initial['evidence']['positionMonoTime']
-        assert evidence['velocityMonoTime'] == initial['evidence']['velocityMonoTime']
-        assert not evidence['followQualified'] and not evidence['departureQualified']
+    assert not any((obj['evidence']['sessionId'], obj['evidence']['trackId']) == identity for obj in objects(row))
+    assert all(not obj['evidence']['coasting'] and obj['evidence']['source'] != 'predicted' for obj in objects(row))
 
   if recovery == 'same_identity':
     restored = rows[26]['fusion_tracks'][0]
@@ -393,14 +480,10 @@ def test_established_radar_hold_survives_dropout_and_releases_for_same_car_depar
   if outcome == 'dropout':
     frozen = rows[27]['observer_ns'], rows[27]['observer_position_ns']
     assert all((row['observer_ns'], row['observer_position_ns']) == frozen for row in rows[28:])
-    coasts = [obj for row in rows[28:36] for obj in objects(row) if obj['evidence']['coasting']]
-    assert coasts
-    for obj in coasts:
-      evidence = obj['evidence']
-      assert evidence['source'] == 'predicted' and evidence['brakeQualified']
-      assert not evidence['followQualified'] and not evidence['departureQualified']
-      assert evidence['positionMonoTime'] == held['evidence']['positionMonoTime']
-      assert evidence['velocityMonoTime'] == held['evidence']['velocityMonoTime']
+    assert all(not obj['evidence']['coasting'] and obj['evidence']['source'] != 'predicted'
+               for row in rows[28:] for obj in objects(row))
+    assert not any(obj['evidence']['trackId'] == held['evidence']['trackId']
+                   for row in rows[36:] for obj in objects(row))
     assert any(row['radar'].get('fusionDegraded', False) for row in rows[36:])
     assert not any(row['radar']['fusionRiskUnresolved'] for row in rows)
     # The executed object-specific HOLD remains its own state. Sensor loss

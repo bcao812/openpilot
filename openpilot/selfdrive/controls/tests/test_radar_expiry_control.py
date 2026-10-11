@@ -9,21 +9,21 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner_owner
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import CapturingPublisher
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
-from openpilot.selfdrive.controls.tests.test_radar_consumption import PUBLICATION, coast, measured, native_frame, radar_frame
+from openpilot.selfdrive.controls.tests.test_radar_consumption import PUBLICATION, measured, native_frame, radar_frame
 from openpilot.selfdrive.controls.tests.test_radard_publication import make_radard, publish_at, update_with_result
 from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import state_at
 
 
 @pytest.mark.parametrize('boundary,source', [
-  ('consumer', 'radar'), ('consumer', 'fused'), ('consumer', 'predicted'),
-  ('late_publication', 'radar'), ('late_publication', 'fused'), ('late_publication', 'predicted'),
-  ('publisher', 'radar'), ('publisher', 'fused'), ('publisher', 'predicted'),
+  ('consumer', 'radar'), ('consumer', 'fused'),
+  ('late_publication', 'radar'), ('late_publication', 'fused'),
+  ('publisher', 'radar'), ('publisher', 'fused'),
 ])
 def test_expired_near_obstacle_does_not_turn_ongoing_braking_into_cruise(boundary, source):
   for name in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
     Params().put_bool(name, True, block=True)
   planner, owner = make_planner_owner(speed=10.0, initial_accel=-1.0)
-  lead = coast(relevant=True) if source == 'predicted' else measured(source=source, relevant=True)
+  lead = measured(source=source, relevant=True)
   lead.dRel = 25.0
   frame = radar_frame(lead, display=(lead,))
   rd = make_radard()

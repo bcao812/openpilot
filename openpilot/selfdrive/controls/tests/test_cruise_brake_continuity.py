@@ -149,7 +149,7 @@ def test_armed_coast_retires_on_real_planner_exit_before_healthy_reentry(guard):
   from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
   from openpilot.selfdrive.controls.lib.motion_supervisor import MotionResponseKind, StopReason
   from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import decoded_commands
-  from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_handover_state, make_planner_owner
+  from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_handover_state, make_planner_owner, patch_sampled_accel
 
   params = Params()
   for name in ('SmartCruiseControlVision', 'DynamicExperimentalControl'):
@@ -163,7 +163,7 @@ def test_armed_coast_retires_on_real_planner_exit_before_healthy_reentry(guard):
   # its sampled acceleration to isolate coast state and final arbitration;
   # the lead case supplies a stronger reference, not a claim about solver
   # performance for that synthetic lead. No response state is injected.
-  with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.0) as sample:
+  with patch_sampled_accel(planner, return_value=0.0) as sample:
     armed, outputs = consume(planner, owner, state, 0)
     assert armed.motionIntent.valid and armed.motionIntent.responseKind == coast_kind
     assert armed.aTarget == pytest.approx(-0.212, abs=3e-6, rel=0.0)

@@ -693,7 +693,7 @@ def test_unready_producer_without_an_executable_trajectory_is_not_valid_for_moti
   assert not harness.supervisor.can_standby
 
 
-def test_first_ready_input_permanently_consumes_cold_standby_eligibility():
+def test_disabled_owner_can_return_to_standby_without_losing_input_identity():
   harness = MotionHarness()
   assert harness.supervisor.can_standby
   assert not harness.step(a_target=1.0, v_ego=10.0)
@@ -703,23 +703,26 @@ def test_first_ready_input_permanently_consumes_cold_standby_eligibility():
   model_time = harness.supervisor._last_model_time_ns
   harness.step(active=False)
   assert harness.supervisor.phase == MotionPhase.OFF
-  assert not harness.supervisor.can_standby
+  assert harness.supervisor.can_standby
   # Healthy OFF evidence establishes the next rearm barrier without granting
-  # drive authority or restoring the one-time cold standby exemption.
+  # drive authority. Standby does not erase that barrier.
   assert harness.supervisor._last_plan_time_ns == harness.plan_time_ns > plan_time
   assert harness.supervisor._last_model_time_ns == harness.model_time_ns > model_time
   assert harness.supervisor._require_new_input
   harness.step(MotionIntent(ready=False), active=False)
-  assert not harness.supervisor.can_standby
+  assert harness.supervisor.can_standby
+  assert harness.supervisor._require_new_input
+  assert not harness.supervisor.inactive_input_valid
 
 
-def test_accepted_hold_also_prevents_return_to_cold_standby():
+def test_disabling_a_held_stop_allows_standby_without_erasing_rearm_identity():
   harness = MotionHarness()
   harness.stopped()
   assert not harness.supervisor.can_standby
   harness.supervisor.reset()
   assert harness.supervisor.phase == MotionPhase.OFF
-  assert not harness.supervisor.can_standby
+  assert harness.supervisor.can_standby
+  assert harness.supervisor._require_new_input
 
 
 @pytest.mark.parametrize('a_target', [0.0, 0.05, 0.15, 1.0])
@@ -754,7 +757,7 @@ def test_readiness_loss_after_motion_is_not_a_new_cold_start():
   harness = MotionHarness()
   harness.step(a_target=1.0, v_ego=10.0)
   harness.step(active=False)
-  assert not harness.supervisor.can_standby
+  assert harness.supervisor.can_standby
   harness.step(MotionIntent(ready=False), a_target=1.0, v_ego=10.0)
   assert harness.supervisor.degraded
   assert not harness.supervisor.can_standby

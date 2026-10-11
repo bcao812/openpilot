@@ -700,6 +700,16 @@ struct HondaRadarObservations {
     lateralPositionVariance @34 :Float64;  # engineering covariance, not calibrated sigma
     lateralVelocityVariance @35 :Float64;
     lateralVelocityValid @36 :Bool;
+    # Same accepted position scan's measured angular extent, translated and
+    # rotated to modelTimestampEof with this track. No nominal vehicle width.
+    bodyWidth @37 :Float64;
+    bodyLeftX @38 :Float64;
+    bodyLeftY @39 :Float64;
+    bodyRightX @40 :Float64;
+    bodyRightY @41 :Float64;
+    bodyMonoTime @42 :UInt64;  # original F0 time; AUX cannot extend its lifetime
+    bodyAvailableMonoTime @43 :UInt64;  # latest F0..F3 time
+    bodyValid @44 :Bool = false;  # geometric estimate, not control permission
   }
 
   struct FusionLead {

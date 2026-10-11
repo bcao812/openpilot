@@ -81,26 +81,23 @@ def test_filtered_probability_cannot_authorize_borrowing_current_raw_weak_motion
     assert not target['evidence']['accelerationValid']
 
 
-@pytest.mark.parametrize('distance, speed, continuous', [(20.0, 10.0, True), (7.0, 3.0, False)])
-def test_raw_confidence_recovery_needs_current_same_slot_motion_continuity(distance, speed, continuous):
+@pytest.mark.parametrize('distance, speed', [(20.0, 10.0), (7.0, 3.0)])
+def test_visual_confidence_recovery_does_not_restore_a_withdrawn_radar_identity(distance, speed):
   controller = HondaRadarControl()
   controller.update(**scene(leads=[vision()], bindings=[binding()]))
   weak = observer_gap(1)
   weak['model']['leadsV3'][0]['prob'] = .2
   result = controller.update(**weak)
   assert all(lead['evidence']['reason'] != 'visionFallback' for lead in present_leads(result))
-  assert controller._tracks[1].last_vision['evidence']['estimateMonoTime'] == START
+  assert not controller._tracks
   assert any(lead['evidence']['source'] == 'vision' for lead in present_leads(result))
   recovered = controller.update(**observer_gap(2, leads=[vision(distance=distance, speed=speed)]))
-  fallbacks = [lead for lead in present_leads(recovered) if lead['evidence']['reason'] == 'visionFallback']
-  assert bool(fallbacks) is continuous
-  if continuous:
-    assert len(present_leads(recovered)) == 1
-    assert fallbacks[0]['evidence']['positionMonoTime'] == START + 2 * STEP
-    assert fallbacks[0]['evidence']['velocityMonoTime'] == START + 2 * STEP
-  else:
-    assert any(lead['evidence']['source'] == 'vision' and lead['dRel'] == 7.0 for lead in present_leads(recovered))
-    assert any(lead['evidence']['trackId'] == 1 and lead['evidence']['brakeQualified'] for lead in present_leads(recovered))
+  assert len(present_leads(recovered)) == 1
+  current = present_leads(recovered)[0]
+  assert current['evidence']['source'] == 'vision' and current['evidence']['trackId'] == 0
+  assert current['dRel'] == distance and current['vLeadK'] == speed
+  assert current['evidence']['positionMonoTime'] == START + 2 * STEP
+  assert current['evidence']['velocityMonoTime'] == START + 2 * STEP
 
 
 def test_raw_confidence_recovery_cannot_recreate_an_explicitly_revoked_identity():
@@ -137,15 +134,16 @@ def test_explicit_identity_rejection_survives_later_observer_dropout(state, reas
   controller.update(**scene(leads=[vision()], bindings=[binding()]))
   rejected = binding(identityState=state, identityReason=reason, rejectionMonoTime=START + STEP)
   controller.update(**scene(1, tracks=[radar(1)] if active_radar else [], leads=[vision()], bindings=[rejected]))
-  assert controller._tracks[1].last_vision is None
+  if active_radar:
+    assert controller._tracks[1].last_vision is None
+  else:
+    assert not controller._tracks
   result = controller.update(**observer_gap(2))
   assert all(lead['evidence']['reason'] != 'visionFallback' for lead in present_leads(result))
-  radar_object = next(lead for lead in present_leads(result) if lead['evidence']['trackId'] == 1)
-  assert radar_object['evidence']['source'] == 'predicted'
-  assert radar_object['evidence']['brakeQualified'] and radar_object['evidence']['coasting']
-  assert radar_object['evidence']['positionMonoTime'] == START + (STEP if active_radar else 0)
-  assert radar_object['evidence']['velocityMonoTime'] == START + (STEP if active_radar else 0)
-  assert any(lead['evidence']['source'] == 'vision' for lead in present_leads(result))
+  assert len(present_leads(result)) == 1
+  assert present_leads(result)[0]['evidence']['source'] == 'vision'
+  assert not present_leads(result)[0]['evidence']['coasting']
+  assert not controller._tracks
 
 
 def test_current_confirmed_rebinding_restores_visual_continuity_after_explicit_rejection():
@@ -175,31 +173,25 @@ def test_invalidated_track_does_not_restore_old_visual_binding_when_radar_return
   assert controller._tracks[1].last_vision is None
   result = controller.update(**observer_gap(3))
   assert all(lead['evidence']['reason'] != 'visionFallback' for lead in present_leads(result))
-  assert any(lead['evidence']['trackId'] == 1 and lead['evidence']['brakeQualified'] for lead in present_leads(result))
+  assert not any(lead['evidence']['trackId'] == 1 for lead in present_leads(result))
 
 
 @pytest.mark.parametrize('reason', ['sourceGap', 'visionUnqualified', 'noMatch', 'ambiguous'])
 @pytest.mark.parametrize('radar_distance, visual_distance', [(17.15, 22.71), (17.30, 22.45)])
-def test_current_soft_rejection_blocks_farther_visual_replacement_until_reconfirmation(reason, radar_distance, visual_distance):
+def test_missing_radar_drops_old_geometry_while_visual_identity_waits_for_reconfirmation(reason, radar_distance, visual_distance):
   controller = HondaRadarControl()
   bias = radar_distance - visual_distance
   controller.update(**scene(tracks=[radar(distance=radar_distance)], leads=[vision(distance=visual_distance)],
                             bindings=[binding(bias_x=bias)]))
   suspension = binding(bias_x=bias, identityState='unresolved', identityReason=reason, rejectionMonoTime=START + STEP)
   result = controller.update(**scene(1, tracks=[], leads=[vision(distance=visual_distance)], bindings=[suspension]))
-  # These farther visual replacements were observed in the recorded window.
-  # Keep the nearer radar coast until this association is currently eligible.
-  assert len(present_leads(result)) == 2
-  assert all(lead['evidence']['reason'] != 'visionFallback' for lead in present_leads(result))
-  assert result.leads[0]['dRel'] == pytest.approx(radar_distance)
-  retained = next(lead for lead in present_leads(result) if lead['evidence']['trackId'] == 1)
-  assert retained['evidence']['source'] == 'predicted' and retained['evidence']['coasting']
-  assert retained['evidence']['brakeQualified']
-  assert not any(retained['evidence'][purpose] for purpose in ('followQualified', 'stopQualified', 'departureQualified'))
-  assert retained['evidence']['positionMonoTime'] == START
-  assert retained['evidence']['velocityMonoTime'] == START
-  assert controller._tracks[1].last_vision['evidence']['estimateMonoTime'] == START
-  assert any(lead['evidence']['source'] == 'vision' and lead['dRel'] == visual_distance for lead in present_leads(result))
+  # The current visual candidate remains available without claiming that its
+  # measurements belong to the missing radar identity.
+  assert len(present_leads(result)) == 1 and not result.degraded
+  current = present_leads(result)[0]
+  assert current['dRel'] == pytest.approx(visual_distance)
+  assert current['evidence']['source'] == 'vision' and current['evidence']['trackId'] == 0
+  assert not current['evidence']['coasting'] and not controller._tracks
   recovered = controller.update(**scene(4, tracks=[radar(4, distance=radar_distance)],
                                        leads=[vision(distance=visual_distance)],
                                        bindings=[binding(bias_x=bias, bindingStartMonoTime=START + 2 * STEP,
@@ -211,16 +203,18 @@ def test_current_soft_rejection_blocks_farther_visual_replacement_until_reconfir
   assert controller._tracks[1].last_vision['evidence']['estimateMonoTime'] == START + 4 * STEP
 
 
-def test_soft_rejection_is_per_frame_when_optional_observer_goes_missing():
+def test_a_withdrawn_radar_identity_is_not_restored_by_an_observer_gap():
   controller = HondaRadarControl()
   controller.update(**scene(leads=[vision()], bindings=[binding()]))
   suspension = binding(identityState='unresolved', identityReason='sourceGap', rejectionMonoTime=START + STEP)
   rejected = controller.update(**scene(1, tracks=[], leads=[vision()], bindings=[suspension]))
   assert all(lead['evidence']['reason'] != 'visionFallback' for lead in present_leads(rejected))
-  assert controller._tracks[1].last_vision is not None
+  assert not controller._tracks
   result = controller.update(**observer_gap(2))
-  assert len(present_leads(result)) == 1 and present_leads(result)[0]['evidence']['reason'] == 'visionFallback'
-  assert not result.degraded
+  assert len(present_leads(result)) == 1
+  assert present_leads(result)[0]['evidence']['source'] == 'vision'
+  assert present_leads(result)[0]['evidence']['reason'] != 'visionFallback'
+  assert result.degraded
 
 
 @pytest.mark.parametrize('changes', [{'index': 1}, {'identifier': 2}])
@@ -259,7 +253,7 @@ def test_untrusted_observer_publication_cannot_revoke_the_confirmed_visual_strea
   assert not result.degraded
 
 
-def test_revoked_binding_preserves_independent_near_radar_risk():
+def test_revoked_binding_does_not_republish_missing_radar_targets():
   controller = HondaRadarControl()
   for frame in range(2):
     association = binding() if frame == 0 else binding(
@@ -267,13 +261,11 @@ def test_revoked_binding_preserves_independent_near_radar_risk():
     tracks = [radar(frame), radar(frame, identifier=2, oem=8, distance=7.0, speed=0.0)]
     controller.update(**scene(frame, tracks=tracks, leads=[vision()], bindings=[association]))
   result = controller.update(**observer_gap(2))
-  assert all(lead['evidence']['reason'] != 'visionFallback' for lead in present_leads(result))
-  near = next(lead for lead in present_leads(result) if lead['evidence']['trackId'] == 2)
-  assert near['dRel'] < 7.0 and near['vLeadK'] == 0.0
-  assert near['evidence']['brakeQualified'] and near['evidence']['coasting']
-  assert near['evidence']['positionMonoTime'] == START + STEP
-  assert near['evidence']['velocityMonoTime'] == START + STEP
-  assert any(lead['evidence']['source'] == 'vision' for lead in present_leads(result))
+  assert result.degraded
+  assert len(present_leads(result)) == 1
+  assert present_leads(result)[0]['evidence']['source'] == 'vision'
+  assert present_leads(result)[0]['evidence']['reason'] != 'visionFallback'
+  assert not controller._tracks
 
 
 @pytest.mark.parametrize('same_car', [False, True], ids=['unbound-side', 'confirmed-visual-body'])

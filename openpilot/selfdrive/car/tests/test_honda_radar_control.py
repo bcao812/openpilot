@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 
 from openpilot.selfdrive.car.honda_radar_control import (
-  COAST_NS, HORIZON, MAX_TRACKS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _corridors, _qualified_path,
+  HORIZON, MAX_TRACKS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _corridors, _qualified_path,
 )
 
 
@@ -164,22 +164,22 @@ def test_radar_only_remains_authoritative_beyond_former_visual_gap_timeout():
     assert evidence(result)['positionMonoTime'] == START + frame * STEP
 
 
-def test_latest_fresh_geometry_survives_coast_without_renewing_components_or_purposes():
-  # Adapter message contract, not a vehicle/plant calibration. The planner can
-  # miss the latest fresh publication while the producer has still seen it.
+@pytest.mark.parametrize('visual', [False, True])
+def test_missing_radar_is_withdrawn_immediately_and_current_vision_remains(visual):
   controller = HondaRadarControl()
   assert evidence(controller.update(**scene()))['followGeometryMonoTime'] == START
-  fresh = evidence(controller.update(**scene(1)))
-  assert fresh['followGeometryMonoTime'] == START + STEP
+  assert evidence(controller.update(**scene(1)))['followGeometryMonoTime'] == START + STEP
   for frame in (2, 3):
-    claim = evidence(controller.update(**scene(frame, tracks=[])))
-    assert claim['followGeometryMonoTime'] == fresh['estimateMonoTime']
-    assert claim['estimateMonoTime'] == START + frame * STEP
-    for field in ('sessionId', 'trackId', 'generation', 'positionMonoTime', 'velocityMonoTime'):
-      assert claim[field] == fresh[field]
-    assert claim['coasting'] and claim['brakeQualified']
-    assert not any(claim[field] for field in ('followQualified', 'stopQualified', 'departureQualified',
-                                             'fcwQualified', 'accelerationValid', 'physicalConflictValid'))
+    result = controller.update(**scene(frame, tracks=[], leads=[vision(distance=12.0)] if visual else None))
+    assert result.healthy and not result.degraded and not result.cleared
+    assert not controller._tracks
+    assert len(present_leads(result)) == int(visual)
+    if visual:
+      lead = present_leads(result)[0]
+      assert lead['dRel'] == 12.0 and not lead['radar']
+      assert lead['evidence']['source'] == 'vision' and not lead['evidence']['coasting']
+      assert lead['evidence']['positionMonoTime'] == START + frame * STEP
+      assert lead['evidence']['velocityMonoTime'] == START + frame * STEP
 
 
 @pytest.mark.parametrize('change', ['opposing', 'crossing', 'future_bend', 'out'])
@@ -213,17 +213,16 @@ def test_new_current_geometry_revocation_cannot_recover_an_older_follow_epoch(ch
   {'sessionId': 'different-session'}, {'trackId': 2}, {'generation': 2},
   {'positionMonoTime': START - 1}, {'velocityMonoTime': START - 1}, {'estimateMonoTime': START - 1},
 ])
-def test_coast_cannot_invent_geometry_from_missing_or_mismatched_provenance(changes):
-  # Corrupted internal evidence is a contract boundary, not a sensor model.
+def test_missing_radar_cannot_republish_saved_geometry_or_components(changes):
   controller = HondaRadarControl()
   controller.update(**scene())
   accepted = controller._tracks[1].accepted['evidence']
   accepted.update(changes)
   if changes.get('followGeometryMonoTime', 0) is None:
     accepted.pop('followGeometryMonoTime')
-  coast = controller.update(**scene(1, tracks=[]))
-  assert present_leads(coast) and evidence(coast)['coasting']
-  assert evidence(coast)['followGeometryMonoTime'] == 0
+  missing = controller.update(**scene(1, tracks=[]))
+  assert not present_leads(missing) and not controller._tracks
+  assert not missing.degraded and not missing.cleared
 
 
 def test_new_immature_radar_waits_for_observer_maturity_not_visual_confirmation():
@@ -237,30 +236,26 @@ def test_new_immature_radar_waits_for_observer_maturity_not_visual_confirmation(
 
 
 
-def test_far_historical_path_does_not_invent_a_crossing_or_latch_a_later_invalid_position():
+def test_unknown_current_path_does_not_reuse_far_historical_geometry():
   controller = HondaRadarControl()
   controller.update(**scene(tracks=[radar(distance=90.0, speed=-.65)]))
   assert not controller._tracks[1].relevant
   for frame in range(1, 4):
     result = controller.update(**scene(frame, tracks=[radar(frame, distance=90.0, speed=-.65)], short_path=True))
-    claim = evidence(result)
     assert result.healthy and not result.degraded and not result.cleared
-    assert claim['coasting'] and claim['conflictEnd'] == HORIZON
-    assert not claim['physicalConflictValid']
-    assert controller._tracks[1].path_ns == START and not controller._tracks[1].relevant
+    assert not present_leads(result) and not controller._tracks
   result = controller.update(**scene(4, tracks=[radar(4, distance=90.0, active=False, lastInvalidReason='positionInnovation')]))
   assert result.healthy and not result.degraded and not present_leads(result) and not result.cleared
-  assert not controller._tracks
 
 
-def test_short_coast_drops_a_lead_whose_current_projected_position_leaves_the_band():
+def test_missing_radar_does_not_project_saved_path_motion():
   controller = HondaRadarControl()
   controller.update(**scene())
   memory = controller._tracks[1]
   memory.path = replace(memory.path, rate=6.0)
-  path = controller._historical_path(memory, START + COAST_NS)
-  assert path.state == 'outOfPath'
-  assert memory.path_ns == memory.position_ns == memory.velocity_ns == START
+  result = controller.update(**scene(1, tracks=[]))
+  assert not present_leads(result) and not controller._tracks
+  assert not result.cleared
 
 
 def test_legacy_predicted_entry_history_cannot_become_current_occupancy():
@@ -268,19 +263,16 @@ def test_legacy_predicted_entry_history_cannot_become_current_occupancy():
   controller.update(**scene())
   memory = controller._tracks[1]
   memory.path = replace(memory.path, state='entering', offset=1.5, rate=-5.0)
-  assert controller._historical_path(memory, START + STEP).state == 'unknown'
   missing = controller.update(**scene(1, tracks=[]))
   assert missing.healthy and not missing.degraded and not present_leads(missing) and not missing.cleared
   assert not controller._tracks
 
 
-def test_unknown_horizon_never_extends_near_measurement_or_path_authority():
+@pytest.mark.parametrize('frame', [1, 3, 6])
+def test_missing_radar_does_not_wait_for_a_prediction_deadline(frame):
   controller = HondaRadarControl()
   controller.update(**scene())
-  memory = controller._tracks[1]
-  assert controller._historical_path(memory, START + COAST_NS).state == 'inPath'
-  assert controller._historical_path(memory, START + COAST_NS + 1).state == 'unknown'
-  result = controller.update(**scene(6, tracks=[]))
+  result = controller.update(**scene(frame, tracks=[]))
   assert result.healthy and not result.degraded and not present_leads(result) and not result.cleared
   assert not controller._tracks
 
@@ -303,8 +295,8 @@ def test_bad_velocity_only_degrades_an_existing_selected_near_lead(
       assert controller._tracks[1].relevant is (previous_distance == 20.0)
     else:
       assert not controller._tracks
-  # Beyond the old velocity's coast deadline, with independent fresh
-  # positions but no qualified raw, visual, or position-derived velocity.
+  # Independent fresh positions cannot replace a missing velocity component.
+  # No qualified raw, visual, or position-derived velocity is available.
   for frame in (7, 8):
     current = radar(frame, distance=40.0, lateral=current_lateral, velocityGood=False, velocityVariance=5.0)
     result = controller.update(**scene(frame, tracks=[current]))
@@ -456,7 +448,7 @@ def test_lateral_position_uncertainty_cannot_create_or_clear_an_obstacle():
   controller = HondaRadarControl()
   controller.update(**scene())
   uncertain = controller.update(**scene(1, tracks=[radar(1, lateral=1.0, lateralPositionVariance=4.01)]))
-  assert evidence(uncertain)['source'] == 'predicted'
+  assert not present_leads(uncertain)
   assert uncertain.degraded and not uncertain.cleared
 
 
@@ -698,18 +690,16 @@ def test_short_stop_trajectory_uses_quality_lanes_only_inside_spatial_support():
   assert not present_leads(HondaRadarControl().update(**bad))
 
 
-def test_unknown_geometry_does_not_create_new_in_path_target_or_fake_departure():
+def test_unknown_geometry_does_not_reuse_an_old_path_or_fake_departure():
   unknown = HondaRadarControl().update(**scene(short_path=True))
   assert not present_leads(unknown) and not unknown.cleared
   controller = HondaRadarControl()
   controller.update(**scene())
   gap = controller.update(**scene(1, short_path=True))
-  assert evidence(gap)['source'] == 'predicted'
-  assert evidence(gap)['pathSource'] == 'previousPath'
-  assert evidence(gap)['brakeQualified'] and not evidence(gap)['departureQualified']
-  assert gap.degraded and not gap.cleared
-  expired = controller.update(**scene(7, short_path=True))
-  assert not present_leads(expired) and expired.degraded and not expired.cleared
+  assert not present_leads(gap) and gap.degraded and not gap.cleared
+  assert not controller._tracks
+  later = controller.update(**scene(7, short_path=True))
+  assert not present_leads(later) and not later.degraded and not later.cleared
 
 
 def test_crossing_does_not_gain_extra_braking_or_follow_memory():
@@ -758,25 +748,18 @@ def test_can_received_after_camera_eof_remains_valid_when_projected_back_to_eof(
   assert qualified_lead(present_leads(result)[0], 'brake')
 
 
-def test_position_new_velocity_old_cannot_renew_velocity_authority():
-  from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
+def test_position_new_velocity_old_cannot_republish_previous_velocity():
   controller = HondaRadarControl()
   controller.update(**scene())
-  values = scene(4, tracks=[radar(4, velocityMonoTime=START, velocityGood=False, observations=3,
-                                previousPositionMonoTime=0, previousPositionSeq=0)])
-  result = controller.update(**values)
-  assert evidence(result)['source'] == 'predicted' and evidence(result)['velocityMonoTime'] == START
-  assert evidence(result)['brakeQualified'] and not evidence(result)['departureQualified']
-  assert evidence(result)['followGeometryMonoTime'] == 0
-  assert present_leads(result)[0]['aLeadK'] == 0.0
-  assert qualified_lead(present_leads(result)[0], 'brake', now_ns=values['now_ns'])
-  coast = controller.update(**scene(5, tracks=[]))
-  assert present_leads(coast) and evidence(coast)['coasting']
-  assert evidence(coast)['followGeometryMonoTime'] == 0
-  values = scene(6, tracks=[radar(6, velocityMonoTime=START, velocityGood=False, observations=3,
-                                previousPositionMonoTime=0, previousPositionSeq=0)])
-  result = controller.update(**values)
-  assert not present_leads(result) and result.degraded
+  for frame in (1, 4):
+    values = scene(frame, tracks=[radar(frame, velocityMonoTime=START, velocityGood=False, observations=3,
+                                      previousPositionMonoTime=0, previousPositionSeq=0)])
+    result = controller.update(**values)
+    assert not present_leads(result) and not controller._tracks
+    assert result.degraded is (frame == 1)
+    assert not result.cleared
+  missing = controller.update(**scene(5, tracks=[]))
+  assert not present_leads(missing) and not missing.degraded and not missing.cleared
 
 
 def test_component_fallback_uses_only_confirmed_same_visual_velocity():
@@ -810,24 +793,17 @@ def test_invalid_components_do_not_become_zero_speed_or_fake_close_obstacles(cha
   assert result.leads[0]['dRel'] == 8.0
 
 
-def test_duplicate_publication_cannot_extend_raw_measurement_age_or_coast_forever():
+def test_duplicate_stale_publication_cannot_republish_a_saved_target():
   controller = HondaRadarControl()
   initial = scene()
   controller.update(**initial)
-  coast = copy.deepcopy(initial)
-  coast['now_ns'] = START + 250_000_000
-  coast['model_ns'] = coast['model']['timestampEof'] = START + 240_000_000
-  result = controller.update(**coast)
-  assert present_leads(result) and evidence(result)['source'] == 'predicted'
-  assert result.degraded
-  assert evidence(result)['positionMonoTime'] == START
-  from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
-  assert qualified_lead(present_leads(result)[0], 'brake', now_ns=coast['now_ns'])
-  coast['now_ns'] = START + COAST_NS + 1
-  coast['model_ns'] = coast['model']['timestampEof'] = START + COAST_NS
-  result = controller.update(**coast)
-  assert not present_leads(result) and result.degraded and not result.cleared
-  assert not controller._tracks
+  for elapsed in (250_000_000, 350_000_001):
+    old = copy.deepcopy(initial)
+    old['now_ns'] = START + elapsed
+    old['model_ns'] = old['model']['timestampEof'] = old['now_ns'] - 10_000_000
+    result = controller.update(**old)
+    assert not present_leads(result) and result.degraded and not result.cleared
+    assert not controller._tracks
 
 
 def test_same_sequence_changed_payload_is_rejected_and_new_sequence_recovers():
@@ -895,20 +871,16 @@ def test_explicit_invalid_position_revokes_instead_of_coasting_corrupted_state()
   assert not present_leads(result) and result.degraded and not result.cleared
 
 
-@pytest.mark.parametrize('frame,coasting', [(1, True), (7, False)])
-def test_missing_near_target_has_only_bounded_coast_beside_new_far_vehicle(frame, coasting):
+@pytest.mark.parametrize('frame', [1, 7])
+def test_missing_near_target_is_not_republished_beside_a_current_far_vehicle(frame):
   controller = HondaRadarControl()
   controller.update(**scene(tracks=[radar(distance=10.0)]))
   later = scene(frame, tracks=[radar(frame, identifier=2, oem=8, distance=60.0)])
   result = controller.update(**later)
-  assert result.healthy and result.degraded is coasting and not result.cleared
-  assert {lead['evidence']['trackId'] for lead in present_leads(result)} == ({1, 2} if coasting else {2})
-  assert set(controller._tracks) == ({1, 2} if coasting else {2})
-  if coasting:
-    near = next(lead for lead in present_leads(result) if lead['evidence']['trackId'] == 1)
-    assert near['evidence']['coasting'] and near['evidence']['brakeQualified']
-    assert not near['evidence']['departureQualified']
-    assert near['evidence']['positionMonoTime'] == START
+  assert result.healthy and not result.degraded and not result.cleared
+  assert {lead['evidence']['trackId'] for lead in present_leads(result)} == {2}
+  assert set(controller._tracks) == {2}
+  assert all(not lead['evidence']['coasting'] for lead in present_leads(result))
 
 
 @pytest.mark.parametrize('speed', [0.0, 10.0])
@@ -937,9 +909,9 @@ def test_expired_track_returning_with_fresh_outside_geometry_can_clear_same_iden
 def test_fresh_empty_packets_expire_missing_target_without_latching_risk():
   controller = HondaRadarControl()
   controller.update(**scene())
-  coast = controller.update(**scene(1, tracks=[]))
-  assert coast.healthy and coast.degraded and evidence(coast)['coasting']
-  assert evidence(coast)['positionMonoTime'] == START
+  missing = controller.update(**scene(1, tracks=[]))
+  assert missing.healthy and not missing.degraded and not present_leads(missing)
+  assert not controller._tracks
   for frame in (7, 8, 100, 500):
     result = controller.update(**scene(frame, tracks=[]))
     assert result.healthy and not result.degraded
@@ -971,11 +943,11 @@ def test_distinct_expired_tracks_do_not_accumulate_or_latch_capacity_fault():
 
 
 @pytest.mark.parametrize('boundary', ['disabled', 'core_invalid'])
-def test_producer_reset_early_returns_drop_active_coast(boundary):
+def test_producer_reset_early_returns_clear_current_radar_memory(boundary):
   controller = HondaRadarControl()
   controller.update(**scene())
-  coast = controller.update(**scene(1, tracks=[]))
-  assert evidence(coast)['coasting'] and set(controller._tracks) == {1}
+  current = controller.update(**scene(1))
+  assert evidence(current)['source'] == 'radar' and set(controller._tracks) == {1}
   values = scene(2, tracks=[])
   if boundary == 'disabled':
     values['enabled'] = False
@@ -1034,7 +1006,7 @@ def test_healthy_no_target_is_distinct_from_sensor_fault():
   assert not failure.healthy and failure.degraded and failure.reason == 'observationStale'
 
 
-def test_only_the_two_selected_ordinary_leads_are_published_and_can_coast():
+def test_only_two_current_ordinary_leads_are_published():
   controller = HondaRadarControl()
   tracks = [radar(identifier=i, oem=i, distance=40.0 + i) for i in range(1, 33)]
   result = controller.update(**scene(tracks=tracks, leads=[vision(distance=7.0), vision(distance=9.0)]))

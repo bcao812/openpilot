@@ -25,7 +25,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
 from openpilot.selfdrive.controls.lib.motion_supervisor import MODEL_LEASE_NS, MOTION_INTENT_VERSION, PLAN_LEASE_NS, MotionIntent
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
   CONTINUATION_STATUSES, CONTINUATION_VERSION, UNSTABLE_DISABLE_NS, ContinuationBudget, ContinuationDonor,
-  ContinuationHistory, ContinuationOffer, continuation_reference, execution_target, validate_continuation,
+  ContinuationHistory, ContinuationOffer, continuation_reference, execution_target, inactive_native_recovery, validate_continuation,
 )
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer, valid_timestamp
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
@@ -320,19 +320,24 @@ class SelfdriveD(CruiseHelper):
     controls_ns = self.sm.logMonoTime['controlsState']
     offer = ContinuationOffer.from_message(plan.continuation)
     reference = continuation_reference(plan.reference, plan_ns=plan_ns, now_ns=now_ns)
-    owner_live = bool(
+    owner_available = bool(
       all(getattr(self.sm, health).get(service) is True for service in ('controlsState', 'carControl')
           for health in ('seen', 'valid', 'alive', 'freq_ok'))
       and valid_timestamp(controls_ns) and 0 <= now_ns - controls_ns <= PLAN_LEASE_NS
       and motion.version == MOTION_INTENT_VERSION and motion.planningMode == int(LongitudinalMode.UNIFIED)
       and motion.enabled and motion.continuationVersion == CONTINUATION_VERSION
-      and self.sm['carControl'].longActive and self.sm['carControl'].enabled and not self.sm['carControl'].cruiseControl.override
     )
-    owner_reference_healthy = bool(owner_live and not motion.degraded and not motion.waitingForFreshInput
+    owner_live = bool(owner_available and self.sm['carControl'].longActive and self.sm['carControl'].enabled
+                      and not self.sm['carControl'].cruiseControl.override)
+    inactive_receipt = inactive_native_recovery(self.sm['controlsState'], self.sm['carControl'])
+    owner_recovering = bool(owner_available and history_valid and inactive_receipt and motion.planMonoTime == plan_ns)
+    if owner_recovering:
+      self._continuation_donor = None
+    owner_reference_healthy = bool((owner_live or owner_recovering) and not motion.degraded and not motion.waitingForFreshInput
                                    and motion.referenceTimingVersion == REFERENCE_TIMING_VERSION and motion.referenceTimingValid
                                    and valid_timestamp(motion.referenceConsumerMonoTime) and valid_timestamp(motion.planMonoTime)
                                    and motion.planMonoTime <= motion.referenceConsumerMonoTime <= controls_ns)
-    owner_tracking = bool(owner_reference_healthy and motion.phase == 'track' and not motion.reasons and not motion.resolvedStop)
+    owner_tracking = bool(owner_live and owner_reference_healthy and motion.phase == 'track' and not motion.reasons and not motion.resolvedStop)
     if owner_tracking and not motion.continuationActive:
       times = (motion.referenceSourceMonoTime, motion.referenceEpochMonoTime, motion.referenceProducerMonoTime,
                motion.referenceProducerInstanceMonoTime, motion.planMonoTime, motion.modelMonoTime, motion.referenceConsumerMonoTime)
@@ -344,14 +349,21 @@ class SelfdriveD(CruiseHelper):
           and now_ns - min(motion.referenceSourceMonoTime, motion.modelMonoTime) <= PLAN_LEASE_NS):
         self._continuation_donor = ContinuationDonor(motion.referenceProducerMonoTime, motion.referenceSourceMonoTime,
                                                     motion.modelMonoTime, motion.referenceProducerInstanceMonoTime)
+    native_healthy = bool(reference is not None and self.sm.valid['longitudinalPlan'] and plan.solverStatus == 0
+                          and plan.motionIntent.valid and plan.motionIntent.ready
+                          and self.sm.all_checks(['modelV2', 'longitudinalPlan']))
     if plan_failure or motion_degraded:
       episode = offer.episode_start_ns if offer is not None and offer.version == CONTINUATION_VERSION and reference is not None else None
       budget.note_failure(now_ns, episode_start_ns=episode)
-    elif (owner_reference_healthy and not motion.continuationActive and reference is not None and self.sm.valid['longitudinalPlan']
-          and plan.solverStatus == 0 and plan.motionIntent.valid and plan.motionIntent.ready
-          and self.sm.all_checks(['modelV2', 'longitudinalPlan'])
+    elif (owner_reference_healthy and not motion.continuationActive and native_healthy
           and motion.referenceProducerMonoTime == reference.producer_ns and motion.modelMonoTime == plan.modelMonoTime):
       budget.note_success(now_ns, producer_ns=reference.producer_ns, source_ns=reference.source_ns, model_ns=plan.modelMonoTime)
+    elif (not native_healthy or not owner_available or not motion.referenceTimingValid
+          or motion.phase == 'off' and (not inactive_receipt or not history_valid)):
+      # A newer LP awaiting its matching consumer receipt is only a join delay.
+      # Actual unhealthy/unready inputs break recovery without renewing the
+      # episode's absolute deadline. Standby never counts as native success.
+      budget.interrupt_recovery()
     if budget.episode_start_ns and valid_timestamp(now_ns):
       self._longitudinal_soft_disable_remaining_ns = max(0, budget.episode_start_ns + UNSTABLE_DISABLE_NS - now_ns)
     if not plan_failure or plan.solverStatus not in CONTINUATION_STATUSES:

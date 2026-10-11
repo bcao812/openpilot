@@ -426,8 +426,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
   def publish(self, sm, pm):
     plan_send = messaging.new_message('longitudinalPlan', logMonoTime=time.monotonic_ns())
 
-    plan_send.valid = (sm.all_checks() and self.mpc.solution_status == 0
-                       and (not self.unified or self.motion_intent.valid or self.reference_planner.standby))
+    # A healthy OFF standby is transport, not a new MPC result. Keep the last
+    # solver status intact and the motion intent invalid/not-ready; a previous
+    # failure must not prevent the SET initialization handshake indefinitely.
+    standby = self.unified and self.reference_planner.standby
+    plan_send.valid = (sm.all_checks() and (standby or self.mpc.solution_status == 0
+                                          and (not self.unified or self.motion_intent.valid)))
 
     longitudinalPlan = plan_send.longitudinalPlan
     longitudinalPlan.modelMonoTime = sm.logMonoTime['modelV2']

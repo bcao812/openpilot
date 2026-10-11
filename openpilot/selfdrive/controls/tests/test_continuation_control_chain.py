@@ -4,10 +4,16 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from openpilot.cereal import log
+from openpilot.common.params import Params
+from openpilot.selfdrive.controls.lib.lead_qualification import lead_identity
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state, Publisher
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness, serialized
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_mpc_failure_chain import can_from_car_control
+from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+from openpilot.selfdrive.controls.tests.test_radar_consumption import native_frame, radar_frame
+from openpilot.selfdrive.selfdrived.events import ET
 
 
 START = 2_000_000_000
@@ -95,8 +101,8 @@ class ContinuationChain:
     assert self.controls.control.LoC.continuation_donor is not None
 
 
-@pytest.mark.parametrize('status', [4, -6])
-def test_real_producer_owner_and_can_accept_two_bounded_failures_then_restore_original_fallback(status):
+def test_real_producer_owner_and_can_accept_two_bounded_failures_then_restore_original_fallback():
+  status = 4
   chain = ContinuationChain()
   chain.establish_native_donor()
   previous = chain.controls.command.actuators.accel
@@ -128,6 +134,53 @@ def test_real_producer_owner_and_can_accept_two_bounded_failures_then_restore_or
   assert not motion.continuationActive and motion.degraded
   assert command.actuators.accel <= -0.5 and can['ACCEL_COMMAND'] <= -0.5 and can['BRAKE_REQUEST'] == 1
   assert second.to_dict() == before_expiry
+
+
+def test_retired_occupancy_failure_never_produces_a_continuation():
+  chain = ContinuationChain()
+  chain.establish_native_donor()
+  previous = chain.controls.command.actuators.accel
+  failed = chain.produce(START + 100_000_000, -6)
+  assert not failed.valid and failed.longitudinalPlan.solverStatus == -6
+  assert not failed.longitudinalPlan.continuation.valid
+  assert chain.planner.reference_planner.continuation.reason == 'unclassified_or_input_failure'
+  command, motion, can = chain.consume(START + 100_000_000)
+  assert not motion.continuationActive and motion.degraded
+  assert command.longActive and not command.cruiseControl.resume
+  assert command.actuators.accel <= min(previous, -0.5)
+  assert can['ACCEL_COMMAND'] <= -0.5 and can['BRAKE_REQUEST'] and can['GAS_COMMAND'] <= 0
+
+
+def test_retired_status_cannot_execute_an_otherwise_valid_offer_or_hide_the_event():
+  from openpilot.selfdrive.selfdrived.tests.test_continuation_events import established_events, observe_at
+
+  daemon, chain = established_events()
+  event = chain.produce(START + 100_000_000, 4)
+  assert event.longitudinalPlan.continuation.valid
+  changed = event.as_builder()
+  changed.longitudinalPlan.solverStatus = -6
+  chain.plan_event = serialized(changed)
+  expected = event.to_dict()
+  expected['longitudinalPlan']['solverStatus'] = -6
+  assert chain.plan_event.to_dict() == expected
+
+  # With a still-healthy owner receipt, the event observer must reject the
+  # status itself; it cannot wait for owner degradation to discover the fault.
+  observe_at(daemon, chain, START + 100_000_000, offset_ns=2_000_000)
+  assert not daemon.sm['controlsState'].motionState.degraded
+  assert log.OnroadEvent.EventName.longitudinalControlUnavailable in daemon.events.names
+  assert daemon.events.contains(ET.SOFT_DISABLE) and daemon.events.contains(ET.NO_ENTRY)
+
+  command, motion, can = chain.consume(START + 100_000_000)
+  assert not motion.continuationActive and motion.degraded
+  assert command.longActive and not command.cruiseControl.resume
+  assert command.actuators.accel <= -0.5
+  assert can['ACCEL_COMMAND'] <= -0.5 and can['BRAKE_REQUEST'] and can['GAS_COMMAND'] <= 0
+  observe_at(daemon, chain, START + 100_000_000, offset_ns=6_000_000)
+  assert log.OnroadEvent.EventName.longitudinalControlUnavailable in daemon.events.names
+  assert log.OnroadEvent.EventName.commIssue not in daemon.events.names
+  assert not daemon.sm['controlsState'].motionState.continuationActive
+  assert chain.plan_event.to_dict() == expected
 
 
 @pytest.mark.parametrize('change', ['model_arrives_first', 'cruise_reduced', 'force_decel', 'disabled', 'pedal', 'mutated_same_offer'])
@@ -176,6 +229,41 @@ def test_new_strong_risk_uses_current_producer_braking_instead_of_old_candidate(
   assert not motion.continuationActive and motion.degraded
   assert failed.longitudinalPlan.aTarget <= -2.0 and command.actuators.accel <= -2.0
   assert can['ACCEL_COMMAND'] <= -2.0 and can['BRAKE_REQUEST'] == 1
+
+
+def test_first_missing_radar_object_and_native_failure_cannot_spend_its_old_donor():
+  for name in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
+    Params().put_bool(name, True, block=True)
+  chain = ContinuationChain()
+  chain.state['selfdriveState'].experimentalMode = True
+  with patch.object(chain.planner.dec, 'enabled', return_value=True), patch.object(chain.planner.dec, 'mode', return_value='acc'):
+    for offset in (0, 50_000_000):
+      stamp = START + offset
+      lead = formal_lead(now_ns=stamp, dRel=200.0, vLead=20.0, vLeadK=20.0, vRel=0.0)
+      chain.state['radarState'] = native_frame(radar_frame(lead, publication=stamp, display=(lead,)))
+      event = chain.produce(stamp)
+      assert event.valid and event.longitudinalPlan.solverStatus == 0
+      for tick in range(5):
+        _, motion, _ = chain.consume(stamp + tick * 10_000_000)
+        assert motion.phase == 'track' and not motion.degraded and not motion.continuationActive
+    donor = chain.planner.reference_planner.continuation.donor
+    assert donor is not None and donor.objects == frozenset((lead_identity(lead),))
+    assert chain.controls.control.LoC.continuation_donor is not None
+    previous = chain.controls.command.actuators.accel
+
+    # This is the first empty publication, still fresh and in the same fusion
+    # scope. It supplies no observed departure or replacement-object identity.
+    missing_ns = START + 100_000_000
+    chain.state['radarState'] = native_frame(radar_frame(publication=missing_ns))
+    failed = chain.produce(missing_ns, 4)
+    assert failed.longitudinalPlan.solverStatus == 4 and not failed.valid
+    assert not failed.longitudinalPlan.continuation.valid
+    assert chain.planner.reference_planner.continuation.reason == 'object_identity_changed'
+    command, motion, can = chain.consume(missing_ns)
+  assert not motion.continuationActive and motion.degraded
+  assert command.longActive and not command.cruiseControl.resume
+  assert command.actuators.accel <= min(previous, -0.5)
+  assert can['ACCEL_COMMAND'] <= -0.5 and can['BRAKE_REQUEST'] and can['GAS_COMMAND'] <= 0
 
 
 def test_continuation_freezes_pid_and_confirmation_with_nonzero_state_error_until_native_recovery():

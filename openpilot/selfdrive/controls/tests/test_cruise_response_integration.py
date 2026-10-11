@@ -1,7 +1,9 @@
-"""Selected cruise policies and native planning preserve P's response history.
+"""Current curve policies preserve P's raw cruise response history.
 
 These fixed-input contracts inspect the published target and constraint. They
 do not substitute for the common closed-loop or CAN/vehicle validation.
+UNIFIED holds the curve entry speed and applies necessary curve braking as an
+independent ceiling; neither policy may replace the raw jerk-response history.
 """
 
 from contextlib import ExitStack
@@ -20,7 +22,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import get_cruise_acc
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, MotionResponseKind, STARTING_ACCEL_RATE, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import decoded_commands
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import (
-  Publisher, advance, consume, make_handover_state, make_planner, make_planner_owner, make_state,
+  Publisher, advance, consume, make_handover_state, make_planner, make_planner_owner, make_state, patch_sampled_accel,
 )
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -36,6 +38,7 @@ def make_scc_case(*, target=30.0, initial_accel=0.0, experimental=False, enabled
   params.put_bool('DynamicExperimentalControl', False, block=True)
   assert params.get_bool('SmartCruiseControlVision') == enabled
   planner, _ = make_planner(speed=20.0, initial_accel=initial_accel)
+  assert planner.scc.vision.hold_entry_speed
   state = make_state(speed=20.0, target=target, experimental=experimental)
   return planner, state
 
@@ -65,6 +68,9 @@ def p_cruise_step(planner, state, previous, *, reset=False):
   # P=e18b1de: reset at 286-289, then the unchanged numerical helper at 207-224.
   # These cases have no pitch/coast cap or steering-angle limit; SCC curvature
   # enters its own real producer through model yaw rate and controls curvature.
+  # The tight-curve targets below are already below P's -1.2 target clamp,
+  # while their independent curve ceilings remain above it. The unchanged P
+  # helper therefore still predicts the raw history, not the final ceiling.
   car_state = state['carState']
   if reset:
     previous = float(np.clip(car_state.aEgo, ACCEL_MIN, ACCEL_MAX))
@@ -75,10 +81,10 @@ def p_cruise_step(planner, state, previous, *, reset=False):
   )
 
 
-def assert_published_arbitration(plan, state, cruise_ceiling):
+def assert_published_arbitration(plan, state, cruise_ceiling, *, curve_ceiling=ACCEL_MAX):
   allowed_model = state['selfdriveState'].experimentalMode
   maximum = ACCEL_MAX if allowed_model else get_max_accel(state['carState'].vEgo)
-  expected_constraint = min(maximum, cruise_ceiling)
+  expected_constraint = min(maximum, cruise_ceiling, curve_ceiling)
   if allowed_model:
     expected_constraint = min(expected_constraint, state['modelV2'].action.desiredAcceleration)
   # The reference and final request are Float32 on the actual wire. Compare
@@ -103,6 +109,14 @@ def test_real_scc_cycle_and_reentry_keep_continuous_p_response_history():
   selected_targets, requests = [], []
   for count, predicted, current, expected_state, expected_source in segments:
     set_curve(state, predicted, current)
+    curve_speed, curve_ceiling = 20.0, ACCEL_MAX
+    if expected_state in (VisionState.entering, VisionState.turning):
+      # Derive the 2 m/s^2 geometric speed from the actual Float32 input.
+      # Entering this 3 m/s^2 predicted curve needs -1 m/s^2; while turning,
+      # the four-second speed error is stricter than the positive table value.
+      predicted_lateral = abs(state['modelV2'].orientationRate.z[0]) * state['modelV2'].velocity.x[0]
+      curve_speed = (2.0 / (predicted_lateral / 20.0 ** 2)) ** 0.5
+      curve_ceiling = -1.0 if expected_state == VisionState.entering else (curve_speed - 20.0) / 4.0
     for _ in range(count):
       plan = step(planner, state, frame)
       assert planner.scc.vision.state == expected_state
@@ -113,38 +127,48 @@ def test_real_scc_cycle_and_reentry_keep_continuous_p_response_history():
       if expected_source == SPSource.sccVision:
         assert policy.speed == planner.scc.vision.output_v_target
         assert policy.acceleration == planner.scc.vision.output_a_target
+        assert planner.scc.vision.entry_speed == 20.0
+        assert policy.speed == pytest.approx(curve_speed, rel=0.0, abs=1e-6)
       previous = p_cruise_step(planner, state, previous)
-      assert_published_arbitration(plan, state, previous)
+      assert planner.reference_planner.cruise_response._previous_accel == previous
+      assert_published_arbitration(plan, state, previous, curve_ceiling=curve_ceiling)
       frame += 1
-  assert selected_targets[4].speed < 20.0 < selected_targets[18].speed
+  assert selected_targets[4].speed < 20.0 == selected_targets[18].speed
   assert selected_targets[24].source == SPSource.cruise
   assert selected_targets[30].source == SPSource.sccVision
   assert min(requests[4:18]) < 0.0
 
 
-@pytest.mark.parametrize('target,expected_source', [(30.0, SPSource.sccVision), (21.0, SPSource.cruise)])
-def test_negative_scc_acceleration_is_not_a_hard_brake_or_an_unselected_policy(target, expected_source):
+@pytest.mark.parametrize('target,expected_source', [(30.0, SPSource.sccVision), (19.5, SPSource.cruise)])
+def test_comfortable_curve_holds_entry_speed_and_respects_a_lower_cruise_target(target, expected_source):
   planner, state = make_scc_case(target=target)
   set_curve(state, 0.0035)
   previous, requests = 0.0, []
   for frame in range(12):
     plan = step(planner, state, frame)
     previous = p_cruise_step(planner, state, previous)
+    assert planner.reference_planner.cruise_response._previous_accel == previous
     assert_published_arbitration(plan, state, previous)
     requests.append(plan.aTarget)
-    assert plan.reference.constraintAccel > 0.0
-    assert plan.aTarget > 0.0
+    if target < 20.0:
+      assert plan.reference.constraintAccel < 0.0 and plan.aTarget < 0.0
+    elif frame:
+      assert plan.reference.constraintAccel == plan.aTarget == 0.0
+    else:
+      assert plan.reference.constraintAccel > 0.0 and plan.aTarget > 0.0
     assert planner.scc.vision.state == (VisionState.enabled if frame == 0 else VisionState.entering)
     if frame:
-      # Decimal-curve goldens allow only the Float32 model-input rounding;
-      # response and arbitration above still compare their exact wire values.
-      assert planner.scc.vision.output_a_target == pytest.approx(-0.2470588235294118, rel=0.0, abs=1e-6)
-      assert planner.scc.vision.output_v_target == pytest.approx(22.916336892570225, rel=0.0, abs=1e-6)
+      # This curve is below the 2 m/s^2 lateral limit at the captured 20 m/s
+      # entry speed. Holding that speed requires zero extra acceleration;
+      # it must neither accelerate toward 30 m/s nor add a curve brake.
+      assert planner.scc.vision.entry_speed == 20.0
+      assert planner.scc.vision.output_a_target == 0.0
+      assert planner.scc.vision.output_v_target == 20.0
       assert planner.cruise_target.source == expected_source
-      assert planner.cruise_target.speed > state['carState'].vEgo
+      assert planner.cruise_target.speed == min(target, 20.0)
     else:
       assert planner.cruise_target.source == SPSource.cruise
-  if target == 21.0:
+  if target < 20.0:
     # The same externally supplied curve with SCC disabled must give the same
     # target trajectory when cruise already selects the lower speed.
     control, control_state = make_scc_case(target=target, enabled=False)
@@ -175,19 +199,20 @@ def test_stronger_lead_or_admitted_model_braking_keeps_priority_and_does_not_rep
       state['modelV2'].action.desiredAcceleration = -2.5 if risk_active else 1.5
     plan = step(planner, state, frame)
     previous = p_cruise_step(planner, state, previous)
+    assert planner.reference_planner.cruise_response._previous_accel == previous
     assert_published_arbitration(plan, state, previous)
     assert planner.scc.vision.state == (VisionState.enabled if frame == 0 else VisionState.entering)
     assert planner.cruise_target.source == (SPSource.cruise if frame == 0 else SPSource.sccVision)
     if risk_active:
       risk_plans.append(plan)
   if risk == 'lead':
-    assert risk_plans[-1].reference.constraintAccel > 0.0
+    assert risk_plans[-1].reference.constraintAccel == 0.0
     assert risk_plans[-1].aTarget < 0.0
     assert risk_plans[-1].aTarget == risk_plans[-1].reference.accel
   elif experimental:
     assert all(plan.reference.constraintAccel == -2.5 and plan.aTarget <= -2.5 for plan in risk_plans)
   else:
-    assert all(plan.reference.constraintAccel > 0.0 and plan.aTarget > 0.0 for plan in risk_plans)
+    assert all(plan.reference.constraintAccel == plan.aTarget == 0.0 for plan in risk_plans)
 
 
 @pytest.mark.parametrize('initial_accel', [-0.6, 0.6])
@@ -208,7 +233,9 @@ def test_nonzero_constructor_and_explicit_reset_keep_p_response_without_overwrit
     state['carState'].aEgo = measured
     plan = step(planner, state, frame)
     previous = p_cruise_step(planner, state, previous, reset=reset)
-    assert_published_arbitration(plan, state, previous)
+    assert planner.reference_planner.cruise_response._previous_accel == previous
+    curve_ceiling = -1.0 if expected_states[frame] == VisionState.entering else ACCEL_MAX
+    assert_published_arbitration(plan, state, previous, curve_ceiling=curve_ceiling)
     assert plan.reference.initialStateKnown
     assert plan.reference.initialAEgo == state['carState'].aEgo
     assert planner.mpc.x0[2] == state['carState'].aEgo
@@ -223,7 +250,9 @@ def test_nonzero_constructor_and_explicit_reset_keep_p_response_without_overwrit
 
 @pytest.mark.parametrize('failure', ['owner_unavailable', 'unhealthy_inputs'])
 def test_invalid_or_unhealthy_cycle_clears_response_before_healthy_recovery(failure):
-  planner, state = make_scc_case()
+  # A comfortable curve now targets the captured entry speed. Seed a positive
+  # history so eight genuine updates still leave a nonzero value to discard.
+  planner, state = make_scc_case(initial_accel=0.6)
   set_curve(state, 0.0035)
   for frame in range(8):
     plan = step(planner, state, frame)
@@ -238,6 +267,7 @@ def test_invalid_or_unhealthy_cycle_clears_response_before_healthy_recovery(fail
   state['carState'].aEgo = -0.35
   recovered = step(planner, state, 9)
   expected = p_cruise_step(planner, state, 0.0, reset=True)
+  assert planner.reference_planner.cruise_response._previous_accel == expected
   assert_published_arbitration(recovered, state, expected)
   assert recovered.reference.constraintAccel < 0.0
 
@@ -370,7 +400,7 @@ def test_coast_exit_and_reentry_keep_raw_jerk_history_in_the_real_planner():
   previous = -0.23
   # Native solve still runs. A controlled readout isolates response history
   # and exact arbitration, without claiming this readout is a vehicle model.
-  with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.0):
+  with patch_sampled_accel(planner, return_value=0.0):
     for frame, target in enumerate([20.0] * 4 + [19.8] * 2 + [20.0] * 3 + [20.2] * 2 + [20.0] * 4):
       state['carState'].vCruise = state['carState'].vCruiseCluster = target * 3.6
       plan = step(planner, state, frame)
@@ -392,7 +422,7 @@ def test_coast_exit_and_reentry_keep_raw_jerk_history_in_the_real_planner():
 def test_exact_unchanged_coast_value_still_declares_execution_semantics():
   initial = -0.19 + get_max_accel(20.0) * DT_MDL  # P jerk equals max-accel table here.
   planner, state = make_coast_case(speed=20.0, target=19.77, initial_accel=initial)
-  with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.0):
+  with patch_sampled_accel(planner, return_value=0.0):
     plan = step(planner, state, 0)
   assert p_cruise_step(planner, state, initial) == -0.19
   assert plan.aTarget == float(np.float32(-0.19))
@@ -411,8 +441,7 @@ def test_coast_keeps_p_admission_guards_at_the_real_planner_boundary(guard):
   planner, state = make_coast_case(speed=speed, target=target)
   state['carState'].aEgo = -0.23  # Reset/manual cases also retain an in-band raw candidate.
   with ExitStack() as stack:
-    stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration',
-                              return_value=float('nan') if guard == 'nonfinite_reference' else 0.0))
+    stack.enter_context(patch_sampled_accel(planner, return_value=float('nan') if guard == 'nonfinite_reference' else 0.0))
     if guard in ('leadOne', 'leadTwo'):
       lead = getattr(state['radarState'], guard)
       lead.present, lead.dRel, lead.vLead, lead.vRel = True, 100.0, speed, 0.0
@@ -474,8 +503,7 @@ def test_coast_never_takes_ownership_from_a_stronger_or_equal_independent_constr
   planner, state = make_coast_case()
   with ExitStack() as stack:
     update = stack.enter_context(patch.object(planner.mpc, 'update', wraps=planner.mpc.update))
-    stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration',
-                              return_value=reference))
+    stack.enter_context(patch_sampled_accel(planner, return_value=reference))
     if maximum is not None:
       stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.cruise_accel_limit', return_value=maximum))
     plan = step(planner, state, 0)
@@ -494,7 +522,7 @@ def test_coast_uses_current_solver_fcw_and_can_return_when_current_risk_clears()
     planner.mpc.crash_cnt = crash_count
 
   with patch.object(planner.mpc, 'update', side_effect=update_current_crash_count), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.0):
+       patch_sampled_accel(planner, return_value=0.0):
     risk = step(planner, state, 0)
     previous = p_cruise_step(planner, state, -0.23)
     assert planner.fcw

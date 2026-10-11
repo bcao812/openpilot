@@ -280,13 +280,17 @@ class Controls(ControlsExt):
         # An impossible clock must not enter the owner's time high water.
         # Its existing invalid-input path still owns braking and release.
         now_ns = 0
-    if (self.LoC.unified and self.LoC.can_standby and not motion_intent.ready and long_plan.solverStatus == 0
-        and self.sm.all_checks(['longitudinalPlan', 'carState'])):
-      CC.longActive = False
     standby_input = bool(self.LoC.unified and self.LoC.can_standby and not self.longitudinal_mode_mismatch
-                         and motion_intent.is_standby_valid() and long_plan.solverStatus == 0
                          and self.sm.all_checks(['longitudinalPlan', 'carState']) and CS.canValid
-                         and math.isfinite(CS.vEgo) and math.isfinite(CS.aEgo) and CS.vCruise == V_CRUISE_UNSET)
+                         and math.isfinite(CS.vEgo) and math.isfinite(CS.aEgo)
+                         and self.LoC.motion_supervisor.valid_standby_input(
+                           motion_intent, long_plan.aTarget, int(self.sm.logMonoTime['longitudinalPlan']),
+                           int(long_plan.modelMonoTime), now_ns))
+    if standby_input:
+      # Keep the initialization handshake unarmed after SET, including the
+      # interval where carState has a set speed but the planner is still on its
+      # last standby publication. A warm OFF owner uses the same contract.
+      CC.longActive = False
 
     actuators = CC.actuators
 

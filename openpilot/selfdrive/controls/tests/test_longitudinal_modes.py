@@ -16,6 +16,7 @@ from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarn
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness, selfdrive_event_harness
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import controller, normal_intent
 from openpilot.selfdrive.controls.tests.test_unified_startup import StartupHarness
+from openpilot.selfdrive.selfdrived.events import ET
 
 
 MODES = (LongitudinalMode.LEGACY, LongitudinalMode.UNIFIED)
@@ -119,7 +120,9 @@ def test_unknown_wire_mode_does_not_use_readiness_as_a_bypass(mode, incoming_mod
   assert motion.degraded
   daemon, car_state = selfdrive_event_harness(harness.control.pm.messages['controlsState'])
   daemon.update_events(car_state)
-  assert log.OnroadEvent.EventName.commIssue in daemon.events.names
+  assert log.OnroadEvent.EventName.longitudinalControlUnavailable in daemon.events.names
+  assert log.OnroadEvent.EventName.commIssue not in daemon.events.names
+  assert daemon.events.contains(ET.NO_ENTRY) and daemon.events.contains(ET.SOFT_DISABLE)
 
 
 @pytest.mark.parametrize('mode', [0, 1, 3, 255, -1, True, False, 1.0, '1', None])

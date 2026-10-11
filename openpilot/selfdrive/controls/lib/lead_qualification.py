@@ -15,12 +15,11 @@ from openpilot.selfdrive.car.honda_radar_relevance import HORIZON
 MAX_CONTROL_OBJECTS = 34  # Historical wire/display bound; control uses only the two formal lead slots.
 MAX_MEASUREMENT_AGE_NS = 200_000_000
 MAX_ESTIMATE_AGE_NS = 250_000_000
-MAX_PREDICTION_AGE_NS = 350_000_000
 MAX_POSITION_STD = 20.0
 MAX_VELOCITY_STD = 20.0
 MIN_VISION_BRAKE_DISTANCE = -1.52  # Camera origin to the front bumper, as in radard.
 PURPOSES = ('follow', 'brake', 'stop', 'departure', 'fcw')
-SOURCES = ('vision', 'radar', 'fused', 'predicted')
+SOURCES = ('vision', 'radar', 'fused')
 _UNREAD = object()
 _SCALAR_TYPES = (bool, int, float, str, type(None))
 
@@ -170,14 +169,13 @@ def _snapshot_facts(lead):
       return False
   elif lead_identity(lead) is None:
     return False
-  coasting = read('coasting', False)
-  if not isinstance(coasting, bool) or source == 'predicted' and not coasting:
+  if read('coasting', False) is not False:
     return False
   estimate, position, velocity, model = (read(field) for field in (
     'estimateMonoTime', 'positionMonoTime', 'velocityMonoTime', 'modelMonoTime'))
   if not all(_integer(stamp, 1) for stamp in (estimate, position, velocity, model)):
     return False
-  age = MAX_PREDICTION_AGE_NS if coasting else MAX_MEASUREMENT_AGE_NS
+  age = MAX_MEASUREMENT_AGE_NS
   if abs(estimate - position) > age or abs(estimate - velocity) > age:
     return False
   earliest = max(estimate, position, velocity, model)
@@ -198,7 +196,7 @@ def _snapshot_facts(lead):
   if not _finite(offset) or not isinstance(path_source, str) or not path_source:
     return False
   flags = tuple(read(purpose + 'Qualified', False) for purpose in PURPOSES)
-  return (1, probability, source, flags, coasting, earliest, latest,
+  return (1, probability, source, flags, earliest, latest,
           distance, relative, ground, str(read('pathState', 'unknown')))
 
 
@@ -215,10 +213,10 @@ def _qualified_snapshot(lead, purpose, min_model_prob, now_ns, require_active_wi
     return False
   if facts[0] == 0:
     return facts[1] >= min_model_prob
-  _, probability, source, flags, coasting, earliest, latest, distance, relative, ground, path_state = facts
+  _, probability, source, flags, earliest, latest, distance, relative, ground, path_state = facts
   if flags[PURPOSES.index(purpose)] is not True:
     return False
-  if source == 'vision' and probability < min_model_prob or coasting and purpose != 'brake':
+  if source == 'vision' and probability < min_model_prob:
     return False
   reference = earliest if now_ns is None else now_ns
   if not earliest <= reference <= latest:
@@ -239,8 +237,8 @@ def _qualified_lead_evidence(lead, purpose, min_model_prob=0.95, *, now_ns=None,
   using this form must separately enforce freshness of their radarState input.
   Model publication and a new CAN sample can follow camera EOF; the producer
   may project that measurement back to the common estimate time.
-  A predicted object can retain a short braking constraint, but cannot confirm
-  a fresh followed car, FCW, parking geometry or departure.
+  Only current radar, fused or visual measurements grant a control purpose.
+  Historical predicted/coasting records remain readable but grant none.
   ``require_active_window`` remains a compatibility argument; retired occupancy
   windows do not grant or expire an ordinary lead's measurement authority.
   """
@@ -270,10 +268,7 @@ def _qualified_lead_evidence(lead, purpose, min_model_prob=0.95, *, now_ns=None,
   elif _physical_identity(evidence) is None:
     return False
 
-  coasting = _read(evidence, 'coasting', False)
-  if not isinstance(coasting, bool) or (source == 'predicted' and not coasting):
-    return False
-  if coasting and purpose != 'brake':
+  if _read(evidence, 'coasting', False) is not False:
     return False
   estimate = _read(evidence, 'estimateMonoTime')
   position = _read(evidence, 'positionMonoTime')
@@ -284,7 +279,7 @@ def _qualified_lead_evidence(lead, purpose, min_model_prob=0.95, *, now_ns=None,
   reference = max(estimate, model, position, velocity) if now_ns is None else now_ns
   if not all(_integer(stamp, 1) for stamp in (estimate, reference, position, velocity, model)):
     return False
-  maximum_age = MAX_PREDICTION_AGE_NS if coasting else MAX_MEASUREMENT_AGE_NS
+  maximum_age = MAX_MEASUREMENT_AGE_NS
   if (not 0 <= reference - estimate <= MAX_ESTIMATE_AGE_NS
       or any(not 0 <= reference - stamp <= maximum_age or abs(estimate - stamp) > maximum_age for stamp in (position, velocity))
       or not 0 <= reference - model <= maximum_age):
@@ -376,23 +371,16 @@ def measurement_expired_since(lead, *, qualified_ns, now_ns):
   if not _integer(qualified_ns, 1) or not _integer(now_ns, 1) or qualified_ns > now_ns:
     return False
   evidence = _read(lead, 'evidence')
-  if str(_read(evidence, 'source')) not in ('radar', 'fused', 'predicted'):
+  if str(_read(evidence, 'source')) not in ('radar', 'fused'):
     return False
   if not _qualified_lead_evidence(lead, 'brake', 0.0, now_ns=qualified_ns):
     return False
-  maximum_age = MAX_PREDICTION_AGE_NS if _read(evidence, 'coasting') is True else MAX_MEASUREMENT_AGE_NS
+  maximum_age = MAX_MEASUREMENT_AGE_NS
   if (not 0 <= now_ns - _read(evidence, 'estimateMonoTime') <= MAX_ESTIMATE_AGE_NS
       or not 0 <= now_ns - _read(evidence, 'modelMonoTime') <= maximum_age):
     return False
   return any(now_ns - _read(evidence, field) > maximum_age
              for field in ('positionMonoTime', 'velocityMonoTime'))
-
-
-def coast_measurement_expired(lead, *, publication_ns, now_ns):
-  """Compatibility check for a predicted coast from a real publication."""
-  evidence = _read(lead, 'evidence')
-  return (str(_read(evidence, 'source')) == 'predicted' and _read(evidence, 'coasting') is True
-          and measurement_expired_since(lead, qualified_ns=publication_ns, now_ns=now_ns))
 
 
 def _object_key(lead):

@@ -1153,7 +1153,7 @@ struct HondaRadarObservations::FusionTrack {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(bd1fb53607e5962e, 24, 2)
+    CAPNP_DECLARE_STRUCT_HEADER(bd1fb53607e5962e, 31, 2)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -6570,6 +6570,22 @@ public:
 
   inline bool getLateralVelocityValid() const;
 
+  inline double getBodyWidth() const;
+
+  inline double getBodyLeftX() const;
+
+  inline double getBodyLeftY() const;
+
+  inline double getBodyRightX() const;
+
+  inline double getBodyRightY() const;
+
+  inline  ::uint64_t getBodyMonoTime() const;
+
+  inline  ::uint64_t getBodyAvailableMonoTime() const;
+
+  inline bool getBodyValid() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -6716,6 +6732,30 @@ public:
 
   inline bool getLateralVelocityValid();
   inline void setLateralVelocityValid(bool value);
+
+  inline double getBodyWidth();
+  inline void setBodyWidth(double value);
+
+  inline double getBodyLeftX();
+  inline void setBodyLeftX(double value);
+
+  inline double getBodyLeftY();
+  inline void setBodyLeftY(double value);
+
+  inline double getBodyRightX();
+  inline void setBodyRightX(double value);
+
+  inline double getBodyRightY();
+  inline void setBodyRightY(double value);
+
+  inline  ::uint64_t getBodyMonoTime();
+  inline void setBodyMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getBodyAvailableMonoTime();
+  inline void setBodyAvailableMonoTime( ::uint64_t value);
+
+  inline bool getBodyValid();
+  inline void setBodyValid(bool value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -13444,6 +13484,118 @@ inline bool HondaRadarObservations::FusionTrack::Builder::getLateralVelocityVali
 inline void HondaRadarObservations::FusionTrack::Builder::setLateralVelocityValid(bool value) {
   _builder.setDataField<bool>(
       ::capnp::bounded<93>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionTrack::Reader::getBodyWidth() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<24>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionTrack::Builder::getBodyWidth() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<24>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setBodyWidth(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<24>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionTrack::Reader::getBodyLeftX() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<25>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionTrack::Builder::getBodyLeftX() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<25>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setBodyLeftX(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<25>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionTrack::Reader::getBodyLeftY() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<26>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionTrack::Builder::getBodyLeftY() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<26>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setBodyLeftY(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<26>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionTrack::Reader::getBodyRightX() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<27>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionTrack::Builder::getBodyRightX() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<27>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setBodyRightX(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<27>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::FusionTrack::Reader::getBodyRightY() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<28>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::FusionTrack::Builder::getBodyRightY() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<28>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setBodyRightY(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<28>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Reader::getBodyMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<29>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Builder::getBodyMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<29>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setBodyMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<29>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Reader::getBodyAvailableMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<30>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::FusionTrack::Builder::getBodyAvailableMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<30>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setBodyAvailableMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<30>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::FusionTrack::Reader::getBodyValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<94>() * ::capnp::ELEMENTS);
+}
+
+inline bool HondaRadarObservations::FusionTrack::Builder::getBodyValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<94>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::FusionTrack::Builder::setBodyValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<94>() * ::capnp::ELEMENTS, value);
 }
 
 inline  ::uint8_t HondaRadarObservations::FusionLead::Reader::getModelIndex() const {

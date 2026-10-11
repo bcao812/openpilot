@@ -7,7 +7,9 @@ import pytest
 
 from openpilot.cereal import log
 from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, T_IDXS
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  COMFORT_STOP_DISTANCE, MPC_INVALID_INPUT, RISK_STOP_DISTANCE, STOP_DISTANCE, LongitudinalMpc, T_IDXS,
+)
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
@@ -93,7 +95,7 @@ def test_sustained_native_braking_is_not_filtered_or_rate_limited_by_sampling():
 
 
 @pytest.mark.parametrize('condition', [
-  'stationary', 'closing', 'decelerating', 'uncertain_first', 'uncertain_second', 'invalid_probability',
+  'stationary', 'closing', 'decelerating', 'uncertain_first', 'uncertain_second',
   'short_gap', 'risk_deficit',
   'high_speed', 'no_lead', 'model_stop', 'model_brake', 'raw_unknown',
 ])
@@ -115,8 +117,6 @@ def test_given_trajectory_has_one_readout_across_following_and_risk_contexts(con
   elif condition == 'uncertain_second':
     state['radarState'].leadTwo = lead
     state['radarState'].leadTwo.modelProb = 0.8
-  elif condition == 'invalid_probability':
-    lead.modelProb = 1.01
   elif condition == 'short_gap':
     lead.dRel = 4.9
   elif condition == 'risk_deficit':
@@ -142,6 +142,20 @@ def test_given_trajectory_has_one_readout_across_following_and_risk_contexts(con
   assert legacy < -0.2 < native  # The single-ramp interpretation reverses this trajectory's sign.
   assert planner.reference_planner.reference_accel == pytest.approx(native)
   assert planner.output_a_target <= planner.reference_planner.constraint_accel
+
+
+def test_invalid_lead_probability_is_rejected_before_action_sampling():
+  planner, _ = make_planner(speed=3.0)
+  state = calm_following_state(3.0, 4.0)
+  state['radarState'].leadOne.modelProb = 1.01
+  # A malformed observation cannot be made into an accepted trajectory by
+  # the sampling fixture. Exercise the producer's real input rejection.
+  with patch.object(planner.mpc, 'sample_solution', wraps=planner.mpc.sample_solution) as sample:
+    planner.update(state, now_ns=advance(state, 0))
+  assert planner.mpc.solution_status == MPC_INVALID_INPUT
+  assert not planner.motion_intent.valid and not planner.motion_intent.release_allowed
+  assert planner.output_a_target <= 0.0
+  sample.assert_not_called()
 
 
 @pytest.mark.parametrize('relative_speed', [-0.6, -0.25, 0.2])
@@ -193,30 +207,57 @@ def test_native_mpc_readout_is_continuous_at_either_lead_confidence_boundary(con
   # Same independent native solver histories. Presence remains true across a
   # wide confidence range, including the former readout boundary. The initial
   # acceleration step is around the logged low-speed p95 magnitude.
-  for confidence in (0.55, 0.8, 0.94975, 0.95025, 1.0):
-    planner, _ = make_planner(speed=2.5)
-    state = calm_following_state(2.5, 4.0)
-    state['selfdriveState'].personality = log.LongitudinalPersonality.standard
-    lead = state['radarState'].leadOne
-    lead.dRel, lead.vLead, lead.vRel = 11.0, 2.5, 0.0
-    lead.aLeadTau, lead.modelProb = 0.3, 0.999
-    if confidence_lead == 'leadTwo':
-      state['radarState'].leadTwo = lead
-    for frame in range(40):
-      planner.update(state, now_ns=advance(state, frame))
+  # Hold comfort geometry at its default to isolate readout: the real
+  # confidence gate may otherwise withdraw the compact follow distance.
+  # Its unpatched geometric behavior is checked separately below.
+  with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.low_speed_follow_distance', return_value=STOP_DISTANCE):
+    for confidence in (0.55, 0.8, 0.94975, 0.95025, 1.0):
+      planner, _ = make_planner(speed=2.5)
+      state = calm_following_state(2.5, 4.0)
+      state['selfdriveState'].personality = log.LongitudinalPersonality.standard
+      lead = state['radarState'].leadOne
+      lead.dRel, lead.vLead, lead.vRel = 11.0, 2.5, 0.0
+      lead.aLeadTau, lead.modelProb = 0.3, 0.999
+      if confidence_lead == 'leadTwo':
+        state['radarState'].leadTwo = lead
+      for frame in range(40):
+        planner.update(state, now_ns=advance(state, frame))
+        assert planner.mpc.solution_status == 0
+      state['carState'].aEgo = initial_acceleration
+      getattr(state['radarState'], confidence_lead).modelProb = confidence
+      # This calls the actual native MPC; no solved trajectory is substituted.
+      planner.update(state, now_ns=advance(state, 40))
       assert planner.mpc.solution_status == 0
-    state['carState'].aEgo = initial_acceleration
-    getattr(state['radarState'], confidence_lead).modelProb = confidence
-    # This calls the actual native MPC; no solved trajectory is substituted.
-    planner.update(state, now_ns=advance(state, 40))
-    assert planner.mpc.solution_status == 0
-    references.append(planner.reference_planner.reference_accel)
-    targets.append(planner.output_a_target)
-    native_solutions.append(planner.mpc.a_solution.copy())
+      np.testing.assert_array_equal(planner.mpc.params[:, [COMFORT_STOP_DISTANCE, RISK_STOP_DISTANCE]], STOP_DISTANCE)
+      references.append(planner.reference_planner.reference_accel)
+      targets.append(planner.output_a_target)
+      native_solutions.append(planner.mpc.a_solution.copy())
   for solution in native_solutions[1:]:
     np.testing.assert_array_equal(native_solutions[0], solution)
   assert references == pytest.approx([references[0]] * len(references))
   assert targets == pytest.approx([targets[0]] * len(targets))
+
+
+@pytest.mark.parametrize('confidence_lead', ['leadOne', 'leadTwo'])
+@pytest.mark.parametrize('confidence,comfort_distance', [(0.94975, 6.0), (0.95025, 4.0)])
+def test_native_confidence_gate_keeps_its_geometry_without_an_extra_readout_switch(confidence_lead, confidence, comfort_distance):
+  planner, _ = make_planner(speed=2.5)
+  state = calm_following_state(2.5, 4.0)
+  lead = state['radarState'].leadOne
+  lead.dRel, lead.vLead, lead.vRel = 11.0, 2.5, 0.0
+  lead.aLeadTau, lead.modelProb = 0.3, confidence
+  if confidence_lead == 'leadTwo':
+    state['radarState'].leadTwo = lead
+    lead.present = False
+  # No geometry or solution is patched. This checks the real .95 stop
+  # qualification boundary while retaining the independent 6 m risk base.
+  planner.update(state, now_ns=advance(state, 0))
+  assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
+  np.testing.assert_allclose(planner.mpc.params[:, COMFORT_STOP_DISTANCE], comfort_distance,
+                             rtol=0.0, atol=4 * np.finfo(float).eps * STOP_DISTANCE)
+  np.testing.assert_array_equal(planner.mpc.params[:, RISK_STOP_DISTANCE], STOP_DISTANCE)
+  expected = np.interp(planner.CP.longitudinalActuatorDelay + DT_MDL, T_IDXS, planner.mpc.a_solution)
+  assert planner.reference_planner.reference_accel == pytest.approx(expected)
 
 
 @pytest.mark.parametrize('lead_speed,lead_acceleration', [(1.0, 0.0), (3.0, -2.0)])

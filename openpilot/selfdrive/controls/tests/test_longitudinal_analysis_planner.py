@@ -18,7 +18,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrac
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import reference_requests_departure
 from openpilot.selfdrive.controls.tests.test_longitudinal_observation_planner import diagnostics, reference_snapshot
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state, patch_sampled_accel
 
 
 MODES = (LongitudinalMode.UNIFIED,)
@@ -175,7 +175,7 @@ def test_unified_observation_keeps_reference_and_admitted_model_constraint_separ
   # This observer test checks the independent acceleration limit and admitted
   # model action; P's raw cruise history has separate differential coverage.
   with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.get_cruise_accel', side_effect=AssertionError('retired cruise executed')), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=1.0) as sample, \
+       patch_sampled_accel(planner, return_value=1.0) as sample, \
        patch.object(planner.reference_planner.cruise_response, 'update', return_value=2.0) as cruise, \
        patch.object(planner, 'is_e2e', return_value=admitted):
     planner.update(state, now_ns=1_005_000_000)

@@ -10,7 +10,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state, patch_sampled_accel
 
 
 BASE_NS = 1_000_000_000
@@ -180,7 +180,7 @@ def test_interrupted_motion_cannot_supply_history_to_the_first_recovered_referen
   elif interruption == 'uninitialized':
     planner.reference_planner.reference_initialized = False
   if interruption == 'invalid_output':
-    with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=float('nan')):
+    with patch_sampled_accel(planner, return_value=float('nan')):
       update_with_native_reference(planner, state, BASE_NS + 2 * STEP_NS)
     assert not planner.motion_intent.valid
   else:

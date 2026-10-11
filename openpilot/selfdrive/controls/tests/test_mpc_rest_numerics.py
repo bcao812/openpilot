@@ -574,7 +574,7 @@ def test_future_precision_repair_cannot_spend_more_than_the_existing_native_resi
   np.testing.assert_array_equal(mpc.x_sol[2], returned['stage2'])
 
 
-def test_second_node_nominal_infeasibility_uses_a_verified_later_stop_through_owner_and_honda_can():
+def test_second_node_goal_uses_verified_first_interval_rest_through_owner_and_honda_can():
   harness = StrictPlanTransportHarness(speed=10.0)
   harness.engage()
   while harness.frame % PLANNER_STEPS:
@@ -590,9 +590,14 @@ def test_second_node_nominal_infeasibility_uses_a_verified_later_stop_through_ow
   mpc = harness.planner.mpc
   plan = harness.latest['longitudinalPlan'].longitudinalPlan
   assert mpc.rest_goal.native_node == 2 and mpc.diagnostic_last_solver_return == 0
-  assert mpc.rest_goal_reason == 'rest_goal_time_below_discrete_lower_bound'
-  assert mpc.effective_rest_node > 2 and mpc.effective_rest_state == 'satisfied'
-  assert_future_rest_bounds(mpc, mpc.effective_rest_node)
+  # The measured state now has a feasible internal event before node one;
+  # the original node-two source goal is not moved to a later grid point.
+  assert mpc.interval_rest is not None and mpc.rest_goal_state == 'satisfied'
+  assert not mpc.rest_goal_reason and mpc.diagnostic_rest_goal['intervalRestVerified']
+  assert mpc.interval_rest.stop_time == pytest.approx(-2.0 * speed / acceleration)
+  assert 0.0 < mpc.interval_rest.stop_time < T_IDXS[1]
+  np.testing.assert_array_equal(mpc.x0, [0.0, speed, acceleration])
+  np.testing.assert_array_equal(mpc.x_sol[1:, 1:], 0.0)
   assert plan.solverStatus == 0 and plan.motionIntent.valid
   assert not plan.motionIntent.brakingValid and not plan.motionIntent.restGoalRejected and not plan.motionIntent.releaseAllowed
   assert all(row['long_active'] and row['accel'] < 0.0 and not row['resume'] and not row['degraded'] for row in rows)
@@ -614,13 +619,15 @@ def test_a_real_future_native_failure_keeps_its_status_and_braking_through_honda
   statuses = []
 
   def solve():
-    # Fault injection restores the captured incompatible exact-zero native
-    # box. The real library must fail; its return is never fabricated or
-    # replaced by the feasible initial guess supplied by production.
+    # With interval-rest, zero boxes at nodes >= 2 are feasible. Instead
+    # require nonzero speed at node one with zero acceleration: the fixed
+    # initial state and shortened first integration cannot reach both.
+    # The real library must fail; its return is never fabricated.
     assert mpc.rest_goal.native_node == 2
-    for stage in range(2, len(T_IDXS)):
-      native.constraints_set(stage, 'lbx', np.zeros(2))
-      native.constraints_set(stage, 'ubx', np.zeros(2))
+    assert mpc.interval_rest is not None
+    incompatible_state = np.array([0.1, 0.0])
+    native.constraints_set(1, 'lbx', incompatible_state)
+    native.constraints_set(1, 'ubx', incompatible_state)
     status = native.solve()
     statuses.append(status)
     return status

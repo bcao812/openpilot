@@ -26,7 +26,7 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import (
 )
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import UnifiedLongitudinalPlanner
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import decoded_commands
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_handover_state, make_planner_owner
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_handover_state, make_planner_owner, patch_sampled_accel
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_cruise_coast_response import learned_harness
 from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarness
@@ -139,7 +139,7 @@ def test_model_cruise_execution_requires_strict_independent_winner(kind, case):
   with ExitStack() as stack:
     update = stack.enter_context(patch.object(planner.mpc, 'update', wraps=planner.mpc.update))
     stack.enter_context(patch.object(planner.reference_planner.cruise_response, 'update', return_value=request))
-    stack.enter_context(patch(f'{PRODUCER_MODULE}.sample_reference_acceleration', return_value=native))
+    stack.enter_context(patch_sampled_accel(planner, return_value=native))
     stack.enter_context(patch(f'{PRODUCER_MODULE}.cruise_accel_limit', return_value=maximum))
     plan, _ = consume(planner, control, state, 0)
   reference = update.call_args.kwargs['reference']
@@ -164,7 +164,7 @@ def test_current_fcw_vetoes_model_cruise_execution_even_when_its_scalar_wins(kin
     planner.mpc.crash_cnt = 3
 
   with patch.object(planner.mpc, 'update', side_effect=update_with_fcw), \
-       patch(f'{PRODUCER_MODULE}.sample_reference_acceleration', return_value=1.0):
+       patch_sampled_accel(planner, return_value=1.0):
     plan, _ = consume(planner, control, state, 0)
   assert planner.fcw and plan.motionIntent.valid
   assert plan.aTarget == plan.reference.constraintAccel < plan.reference.accel

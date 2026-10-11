@@ -13,12 +13,9 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFO
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state, patch_sampled_accel
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarness
-
-
-SAMPLE_ACCEL = 'openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration'
 
 
 def set_vision_lead(state, timestamp, gap, *, lead_index=0, std=.1):
@@ -54,7 +51,7 @@ def warm_parking(*, lead_index=0, experimental=False, model_accel=.5, radar_avai
   state['modelV2'].action.desiredAcceleration = model_accel
   # Isolate the scalar arbitration from native preference differences. The
   # native solver still runs, retaining its original bounds and geometry.
-  with patch(SAMPLE_ACCEL, return_value=.4):
+  with patch_sampled_accel(planner, return_value=.4):
     for frame in range(121):
       now = advance(state, frame)
       set_vision_lead(state, now, final_gap + .6 * (120 - frame) * .05, lead_index=lead_index)
@@ -118,7 +115,7 @@ def test_uncertainty_failure_after_native_compact_use_rebuilds_full_history_in_p
   assert producer.parking_mpc_distances[1][0] < 6.0
   assert np.min(planner.mpc.params[:, RISK_STOP_DISTANCE]) < 6.0
 
-  with patch(SAMPLE_ACCEL, return_value=.4):
+  with patch_sampled_accel(planner, return_value=.4):
     for frame in range(121, 235):
       now = advance(state, frame)
       set_vision_lead(state, now, 15.0 - .03 * (frame - 120),
@@ -156,7 +153,7 @@ def test_exact_older_model_metadata_remains_usable_for_an_async_radar_publicatio
   now = advance(state, 121)
   set_vision_lead(state, now, 14.97)
   state['radarState'] = older_radar
-  with patch(SAMPLE_ACCEL, return_value=.4):
+  with patch_sampled_accel(planner, return_value=.4):
     planner.update(state, now_ns=now)
   decision = producer.parking_approach.decision
   assert planner.mpc.solution_status == 0
@@ -200,7 +197,7 @@ def test_real_owner_model_hold_remains_without_a_parking_hold_state():
   state['modelV2'].action.shouldStop = True
   now = advance(state, 121)
   set_vision_lead(state, now, 6.4)
-  with patch(SAMPLE_ACCEL, return_value=.4):
+  with patch_sampled_accel(planner, return_value=.4):
     planner.update(state, now_ns=now)
   decision = planner.reference_planner.parking_approach.decision
   assert decision.accel_cap is None and not decision.require_stop
@@ -223,7 +220,7 @@ def test_lead_loss_after_native_compact_use_withdraws_only_geometry():
   assert np.min(planner.mpc.params[:, RISK_STOP_DISTANCE]) < 6.0
   now = advance(state, 121)
   state['radarState'].leadOne.present = False
-  with patch(SAMPLE_ACCEL, return_value=.4):
+  with patch_sampled_accel(planner, return_value=.4):
     planner.update(state, now_ns=now)
   decision = producer.parking_approach.decision
   assert not decision.allow_compact

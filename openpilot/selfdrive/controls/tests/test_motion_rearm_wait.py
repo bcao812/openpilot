@@ -262,7 +262,7 @@ def test_a_causal_invalid_packet_cannot_be_repaired_with_the_same_ids_to_clear_f
 
 
 @pytest.mark.parametrize('cold_standby_between', [False, True])
-def test_fault_cause_survives_off_and_cannot_be_relabelled_as_healthy_wait(mode, cold_standby_between):
+def test_new_healthy_off_input_retires_the_fault_but_preserves_reentry_wait(mode, cold_standby_between):
   harness = enter_off(mode)
   harness.step(new_plan=False)
   harness.plan.motionIntent.valid = False
@@ -275,21 +275,42 @@ def test_fault_cause_survives_off_and_cannot_be_relabelled_as_healthy_wait(mode,
     harness.car_state.vCruise = V_CRUISE_UNSET
     harness.plan.motionIntent.ready = False
     harness.step()
+    assert harness.control.LoC.motion_supervisor._rearm_after_fault
+    assert not harness.control.LoC.motion_supervisor.inactive_input_valid
   harness.car_state.vCruise = 80.0
   harness.plan.motionIntent.valid = True
   harness.plan.motionIntent.ready = True
   harness.step()
+  assert harness.control.LoC.motion_supervisor.inactive_input_valid
+  assert not harness.control.LoC.motion_supervisor._rearm_after_fault
   harness.selfdrive_state.enabled = True
   harness.selfdrive_state.active = True
   harness.selfdrive_state.state = State.enabled
   command, motion = harness.step(new_plan=False)
-  assert motion.degraded and not motion.waitingForFreshInput
+  assert not motion.degraded and motion.waitingForFreshInput
   assert command.actuators.accel <= -0.2
   daemon, _, machine = event_consumers(harness)
-  assert EventName.longitudinalControlUnavailable in daemon.events.names and machine.state == State.softDisabling
+  assert EventName.longitudinalControlUnavailable not in daemon.events.names and machine.state == State.enabled
   assert EventName.commIssue not in daemon.events.names
   _, fresh = harness.step()
   assert not fresh.degraded and not fresh.waitingForFreshInput
+
+
+def test_repairing_the_failed_pair_while_off_does_not_retire_its_fault(mode):
+  harness = enter_off(mode)
+  harness.plan.motionIntent.valid = False
+  _, fault = harness.step()
+  assert fault.degraded
+  rejected_plan = harness.control.sm.logMonoTime['longitudinalPlan']
+  rejected_model = harness.plan.modelMonoTime
+  harness.selfdrive_state.enabled = False
+  harness.selfdrive_state.active = False
+  harness.selfdrive_state.state = State.disabled
+  harness.plan.motionIntent.valid = True
+  command, _ = harness.step(plan_time_ns=rejected_plan, model_time_ns=rejected_model)
+  assert command.actuators.accel == 0.0 and not command.longActive
+  assert harness.control.LoC.motion_supervisor._rearm_after_fault
+  assert not harness.control.LoC.motion_supervisor.inactive_input_valid
 
 
 @pytest.mark.parametrize('pedal', ['gasPressed', 'brakePressed'])

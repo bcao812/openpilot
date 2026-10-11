@@ -22,7 +22,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MotionIntent, MotionPhase, MotionReferenceKind, MotionResponseKind,
                                                                StopReason)
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness, controller, decoded_commands
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state, patch_sampled_accel
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
 
 
@@ -279,7 +279,7 @@ def test_native_continuation_winner_publication_keeps_only_nonpositive_response(
          patch.object(planner.mpc, 'update', wraps=planner.mpc.update) as native_update, \
          patch.object(planner.reference_planner.cruise_response, 'update',
                       side_effect=lambda _target, _speed, maximum, **_kwargs: maximum), \
-         patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=target), \
+         patch_sampled_accel(planner, return_value=target), \
          patch.object(control.launch_response, 'propose', wraps=control.launch_response.propose) as feedback:
       for frame in range(20):
         state['controlsState'].longControlState = control.long_control_state

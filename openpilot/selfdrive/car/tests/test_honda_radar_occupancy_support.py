@@ -10,7 +10,7 @@ from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
 
 
 @pytest.mark.parametrize('gap', ['missing', 'position_coast', 'path_history'])
-def test_ordinary_lead_coast_has_no_support_tail_or_renewed_measurement_lifetime(gap):
+def test_missing_measurements_withdraw_the_formal_lead_without_a_support_tail(gap):
   controller = HondaRadarControl()
   initial = radar(distance=12.0, speed=0.0, lateralPositionVariance=3.61, lateralVelocityVariance=1.0)
   first = controller.update(**scene(tracks=[initial]))
@@ -25,26 +25,26 @@ def test_ordinary_lead_coast_has_no_support_tail_or_renewed_measurement_lifetime
     else:
       sample = scene(frame, tracks=[radar(frame, distance=12.0, speed=0.0)], short_path=True)
     result = controller.update(**sample)
-    claim = evidence(result)
-    assert claim['conflictStart'] == 0.0 and claim['conflictEnd'] == HORIZON
-    assert claim['conflictSupportVersion'] == 0 and claim['conflictSupportedEnd'] == 0.0
-    assert claim['brakeQualified'] and claim['coasting']
-    assert not any(claim[key] for key in ('followQualified', 'stopQualified', 'departureQualified', 'physicalConflictValid'))
-    if gap != 'path_history':
-      assert claim['positionMonoTime'] == claim['velocityMonoTime'] == START
-    assert result.degraded and not result.cleared
-    assert qualified_lead(present_leads(result)[0], 'brake', now_ns=sample['now_ns'])
+    # The raw fusion may diagnose coasting, but formal control never republishes
+    # the missing position/path as a new braking object or as measured clearance.
+    assert not present_leads(result) and not result.cleared and not controller._tracks
+    assert all(not qualified_lead(lead, purpose, now_ns=sample['now_ns'])
+               for lead in result.leads for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw'))
+    assert result.healthy
+    # Losing the current path of an established relevant lead still reports
+    # that current failure; an ordinary position gap does not fabricate one.
+    assert result.degraded is (gap == 'path_history' and frame == 1)
   assert original == saved
   expired = controller.update(**scene(10, tracks=[]))
   assert expired.healthy and not expired.degraded and not present_leads(expired) and not expired.cleared
   assert not controller._tracks
 
 
-def test_fresh_measurements_restore_follow_flags_without_creating_an_occupancy_window():
+def test_fresh_measurements_restore_follow_flags_after_explicit_withdrawal():
   controller = HondaRadarControl()
   controller.update(**scene(tracks=[radar(distance=12.0, speed=0.0)]))
-  coast = controller.update(**scene(2, tracks=[]))
-  assert evidence(coast)['coasting']
+  withdrawn = controller.update(**scene(2, tracks=[]))
+  assert not present_leads(withdrawn) and not withdrawn.cleared and not controller._tracks
   renewed = controller.update(**scene(3, tracks=[radar(3, distance=12.0, speed=0.0)]))
   claim = evidence(renewed)
   assert claim['positionMonoTime'] == claim['velocityMonoTime'] == START + 3 * STEP

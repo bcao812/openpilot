@@ -13,7 +13,7 @@ from openpilot.selfdrive.controls.lib.legacy_longcontrol import update_legacy
 from openpilot.selfdrive.controls.lib.legacy_longcontrol import long_control_state_trans as long_control_state_trans
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
-  CONTINUATION_STATUSES, ContinuationBudget, ContinuationDonor, ContinuationHistory, ContinuationOffer,
+  CONTINUATION_STATUSES, INACTIVE_NATIVE_RECOVERY_REASON, ContinuationBudget, ContinuationDonor, ContinuationHistory, ContinuationOffer,
   execution_target, validate_continuation,
 )
 from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MAX_CONTROL_GAP_NS, MotionPhase, MotionReferenceKind, MotionResponseKind,
@@ -97,6 +97,7 @@ class LongControl:
     self.continuation_offer = None
     self.continuation_reason = 'none'
     history_valid = self.continuation_history.observe(car_state_ns, now_ns, CS.vEgo, CS.aEgo)
+    reference = reference_check.timing if reference_check is not None and reference_check.valid else None
     if not active:
       self.continuation_donor = None
       # Observe identities for rearm without bypassing the immediate
@@ -104,6 +105,17 @@ class LongControl:
       self.motion_supervisor.update(False, CS.vEgo, CS.aEgo, CS.standstill, a_target, intent,
                                     plan_time_ns=plan_time_ns, model_time_ns=model_time_ns, now_ns=now_ns,
                                     plan_valid=plan_valid, solver_status=solver_status, standby_input=standby_input)
+      if (self.motion_supervisor.inactive_input_valid and native_recovery_valid is True and reference is not None):
+        # Observe real, advancing native successes while remaining OFF. This
+        # receipt may retire a failure episode, but cannot establish a donor,
+        # execute a plan, release a stop, or bypass the next-input rearm gate.
+        self.continuation_budget.note_success(now_ns, producer_ns=reference.producer_ns,
+                                             source_ns=reference.source_ns, model_ns=model_time_ns)
+        self.continuation_reason = INACTIVE_NATIVE_RECOVERY_REASON
+      elif solver_status != 0 and not standby_input:
+        self.continuation_budget.note_failure(now_ns)
+      else:
+        self.continuation_budget.interrupt_recovery()
       self.resolved_should_stop = False
       self.reset()
       self.long_control_state = LongCtrlState.off
@@ -124,7 +136,6 @@ class LongControl:
     # fresh braking envelope is still usable without trusting that history.
     stop_accel_valid = (math.isfinite(self.CP.stopAccel)
                         and CarControllerParams.BOSCH_ACCEL_MIN <= self.CP.stopAccel <= DEGRADED_ACCEL)
-    reference = reference_check.timing if reference_check is not None and reference_check.valid else None
     continuation_valid = False
     continuation_target = None
     if solver_status != 0:
@@ -181,6 +192,8 @@ class LongControl:
       # stability without acquiring the separate moving-donor authority.
       self.continuation_budget.note_success(now_ns, producer_ns=reference.producer_ns,
                                              source_ns=reference.source_ns, model_ns=model_time_ns)
+    else:
+      self.continuation_budget.interrupt_recovery()
     if cold_standstill and self.resolved_should_stop:
       hold_accel = self.CP.stopAccel if stop_accel_valid else -2.0
       self.last_output_accel = min(self.last_output_accel, hold_accel)

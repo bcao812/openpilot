@@ -13,7 +13,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDX
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import CapturingPublisher
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
-from openpilot.selfdrive.controls.tests.test_radar_consumption import coast, native_frame, radar_frame
+from openpilot.selfdrive.controls.tests.test_radar_consumption import expiring_lead, native_frame, radar_frame
 from openpilot.selfdrive.controls.tests.test_radar_fusion_mpc import EPOCH_NS
 from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import (
@@ -66,7 +66,7 @@ def run_case(*, extra_kind=None, initial_accel=.16649655997753143, action_cap=.3
   state['modelV2'].action.desiredAcceleration = action_cap
   if diagnostic == 'prior_expiry':
     publication = EPOCH_NS - 100_000_000
-    expired = coast(publication=publication, relevant=True, track=99)
+    expired = expiring_lead(publication=publication, relevant=True, track=99)
     planner.reference_planner.radar_consumption.update(
       native_frame(radar_frame(expired, publication=publication, display=(expired,))), publication_ns=publication,
       now_ns=EPOCH_NS - 40_000_000, speed=SPEED,

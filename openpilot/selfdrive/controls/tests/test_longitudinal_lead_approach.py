@@ -18,7 +18,9 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   LEAD_BRAKING_MIN_CHANGE_SCALE, LongitudinalPlanSource, get_lead_approach_urgency, get_lead_braking_urgency,
 )
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionResponseKind
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, consume, make_planner, make_planner_owner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import (
+  advance, consume, make_planner, make_planner_owner, make_state, patch_sampled_accel,
+)
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_motion_response_contract import ordinary_policy as ordinary_policy
 from openpilot.selfdrive.controls.tests.test_mpc_problem_contract import NativeProblemRecorder
@@ -293,7 +295,7 @@ def test_approach_weight_does_not_grant_lead_braking_permission(selected, ordina
     planner.mpc.crash_cnt = 0
 
   with patch.object(planner, 'is_e2e', return_value=True), patch.object(planner.mpc, 'update', side_effect=update), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=-0.75):
+       patch_sampled_accel(planner, return_value=-0.75):
     plan, _ = consume(planner, controller, state, 0)
   assert plan.solverStatus == 0
   assert plan.aTarget == -0.75

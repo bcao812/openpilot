@@ -237,16 +237,16 @@ class UnifiedLongitudinalPlanner:
     self._model_rest_active = False
     self.entered_rest_goal = False
     self.cruise_initialized = False
-    self.cold_standby_started = False
+    self.standby_started = False
     self.standby = False
     self.continuation = PlannerContinuation()
     self._departure_wait_started_ns = None
     self._departure_wait_last_log_ns = None
     planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), valid=False)
 
-  def invalidate(self, speed, reason, *, preserve_continuation=False):
+  def invalidate(self, speed, reason, *, preserve_continuation=False, failure=True):
     planner = self.planner
-    self.continuation.invalidate(reason, now_ns=self._radar_update_ns, keep_offer=preserve_continuation)
+    self.continuation.invalidate(reason, now_ns=self._radar_update_ns, keep_offer=preserve_continuation, failure=failure)
     if not preserve_continuation:
       self.cruise_response.clear()
     self.turn_lead_guard.clear()
@@ -347,11 +347,11 @@ class UnifiedLongitudinalPlanner:
     if car_state.vCruise == V_CRUISE_UNSET:
       idle = (not state['selfdriveState'].enabled and not state['carControl'].enabled
               and state['controlsState'].longControlState == LongCtrlState.off)
-      if healthy and idle and not self.cruise_initialized:
-        self.cold_standby_started = True
-      self.invalidate(speed, "cruise_unset")
-      if (healthy and self.cold_standby_started and not self.cruise_initialized
-          and state['controlsState'].longControlState == LongCtrlState.off):
+      if healthy and idle:
+        self.standby_started = True
+      standby = bool(healthy and self.standby_started and state['controlsState'].longControlState == LongCtrlState.off)
+      self.invalidate(speed, "cruise_unset", failure=not standby)
+      if standby:
         self.standby = True
         stopped = bool(car_state.standstill or speed < STOP_SPEED)
         planner.motion_intent = MotionIntent(mode=int(planner.longitudinal_mode), reasons=int(StopReason.CRUISE) if stopped else 0,
@@ -359,14 +359,14 @@ class UnifiedLongitudinalPlanner:
         planner.output_should_stop = stopped
         planner.v_desired_filter.x = speed
         self.e2e_allowed = False
-        planner._observe(outcome="cold_standby", modelAdmissionKnown=True, e2eAllowed=False)
+        planner._observe(outcome="standby" if self.cruise_initialized else "cold_standby", modelAdmissionKnown=True, e2eAllowed=False)
         if planner.trace is not None:
           observe_trace(planner.trace, "begin", planner, state, True, speed, ACCEL_MAX)
           observe_trace(planner.trace, "finish_unified", planner, False)
       return
     if healthy:
       self.cruise_initialized = True
-      self.cold_standby_started = False
+      self.standby_started = False
     return speed, measured_accel, healthy
 
   @property

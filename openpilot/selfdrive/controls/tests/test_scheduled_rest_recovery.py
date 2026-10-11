@@ -6,7 +6,7 @@ synthetic stop references. They are not a replay or a vehicle-response model.
 
 from dataclasses import asdict, replace
 import json
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import numpy as np
 import pytest
@@ -254,52 +254,61 @@ class GeometryPrepared(Exception):
   pass
 
 
-def update_until_lead_processing(mpc, radar):
-  # Stop after the real update's eligibility/geometry stage, before any native
-  # object, parameters, template or solver is needed by this geometry test.
-  with patch.object(mpc, 'process_lead', side_effect=GeometryPrepared), pytest.raises(GeometryPrepared):
+def geometry_mpc(initial_state):
+  # Mirror reset's Python state consumed before native problem installation.
+  # These geometry tests deliberately have no solver; lead preparation and
+  # restoration of the actual, unclipped distance still use real MPC methods.
+  mpc = LongitudinalMpc.__new__(LongitudinalMpc)
+  mpc.solution_status = 0
+  mpc.params = np.zeros((N+1, PARAM_DIM))
+  mpc.a_prev = np.zeros(N+1)
+  mpc._was_fusion_active = False
+  mpc.x0 = np.array(initial_state, dtype=float)
+  return mpc
+
+
+def update_until_reference_problem(mpc, radar):
+  # Let update run process_lead and its subsequent restoration of the real
+  # measured position, stopping before set_reference_problem needs a solver.
+  with patch.object(mpc, 'set_reference_problem', side_effect=GeometryPrepared), pytest.raises(GeometryPrepared):
     mpc.update(radar)
   return mpc.rest_recovery_position_limit
 
 
 @pytest.mark.parametrize('closer_slot', [0, 1])
 def test_recovery_geometry_uses_both_slots_before_impossible_gap_clipping(closer_slot):
-  mpc = LongitudinalMpc.__new__(LongitudinalMpc)
-  mpc.x0 = np.array([5.0, 10.0, 0.0])
+  mpc = geometry_mpc([5.0, 10.0, 0.0])
   radar = radar_state(distance=3.0)
   radar.leadTwo.present, radar.leadTwo.dRel = True, 3.0
   leads = radar.leadOne, radar.leadTwo
   leads[closer_slot].dRel = 1.0
   assert all(mpc.process_lead(lead)[0, 0] > lead.dRel for lead in leads)
-  assert update_until_lead_processing(mpc, radar) == pytest.approx(5.0 + 1.0 - CRASH_DISTANCE)
+  assert update_until_reference_problem(mpc, radar) == pytest.approx(5.0 + 1.0 - CRASH_DISTANCE)
   assert not hasattr(mpc, 'solver')
 
 
 def test_stopping_equivalence_cannot_replace_the_closer_raw_lead_position():
-  mpc = LongitudinalMpc.__new__(LongitudinalMpc)
-  mpc.x0 = np.array([0.0, 0.1, 0.0])
+  mpc = geometry_mpc([0.0, 0.1, 0.0])
   radar = radar_state(distance=2.0, speed=10.0)
   radar.leadTwo.present, radar.leadTwo.dRel = True, 3.0
   assert radar.leadOne.dRel + radar.leadOne.vLead**2 / 5.0 > radar.leadTwo.dRel
-  assert update_until_lead_processing(mpc, radar) == pytest.approx(2.0 - CRASH_DISTANCE)
+  assert update_until_reference_problem(mpc, radar) == pytest.approx(2.0 - CRASH_DISTANCE)
 
 
 @pytest.mark.parametrize('reverse_slot', [0, 1])
 def test_either_reversing_present_lead_disqualifies_frozen_position_recovery(reverse_slot):
-  mpc = LongitudinalMpc.__new__(LongitudinalMpc)
-  mpc.x0 = np.array([0.0, 0.1, 0.0])
+  mpc = geometry_mpc([0.0, 0.1, 0.0])
   radar = radar_state(distance=2.0, speed=0.2)
   radar.leadTwo.present, radar.leadTwo.dRel, radar.leadTwo.vLead = True, 3.0, 0.2
   (radar.leadOne, radar.leadTwo)[reverse_slot].vLead = -0.1
-  assert update_until_lead_processing(mpc, radar) is None
+  assert update_until_reference_problem(mpc, radar) is None
 
 
 @pytest.mark.parametrize('change', ['absent', 'reverse', 'too_close', 'invalid'])
 def test_previous_geometry_is_cleared_before_every_update(change):
-  mpc = LongitudinalMpc.__new__(LongitudinalMpc)
-  mpc.x0 = np.array([0.0, 0.1, 0.0])
+  mpc = geometry_mpc([0.0, 0.1, 0.0])
   radar = radar_state(distance=2.0, speed=0.2)
-  assert update_until_lead_processing(mpc, radar) == pytest.approx(2.0 - CRASH_DISTANCE)
+  assert update_until_reference_problem(mpc, radar) == pytest.approx(2.0 - CRASH_DISTANCE)
   if change == 'absent':
     radar.leadOne.present = False
   elif change == 'reverse':
@@ -310,10 +319,12 @@ def test_previous_geometry_is_cleared_before_every_update(change):
     radar.leadOne.dRel = float('nan')
     with patch.object(mpc, 'fail') as fail:
       mpc.update(radar)
-    fail.assert_called_once_with(MPC_INVALID_INPUT)
+    fail.assert_called_once_with(MPC_INVALID_INPUT, stage='formal_lead', detail=ANY)
+    assert isinstance(fail.call_args.kwargs['detail'], ValueError)
+    assert str(fail.call_args.kwargs['detail']) == 'Unqualified formal lead'
     assert mpc.rest_recovery_position_limit is None
     return
-  assert update_until_lead_processing(mpc, radar) is None
+  assert update_until_reference_problem(mpc, radar) is None
 
 
 # Exact x0 and the MPC-consumed lead fields from J451. The model curves below

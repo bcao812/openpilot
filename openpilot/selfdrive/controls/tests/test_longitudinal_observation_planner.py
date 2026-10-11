@@ -29,7 +29,7 @@ from openpilot.selfdrive.controls.lib.planner_continuation import PlannerContinu
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
 from openpilot.selfdrive.controls.lib.turn_lead_guard import TurnLeadGuard
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state, patch_sampled_accel
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP
 
@@ -400,8 +400,7 @@ def test_actual_solver_failures_survive_control_reset(unified, failure, status, 
 def test_nonfinite_sample_is_not_replaced_with_invalidated_reference_zero():
   planner = make_planner()
   state = make_state()
-  with patch("openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration",
-             return_value=float("nan")) as sample:
+  with patch_sampled_accel(planner, return_value=float("nan")) as sample:
     update_at_fixture_clock(planner, state)
   observed = diagnostics(planner, state)
   sample.assert_called_once()

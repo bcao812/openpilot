@@ -10,7 +10,7 @@ from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE
 from openpilot.selfdrive.controls.radard import RadarD
 from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
 from openpilot.selfdrive.controls.tests.test_radar_consumption import (
-  CONSUMPTION, PUBLICATION, SESSION, coast, future_entry, measured, native_frame, radar_frame,
+  CONSUMPTION, PUBLICATION, SESSION, expiring_lead, future_entry, measured, native_frame, radar_frame,
 )
 
 
@@ -61,11 +61,11 @@ def make_radard():
 
 
 @pytest.mark.parametrize('source,caution', [
-  ('radar', False), ('fused', False), ('predicted', False),
+  ('radar', False), ('fused', False),
 ])
 @pytest.mark.parametrize('after_deadline', [0, 1])
 def test_publisher_removes_only_naturally_expired_measurement_at_actual_event_time(source, caution, after_deadline):
-  old = coast() if source == 'predicted' else measured(source=source, caution=caution)
+  old = measured(source=source, caution=caution)
   fresh = formal_lead(now_ns=PUBLICATION, evidence={'trackId': 9})
   frame = radar_frame(old, fresh, display=(old, fresh))
   rd = make_radard()
@@ -82,7 +82,7 @@ def test_publisher_removes_only_naturally_expired_measurement_at_actual_event_ti
   assert rd.radar_state.to_dict() == before
 
 
-@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('source', ['radar', 'fused'])
 def test_publisher_retires_future_entry_from_objects_and_display_without_degradation(source):
   future = future_entry(source=source)
   current = formal_lead(now_ns=PUBLICATION, evidence={'trackId': 9})
@@ -100,14 +100,14 @@ def test_publisher_retires_future_entry_from_objects_and_display_without_degrada
   assert rd.radar_state.to_dict() == before
 
 
-@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('source', ['radar', 'fused'])
 @pytest.mark.parametrize('defect', [
   'old_at_qualification', 'old_model_at_publication', 'different_formal_slot', 'invalid_position', 'future_measurement',
 ])
 def test_publication_expiry_cannot_erase_malformed_or_previously_stale_objects(source, defect):
-  old = coast() if source == 'predicted' else measured(source=source)
+  old = measured(source=source)
   frame = radar_frame(old, display=(old,))
-  maximum_age = 350_000_000 if source == 'predicted' else 200_000_000
+  maximum_age = 200_000_000
   if defect == 'old_at_qualification':
     old.evidence.positionMonoTime = PUBLICATION - maximum_age - 1
   elif defect == 'old_model_at_publication':
@@ -140,10 +140,10 @@ def test_publisher_keeps_normal_leads_and_never_publishes_an_extra_object_list()
   assert not rd.publication_expiry.degraded and not event.radarState.fusionDegraded
 
 
-@pytest.mark.parametrize('source', ['radar', 'predicted'])
+@pytest.mark.parametrize('source', ['radar', 'fused'])
 def test_publication_expiry_does_not_survive_scope_gap_or_empty_messages(source):
   rd = make_radard()
-  old = coast(relevant=True) if source == 'predicted' else measured(relevant=True)
+  old = measured(source=source, relevant=True)
   update_with_result(rd, radar_frame(old, display=(old,)))
   event = publish_at(rd, CONSUMPTION)
   assert event.radarState.leadOne.present and not event.radarState.fusionRiskUnresolved
@@ -169,7 +169,7 @@ def test_publication_expiry_does_not_survive_scope_gap_or_empty_messages(source)
 
 def test_configuration_exit_does_not_reuse_previous_publication_expiry():
   rd = make_radard()
-  old = coast(relevant=True)
+  old = expiring_lead(relevant=True)
   update_with_result(rd, radar_frame(old, display=(old,)))
   publish_at(rd, CONSUMPTION)
   assert rd.publication_expiry.degraded

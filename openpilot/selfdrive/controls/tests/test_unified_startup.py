@@ -24,6 +24,7 @@ from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import
 )
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
+from openpilot.selfdrive.selfdrived.engagement_policy import EngagementPolicy
 from openpilot.selfdrive.selfdrived.events import ET
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
@@ -48,6 +49,7 @@ class StartupHarness:
     self.source_state = car.CarState.new_message()
     self.source_state.canValid = True
     self.source_state.vEgo = speed
+    self.source_state.vEgoRaw = speed
     self.source_state.aEgo = 0.0
     self.source_state.standstill = speed == 0.0
     self.source_state.gearShifter = car.CarState.GearShifter.drive
@@ -85,6 +87,20 @@ class StartupHarness:
     self.selfdrive.enabled = False
     self.selfdrive.active = False
     self.selfdrive.state_machine = StateMachine()
+    self.selfdrive.engagement_policy = EngagementPolicy()
+    # Lateral/MADS remains a disabled collaborator. The longitudinal policy,
+    # main FSM and the consumer/output receipts below use production code.
+    self.selfdrive.mads = SimpleNamespace(enabled=False, active=False, enabled_toggle=False,
+                                         longitudinal_failure_isolated=False)
+    event_state = self.selfdrive.sm
+    self.selfdrive.sm = bounded_submaster([*event_state.services, 'carOutput'])
+    for service in event_state.services:
+      self.selfdrive.sm.data[service] = event_state[service]
+    device = self.selfdrive.sm['deviceState'].as_builder()
+    device.started = True
+    self.selfdrive.sm.data['deviceState'] = device.as_reader()
+    self.selfdrive.cp_safety_configs = [(config.safetyModel, config.safetyParam) for config in self.CP.safetyConfigs]
+    self.selfdrive.cp_alt_experience = self.CP.alternativeExperience
     self.selfdrive.car_events = CarEvents(self.CP)
     self.selfdrive.CS_prev = self.source_state.as_reader().as_builder()
     self.selfdrive.sm.ignore_valid.extend(['longitudinalPlanSP', 'modelDataV2SP', 'lateralManeuverPlan', 'alertDebug'])
@@ -178,6 +194,17 @@ class StartupHarness:
     model.action.desiredAcceleration = -2.0 if self.model_stop else 0.5
     return event
 
+  def panda_event(self):
+    """A healthy configured ECU boundary, not a replay or execution of panda safety."""
+    event = new_event('pandaStates', self.now_ns)
+    pandas = event.init('pandaStates', len(self.CP.safetyConfigs))
+    for panda, config in zip(pandas, self.CP.safetyConfigs, strict=True):
+      panda.safetyModel, panda.safetyParam = config.safetyModel, config.safetyParam
+      panda.alternativeExperience = self.CP.alternativeExperience
+      panda.controlsAllowed = bool(self.selfdrive.enabled and self.source_state.cruiseState.available
+                                   and not self.source_state.gasPressed and not self.source_state.brakePressed)
+    return serialized(event)
+
   def step(self, *, button=None, run_planner=True, override_plan=None, planner_overrides=None):
     self.now_ns += CONTROL_STEP_NS
     self.frame += 1
@@ -187,6 +214,7 @@ class StartupHarness:
       events = self.source_state.init('buttonEvents', 1)
       events[0].type = ButtonType.cancel if button == 'cancel' else ButtonType.decelCruise
       events[0].pressed = button in ('set_press', 'cancel')
+    self.latest['pandaStates'] = self.panda_event()
     with patch('time.monotonic_ns', return_value=self.now_ns), patch('time.monotonic', return_value=self.now_ns / 1e9), \
          patch('openpilot.selfdrive.car.card.messaging.drain_sock_raw', return_value=[]):
       self.feed(self.card.sm, self.latest)
@@ -202,8 +230,11 @@ class StartupHarness:
         override_plan.longitudinalPlan.modelMonoTime = self.now_ns
         self.latest['longitudinalPlan'] = serialized(override_plan)
       self.feed(self.selfdrive.sm, self.latest)
+      self.selfdrive._car_state_mono_ns = self.latest['carState'].logMonoTime
+      self.selfdrive._car_state_valid = self.latest['carState'].valid
       self.selfdrive.update_events(state)
-      self.selfdrive.enabled, self.selfdrive.active = self.selfdrive.state_machine.update(self.selfdrive.events)
+      self.selfdrive.update_engagement_state(state)
+      self.selfdrive.engagement_policy.observe_states(self.selfdrive, state)
       self.selfdrive.CS_prev = state.as_reader()
       selfdrive_event = new_event('selfdriveState', self.now_ns)
       selfdrive_event.selfdriveState.enabled = self.selfdrive.enabled
@@ -239,6 +270,11 @@ class StartupHarness:
       'consumed_plan_mono': int(consumed_plan.logMonoTime),
       'consumed_ready': consumed_plan.longitudinalPlan.motionIntent.to_dict().get('ready', True),
       'plan_valid': bool(self.latest['longitudinalPlan'].valid),
+      'selfdrive_state': self.selfdrive.state_machine.state,
+      'holding_for_takeover': self.selfdrive.state_machine.holding_for_takeover,
+      'hold_deadline_ns': self.selfdrive.engagement_policy.handoff.extended_deadline_ns,
+      'hold_remaining_ns': self.selfdrive.engagement_policy.decision.hold_remaining_ns,
+      'force_decel': bool(self.latest['controlsState'].controlsState.forceDecel),
     }
     self.history.append(row)
     return row
@@ -267,6 +303,7 @@ class StartupHarness:
   def hold(self):
     self.engage()
     self.source_state.vEgo = 0.0
+    self.source_state.vEgoRaw = 0.0
     self.source_state.standstill = True
     self.source_state.cruiseState.standstill = True
     self.model_stop = True
@@ -401,7 +438,7 @@ def test_real_warm_hold_setpoint_loss_keeps_pressure_and_publishes_a_fault():
   assert all(command['BRAKE_REQUEST'] and command['GAS_COMMAND'] <= 0 and not command['resume'] for command in emitted)
 
 
-def test_disabling_after_motion_does_not_erase_the_initialized_speed_failure():
+def test_disabling_after_motion_allows_unarmed_standby_and_a_new_set_handshake():
   harness = StartupHarness()
   harness.engage()
   harness.step(button='cancel')
@@ -410,13 +447,21 @@ def test_disabling_after_motion_does_not_erase_the_initialized_speed_failure():
   harness.card.v_cruise_helper.v_cruise_cluster_kph = V_CRUISE_UNSET
   for _ in range(8):
     row = harness.step()
-  assert not harness.controls.LoC.can_standby
-  assert not harness.latest['longitudinalPlan'].valid
-  assert harness.latest['longitudinalPlan'].longitudinalPlan.motionIntent.ready
-  assert row['no_entry']
-  assert row['comm_issue']
+  assert harness.controls.LoC.can_standby
+  assert harness.latest['longitudinalPlan'].valid
+  assert not harness.latest['longitudinalPlan'].longitudinalPlan.motionIntent.valid
+  assert not harness.latest['longitudinalPlan'].longitudinalPlan.motionIntent.ready
+  assert not row['no_entry']
+  assert not row['comm_issue']
   assert not row['long_active']
   assert not row['resume']
+  assert row['accel'] == 0.0
+  requested = harness.first_set()
+  assert requested['enabled'] and not requested['long_active']
+  assert harness.step()['v_cruise'] == V_CRUISE_INITIAL
+  rows = [harness.step() for _ in range(2 * PLANNER_STEPS)]
+  assert any(row['long_active'] for row in rows)
+  assert all(not row['degraded'] and not row['longitudinal_unavailable'] for row in rows)
 
 
 def test_invalid_default_set_speed_cannot_poison_first_set_initialization():
@@ -482,7 +527,7 @@ def test_restarting_only_the_planner_cannot_turn_an_existing_hold_into_cold_stan
   assert not produced.longitudinalPlan.motionIntent.valid
   assert produced.longitudinalPlan.motionIntent.ready
   assert not harness.planner.reference_planner.standby
-  assert not harness.planner.reference_planner.cold_standby_started
+  assert not harness.planner.reference_planner.standby_started
   assert harness.mpc_update.call_count == 0
   if fault == 'not_ready':
     standby = produced.as_builder()

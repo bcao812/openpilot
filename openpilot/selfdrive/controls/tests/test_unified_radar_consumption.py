@@ -17,7 +17,7 @@ from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
 from openpilot.selfdrive.controls.tests.test_radar_consumption import (
-  CONSUMPTION, PUBLICATION, SESSION, coast, measured, native_frame, radar_frame,
+  CONSUMPTION, PUBLICATION, SESSION, expiring_lead, measured, native_frame, radar_frame,
 )
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
@@ -91,10 +91,10 @@ def test_mutable_builder_keeps_the_original_publication_path():
 
 
 @pytest.mark.parametrize('speed', [0.0, 1.0])
-def test_irrelevant_coast_expiry_does_not_veto_primary_follow_or_departure(speed):
+def test_irrelevant_measured_expiry_does_not_veto_primary_follow_or_departure(speed):
   primary = formal_lead(now_ns=PUBLICATION, vLead=speed + 1.0, vLeadK=speed + 1.0, vRel=1.0,
                         evidence={'trackId': 5})
-  expired = coast()
+  expired = expiring_lead()
   raw = radar_frame(primary, expired, display=(primary, expired))
   planner = enabled_planner(speed)
   state = state_at(raw, speed=speed)
@@ -131,14 +131,14 @@ def test_only_the_formal_secondary_lead_can_veto_the_primary_departure(kind, for
     assert has_departing_lead(frame, speed, .3, now_ns=CONSUMPTION, held_identity=(SESSION, 5)) is expected
 
 
-@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('source', ['radar', 'fused'])
 @pytest.mark.parametrize('publication', [PUBLICATION, CONSUMPTION])
 def test_unified_expiry_matches_the_surviving_collection_without_changing_original_bytes(source, publication):
   primary = formal_lead(now_ns=PUBLICATION, dRel=40.0, vLead=5.5, vLeadK=5.5, vRel=.5,
                         evidence={'trackId': 5})
   outputs = []
   for add_expired in (False, True):
-    expired = coast() if source == 'predicted' else measured(source=source)
+    expired = measured(source=source)
     extras = (expired,) if add_expired else ()
     frame = radar_frame(primary, *extras, display=(primary,))
     state = state_at(frame, speed=5.0, publication=publication)
@@ -154,13 +154,13 @@ def test_unified_expiry_matches_the_surviving_collection_without_changing_origin
   np.testing.assert_array_equal(outputs[0][1], outputs[1][1])
 
 
-@pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
+@pytest.mark.parametrize('source', ['radar', 'fused'])
 @pytest.mark.parametrize('path,start', [('entering', 0.0), ('entering', .5), ('inPath', .5)])
 def test_retired_predicted_entry_matches_no_object_without_failure_braking_or_fcw(source, path, start):
   candidate = formal_lead(now_ns=PUBLICATION, source=source, dRel=6.0, vLead=0.0, vLeadK=0.0, vRel=-10.0,
                           evidence={'pathState': path, 'conflictStart': start, 'conflictEnd': 2.0,
                                     'followQualified': False, 'stopQualified': False, 'departureQualified': False,
-                                    'fcwQualified': source != 'predicted', 'accelerationValid': source != 'predicted'})
+                                    'fcwQualified': True, 'accelerationValid': True})
   outputs = []
   for include_candidate in (False, True):
     objects = (candidate,) if include_candidate else ()
@@ -186,7 +186,7 @@ def test_expiry_diagnostic_clears_without_releasing_an_already_adopted_hold(init
   # This component starts with an established object barrier. Acquisition and
   # actual braking are verified by the rolling owner/CAN pipeline below.
   planner.reference_planner.radar_held_identity = (SESSION, 7)
-  expired = coast(relevant=True)
+  expired = expiring_lead(relevant=True)
   raw = radar_frame(expired, display=(expired,))
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
     for elapsed in (0, 100_000_000, 5_000_000_000):
@@ -244,7 +244,7 @@ def test_history_flags_do_not_change_healthy_lead_acceleration_or_motion_intent(
     planner = enabled_planner(5.0)
     if diagnostic == 'prior_expiry':
       old = PUBLICATION - 100_000_000
-      expired = coast(publication=old, relevant=True, track=99)
+      expired = expiring_lead(publication=old, relevant=True, track=99)
       planner.reference_planner.radar_consumption.update(
         native_frame(radar_frame(expired, publication=old, display=(expired,))), publication_ns=old, now_ns=old + 60_000_000, speed=10.0,
       )
@@ -508,7 +508,7 @@ def test_red_light_stop_does_not_assign_a_far_stationary_detection_a_hold_that_b
 def test_scope_exit_discards_current_expiry_without_a_driver_reset(current_expiry):
   planner = enabled_planner(1.0)
   ref = planner.reference_planner
-  objects = (coast(relevant=True),) if current_expiry else ()
+  objects = (expiring_lead(relevant=True),) if current_expiry else ()
   state = state_at(radar_frame(*objects, display=objects, degraded=True, risk_unresolved=True))
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
     planner.update(state, now_ns=CONSUMPTION)
@@ -534,7 +534,7 @@ def test_invalid_current_plan_does_not_reuse_previous_expiry_diagnostic(failure,
   if prior_expiry:
     # Seed a real earlier consumption result. The next attempt must derive
     # its own input validity rather than inherit this expired object.
-    expired = coast(relevant=True)
+    expired = expiring_lead(relevant=True)
     ref.radar_consumption.update(native_frame(radar_frame(expired, display=(expired,))),
                                  publication_ns=PUBLICATION, now_ns=CONSUMPTION, speed=5.0)
     assert ref.radar_consumption.degraded
@@ -578,7 +578,7 @@ def test_invalid_radar_transport_cannot_confirm_departure_after_previous_expiry(
   planner = enabled_planner(1.0)
   ref = planner.reference_planner
   with patch.object(planner.dec, 'enabled', return_value=True):
-    expired = coast(relevant=True)
+    expired = expiring_lead(relevant=True)
     state = state_at(radar_frame(expired, display=(expired,)))
     ref.radar_input_state(state, CONSUMPTION)
     assert ref.radar_consumption.degraded

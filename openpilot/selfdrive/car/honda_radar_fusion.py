@@ -14,6 +14,7 @@ import numpy as np
 from capnp.lib.capnp import _DynamicListBuilder, _DynamicListReader, _DynamicStructBuilder, _DynamicStructReader
 
 from opendbc.car.honda.bosch_a_radar import radar_scan_continuous
+from openpilot.selfdrive.car.honda_radar_body import RadarBody, measured_radar_body
 from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL
 
 VERSION = 'bosch-a-shadow-3'
@@ -316,6 +317,7 @@ class Track:
   saturation_recovery: SaturationRecovery | None = None
   # Six distinct position samples; AUX updates never add a sample.
   positions: deque = field(default_factory=lambda: deque(maxlen=6))
+  body: RadarBody | None = None
 
   @property
   def mature(self):
@@ -507,6 +509,7 @@ class HondaRadarFusion:
 
   def _invalidate(self, track, reason, position_ns, now_ns):
     track.active = track.velocity_good = track.acceleration_good = False
+    track.body = None
     track.last_invalid_reason, track.last_invalid_ns = reason, now_ns
     track.invalid_position_ns = max(track.invalid_position_ns, position_ns)
     track.slot_reassigned_ns = track.slot_reassigned_seq = 0
@@ -777,6 +780,9 @@ class HondaRadarFusion:
       track.slot_reassigned_ns = track.slot_reassigned_seq = 0
       track.saturation_recovery = None
       track.positions.append((stamp, x, y))
+      # Only a newly accepted position scan can replace its width. Missing or
+      # invalid new bounds erase the old extent; a late AUX never renews it.
+      track.body = measured_radar_body(observation, now_ns)
       self._velocity(track, observation, now_ns, projection_cache)
       if saturation_recovery:
         if not track.velocity_good:
@@ -790,6 +796,22 @@ class HondaRadarFusion:
       self.counts['expired'] += 1
     live_identifiers = {track.identifier for track in self.tracks.values()}
     self.bindings = {key: binding for key, binding in self.bindings.items() if key[1] in live_identifiers}
+
+  def _body_snapshot(self, track, mean, epoch_ns, now_ns):
+    result = {'bodyWidth': 0.0, 'bodyLeftX': 0.0, 'bodyLeftY': 0.0, 'bodyRightX': 0.0, 'bodyRightY': 0.0,
+              'bodyMonoTime': 0, 'bodyAvailableMonoTime': 0, 'bodyValid': False}
+    body = track.body
+    if (body is None or not track.active or body.position_ns != track.position_ns
+        or not fresh(body.position_ns, now_ns, MAX_AGE_NS) or body.available_ns > now_ns
+        or abs(epoch_ns - body.position_ns) > MAX_AGE_NS):
+      return result
+    ego = self.history.at(min(epoch_ns, body.position_ns))
+    if ego is None:
+      return result
+    left, right = body.endpoints(float(mean[0]), float(mean[1]), -ego.yaw * (epoch_ns - body.position_ns) / 1e9)
+    result.update(bodyWidth=body.width, bodyLeftX=left[0], bodyLeftY=left[1], bodyRightX=right[0], bodyRightY=right[1],
+                  bodyMonoTime=body.position_ns, bodyAvailableMonoTime=body.available_ns, bodyValid=True)
+    return result
 
   def _candidates(self, model, model_ns, ego, now_ns, projection_cache=None):
     path_x, path_y = list(model.position.x), list(model.position.y)
@@ -843,7 +865,8 @@ class HondaRadarFusion:
           'acceleration': track.acceleration,
           'accelerationGood': velocity_good and track.acceleration_good,
           'lateralPositionVariance': lateral_position_variance, 'lateralVelocityVariance': lateral_velocity_variance,
-          'lateralVelocityValid': lateral_velocity_valid})
+          'lateralVelocityValid': lateral_velocity_valid,
+          **self._body_snapshot(track, mean, int(model.timestampEof), now_ns)})
       if track.active:
         candidates.append((track, mean, covariance, relation, motion, coasting, velocity_good))
     result = []

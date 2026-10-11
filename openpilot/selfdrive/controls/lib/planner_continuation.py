@@ -14,7 +14,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
 from openpilot.selfdrive.controls.lib.lead_qualification import control_leads, lead_identity
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
   CONTINUATION_STATUSES, CONTINUATION_VERSION,
-  ContinuationBudget, ContinuationCandidate, ContinuationDonor as NativeIdentity, ContinuationOffer,
+  ContinuationBudget, ContinuationCandidate, ContinuationDonor as NativeIdentity, ContinuationOffer, inactive_native_recovery,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
@@ -49,10 +49,12 @@ class PlannerContinuation:
     self.tail_extension_s = 0.0
     self.validation_time = 0.0
 
-  def invalidate(self, reason, *, now_ns=0, keep_offer=False):
+  def invalidate(self, reason, *, now_ns=0, keep_offer=False, failure=True):
     self.native_receipt = None
-    if valid_timestamp(now_ns):
+    if failure and valid_timestamp(now_ns):
       self.budget.note_failure(now_ns)
+    else:
+      self.budget.interrupt_recovery()
     if not keep_offer:
       self.donor = None
       self.offer = None
@@ -75,12 +77,17 @@ class PlannerContinuation:
     return frozenset(identities)
 
   @staticmethod
-  def receipt_available(state, now_ns):
+  def receipt_available(state, now_ns, *, allow_inactive=False):
     motion = state['controlsState'].motionState
     car = state['carState']
     control = state['carControl']
     times = getattr(state, 'logMonoTime', {})
     source_times = times.get('controlsState', 0), times.get('carControl', 0)
+    executing = (state['selfdriveState'].enabled and control.enabled and control.longActive
+                 and not control.cruiseControl.override and not car.gasPressed and not car.brakePressed
+                 and not state['controlsState'].forceDecel)
+    recovering = (allow_inactive and inactive_native_recovery(state['controlsState'], control)
+                  and state.all_checks(service_list=['controlsState', 'carControl', 'carState', 'modelV2']))
     return bool(
       getattr(motion, 'continuationVersion', 0) == CONTINUATION_VERSION
       and motion.enabled and not (motion.degraded or motion.waitingForFreshInput)
@@ -88,9 +95,7 @@ class PlannerContinuation:
       and all(valid_timestamp(value) and 0 <= now_ns - value <= 100_000_000 for value in source_times)
       and valid_timestamp(motion.referenceConsumerMonoTime)
       and motion.referenceProducerMonoTime <= motion.referenceConsumerMonoTime <= min(source_times)
-      and state['selfdriveState'].enabled and control.enabled and control.longActive
-      and not control.cruiseControl.override and not car.gasPressed and not car.brakePressed
-      and not state['controlsState'].forceDecel
+      and (executing or recovering)
     )
 
   @classmethod
@@ -119,7 +124,8 @@ class PlannerContinuation:
   def native_success(self, mpc, state, timing, *, now_ns, permitted, scope, applied_accel_ceiling):
     """Seal only after native, all postchecks and final arbitration succeeded."""
     motion, receipt = state['controlsState'].motionState, self.native_receipt
-    if (receipt is not None and self.receipt_available(state, now_ns)
+    receipt_healthy = self.receipt_available(state, now_ns, allow_inactive=True)
+    if (receipt is not None and receipt_healthy
         and not getattr(motion, 'continuationActive', False)
         and motion.referenceProducerInstanceMonoTime == receipt.instance_ns
         and motion.referenceProducerMonoTime == receipt.producer_ns
@@ -129,6 +135,8 @@ class PlannerContinuation:
       # healthy native cycle; donor eligibility is a separate, narrower test.
       self.budget.note_success(now_ns, producer_ns=receipt.producer_ns,
                                source_ns=receipt.source_ns, model_ns=receipt.model_ns)
+    elif not receipt_healthy:
+      self.budget.interrupt_recovery()
     model_ns = state.logMonoTime.get('modelV2', 0)
     self.native_receipt = (NativeIdentity.from_reference(timing, model_ns)
                            if timing is not None and valid_timestamp(model_ns) else None)

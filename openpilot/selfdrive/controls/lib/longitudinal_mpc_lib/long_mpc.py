@@ -14,7 +14,7 @@ from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, PREFERENCE_TIME_S
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_ESTIMATE_AGE_NS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS, lead_identity, qualified_lead,
+  MAX_ESTIMATE_AGE_NS, MAX_MEASUREMENT_AGE_NS, lead_identity, qualified_lead,
 )
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.continuation import (
   ContinuationDonor, ContinuationProblem, ContinuationResult, build_candidate, frozen_array, valid_timestamp,
@@ -558,7 +558,7 @@ class LongitudinalMpc:
       evidence = getattr(lead, 'evidence', None)
       if evidence is None or evidence.version == 0:
         continue
-      age = MAX_PREDICTION_AGE_NS if evidence.coasting else MAX_MEASUREMENT_AGE_NS
+      age = MAX_MEASUREMENT_AGE_NS
       expiry = min(expiry, int(evidence.estimateMonoTime) + MAX_ESTIMATE_AGE_NS,
                    int(evidence.positionMonoTime) + age, int(evidence.velocityMonoTime) + age,
                    int(evidence.modelMonoTime) + age)
@@ -765,7 +765,7 @@ class LongitudinalMpc:
         if not valid_timestamp(reference_ns) or not valid_timestamp(evidence.estimateMonoTime):
           raise ValueError('Invalid lead reference clock')
         elapsed = (reference_ns - evidence.estimateMonoTime) / 1e9
-        if not -REFERENCE_MAX_AGE_NS / 1e9 <= elapsed <= MAX_PREDICTION_AGE_NS / 1e9:
+        if not -REFERENCE_MAX_AGE_NS / 1e9 <= elapsed <= MAX_ESTIMATE_AGE_NS / 1e9:
           raise ValueError('Lead estimate cannot align with the initial state')
         # A recent model estimate can follow carState. Use the signed interval
         # without redating the measurement or replacing the ego reference epoch.
@@ -2012,8 +2012,7 @@ class LongitudinalMpc:
                        trajectory[:, 1]))
       for lead, trajectory in zip(leads, lead_trajectories, strict=True) if lead.present
     )
-    recovery_leads = tuple((lead, trajectory) for lead, trajectory in zip(self._source_leads, self._lead_trajectories, strict=True)
-                           if not getattr(getattr(lead, 'evidence', None), 'coasting', False))
+    recovery_leads = tuple(zip(self._source_leads, self._lead_trajectories, strict=True))
     if recovery_leads and all(lead.vLead >= 0.0 for lead, _ in recovery_leads):
       limit = self.x0[0] + min(trajectory[0, 0] for _, trajectory in recovery_leads) - CRASH_DISTANCE
       if limit > self.x0[0]:

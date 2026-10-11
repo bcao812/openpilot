@@ -42,6 +42,16 @@ def synthetic_track_diagnostics(index):
     'lateralPositionVariance': sample + 0.375,
     'lateralVelocityVariance': sample + 1.625,
     'lateralVelocityValid': True,
+    # Non-Float32 fractions and wide timestamps exercise every new body
+    # field through the native logger, including the enlarged list stride.
+    'bodyWidth': sample + .123456789123,
+    'bodyLeftX': 200 + sample + .234567891234,
+    'bodyLeftY': 10 + sample + .345678912345,
+    'bodyRightX': 200 + sample + .456789123456,
+    'bodyRightY': -(sample + .567891234567),
+    'bodyMonoTime': wide + 5,
+    'bodyAvailableMonoTime': wide + 6,
+    'bodyValid': True,
   }
 
 

@@ -64,7 +64,7 @@ def fail_next(planner, state, frame=2, status=4):
   return now
 
 
-@pytest.mark.parametrize('status', [4, -6])
+@pytest.mark.parametrize('status', [4])
 def test_qualified_native_donor_has_separate_candidate_without_rewriting_failure(status):
   planner, state = ready_planner()
   now = fail_next(planner, state, status=status)
@@ -90,9 +90,10 @@ def test_qualified_native_donor_has_separate_candidate_without_rewriting_failure
   assert message.longitudinalPlan.aTarget <= -0.5
 
 
-def test_input_failure_keeps_original_protection_and_never_offers_continuation():
+@pytest.mark.parametrize('status', [-1, -6])
+def test_input_or_retired_failure_keeps_original_protection_and_never_offers_continuation(status):
   planner, state = ready_planner()
-  fail_next(planner, state, status=-1)
+  fail_next(planner, state, status=status)
   carry = planner.reference_planner.continuation
   assert carry.offer is None and carry.donor is None
   assert carry.reason == 'unclassified_or_input_failure'
@@ -148,7 +149,7 @@ def test_unknown_or_new_lead_identity_cannot_spend_an_unobstructed_donor():
 def test_tighter_current_cap_rejects_continuation_and_strengthens_fallback():
   planner, state = ready_planner()
   reference = planner.reference_planner
-  with patch.object(reference, 'independent_constraint', return_value=(-1.2, planner.mpc.source, False, -1.2, False)):
+  with patch.object(reference, 'independent_constraint', return_value=(-1.2, planner.mpc.source, False, False)):
     fail_next(planner, state)
   assert reference.continuation.offer is None
   assert reference.continuation.reason == 'current_independent_constraint_tighter'
@@ -160,7 +161,7 @@ def test_tighter_current_cap_rejects_continuation_and_strengthens_fallback():
 def test_final_cap_is_part_of_the_dynamically_consistent_donor_reference():
   planner, state = ready_planner()
   reference = planner.reference_planner
-  with patch.object(reference, 'independent_constraint', return_value=(-0.4, planner.mpc.source, False, -0.4, False)):
+  with patch.object(reference, 'independent_constraint', return_value=(-0.4, planner.mpc.source, False, False)):
     planner.update(state, now_ns=advance(state, 2))
   assert planner.mpc.solution_status == 0
   assert reference.reference_overridden

@@ -15,6 +15,7 @@ from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import
   CapturingPublisher, ControlsHarness, new_event, selfdrive_event_harness, serialized,
 )
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager
+from openpilot.selfdrive.selfdrived.engagement_policy import EngagementPolicy
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.longitudinal_observation import SelfdriveObservation
 from openpilot.selfdrive.selfdrived.state import SOFT_DISABLE_TIME, StateMachine
@@ -46,6 +47,7 @@ def observed_selfdrive(control_state=None, *, enabled=True):
     daemon.longitudinal_observation.recorder.clock = lambda: 20_000_000_000
   daemon.active = True
   daemon.state_machine = StateMachine()
+  daemon.engagement_policy = EngagementPolicy()
   daemon.state_machine.state = State.enabled
   daemon.prof = None
   daemon.car_state_sock = object()

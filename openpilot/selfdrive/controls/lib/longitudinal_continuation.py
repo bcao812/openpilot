@@ -11,6 +11,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from opendbc.car.honda.values import CarControllerParams
+from opendbc.car.structs import car
 from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
 from openpilot.selfdrive.controls.lib.reference_timing import (
   REFERENCE_MAX_AGE_NS, REFERENCE_TIMING_VERSION, ReferenceTiming, finite_state, valid_timestamp,
@@ -19,18 +20,37 @@ from openpilot.selfdrive.modeld.constants import index_function
 
 
 CONTINUATION_VERSION = 1
-CONTINUATION_STATUSES = (4, -6)
+# Match the native proposal gate. The retired occupancy status (-6) must not
+# authorize a received offer after its producer path has been removed.
+CONTINUATION_STATUSES = (4,)
 CONTINUATION_EPISODE_NS = 100_000_000
 CONTINUATION_DONOR_SOURCE_NS = 200_000_000
 NATIVE_RECOVERY_NS = 500_000_000
 NATIVE_SUCCESS_GAP_NS = 100_000_000
 UNSTABLE_DISABLE_NS = 3_000_000_000
+INACTIVE_NATIVE_RECOVERY_REASON = 'inactive_native_recovery'
 SPEED_TOLERANCE_MAX = 0.2
 ACCEL_TOLERANCE_MAX = 0.25
 CONTINUATION_N = 12
 CONTINUATION_TIMES = tuple(index_function(index, max_val=10.0, max_idx=CONTINUATION_N) for index in range(CONTINUATION_N + 1))
 HISTORY_GAP_NS = 20_000_000
 HISTORY_TAIL_NS = 10_000_000
+
+
+def inactive_native_recovery(controls, control):
+  """An OFF consumer's native-input receipt, with no execution authority.
+
+  Callers must additionally check transport, time and the exact plan/reference
+  identity. Standby and an accepted continuation never publish this receipt.
+  """
+  motion = controls.motionState
+  off = car.CarControl.Actuators.LongControlState.off
+  return (motion.continuationVersion == CONTINUATION_VERSION
+          and motion.continuationReason == INACTIVE_NATIVE_RECOVERY_REASON
+          and motion.phase == 'off' and controls.longControlState == off
+          and not (motion.degraded or motion.waitingForFreshInput or motion.resolvedStop or motion.reasons or motion.continuationActive)
+          and not control.longActive and control.actuators.longControlState == off
+          and control.actuators.accel == 0.0 and not control.cruiseControl.resume)
 
 
 @dataclass(frozen=True)
@@ -117,6 +137,11 @@ class ContinuationBudget:
       return False
     self._last_now_ns = int(now_ns)
     return True
+
+  def interrupt_recovery(self):
+    """Break consecutive health evidence without renewing the failure deadline."""
+    self._recovery_start_ns = self._last_success_ns = 0
+    self._last_success_ids = None
 
   def note_failure(self, now_ns, *, episode_start_ns=None):
     if not self._clock(now_ns):

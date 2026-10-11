@@ -209,12 +209,30 @@ def test_scope_health_does_not_claim_dec_or_mpc_recomputation_after_early_return
     assert not pipeline.radard.control_scope_unavailable
 
 
-def test_mpc_failure_does_not_withdraw_real_radar_objects_from_the_next_tick():
+def test_mpc_failure_does_not_withdraw_formal_radar_leads_from_the_next_tick():
+  def formal_evidence(row):
+    # Only the two published leads carry current control authority. The old
+    # radarObjects list is deliberately empty, including during recovery.
+    assert row['radar'].get('radarObjects', []) == []
+    leads = [row['radar'][name] for name in ('leadOne', 'leadTwo') if row['radar'][name]['present']]
+    assert leads
+    evidence_by_identity = {}
+    for lead in leads:
+      evidence = lead['evidence']
+      assert evidence['version'] == 1 and evidence['source'] == 'radar'
+      assert evidence['brakeQualified'] and not evidence['coasting']
+      assert evidence['sessionId'] == row['radar']['fusionSessionId'] and evidence['sessionId']
+      assert evidence['trackId'] > 0
+      identity = evidence['sessionId'], evidence['trackId']
+      assert identity not in evidence_by_identity
+      evidence_by_identity[identity] = evidence
+    return evidence_by_identity
+
   with control_pipeline(speed=8.0) as pipeline:
     target = Target(30.0, 8.0)
     for _ in range(24):
       before = pipeline.step(speed=8.0, radar=[target])
-    identities = {obj['evidence']['trackId'] for obj in before['radar']['radarObjects']}
+    identities = set(formal_evidence(before))
     assert identities and before['solver'] == 0
     adapter = pipeline.radard.fusion_control
     solver = pipeline.planner.mpc.solver
@@ -237,10 +255,9 @@ def test_mpc_failure_does_not_withdraw_real_radar_objects_from_the_next_tick():
     previous_position = before['observer_position_ns']
     for row in (*failed_rows, recovered, after):
       assert row['radar']['fusionActive'] and row['radar']['fusionReason'] != 'controlScopeUnavailable'
-      assert {obj['evidence']['trackId'] for obj in row['radar']['radarObjects']} == identities
-      assert row['radar']['leadOne']['evidence']['source'] == 'radar'
-      for obj in row['radar']['radarObjects']:
-        evidence = obj['evidence']
+      evidence_by_identity = formal_evidence(row)
+      assert set(evidence_by_identity) == identities
+      for evidence in evidence_by_identity.values():
         assert evidence['positionMonoTime'] == row['observer_position_ns'] > previous_position
         assert evidence['velocityMonoTime'] == row['source_ns']
         assert evidence['modelMonoTime'] == row['source_ns']

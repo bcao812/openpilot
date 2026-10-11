@@ -9,7 +9,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan
 from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_STOP_DISTANCE, CRASH_DISTANCE, FCW_IDXS, MPC_INVALID_INPUT, N,
-  RISK_STOP_DISTANCE, STOP_DISTANCE, T_IDXS,
+  RISK_STOP_DISTANCE, T_IDXS,
   LongitudinalMpc, LongitudinalPlanSource, MpcReference,
 )
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceEvidence, ModelSource, MovingPreference, RestGoal
@@ -246,17 +246,16 @@ def test_formal_radar_fcw_cannot_inherit_unrelated_or_revoked_confirmation(inter
     assert planner.solution_status == 4
 
 
-def test_known_formal_lead_coast_keeps_braking_but_no_fcw_or_stop_authority():
+def test_legacy_formal_prediction_is_rejected_before_native_solving():
   fresh = object_lead(distance=30.0, speed=2.0, ego_speed=15.0)
   now = EPOCH_NS + 50_000_000
   coast = coast_from(fresh, now)
-  free = solve(fused_state(), speed=15.0, now_ns=now, reference_ns=now)
   planner = solve(fused_state(display=(coast,)), speed=15.0, now_ns=now, reference_ns=now)
-  assert qualified_lead(coast, 'brake', 0.0, now_ns=now)
-  assert not any(qualified_lead(coast, purpose, 0.0, now_ns=now) for purpose in ('follow', 'stop', 'departure', 'fcw'))
-  assert action(planner) < action(free) - .1
+  assert not any(qualified_lead(coast, purpose, 0.0, now_ns=now) for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw'))
+  assert planner.solution_status == -1 and planner.solve_time == 0.0
+  assert not planner._diagnostic_problem_installed
   assert planner.crash_cnt == 0 and planner.rest_recovery_position_limit is None
-  assert planner.source_object_identity == ('radar-test', 1)
+  assert planner.source_object_identity is None
 
 
 @pytest.mark.parametrize('defect', ['position_expired', 'future_model', 'velocity_invalid', 'nan', 'negative_tau', 'wrong_source'])
@@ -314,8 +313,8 @@ def test_compact_gap_is_not_given_to_an_unqualified_coasting_lead():
   lead = coast_from(object_lead(distance=6.0, ego_speed=0.0), now)
   reference = MpcReference(None, comfort_stop_distance=3.0, lead_risk_stop_distances=(4.0, 6.0))
   planner = solve(fused_state(display=(lead,)), speed=0.0, reference=reference, now_ns=now, reference_ns=now)
-  np.testing.assert_array_equal(planner.params[:, COMFORT_STOP_DISTANCE], STOP_DISTANCE)
-  np.testing.assert_array_equal(planner.params[:, RISK_STOP_DISTANCE], STOP_DISTANCE)
+  assert planner.solution_status == -1 and not planner._diagnostic_problem_installed
+  assert planner.rest_recovery_position_limit is None
 
 
 def test_stopped_formal_lead_cannot_be_extrapolated_as_reversing():

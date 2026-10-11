@@ -1,6 +1,9 @@
 """Message and planner factories shared by longitudinal component tests."""
 
-from unittest.mock import patch
+from contextlib import contextmanager
+from unittest.mock import DEFAULT, Mock, patch
+
+import numpy as np
 
 from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, CarControllerParams
@@ -114,6 +117,27 @@ def advance(state, frame):
   for service in state.logMonoTime:
     state.logMonoTime[service] = timestamp
   return timestamp
+
+
+@contextmanager
+def patch_sampled_accel(planner, *, return_value=DEFAULT, side_effect=None):
+  """Inject only the scalar action acceleration after real MPC sampling.
+
+  Native solves and trajectory-array reads remain intact. The yielded mock
+  records only scalar reads, so tests can change their injected value or
+  verify that a fault reached the actual action-sampling boundary.
+  """
+  native_sample = planner.mpc.sample_solution
+  action_accel = Mock(return_value=return_value, side_effect=side_effect)
+
+  def sample_solution(times):
+    sampled = native_sample(times)
+    if np.ndim(times) == 0:
+      return sampled[0], action_accel(times), sampled[2]
+    return sampled
+
+  with patch.object(planner.mpc, 'sample_solution', side_effect=sample_solution):
+    yield action_accel
 
 
 class Publisher:

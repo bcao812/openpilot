@@ -3,10 +3,12 @@ from dataclasses import replace
 
 import pytest
 
+from opendbc.car.structs import car
 from openpilot.cereal import log
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
-  CONTINUATION_N, CONTINUATION_TIMES, ContinuationBudget, ContinuationCandidate, ContinuationDonor, ContinuationHistory,
-  ContinuationOffer, execution_target, validate_continuation,
+  CONTINUATION_N, CONTINUATION_TIMES, CONTINUATION_VERSION, INACTIVE_NATIVE_RECOVERY_REASON,
+  ContinuationBudget, ContinuationCandidate, ContinuationDonor, ContinuationHistory,
+  ContinuationOffer, execution_target, inactive_native_recovery, validate_continuation,
 )
 from openpilot.selfdrive.controls.lib.reference_timing import ReferenceTiming
 
@@ -53,6 +55,43 @@ def test_only_half_a_second_of_fresh_advancing_native_successes_clears_budget():
     cleared = budget.note_success(now, producer_ns=now - 1_000_000, source_ns=now - 2_000_000, model_ns=now - 2_000_000)
     assert cleared is (index == 10)
   assert budget.episode_start_ns == 0
+
+
+def test_interrupted_health_requires_a_new_half_second_without_renewing_the_deadline():
+  _, _, budget, _ = protocol_fixture()
+  episode = budget.episode_start_ns
+  for offset in (20, 70, 120, 170, 220):
+    now = START + offset * 1_000_000
+    assert not budget.note_success(now, producer_ns=now - 1, source_ns=now - 2, model_ns=now - 2)
+  budget.interrupt_recovery()
+  assert budget.episode_start_ns == episode
+  for index in range(11):
+    now = START + (270 + 50 * index) * 1_000_000
+    cleared = budget.note_success(now, producer_ns=now - 1, source_ns=now - 2, model_ns=now - 2)
+    assert cleared is (index == 10)
+
+
+@pytest.mark.parametrize('defect', ['none', 'active', 'positive', 'negative', 'resume', 'track', 'continuation', 'version'])
+def test_inactive_native_receipt_cannot_certify_an_executing_or_continuing_owner(defect):
+  controls = log.ControlsState.new_message()
+  control = car.CarControl.new_message()
+  motion = controls.motionState
+  motion.continuationVersion = CONTINUATION_VERSION
+  motion.continuationReason = INACTIVE_NATIVE_RECOVERY_REASON
+  motion.phase = 'off'
+  if defect == 'active':
+    control.longActive = True
+  elif defect in ('positive', 'negative'):
+    control.actuators.accel = 0.1 if defect == 'positive' else -0.1
+  elif defect == 'resume':
+    control.cruiseControl.resume = True
+  elif defect == 'track':
+    motion.phase = 'track'
+  elif defect == 'continuation':
+    motion.continuationActive = True
+  elif defect == 'version':
+    motion.continuationVersion = CONTINUATION_VERSION + 1
+  assert inactive_native_recovery(controls, control) is (defect == 'none')
 
 
 @pytest.mark.parametrize('defect', ['none', 'revoked', 'version', 'donor', 'expired', 'no_tolerance', 'low_speed', 'cruise_reduced', 'bad_curve'])

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS, _ControlLeadView, _StructSnapshot,
+  MAX_CONTROL_OBJECTS, MAX_MEASUREMENT_AGE_NS, _ControlLeadView, _StructSnapshot,
   _finite, _integer, _qualified_lead_evidence, control_leads, lead_identity, qualified_lead, retired_future_entry,
 )
 
@@ -210,23 +210,24 @@ def test_constant_velocity_prior_is_explicit_and_not_a_measured_acceleration():
   assert not qualified_lead(lead, 'brake', now_ns=NOW)
 
 
-def test_short_prediction_can_only_retain_braking_from_original_measurement_age():
-  lead = formal_lead(source='predicted', evidence={
-    'positionMonoTime': NOW - MAX_PREDICTION_AGE_NS,
-    'velocityMonoTime': NOW - MAX_PREDICTION_AGE_NS,
-  })
-  assert qualified_lead(lead, 'brake', now_ns=NOW)
-  for purpose in ('follow', 'stop', 'departure', 'fcw'):
-    assert not qualified_lead(lead, purpose, now_ns=NOW)
-  assert not qualified_lead(lead, 'brake', now_ns=NOW + 1)
+@pytest.mark.parametrize('source,coasting', [
+  ('predicted', True), ('predicted', False), ('radar', True), ('fused', True), ('vision', True),
+])
+@pytest.mark.parametrize('snapshot', [False, True])
+def test_prediction_or_coasting_never_grants_control_even_with_fresh_stamps(source, coasting, snapshot):
+  lead = formal_lead(source=source, evidence={'coasting': coasting})
+  if snapshot:
+    lead = _StructSnapshot({**vars(lead), 'evidence': vars(lead.evidence)})
+  for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw'):
+    assert not qualified_lead(lead, purpose, 0.0, now_ns=NOW)
 
 
 @pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
 @pytest.mark.parametrize('path_state,start', [('entering', 0.0), ('entering', .05), ('inPath', .05)])
 def test_future_entry_never_grants_a_control_or_fcw_purpose(source, path_state, start):
   lead = formal_lead(source=source, evidence={'pathState': path_state, 'conflictStart': start, 'conflictEnd': .1})
-  assert _qualified_lead_evidence(lead, 'brake', now_ns=NOW)
-  assert retired_future_entry(lead, now_ns=NOW)
+  assert _qualified_lead_evidence(lead, 'brake', now_ns=NOW) is (source != 'predicted')
+  assert retired_future_entry(lead, now_ns=NOW) is (source != 'predicted')
   for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw', 'caution'):
     for now in (NOW, NOW + 100_000_000, NOW + 200_000_001):
       for active_window in (True, False):

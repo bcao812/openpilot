@@ -20,7 +20,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPl
 from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VERSION, MotionIntent, MotionPhase, MotionReferenceKind,
                                                                MotionResponseKind, StopReason)
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import UnifiedLongitudinalPlanner
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state, patch_sampled_accel
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource as PolicySource
@@ -162,8 +162,7 @@ def test_negative_source_label_requires_same_lead_geometry_and_current_contract(
 
   with patch.object(planner, 'is_e2e', return_value=True), patch.object(planner.mpc, 'update', side_effect=update), \
        patch.object(state, 'all_checks', return_value=case != 'stale_radar'), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration',
-             return_value=0.3 if case == 'positive_target' else -1.0):
+       patch_sampled_accel(planner, return_value=0.3 if case == 'positive_target' else -1.0):
     plan, _ = consume(planner, control, state, 0)
   assert plan.motionIntent.responseKind == expected
   if expected == MotionResponseKind.LEAD_BRAKING:
@@ -190,7 +189,7 @@ def test_fcw_does_not_withdraw_existing_qualified_braking(selected, e2e, target,
     planner.mpc.crash_cnt = crash_count
 
   with patch.object(planner, 'is_e2e', return_value=e2e), patch.object(planner.mpc, 'update', side_effect=update), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=target):
+       patch_sampled_accel(planner, return_value=target):
     for frame in range(8):
       crash_count = 0 if frame < 3 else 4
       before = control.pid.i
@@ -218,7 +217,7 @@ def test_ordinary_acc_with_a_lead_cannot_gain_positive_i_before_or_during_fcw(se
     planner.mpc.crash_cnt = crash_count
 
   with patch.object(planner, 'is_e2e', return_value=False), patch.object(planner.mpc, 'update', side_effect=update), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.3):
+       patch_sampled_accel(planner, return_value=0.3):
     for frame in range(6):
       crash_count = 0 if frame < 3 else 4
       plan, outputs = consume(planner, control, state, frame)
@@ -260,7 +259,7 @@ def test_native_continuation_has_no_positive_i_before_or_at_current_risk_boundar
   with patch.object(planner, 'is_e2e', side_effect=lambda _: e2e), patch.object(planner.mpc, 'update', side_effect=update), \
        patch.object(state, 'all_checks', side_effect=lambda *args, **kwargs: healthy), \
        patch.object(planner.reference_planner.cruise_response, 'update', side_effect=neutral_cruise_response) as cruise_update, \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', side_effect=lambda *args, **kwargs: target):
+       patch_sampled_accel(planner, side_effect=lambda *args, **kwargs: target):
     for frame in range(6):
       if frame == 3:
         assert control.pid.i == 0.0
@@ -320,7 +319,7 @@ def test_lead_loss_threshold_crossing_and_slot_change_recompute_permission_witho
   cases = [(0, True, 10.0), (0, True, 0.5), (0, True, 10.0),
            (1, True, 10.0), (1, False, 10.0), (0, True, 10.0)]
   with patch.object(planner, 'is_e2e', return_value=True), patch.object(planner.mpc, 'update', side_effect=update), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=-1.0):
+       patch_sampled_accel(planner, return_value=-1.0):
     for frame, (selected, present, closing) in enumerate(cases):
       leads = (state['radarState'].leadOne, state['radarState'].leadTwo)
       set_lead(leads[selected], present=present, closing=closing)

@@ -1,6 +1,6 @@
 """One immutable formal-lead view for a radarState planner tick.
 
-A measured object or coast may cross its deadline before or after publication.
+A measured object may cross its deadline before or after publication.
 Remove irrelevant expired formal leads without carrying missing-object risks
 into later messages. Relevant expiry and malformed formal input retain the
 existing failure braking path. Extra radar objects never acquire control roles.
@@ -8,7 +8,7 @@ Well-formed future-entry predictions are retired before assigning control roles.
 """
 from openpilot.selfdrive.car.honda_radar_relevance import loss_relevant
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_ESTIMATE_AGE_NS, MAX_MEASUREMENT_AGE_NS, MAX_PREDICTION_AGE_NS,
+  MAX_ESTIMATE_AGE_NS, MAX_MEASUREMENT_AGE_NS,
   _ControlLeadView, _StructSnapshot, _as_reader, _finite, _future_entry, _integer, _object_key, _qualified_lead_evidence, _read,
   lead_identity, retired_future_entry,
 )
@@ -88,9 +88,9 @@ def _measurement_expired_at(lead, now_ns):
   if not _integer(now_ns, 1) or not _qualified_lead_evidence(lead, 'brake', 0.0):
     return False
   evidence = _read(lead, 'evidence')
-  if str(_read(evidence, 'source')) not in ('radar', 'fused', 'predicted'):
+  if str(_read(evidence, 'source')) not in ('radar', 'fused'):
     return False
-  maximum_age = MAX_PREDICTION_AGE_NS if _read(evidence, 'coasting') is True else MAX_MEASUREMENT_AGE_NS
+  maximum_age = MAX_MEASUREMENT_AGE_NS
   measurements = tuple(_read(evidence, field) for field in ('positionMonoTime', 'velocityMonoTime'))
   return (0 <= now_ns - _read(evidence, 'estimateMonoTime') <= MAX_ESTIMATE_AGE_NS
           and 0 <= now_ns - _read(evidence, 'modelMonoTime') <= maximum_age
@@ -215,7 +215,7 @@ class RadarConsumption:
       relevant = _relevant_at_consumption(lead, now_ns, speed)
       # A degraded flag is diagnostic, not a braking command. The same relevant
       # obstacle must retain failure braking whether its measurement crossed
-      # the deadline before or after publication, measured or predicted.
+      # the measurement deadline before or after publication.
       if relevant:
         self.degraded = True
         continue

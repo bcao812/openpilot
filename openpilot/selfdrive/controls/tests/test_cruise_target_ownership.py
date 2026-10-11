@@ -26,7 +26,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrac
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionReferenceKind, MotionResponseKind
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import sample_reference_acceleration
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, consume, make_handover_state, make_planner_owner
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, consume, make_handover_state, make_planner_owner, patch_sampled_accel
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -442,8 +442,7 @@ def test_cruise_request_declaration_requires_the_strict_final_winner(case, expec
   # are controlled to express exact ties, rather than relying on QP rounding.
   with ExitStack() as stack:
     update = stack.enter_context(patch.object(planner.mpc, 'update', wraps=planner.mpc.update))
-    stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration',
-                              return_value=native))
+    stack.enter_context(patch_sampled_accel(planner, return_value=native))
     if maximum is not None:
       stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.cruise_accel_limit', return_value=maximum))
     plan, _ = consume(planner, owner, state, 0)
@@ -458,7 +457,7 @@ def test_cruise_request_declaration_requires_the_strict_final_winner(case, expec
 def test_strict_cruise_request_keeps_ordinary_model_facts_and_respects_scc_domain(domain, expected_kind):
   planner, owner, state = ordinary_case(speed=3.0, target=4.0)
   with ExitStack() as stack:
-    stack.enter_context(patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=1.0))
+    stack.enter_context(patch_sampled_accel(planner, return_value=1.0))
     if domain == 'e2e':
       state['selfdriveState'].experimentalMode = True
     else:
@@ -485,7 +484,7 @@ def test_current_fcw_vetoes_cruise_request_domain_and_clearance_restores_it():
     planner.mpc.crash_cnt = crash_count
 
   with patch.object(planner.mpc, 'update', side_effect=update_current_crash_count), \
-       patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.sample_reference_acceleration', return_value=0.5):
+       patch_sampled_accel(planner, return_value=0.5):
     risk, _ = consume(planner, owner, state, 0)
     assert planner.fcw and risk.motionIntent.responseKind != CRUISE_REQUEST_KIND
     assert risk.aTarget == risk.reference.constraintAccel < risk.reference.accel

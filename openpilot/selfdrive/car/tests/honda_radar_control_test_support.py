@@ -12,7 +12,7 @@ import math
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from opendbc.can import CANParser
+from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.honda.carcontroller import CarController
 from opendbc.car.honda.hondacan import CanBus
@@ -44,6 +44,7 @@ class Target:
   lateral: float = 0.0  # Radar/body coordinates, left positive.
   slot: int = 0
   oem_id: int = 1
+  body_offsets: tuple[float, float] | None = None  # Left/right metres from the reflection, left positive.
 
 
 def raw_scan(target, ego_speed, frame, bus):
@@ -52,9 +53,23 @@ def raw_scan(target, ego_speed, frame, bus):
   azimuth = round(1024 + 2048 * math.atan2(target.lateral, target.distance))
   velocity = round(864 + 64 * (target.speed - ego_speed))
   assert 0 < distance < 4095 and 0 <= azimuth < 2047 and 0 < velocity < 1728
-  return scan_frames(slot=target.slot, oem_id=target.oem_id, index=frame % 16,
-                     life=min(4094, 1 + 2 * frame), distance=distance, azimuth=azimuth,
-                     velocity=velocity, bus=bus)
+  frames = scan_frames(slot=target.slot, oem_id=target.oem_id, index=frame % 16,
+                       life=min(4094, 1 + 2 * frame), distance=distance, azimuth=azimuth,
+                       velocity=velocity, bus=bus)
+  if target.body_offsets is not None:
+    left, right = target.body_offsets
+    assert math.isfinite(left) and math.isfinite(right) and left >= 0 >= right and left > right
+    measured_distance = distance * .05712 - 3.0
+    measured_lateral = measured_distance * math.tan((azimuth - 1024) / 2048.0)
+    edges = [round(1024 + 2048 * math.atan2(measured_lateral + offset, measured_distance)) for offset in (left, right)]
+    assert all(0 <= edge <= 2047 for edge in edges)
+    # Supply physical sensor geometry in the real F3 packet. Everything from
+    # decoder validation through formal lead qualification remains production code.
+    frames[3] = CANPacker('honda_bosch_a_radar').make_can_msg(frames[3][0], bus, {
+      'FRAME_IDX': frame % 16, 'TRACK_ID': target.oem_id,
+      'AZIMUTH_EDGE_A_RAW': edges[0], 'AZIMUTH_EDGE_B_RAW': edges[1],
+    })
+  return frames
 
 
 def _publish_at(produce, timestamp):
