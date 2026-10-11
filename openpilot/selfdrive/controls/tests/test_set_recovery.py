@@ -103,6 +103,33 @@ def test_repeated_successful_publication_cannot_retire_the_disabled_fault_budget
   assert harness.controls.LoC.continuation_budget.episode_start_ns
 
 
+def test_unhealthy_model_frequency_cannot_retire_the_disabled_fault_budget():
+  harness = fail_then_disable()
+  budgets = (harness.controls.LoC.continuation_budget, harness.selfdrive._longitudinal_failure_budget,
+             harness.planner.reference_planner.continuation.budget)
+  episodes = tuple(budget.episode_start_ns for budget in budgets)
+  assert all(episodes)
+  harness.now_ns += 3_100_000_000
+  feed = harness.feed
+
+  def unhealthy_feed(state, messages):
+    feed(state, messages)
+    if state is harness.controls.sm:
+      state.freq_ok['modelV2'] = False
+
+  # The plan/model identities advance for longer than the native recovery
+  # window, but failed transport may not earn an OFF recovery receipt.
+  with patch.object(harness, 'feed', side_effect=unhealthy_feed):
+    for _ in range(80):
+      assert_disabled(harness.step())
+      assert not harness.controls.sm.freq_ok['modelV2']
+      assert tuple(budget.episode_start_ns for budget in budgets) == episodes
+      assert harness.controls.LoC.continuation_reason != INACTIVE_NATIVE_RECOVERY_REASON
+  for _ in range(80):
+    assert_disabled(harness.step())
+  assert_budgets_retired(harness)
+
+
 def test_unresolved_native_failure_still_rejects_set_after_manual_disable():
   harness = fail_then_disable()
   harness.now_ns += 3_100_000_000
@@ -132,7 +159,7 @@ def test_new_failure_after_disabled_recovery_gets_its_own_bounded_deadline():
   assert 2_000_000_000 < harness.selfdrive._longitudinal_soft_disable_remaining_ns <= 3_000_000_000
 
 
-def stopped_handoff():
+def stopped_harness():
   harness = StartupHarness()
   harness.hold()
   # Let the real owner/controller reach holding pressure before introducing
@@ -144,7 +171,11 @@ def stopped_handoff():
       break
   else:
     raise AssertionError(harness.history[-5:])
+  return harness
 
+
+def stopped_handoff():
+  harness = stopped_harness()
   with patch.object(harness.planner.mpc, 'run', side_effect=lambda: harness.planner.mpc.fail(-1)):
     for _ in range(UNSTABLE_DISABLE_NS // CONTROL_STEP_NS + 2 * PLANNER_STEPS):
       row = harness.step()
@@ -158,6 +189,32 @@ def stopped_handoff():
   assert handoff.extended_deadline_ns == handoff.original_deadline_ns + HOLD_EXTRA_NS
   assert handoff.original_deadline_ns <= row['mono'] < handoff.extended_deadline_ns
   return harness
+
+
+@pytest.mark.parametrize('service', ['carOutput', 'pandaStates'])
+def test_unhealthy_execution_frequency_cannot_authorize_stopped_handoff(service):
+  harness = stopped_harness()
+  feed = harness.feed
+
+  def unhealthy_feed(state, messages):
+    feed(state, messages)
+    if state is harness.selfdrive.sm:
+      state.freq_ok[service] = False
+
+  with patch.object(harness, 'feed', side_effect=unhealthy_feed), \
+       patch.object(harness.planner.mpc, 'run', side_effect=lambda: harness.planner.mpc.fail(-1)):
+    for _ in range(UNSTABLE_DISABLE_NS // CONTROL_STEP_NS + 2 * PLANNER_STEPS):
+      row = harness.step()
+      assert not harness.selfdrive.sm.freq_ok[service]
+      assert not row['holding_for_takeover']
+      assert harness.selfdrive.engagement_policy.handoff.extended_deadline_ns == 0
+      episode = harness.selfdrive._longitudinal_failure_budget.episode_start_ns
+      if not row['enabled']:
+        assert row['mono'] == episode + UNSTABLE_DISABLE_NS
+        assert_disabled(row)
+        break
+    else:
+      raise AssertionError(harness.history[-5:])
 
 
 def assert_handoff(row, deadline, stop_accel):

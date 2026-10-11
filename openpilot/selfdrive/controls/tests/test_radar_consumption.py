@@ -264,7 +264,8 @@ def test_pilot_sample_9_extra_future_entry_never_enters_control_or_expiry_risk()
   assert publication - measurement == 307_876_771
   assert consumption - publication == 65_574_531
   assert consumption - measurement == 373_451_302
-  assert _qualified_lead_evidence(expiring, 'brake', now_ns=publication)
+  # The recorded measurement already exceeded the 200 ms lifetime at publication.
+  assert not _qualified_lead_evidence(expiring, 'brake', now_ns=publication)
   assert not qualified_lead(expiring, 'brake', now_ns=publication)
   assert not qualified_lead(expiring, 'brake', now_ns=consumption)
   consumer = RadarConsumption()
@@ -816,7 +817,8 @@ def test_legacy_prediction_is_not_renewed_or_admitted_by_consumption(age_ns):
   before = frame.to_dict()
   consumer = RadarConsumption()
   view = consume_frame(consumer, frame, now=PUBLICATION)
-  assert view is frame and frame.to_dict() == before
+  assert view.to_dict() == frame.to_dict() == before
   for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw'):
     assert not qualified_lead(view.leadOne, purpose, 0.0, now_ns=PUBLICATION)
+    assert not control_leads(view, purpose, 0.0, now_ns=PUBLICATION)
   assert not consumer.expired_identities and not consumer.degraded

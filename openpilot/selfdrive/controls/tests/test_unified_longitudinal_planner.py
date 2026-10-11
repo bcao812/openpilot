@@ -441,13 +441,16 @@ def test_unbound_physical_departure_requires_formal_leads_without_replacing_a_he
   radar = radar_frame(*objects, display=(primary,) if other == 'caution' else tuple(objects))
   identity = None if held == 'none' else (SESSION, 5 if held == 'matching' else 7)
   rejection = departing_lead_rejection(radar, 0.0, .5, now_ns=CONSUMPTION, held_identity=identity, allow_unbound_physical=True)
-  assert (rejection is None) is (held != 'different' and (held == 'matching' or other not in ('stationary', 'occluded')))
+  allowed = held != 'different' and other != 'occluded' and (held == 'matching' or other != 'stationary')
+  assert (rejection is None) is allowed
   if held == 'none':
     assert not has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION)
     if other in ('stationary', 'occluded'):
       assert rejection == ('lead_departure_unqualified', (SESSION, 7))
   elif held == 'different':
     assert rejection == ('held_identity_mismatch', (SESSION, 5))
+  elif other == 'occluded':
+    assert rejection == ('secondary_brake_unqualified', (SESSION, 7))
 
 
 @pytest.mark.parametrize('speed,standstill,consumed', [

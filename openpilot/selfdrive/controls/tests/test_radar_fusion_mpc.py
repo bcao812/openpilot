@@ -250,12 +250,17 @@ def test_legacy_formal_prediction_is_rejected_before_native_solving():
   fresh = object_lead(distance=30.0, speed=2.0, ego_speed=15.0)
   now = EPOCH_NS + 50_000_000
   coast = coast_from(fresh, now)
-  planner = solve(fused_state(display=(coast,)), speed=15.0, now_ns=now, reference_ns=now)
+  planner = LongitudinalMpc()
+  planner.diagnostic_obstacles_enabled = True
+  planner.set_cur_state(15.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+  planner.update(fused_state(display=(coast,)), reference=MpcReference(20.0), now_ns=now, reference_ns=now)
   assert not any(qualified_lead(coast, purpose, 0.0, now_ns=now) for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw'))
-  assert planner.solution_status == -1 and planner.solve_time == 0.0
+  assert planner.solution_status == MPC_INVALID_INPUT and planner.solve_time == 0.0
+  assert planner.diagnostic_solve_calls == 0 and not planner.previous_solution_valid
   assert not planner._diagnostic_problem_installed
   assert planner.crash_cnt == 0 and planner.rest_recovery_position_limit is None
-  assert planner.source_object_identity is None
+  assert planner.source_object_identity is None and planner.object_influence_identities == ()
 
 
 @pytest.mark.parametrize('defect', ['position_expired', 'future_model', 'velocity_invalid', 'nan', 'negative_tau', 'wrong_source'])
@@ -312,9 +317,15 @@ def test_compact_gap_is_not_given_to_an_unqualified_coasting_lead():
   now = EPOCH_NS + 50_000_000
   lead = coast_from(object_lead(distance=6.0, ego_speed=0.0), now)
   reference = MpcReference(None, comfort_stop_distance=3.0, lead_risk_stop_distances=(4.0, 6.0))
-  planner = solve(fused_state(display=(lead,)), speed=0.0, reference=reference, now_ns=now, reference_ns=now)
-  assert planner.solution_status == -1 and not planner._diagnostic_problem_installed
+  planner = LongitudinalMpc()
+  planner.diagnostic_obstacles_enabled = True
+  planner.set_cur_state(0.0, 0.0)
+  planner.set_weights(prev_accel_constraint=False)
+  planner.update(fused_state(display=(lead,)), reference=reference, now_ns=now, reference_ns=now)
+  assert planner.solution_status == MPC_INVALID_INPUT and not planner._diagnostic_problem_installed
+  assert planner.diagnostic_solve_calls == 0 and not planner.previous_solution_valid
   assert planner.rest_recovery_position_limit is None
+  assert planner.object_influence_identities == ()
 
 
 def test_stopped_formal_lead_cannot_be_extrapolated_as_reversing():

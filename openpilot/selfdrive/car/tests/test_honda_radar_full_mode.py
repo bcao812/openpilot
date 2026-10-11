@@ -5,6 +5,7 @@ import pytest
 
 from openpilot.selfdrive.car.honda_radar_observer_config import ObserverSettings, scope_state
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import configuration, state
+from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import UnifiedLongitudinalPlanner
 from openpilot.cereal import log
 
@@ -42,6 +43,7 @@ def test_consumer_scope_exit_uses_untouched_vision_without_mutating_published_ra
   planner = SimpleNamespace(CP=cp, CP_SP=cp_sp, unified=True, dec=SimpleNamespace(enabled=lambda: True))
   consumer = UnifiedLongitudinalPlanner.__new__(UnifiedLongitudinalPlanner)
   consumer.planner = planner
+  consumer.radar_consumption = RadarConsumption()
   consumer.radar_settings = ObserverSettings(True, False, True)
   consumer.refresh_radar_settings = lambda now: None
   published = log.RadarState.new_message(fusionActive=True, mdMonoTime=1_000_000_000)

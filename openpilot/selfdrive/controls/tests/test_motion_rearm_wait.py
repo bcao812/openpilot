@@ -354,7 +354,7 @@ def test_future_failed_header_does_not_poison_the_fresh_recovery_watermark(mode)
 
 
 @pytest.mark.parametrize('fault', ['valid', 'version', 'mode', 'solver', 'nonfinite', 'future', 'backward', 'clock', 'expired'])
-def test_real_fault_while_off_survives_a_healthy_off_packet_and_reentry(mode, fault):
+def test_off_fault_recovery_still_requires_a_new_pair_for_reentry(mode, fault):
   owner = MotionSupervisor()
 
   def off_intent(timestamp):
@@ -391,10 +391,15 @@ def test_real_fault_while_off_survives_a_healthy_off_packet_and_reentry(mode, fa
 
   healthy = off_intent(2_600_000_000)
   sample_step(owner, 2_600_000_000, intent=healthy, active=False)
+  assert owner.inactive_input_valid and not owner._rearm_after_fault
+  assert owner.phase == MotionPhase.OFF and owner._require_new_input
+  # A fresh native input can retire the input fault while OFF. That pair is
+  # now the rearm barrier, so consuming it again cannot authorize motion.
   sample_step(owner, 2_600_000_000, intent=healthy, now_ns=2_612_000_000)
-  assert owner.degraded and not owner.waiting_for_fresh_input
-  assert owner.reasons & StopReason.INVALID
+  assert not owner.degraded and owner.waiting_for_fresh_input
+  assert not owner.reasons & StopReason.INVALID
+  assert owner.phase != MotionPhase.RELEASE
   assert owner._require_new_input
   sample_step(owner, 2_650_000_000, intent=off_intent(2_650_000_000))
   assert not owner.degraded and not owner.waiting_for_fresh_input
-  assert not owner._rearm_after_fault
+  assert not owner._rearm_after_fault and not owner._require_new_input

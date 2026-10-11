@@ -181,25 +181,58 @@ def test_invalid_evidence_cannot_grant_motion_in_unified(mode, standstill, reaso
 
 
 @pytest.mark.parametrize('mode', MOTION_MODES)
-def test_readiness_wait_is_cold_only_and_cannot_rearm_a_used_owner(mode):
+def test_explicit_standby_wait_cannot_disarm_an_active_owner(mode):
   harness = mode_controls(mode)
+  harness.plan.motionIntent.valid = False
   harness.plan.motionIntent.ready = False
+  harness.plan.aTarget = 0.0
   command, motion = harness.step()
   assert not command.longActive
   assert not motion.degraded
   assert motion.phase == 'off'
   assert harness.control.LoC.can_standby
+  harness.plan.motionIntent.valid = True
   harness.plan.motionIntent.ready = True
+  harness.plan.aTarget = 0.5
   command, motion = harness.step()
   assert command.longActive
   assert not motion.degraded
   assert not harness.control.LoC.can_standby
+  harness.plan.motionIntent.valid = False
   harness.plan.motionIntent.ready = False
   command, motion = harness.step()
+  assert command.longActive
   assert motion.degraded
   assert command.actuators.accel <= DEGRADED_ACCEL + 1e-6
   assert not command.cruiseControl.resume
   assert not harness.control.LoC.can_standby
+
+
+@pytest.mark.parametrize('phase', ['cold', 'track', 'hold'])
+def test_unready_valid_plan_cannot_authorize_motion_or_bypass_unavailable_events(phase):
+  harness = mode_controls(LongitudinalMode.UNIFIED)
+  if phase == 'track':
+    harness.step()
+  elif phase == 'hold':
+    harness.hold()
+  harness.plan.motionIntent.ready = False
+  harness.plan.motionIntent.releaseAllowed = True
+  harness.plan.aTarget = 1.0
+  command, motion = harness.step()
+  # valid=True/ready=False is neither executable evidence nor the explicit
+  # valid=False/ready=False standby handshake, even for an unused owner.
+  assert harness.plan.motionIntent.valid
+  assert command.longActive and motion.degraded
+  assert command.actuators.accel <= DEGRADED_ACCEL + 1e-6
+  assert not command.cruiseControl.resume
+  assert motion.reasons & int(StopReason.INVALID)
+  if phase == 'hold':
+    assert motion.phase == 'hold' and motion.resolvedStop
+    assert command.actuators.accel <= -2.0
+  daemon, car_state = selfdrive_event_harness(harness.control.pm.messages['controlsState'])
+  daemon.update_events(car_state)
+  assert log.OnroadEvent.EventName.longitudinalControlUnavailable in daemon.events.names
+  assert daemon.events.contains(ET.NO_ENTRY) and daemon.events.contains(ET.SOFT_DISABLE)
 
 
 @pytest.mark.parametrize('mode', MOTION_MODES)

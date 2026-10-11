@@ -201,11 +201,28 @@ def test_fusion_invalidated_track_cannot_publish_its_old_body():
 
 
 def test_fusion_body_fields_survive_the_wire_roundtrip():
-  from openpilot.selfdrive.car.honda_radar_fusion import HondaRadarFusion
-  from openpilot.selfdrive.car.tests.test_honda_radar_fusion import advance
-  result = advance(HondaRadarFusion(), 0, [_producer_sample(0)])
-  message = custom.HondaRadarObservations.new_message(fusion=result)
-  with custom.HondaRadarObservations.from_bytes(message.to_bytes()) as reader:
-    track = reader.fusion.tracks[0]
-    assert track.bodyValid and track.bodyMonoTime == START
+  from opendbc.can import CANPacker
+  from openpilot.cereal import log
+  from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
+  from openpilot.selfdrive.car.tests.test_honda_radar_observer import SETTINGS, can_message, configuration, scan_frames
+  from openpilot.selfdrive.car.tests.test_honda_radar_shadow import fusion_state
+
+  # Exercise the production decoder/fusion/message boundary with real cereal
+  # model values. The math-only advance fixture carries NumPy path scalars;
+  # converting its output here would skip the actual serialization contract.
+  frames = scan_frames(distance=403, azimuth=1054, velocity=864)
+  frames[3] = CANPacker('honda_bosch_a_radar').make_can_msg(frames[3][0], 2, {
+    'FRAME_IDX': 0, 'TRACK_ID': 1, 'AZIMUTH_EDGE_A_RAW': 1020, 'AZIMUTH_EDGE_B_RAW': 1100,
+  })
+  sm = fusion_state(START)
+  message = HondaRadarObserver(*configuration(), session_id='body-wire').update(
+    [can_message(START, frames)], sm, SETTINGS, START + 1, sm)
+  assert message is not None and message.hondaRadarObservations.fusion.active
+  original, = message.hondaRadarObservations.fusion.tracks
+  expected = {name: getattr(original, name) for name in BODY_DEFAULTS}
+  with log.Event.from_bytes(message.to_bytes()) as reader:
+    assert reader.valid and reader.hondaRadarObservations.fusion.active
+    track, = reader.hondaRadarObservations.fusion.tracks
+    assert {name: getattr(track, name) for name in BODY_DEFAULTS} == expected
+    assert track.bodyValid and track.bodyMonoTime == track.bodyAvailableMonoTime == track.positionMonoTime == START
     assert track.bodyWidth == pytest.approx(track.bodyLeftY - track.bodyRightY)

@@ -177,10 +177,13 @@ class StartupHarness:
       incoming.append(serialized(event.as_builder() if hasattr(event, 'as_builder') else event))
     state.update_msgs(self.now_ns / 1e9, incoming)
     state.updated = dict.fromkeys(state.services, False)
-    # This fixture republishes at the control cadence; average transport rate
-    # is a bounded collaborator, not the failure under test here.
-    if state is self.selfdrive.sm:
-      state.freq_ok['longitudinalPlan'] = state.freq_ok['modelV2'] = True
+    # These received services model their normal transport frequency. Their
+    # average-rate trackers do not describe this synthetic control cadence;
+    # explicit health consumers need the same boundary as all_checks(). Keep
+    # validity, alive status, payloads and source timestamps from real ingestion.
+    # Frequency-fault cases inject their failure after this bounded feed.
+    for event in incoming:
+      state.freq_ok[event.which()] = True
 
   def model_event(self):
     event = new_event('modelV2', self.now_ns)

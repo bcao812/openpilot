@@ -143,6 +143,9 @@ def test_real_scc_cycle_and_reentry_keep_continuous_p_response_history():
 def test_comfortable_curve_holds_entry_speed_and_respects_a_lower_cruise_target(target, expected_source):
   planner, state = make_scc_case(target=target)
   set_curve(state, 0.0035)
+  # vCruise is transported as Float32 km/h; derive the exact expected speed
+  # from that input rather than the pre-serialization m/s fixture argument.
+  cruise_speed = state['carState'].vCruise * CV.KPH_TO_MS
   previous, requests = 0.0, []
   for frame in range(12):
     plan = step(planner, state, frame)
@@ -165,7 +168,7 @@ def test_comfortable_curve_holds_entry_speed_and_respects_a_lower_cruise_target(
       assert planner.scc.vision.output_a_target == 0.0
       assert planner.scc.vision.output_v_target == 20.0
       assert planner.cruise_target.source == expected_source
-      assert planner.cruise_target.speed == min(target, 20.0)
+      assert planner.cruise_target.speed == min(cruise_speed, 20.0)
     else:
       assert planner.cruise_target.source == SPSource.cruise
   if target < 20.0:
