@@ -8,7 +8,7 @@ import pytest
 from openpilot.cereal import log
 from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MEASUREMENT_AGE_NS, lead_identity, qualified_lead
-from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_EPISODE_NS
+from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_EPISODE_NS, candidate_state
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.continuation import STALE_MEASUREMENT_STATUS
 from openpilot.selfdrive.controls.lib.planner_continuation import PlannerContinuation
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import selfdrive_event_harness
@@ -23,6 +23,28 @@ from openpilot.selfdrive.selfdrived.tests.test_continuation_events import observ
 
 MEASURED = START + 100_000_000 - MAX_MEASUREMENT_AGE_NS
 FIRST_STALE = START + 100_000_000
+
+
+class StaleContinuationChain(ContinuationChain):
+  """Supply a physically consistent measured history during the short offer.
+
+  This is an ideal tracking fixture, not a vehicle plant or delivered-effect
+  claim. The separate control-chain tests cover rejecting mismatched history.
+  """
+  def _advance_measured_state(self, timestamp):
+    carry = self.planner.reference_planner.continuation
+    reference = self.planner.reference_timing.pending
+    if carry.offer is not None and reference is not None:
+      speed, accel = candidate_state(carry.offer.candidate, (timestamp - reference.epoch_ns) / 1e9)
+      self.state['carState'].vEgo, self.state['carState'].aEgo = speed, accel
+
+  def produce(self, source_ns, status=0):
+    self._advance_measured_state(source_ns)
+    return super().produce(source_ns, status)
+
+  def consume(self, sample_ns, **kwargs):
+    self._advance_measured_state(sample_ns)
+    return super().consume(sample_ns, **kwargs)
 
 
 def physical_lead(stamp=START + 50_000_000, *, measured_ns=MEASURED, source='radar', **changes):
@@ -88,8 +110,32 @@ def test_unhealthy_fresh_publication_cannot_clear_a_retained_target():
   assert carry.retained_measurements
 
 
+@pytest.mark.parametrize('clearance', ['measured_out', 'other_session', 'stale_publication', 'older_than_occupancy', 'unhealthy'])
+def test_only_a_new_healthy_same_session_measured_out_receipt_clears_known_loss(clearance):
+  carry = PlannerContinuation()
+  old = physical_lead()
+  frame = radar_frame(old, display=(old,))
+  publication = START + 50_000_000
+  assert carry.retain_measurement_loss(frame, publication, active=True, speed=20.0, publication_ns=publication) == ''
+  assert carry.known_measurements
+  now = FIRST_STALE + 50_000_000
+  cleared_ns = now
+  if clearance == 'stale_publication':
+    cleared_ns = now - 250_000_000
+  elif clearance == 'older_than_occupancy':
+    cleared_ns = publication - 1
+  session = 'another-session' if clearance == 'other_session' else old.evidence.sessionId
+  frame = radar_frame(publication=cleared_ns, cleared=(old.evidence.trackId,), session=session)
+  reason = carry.retain_measurement_loss(frame, now, active=True, healthy=clearance != 'unhealthy', speed=20.0,
+                                         publication_ns=cleared_ns)
+  if clearance == 'measured_out':
+    assert reason == '' and not carry.known_measurements and not carry.retained_measurements
+  else:
+    assert carry.known_measurements
+
+
 @contextmanager
-def established_stale_chain(*, source='radar'):
+def established_stale_chain(*, source='radar', braking_limit=-.4):
   """A real native donor and owner under a fixed, modest braking ceiling.
 
   Only DEC's selected mode and the independent ceiling are fixture inputs.
@@ -98,7 +144,7 @@ def established_stale_chain(*, source='radar'):
   """
   for name in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
     Params().put_bool(name, True, block=True)
-  chain = ContinuationChain()
+  chain = StaleContinuationChain()
   chain.state['selfdriveState'].experimentalMode = True
   chain.state['carState'].vCruise = chain.state['carState'].vCruiseCluster = 72.0
   chain.state['modelV2'].action.desiredAcceleration = 0.0
@@ -107,7 +153,7 @@ def established_stale_chain(*, source='radar'):
 
   def braking_ceiling(*args, **kwargs):
     accel, selected_source, override, warning = independent(*args, **kwargs)
-    return min(accel, -.05), selected_source, override, warning
+    return min(accel, braking_limit), selected_source, override, warning
 
   daemon = None
   with patch.object(chain.planner.dec, 'enabled', return_value=True), \
@@ -134,6 +180,18 @@ def established_stale_chain(*, source='radar'):
     assert reference.continuation.donor is not None, chain.planner.mpc.continuation_donor_reason
     assert chain.controls.control.LoC.continuation_donor is not None
     yield chain, daemon
+
+
+def test_nonsteady_donor_tail_keeps_the_original_failure_protection():
+  with established_stale_chain(braking_limit=-.05) as (chain, daemon):
+    failed = chain.produce(FIRST_STALE)
+    carry = chain.planner.reference_planner.continuation
+    assert not failed.longitudinalPlan.continuation.valid
+    assert carry.reason == 'conditioned_donor_terminal_jerk'
+    command, motion, _ = chain.consume(FIRST_STALE)
+    observe_at(daemon, chain, FIRST_STALE)
+    assert motion.degraded and command.actuators.accel <= -.5
+    assert log.OnroadEvent.EventName.longitudinalControlUnavailable in daemon.events.names
 
 
 @pytest.mark.parametrize('source', ['radar', 'fused'])
@@ -234,6 +292,24 @@ def test_first_expired_publication_may_withdraw_the_target_without_erasing_its_l
     assert motion.degraded and not motion.continuationActive
     assert command.actuators.accel <= -.5 and can['BRAKE_REQUEST']
     assert log.OnroadEvent.EventName.longitudinalControlUnavailable in daemon.events.names
+
+
+def test_fresh_measured_out_keeps_normal_planning_after_the_old_measurement_deadline():
+  with established_stale_chain() as (chain, daemon):
+    previous = chain.state['radarState'].leadOne.evidence
+    for offset in (0, 50_000_000):
+      stamp = FIRST_STALE + offset
+      cleared = (previous.trackId,) if offset == 0 else ()
+      chain.state['radarState'] = native_frame(radar_frame(publication=stamp, cleared=cleared, session=previous.sessionId))
+      event = chain.produce(stamp)
+      assert event.valid and event.longitudinalPlan.solverStatus == 0
+      assert not chain.planner.reference_planner.continuation.retained_measurements
+      assert not chain.planner.reference_planner.continuation.known_measurements
+      for tick in range(5):
+        sample = stamp + tick * 10_000_000
+        _, motion, _ = chain.consume(sample)
+        observe_at(daemon, chain, sample)
+        assert not motion.degraded and not daemon.events.names
 
 
 def test_a_new_measurement_of_the_retained_object_restores_normal_planning():

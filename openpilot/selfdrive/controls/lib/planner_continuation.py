@@ -11,7 +11,9 @@ import time
 import numpy as np
 
 from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
-from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MEASUREMENT_AGE_NS, _integer, _read, control_leads, lead_identity, qualified_lead
+from openpilot.selfdrive.controls.lib.lead_qualification import (
+  MAX_MEASUREMENT_AGE_NS, MAX_MODEL_AGE_NS, _integer, _read, control_leads, lead_identity, qualified_lead,
+)
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
   CONTINUATION_STATUSES, CONTINUATION_VERSION, STALE_MEASUREMENT_STATUS,
   ContinuationBudget, ContinuationCandidate, ContinuationDonor as NativeIdentity, ContinuationOffer, inactive_native_recovery,
@@ -47,6 +49,7 @@ class PlannerContinuation:
     # plan. Only new qualified measurements or leaving control clear this.
     self.retained_measurements = {}
     self.known_measurements = {}
+    self.measurement_publications = {}
 
   def begin(self):
     self.offer = None
@@ -110,7 +113,7 @@ class PlannerContinuation:
       measurements[identity] = values
     return measurements
 
-  def retain_measurement_loss(self, radar, now_ns, *, active, healthy=True, speed=0.0):
+  def retain_measurement_loss(self, radar, now_ns, *, active, healthy=True, speed=0.0, publication_ns=None):
     """Retain a loss across publications; absence is not a fresh clearance.
 
     This latch grants no continuation or braking authority. A missing,
@@ -120,11 +123,27 @@ class PlannerContinuation:
     if not active:
       self.retained_measurements.clear()
       self.known_measurements.clear()
+      self.measurement_publications.clear()
       return ''
     if not healthy:
       return 'retained_stale_radar_unhealthy' if self.retained_measurements else ''
     present = {lead_identity(lead): lead for lead in (radar.leadOne, radar.leadTwo)
                if _read(lead, 'present') is True and lead_identity(lead) is not None}
+    model_ns = _read(radar, 'mdMonoTime')
+    if (valid_timestamp(publication_ns) and valid_timestamp(model_ns)
+        and model_ns <= publication_ns <= now_ns and now_ns - model_ns <= MAX_MODEL_AGE_NS
+        and _read(radar, 'fusionHealthy') is True and _read(radar, 'fusionDegraded') is False):
+      # These are producer receipts of a fresh independent measured OUT,
+      # not a generic dropped-track list. Never apply a cached clearance to
+      # a newer occupancy or another radar process/session.
+      session = _read(radar, 'fusionSessionId')
+      cleared = _read(radar, 'fusionClearedTracks', ())
+      for identity in set(self.known_measurements) | set(self.retained_measurements):
+        if (identity not in present and identity[0] == session and identity[1] in cleared
+            and publication_ns > self.measurement_publications.get(identity, now_ns)):
+          self.known_measurements.pop(identity, None)
+          self.retained_measurements.pop(identity, None)
+          self.measurement_publications.pop(identity, None)
     # Remember qualified risk-relevant measurements before they expire. A
     # producer may withdraw the slot directly, without publishing an expired
     # object first. An empty successful plan must not erase that pending loss.
@@ -147,6 +166,7 @@ class PlannerContinuation:
           return 'retained_stale_target_not_refreshed'
         del self.retained_measurements[identity]
         self.known_measurements.pop(identity, None)
+        self.measurement_publications.pop(identity, None)
       elif not _measurement_expired_at(lead, now_ns):
         return 'retained_stale_target_unqualified'
     for identity, lead in present.items():
@@ -162,6 +182,10 @@ class PlannerContinuation:
           self.known_measurements[identity] = values
         else:
           self.known_measurements.pop(identity, None)
+          self.measurement_publications.pop(identity, None)
+      if identity in self.known_measurements or identity in self.retained_measurements:
+        stamp = publication_ns if valid_timestamp(publication_ns) and publication_ns <= now_ns else now_ns
+        self.measurement_publications[identity] = max(stamp, self.measurement_publications.get(identity, 0))
     return ''
 
   @staticmethod

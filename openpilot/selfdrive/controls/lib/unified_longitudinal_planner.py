@@ -668,7 +668,7 @@ class UnifiedLongitudinalPlanner:
     retention_reason = self.continuation.retain_measurement_loss(
       radar, now_ns, active=bool(active and not scope_exit),
       healthy=bool(healthy and getattr(radar, 'fusionHealthy', False) and not getattr(radar, 'fusionDegraded', False)),
-      speed=speed,
+      speed=speed, publication_ns=state.logMonoTime.get('radarState'),
     )
     if self.fusion_admitted:
       clear_session = getattr(radar, 'fusionSessionId', '')

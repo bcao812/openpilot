@@ -294,7 +294,7 @@ def test_each_formal_lead_keeps_its_original_measurement_deadline(slot):
   planner.set_cur_state(8.0, 0.0)
   planner.update(state, reference=MpcReference(10.0), reference_ns=reference, now_ns=now)
   assert planner.solution_status == 4
-  assert planner.continuation_problem.evidence_expiry_ns == EPOCH + 110_000_000
+  assert planner.continuation_problem.evidence_expiry_ns == EPOCH - 90_000_000 + MAX_MEASUREMENT_AGE_NS
   assert len(planner.continuation_problem.lead_trajectories) == 1
 
 

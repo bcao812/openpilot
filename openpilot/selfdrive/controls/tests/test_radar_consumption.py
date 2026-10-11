@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from openpilot.selfdrive.controls.lib.lead_qualification import (
-  MAX_MEASUREMENT_AGE_NS, _qualified_lead_evidence, control_leads,
+  MAX_MEASUREMENT_AGE_NS, MAX_MODEL_AGE_NS, _qualified_lead_evidence, control_leads,
   measurement_expired_since, qualified_lead,
 )
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption, RadarConsumptionView
@@ -603,9 +603,9 @@ def test_native_tick_snapshot_freezes_values_without_caching_qualification():
   assert not qualified_lead(frozen, 'caution', 0.0, now_ns=PUBLICATION)
   raw = native.as_reader().leadOne
   assert frozen.evidence.conflictEnd == raw.evidence.conflictEnd
-  # Only the source measurements expire the ordinary lead; a retired finite
-  # occupancy endpoint cannot shorten or extend their authority.
-  boundary = PUBLICATION + MAX_MEASUREMENT_AGE_NS
+  # The earliest source lease expires the ordinary lead. The retired finite
+  # occupancy endpoint cannot shorten or extend any of those leases.
+  boundary = PUBLICATION + min(MAX_MEASUREMENT_AGE_NS, MAX_MODEL_AGE_NS)
   for candidate in (raw, frozen):
     assert qualified_lead(candidate, 'brake', .95, now_ns=boundary - 1)
     assert qualified_lead(candidate, 'brake', .95, now_ns=boundary)
