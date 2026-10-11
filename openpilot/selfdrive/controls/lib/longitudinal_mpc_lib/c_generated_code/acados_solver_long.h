@@ -71,7 +71,6 @@
 extern "C" {
 #endif
 
-
 // ** capsule for solver data **
 typedef struct long_solver_capsule
 {
@@ -122,6 +121,7 @@ typedef struct long_solver_capsule
 
 
 
+    void * custom_update_memory;
 
 } long_solver_capsule;
 

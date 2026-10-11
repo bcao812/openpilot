@@ -41,8 +41,7 @@
 #include "long_model/long_model.h"
 #include "long_constraints/long_constraints.h"
 #include "long_cost/long_cost.h"
-
-
+#include "interval_rest_update.h"
 
 
 #include "acados_solver_long.h"
@@ -858,6 +857,8 @@ int long_acados_create_with_discretization(long_solver_capsule* capsule, int N, 
 
     // 9) do precomputations
     int status = long_acados_create_9_precompute(capsule);
+    // Initialize custom update function
+    custom_update_init_function(capsule);
 
     return status;
 }
@@ -1057,6 +1058,7 @@ int long_acados_free(long_solver_capsule* capsule)
 {
     // before destroying, keep some info
     const int N = capsule->nlp_solver_plan->N;
+    custom_update_terminate_function(capsule);
     // free memory
     ocp_nlp_solver_opts_destroy(capsule->nlp_opts);
     ocp_nlp_in_destroy(capsule->nlp_in);
@@ -1138,13 +1140,7 @@ void long_acados_print_stats(long_solver_capsule* capsule)
 
 int long_acados_custom_update(long_solver_capsule* capsule, double* data, int data_len)
 {
-    (void)capsule;
-    (void)data;
-    (void)data_len;
-    printf("\ndummy function that can be called in between solver calls to update parameters or numerical data efficiently in C.\n");
-    printf("nothing set yet..\n");
-    return 1;
-
+    return custom_update_function(capsule, data, data_len);
 }
 
 

@@ -54,6 +54,7 @@ OCP_SRC+= long_cost/long_cost_y_hess.c
 OCP_SRC+= long_cost/long_cost_y_e_fun.c
 OCP_SRC+= long_cost/long_cost_y_e_fun_jac_ut_xt.c
 OCP_SRC+= long_cost/long_cost_y_e_hess.c
+OCP_SRC+= interval_rest_update.c
 
 OCP_SRC+= acados_solver_long.c
 OCP_OBJ := $(OCP_SRC:.c=.o)
