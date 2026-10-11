@@ -97,6 +97,36 @@ def test_missing_native_support_is_an_explicit_solver_failure():
   assert not mpc.previous_solution_valid
 
 
+@pytest.mark.parametrize('velocity_residual,accepted', [(0.5e-9, True), (2.0e-9, False)])
+def test_position_roundoff_may_accumulate_but_motion_state_budget_stays_fixed(velocity_residual, accepted):
+  speed, acceleration = CAPTURED_STATES[0]
+  mpc = LongitudinalMpc()
+  mpc.set_weights(prev_accel_constraint=False)
+  mpc.set_cur_state(speed, acceleration)
+  native = mpc.solver
+  observed = Mock(wraps=native)
+
+  def get(stage, field):
+    if field != 'x' or stage == 0:
+      return native.get(stage, field)
+    states, _ = mpc.interval_rest.native_trajectory(T_IDXS)
+    state = states[stage].copy()
+    state[0] += velocity_residual * (T_IDXS[stage] - T_IDXS[1])
+    state[1] = velocity_residual
+    return state
+
+  observed.get.side_effect = get
+  mpc.solver = observed
+  mpc.update(radar_state(), reference=reference(speed))
+  assert mpc.diagnostic_last_solver_return == 0
+  assert mpc.diagnostic_rest_goal['maximumStateCorrection'] > QP_FEASIBILITY_TOL
+  if accepted:
+    assert mpc.solution_status == 0 and mpc.rest_goal_state == 'satisfied'
+    np.testing.assert_array_equal(mpc.x_sol[1:, 1:], 0.0)
+  else:
+    assert mpc.solution_status == MPC_GOAL_UNSATISFIED and not mpc.previous_solution_valid
+
+
 def test_ordinary_update_restores_whole_interval_integration_after_early_rest():
   speed, acceleration = CAPTURED_STATES[0]
   mpc = LongitudinalMpc()

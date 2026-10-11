@@ -1783,15 +1783,29 @@ class LongitudinalMpc:
     durations[0] = event.stop_time
     defects = np.array([self.x_sol[stage+1] - self.integrate_jerk(self.x_sol[stage], self.j_solution[stage], duration)
                         for stage, duration in enumerate(durations)])
-    state_error = float(np.max(np.abs(self.x_sol - states)))
+    state_correction = np.abs(self.x_sol - states)
+    state_error = float(np.max(state_correction))
+    motion_error = float(np.max(state_correction[:, 1:]))
     jerk_effect = float(np.max(np.abs(self.j_solution - jerks) * durations))
     dynamics_error = float(np.max(np.abs(defects)))
+    # A sub-tolerance velocity residual accumulates position error over the
+    # horizon. Propagate the existing component/defect budget through the
+    # same dynamics; it is not a new fixed physical position allowance.
+    # Raw v/a and each jerk's acceleration effect still have a 1e-9 bound.
+    correction_budget = np.empty_like(states)
+    correction_budget[0] = QP_FEASIBILITY_TOL
+    for stage, duration in enumerate(durations):
+      transition = np.array([[1.0, duration, 0.5 * duration**2], [0.0, 1.0, duration], [0.0, 0.0, 1.0]])
+      control = np.array([duration**3 / 6.0, 0.5 * duration**2, duration])
+      correction_budget[stage+1] = (transition @ correction_budget[stage]
+                                    + control * abs(self.j_solution[stage] - jerks[stage]) + QP_FEASIBILITY_TOL)
     failure = ''
     if self.diagnostic_last_solver_return != 0 or self.solution_status != 0:
       failure = 'interval_rest_without_native_success'
     elif not np.all(np.isfinite(self.x_sol)) or not np.all(np.isfinite(self.j_solution)):
       failure = 'interval_rest_nonfinite_native_trajectory'
-    elif max(state_error, jerk_effect, dynamics_error) > QP_FEASIBILITY_TOL:
+    elif (max(motion_error, jerk_effect, dynamics_error) > QP_FEASIBILITY_TOL
+          or np.any(state_correction > correction_budget)):
       failure = 'interval_rest_native_precision_budget_exceeded'
     elif (np.any(states[:, 2] < self.params[:, 0]) or np.any(states[:, 2] > self.params[:, 1])
           or not max(self.params[0, 0], self.params[1, 0]) <= event.acceleration <= min(self.params[0, 1], self.params[1, 1])):
@@ -1815,6 +1829,7 @@ class LongitudinalMpc:
         failure = 'interval_rest_lead_geometry_violated'
     self.diagnostic_rest_goal.update(
       maximumNativeDynamicsDefect=dynamics_error, maximumStateCorrection=state_error,
+      maximumStateCorrectionBudget=np.max(correction_budget, axis=0).tolist(), maximumMotionStateCorrection=motion_error,
       maximumJerkAccelerationCorrection=jerk_effect,
       minimumObservedLeadClearance=minimum_clearance if np.isfinite(minimum_clearance) else None,
     )
