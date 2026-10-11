@@ -10,7 +10,7 @@ from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, DBC
 from opendbc.car.structs import car
-from openpilot.cereal import custom, log
+from openpilot.cereal import custom, log, messaging
 from openpilot.common.realtime import DT_CTRL, DT_MDL
 from openpilot.selfdrive.car.card import Car
 from openpilot.selfdrive.car.car_events import CarEvents
@@ -218,7 +218,18 @@ class StartupHarness:
       events[0].type = ButtonType.cancel if button == 'cancel' else ButtonType.decelCruise
       events[0].pressed = button in ('set_press', 'cancel')
     self.latest['pandaStates'] = self.panda_event()
+
+    make_message = messaging.new_message
+
+    def timed_message(*args, **kwargs):
+      # Receipts and newly published envelopes share this frozen ns clock.
+      # The float-seconds roundtrip can otherwise put publication 1 ns before
+      # consumption. Explicit timestamps remain available for fault cases.
+      kwargs.setdefault('logMonoTime', self.now_ns)
+      return make_message(*args, **kwargs)
+
     with patch('time.monotonic_ns', return_value=self.now_ns), patch('time.monotonic', return_value=self.now_ns / 1e9), \
+         patch('openpilot.cereal.messaging.new_message', new=timed_message), \
          patch('openpilot.selfdrive.car.card.messaging.drain_sock_raw', return_value=[]):
       self.feed(self.card.sm, self.latest)
       state, extension, radar = self.card.state_update()
