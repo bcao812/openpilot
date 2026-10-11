@@ -30,7 +30,7 @@ casadi_constraints = [
   f'{gen}/long_constraints/long_constr_h_fun_jac_uxt_zt.c',
 ]
 
-build_files = [f'{gen}/acados_solver_long.c'] + casadi_model + casadi_cost_y + casadi_cost_e +  \
+build_files = [f'{gen}/acados_solver_long.c', f'{gen}/interval_rest_update.c'] + casadi_model + casadi_cost_y + casadi_cost_e +  \
               casadi_cost_0 + casadi_constraints
 
 # extra generated files used to trigger a rebuild
@@ -44,6 +44,7 @@ generated_files = [
   f'{gen}/acados_sim_solver_long.h',
   f'{gen}/acados_sim_solver_long.c',
   f'{gen}/acados_solver.pxd',
+  f'{gen}/interval_rest_update.h',
 
   f'{gen}/long_model/long_expl_vde_adj.c',
 
@@ -56,6 +57,7 @@ acados_include_dir = Dir(acados.INCLUDE_DIR)
 acados_template_dir = Dir(acados.TEMPLATE_DIR)
 
 source_list = ['long_mpc.py',
+  'interval_rest.py', 'interval_rest_update.c', 'interval_rest_update.h',
   '#openpilot/selfdrive/controls/lib/model_reference.py',
   '#openpilot/selfdrive/modeld/constants.py',
   acados_include_dir.File('acados_c/ocp_nlp_interface.h'),

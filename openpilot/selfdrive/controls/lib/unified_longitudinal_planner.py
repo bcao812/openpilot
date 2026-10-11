@@ -856,6 +856,7 @@ class UnifiedLongitudinalPlanner:
       cruise_speed=None if native_cruise_external else cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
       typed_model=None if ordinary_model_motion else self.model_evidence, allow_future_rest_reschedule=True,
+      allow_interval_rest=True,
       comfort_stop_distance=comfort_distance, lead_risk_stop_distances=lead_risk_distances,
     )
     urgency = 0.0
@@ -903,16 +904,14 @@ class UnifiedLongitudinalPlanner:
     # Eligibility below consumes the current solve's collision warning, never
     # the preceding plan's flag.
     planner.fcw = planner.mpc.crash_cnt > 2 and not car_state.standstill
-    planner.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS, planner.mpc.v_solution)
-    planner.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS, planner.mpc.a_solution)
-    planner.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS[:-1], planner.mpc.j_solution)
+    (planner.v_desired_trajectory, planner.a_desired_trajectory,
+     planner.j_desired_trajectory) = planner.mpc.sample_solution(CONTROL_N_T_IDX)
     planner._observe(actionHorizonKnown=True, actionHorizon=float(delay + DT_MDL))
     # Keep the existing actuator preview and the measured MPC initial state.
     # The accepted trajectory already carries its qualified continuity cost;
     # read it consistently instead of modulating a second inverse with noisy
     # lead estimates. Braking and motion-authority constraints remain separate.
-    self.reference_accel = sample_reference_acceleration(
-      planner.mpc.a_solution, delay + DT_MDL)
+    self.reference_accel = float(planner.mpc.sample_solution(delay + DT_MDL)[1])
     planner._observe(sampledAccelKnown=True, sampledAccel=self.reference_accel)
     if not math.isfinite(self.reference_accel):
       self.invalidate(speed, "nonfinite_sampled_accel")
@@ -953,7 +952,8 @@ class UnifiedLongitudinalPlanner:
     if output < self.reference_accel:
       planner.mpc.source = self.constraint_source
 
-    forward_reference = reference_requests_departure(planner.mpc.v_solution, planner.mpc.a_solution, planner.mpc.j_solution)
+    forward_reference = (planner.mpc.interval_rest is None and
+                         reference_requests_departure(planner.mpc.v_solution, planner.mpc.a_solution, planner.mpc.j_solution))
     low_speed_preference_stop = (planner.mpc.v_solution[-1] < STOP_SPEED
                                 and (should_stop(speed, self.reference_accel) or speed < STOP_SPEED and not forward_reference))
     reasons = StopReason(0)

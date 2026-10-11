@@ -20,6 +20,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.continuation import (
   ContinuationDonor, ContinuationProblem, ContinuationResult, build_candidate, frozen_array, valid_timestamp,
 )
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_MAX_AGE_NS
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.interval_rest import IntervalRest
 
 if __name__ == '__main__':  # generating code
   from acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -117,6 +118,9 @@ class MpcReference:
   # The UNIFIED producer may schedule a witnessed later stop. Direct mathematical
   # callers keep the original source-goal contract unless they explicitly opt in.
   allow_future_rest_reschedule: bool = False
+  # Only the UNIFIED producer opts into a braking/rest switch inside interval
+  # zero. Its consumer samples that same piecewise trajectory explicitly.
+  allow_interval_rest: bool = False
   # These explicit targets apply only to real leads. Virtual cruise/model
   # obstacles retain STOP_DISTANCE, as do callers that omit these fields.
   # Qualification for a compact stationary gap belongs to the producer.
@@ -341,6 +345,9 @@ def gen_long_ocp():
   ocp.solver_options.tf = Tf
   ocp.solver_options.shooting_nodes = T_IDXS
 
+  ocp.solver_options.custom_update_filename = 'interval_rest_update.c'
+  ocp.solver_options.custom_update_header_filename = 'interval_rest_update.h'
+
   ocp.code_export_directory = EXPORT_DIR
   return ocp
 
@@ -349,6 +356,7 @@ class LongitudinalMpc:
   def __init__(self, dt=DT_MDL):
     self.dt = dt
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
+    self._native_first_interval = float(T_IDXS[1])
     self.diagnostic_solve_calls = 0
     self.diagnostic_reset_calls = 0
     self.diagnostic_last_solver_return = None
@@ -443,6 +451,7 @@ class LongitudinalMpc:
     self.last_solver_status = 0
     self.failure_reason = ''
     self.rest_goal = None
+    self.interval_rest = None
     self.rest_goal_state = 'none'
     self.rest_goal_reason = ''
     self.rest_goal_braking_accel = None
@@ -484,6 +493,7 @@ class LongitudinalMpc:
     """Drop UNIFIED reference provenance without moving the consumer clock."""
     self._reference_epoch_ns = None
     self._reference_acceleration = None
+    self._reference_interval_rest = None
     self._reference_pending_ns = None
     self._reference_pending_solved = False
 
@@ -496,6 +506,7 @@ class LongitudinalMpc:
     """
     epoch_ns = self._reference_epoch_ns
     acceleration = self._reference_acceleration
+    interval_rest = self._reference_interval_rest
     self.invalidate_reference_history()
     self.a_prev = np.zeros_like(self.a_solution)
     if (not isinstance(now_ns, Integral) or isinstance(now_ns, bool)
@@ -513,7 +524,8 @@ class LongitudinalMpc:
     if (not 0.0 < elapsed or weighted_times[-1] + elapsed > T_IDXS[-1]
         or acceleration.shape != T_IDXS.shape or not np.all(np.isfinite(acceleration))):
       return False
-    self.a_prev = np.interp(T_IDXS + elapsed, T_IDXS, acceleration)
+    self.a_prev = (interval_rest.sample(T_IDXS + elapsed)[0][:, 2] if interval_rest is not None else
+                   np.interp(T_IDXS + elapsed, T_IDXS, acceleration))
     return True
 
   def mark_reference_history(self, *, valid):
@@ -528,6 +540,7 @@ class LongitudinalMpc:
     # The next native solve overwrites x_sol, which backs a_solution. Preserve
     # this accepted reference rather than dating a later/failed solve as it.
     self._reference_acceleration = self.a_solution.copy()
+    self._reference_interval_rest = self.interval_rest
     return True
 
   def _capture_continuation_problem(self, *, reference_ns, now_ns, fusion_active):
@@ -779,7 +792,7 @@ class LongitudinalMpc:
     return lead_xv
 
   @staticmethod
-  def lead_clearance_minimum(trajectory, states, jerks):
+  def lead_clearance_minimum(trajectory, states, jerks, *, times=T_IDXS):
     """Continuous clearance of an ordinary lead for continuation admission.
 
     The lead uses the same forward-only motion samples as process_lead, with
@@ -788,7 +801,7 @@ class LongitudinalMpc:
     of relative velocity inside each native interval.
     """
     minimum = float('inf')
-    for stage, duration in enumerate(np.diff(T_IDXS)):
+    for stage, duration in enumerate(np.diff(times)):
       lead_position = trajectory[stage, 0]
       lead_velocity = (trajectory[stage+1, 0] - lead_position) / duration
       position, velocity, acceleration = states[stage]
@@ -1409,6 +1422,11 @@ class LongitudinalMpc:
     if node is None:
       node = self.rest_goal.native_node if self.rest_goal is not None else 0
     future = (self.rest_goal_state == 'constrained' or self.effective_rest_state == 'constrained') and node > 0
+    # The interval-rest ramp ends at exact v=a=0, then holds. Its shorter
+    # native integration and independent event-aware acceptance replace the
+    # whole-interval Bernstein rows, which would describe a different curve.
+    if self.interval_rest is not None:
+      future = False
     # Future rest ends the entering interval at a<=0. Its velocity is monotone
     # or concave, so the minimum is an endpoint. Later intervals have both
     # accelerations <=0 and are monotone. Node v>=0 certifies these intervals
@@ -1495,6 +1513,7 @@ class LongitudinalMpc:
     if typed is not None and not isinstance(typed, ModelReferenceEvidence):
       raise ValueError('Invalid typed model reference')
     self.rest_goal = typed.rest_goal if typed is not None else None
+    self.interval_rest = None
     self.rest_goal_state = 'none'
     self.rest_goal_reason = ''
     self.rest_goal_braking_accel = None
@@ -1584,6 +1603,8 @@ class LongitudinalMpc:
 
     if self.rest_goal is not None:
       goal = self.rest_goal
+      if type(reference.allow_interval_rest) is not bool:
+        raise ValueError('Invalid interval-rest selection')
       minimum_accel = float(np.min(np.broadcast_to(accel_min, (N+1,))))
       nominal_distance = float(self.x0[1]**2 / (-2.0 * minimum_accel)) if minimum_accel < 0.0 else float('inf')
       self.diagnostic_rest_goal = {
@@ -1598,6 +1619,17 @@ class LongitudinalMpc:
       }
       if goal.native_node is None or not 0 <= goal.native_node <= N or goal.native_time_s != T_IDXS[goal.native_node]:
         self.rest_goal_state, self.rest_goal_reason = 'unverified', 'rest_goal_outside_native_horizon'
+      elif (reference.allow_interval_rest and qualified and goal.native_node > 0
+            and (early_rest := IntervalRest.from_state(self.x0, float(T_IDXS[1]), goal.native_time_s)) is not None
+            and np.all(self.params[:, 0] <= 0.0) and np.all(self.params[:, 1] >= 0.0)
+            and max(self.params[0, 0], self.params[1, 0]) <= self.x0[2] <= min(self.params[0, 1], self.params[1, 1])):
+        self.interval_rest = early_rest
+        self.rest_goal_state = 'constrained'
+        self.diagnostic_rest_goal.update(
+          trajectoryKind='interval_rest', stopTime=early_rest.stop_time,
+          firstMotionDuration=early_rest.stop_time, firstHoldDuration=float(T_IDXS[1]) - early_rest.stop_time,
+          sourceGoalUnchanged=True,
+        )
       elif goal.native_node == 0 and (self.x0[1] < 0.0 or np.max(np.abs(self.x0[1:])) > REST_STATE_TOL):
         self.rest_goal_state, self.rest_goal_reason = 'infeasible', 'rest_goal_due_with_nonrest_initial_state'
       elif goal.native_node == 0 and (resting_primal := self.due_rest_primal(self.x0)) is None:
@@ -1646,7 +1678,7 @@ class LongitudinalMpc:
         scheduled_primal = self.schedule_future_rest()
 
       if self.rest_goal_state == 'constrained' or scheduled_primal is not None:
-        node = self.effective_rest_node if scheduled_primal is not None else goal.native_node
+        node = 1 if self.interval_rest is not None else self.effective_rest_node if scheduled_primal is not None else goal.native_node
         if scheduled_primal is not None:
           # A scheduled destination has a complete checked witness. Retain its
           # acceleration envelope on every future interval; nominal short-rest
@@ -1657,7 +1689,17 @@ class LongitudinalMpc:
         # A raw zero goal survives the anchored moving preference unchanged.
         # Rescheduling a constraint does not move the source's desired stop.
         self.params[goal.native_node:, MODEL_V_REF:MODEL_A_REF + 1] = 0.0
-        if node == 0:
+        if self.interval_rest is not None:
+          # Exact rest at the event is required to omit the remaining motion
+          # integration. Never use the wider rest box to discard real travel.
+          self.params[1:, MODEL_V_REF:MODEL_A_REF + 1] = 0.0
+          states, jerks = self.interval_rest.native_trajectory(T_IDXS)
+          for stage in range(N+1):
+            self.solver.set(stage, 'x', states[stage])
+            if stage < N:
+              self.solver.set(stage, 'u', np.array([jerks[stage]]))
+          self.diagnostic_rest_goal.update(nativeVelocityBounds=[0.0, 0.0], nativeAccelerationBounds=[0.0, 0.0])
+        elif node == 0:
           # Within the existing rest acceptance precision, exact endpoint
           # v=a=0 is generally unreachable from a nonzero fixed initial state:
           # a_1=0 implies v_1=v_0+a_0*dt/2 for this constant-jerk model.
@@ -1717,9 +1759,89 @@ class LongitudinalMpc:
     self.diagnostic_reference_weights = weights.copy()
     self.diagnostic_reference_bounds = (lower.copy(), upper.copy())
 
+  def sample_solution(self, times):
+    """Sample the accepted motion, including the interval-zero rest event."""
+    if self.interval_rest is not None:
+      if self.solution_status != 0 or self.rest_goal_state != 'satisfied':
+        raise ValueError('Cannot sample an unaccepted interval-rest trajectory')
+      states, jerk = self.interval_rest.sample(times)
+      return states[..., 1], states[..., 2], jerk
+    return (np.interp(times, T_IDXS, self.v_solution), np.interp(times, T_IDXS, self.a_solution),
+            np.interp(times, T_IDXS[:-1], self.j_solution))
+
+  def check_interval_rest_goal(self):
+    """Verify a real native solve before publishing the braking/hold curve.
+
+    The zero endpoint determines this ramp uniquely. Only numerical defects
+    within the existing 1e-9 budget may be removed; a successful native return,
+    geometry and acceleration checks remain mandatory. The public clock and
+    the measured initial state never move to the end of the prefix.
+    """
+    event = self.interval_rest
+    states, jerks = event.native_trajectory(T_IDXS)
+    durations = np.diff(T_IDXS)
+    durations[0] = event.stop_time
+    defects = np.array([self.x_sol[stage+1] - self.integrate_jerk(self.x_sol[stage], self.j_solution[stage], duration)
+                        for stage, duration in enumerate(durations)])
+    state_error = float(np.max(np.abs(self.x_sol - states)))
+    jerk_effect = float(np.max(np.abs(self.j_solution - jerks) * durations))
+    dynamics_error = float(np.max(np.abs(defects)))
+    failure = ''
+    if self.diagnostic_last_solver_return != 0 or self.solution_status != 0:
+      failure = 'interval_rest_without_native_success'
+    elif not np.all(np.isfinite(self.x_sol)) or not np.all(np.isfinite(self.j_solution)):
+      failure = 'interval_rest_nonfinite_native_trajectory'
+    elif max(state_error, jerk_effect, dynamics_error) > QP_FEASIBILITY_TOL:
+      failure = 'interval_rest_native_precision_budget_exceeded'
+    elif (np.any(states[:, 2] < self.params[:, 0]) or np.any(states[:, 2] > self.params[:, 1])
+          or not max(self.params[0, 0], self.params[1, 0]) <= event.acceleration <= min(self.params[0, 1], self.params[1, 1])):
+      failure = 'interval_rest_acceleration_envelope_violated'
+    elif event.stop_time > self.rest_goal.native_time_s:
+      failure = 'interval_rest_misses_source_goal'
+    times, expanded_states, expanded_jerks = event.expanded_trajectory(T_IDXS)
+    minimum_clearance = float('inf')
+    if not failure:
+      # Keep observed lead geometry, including the portion between the event
+      # and public node one. The native soft headway cost remains unchanged.
+      for trajectory in self._lead_trajectories:
+        if trajectory.shape != (N+1, 2) or not np.all(np.isfinite(trajectory)):
+          failure = 'interval_rest_invalid_lead_geometry'
+          break
+        expanded_lead = np.column_stack((np.interp(times, T_IDXS, trajectory[:, 0]),
+                                         np.interp(times, T_IDXS, trajectory[:, 1])))
+        minimum_clearance = min(minimum_clearance, self.lead_clearance_minimum(
+          expanded_lead, expanded_states, expanded_jerks, times=times))
+      if minimum_clearance < CRASH_DISTANCE:
+        failure = 'interval_rest_lead_geometry_violated'
+    self.diagnostic_rest_goal.update(
+      maximumNativeDynamicsDefect=dynamics_error, maximumStateCorrection=state_error,
+      maximumJerkAccelerationCorrection=jerk_effect,
+      minimumObservedLeadClearance=minimum_clearance if np.isfinite(minimum_clearance) else None,
+    )
+    if failure:
+      self.rest_goal_state, self.rest_goal_reason = 'unsatisfied', failure
+      self.solution_status = MPC_GOAL_UNSATISFIED
+      self.rest_goal_braking_accel = float(np.min(self.params[:, 0]))
+      self.failure_reason = failure
+      self.previous_solution_valid = False
+      self.invalidate_reference_history()
+    else:
+      self.x_sol[:] = states
+      self.u_sol[:, 0] = jerks
+      self.rest_goal_state, self.rest_goal_reason = 'satisfied', ''
+      self.rest_goal_braking_accel = None
+      self.failure_reason = ''
+      self.a_prev = event.sample(T_IDXS + self.dt)[0][:, 2]
+      self.diagnostic_rest_goal.update(maximumRestStateError=0.0, minimumContinuousVelocity=0.0,
+                                       intervalRestVerified=True)
+    self.diagnostic_rest_goal.update(state=self.rest_goal_state, reason=self.rest_goal_reason)
+
   def check_rest_goal(self):
     """Judge the original source goal; scheduling never changes this contract."""
     if self.rest_goal is None:
+      return
+    if self.interval_rest is not None:
+      self.check_interval_rest_goal()
       return
     if self.rest_goal_state in ('infeasible', 'unverified'):
       self.solution_status = MPC_GOAL_INFEASIBLE
@@ -2069,7 +2191,9 @@ class LongitudinalMpc:
   def _failure_constraint_summary(self):
     result = {'problemInstalled': self._diagnostic_problem_installed, 'restGoalState': self.rest_goal_state,
               'restGoalNode': self._failure_scalar(getattr(self.rest_goal, 'native_node', None)),
-              'effectiveRestNode': self._failure_scalar(self.effective_rest_node)}
+              'effectiveRestNode': self._failure_scalar(self.effective_rest_node),
+              'intervalRestTime': self._failure_scalar(getattr(self.interval_rest, 'stop_time', None)),
+              'nativeFirstMotionDuration': self._failure_scalar(self._native_first_interval)}
     if not self._diagnostic_problem_installed:
       return result  # A partly constructed problem must not describe old rows as current.
     stages = [stage for stage, (C, D, _, _) in enumerate(self._rest_constraint_buffers) if np.any(C) or np.any(D)]
@@ -2197,9 +2321,15 @@ class LongitudinalMpc:
     self.solver.constraints_set(0, "ubx", self.x0)
 
     solve_started_t = time.monotonic()
-    stage = 'native_solve'
+    stage = 'native_interval_update'
     try:
       self.diagnostic_last_solver_return = None
+      duration = self.interval_rest.stop_time if self.interval_rest is not None else float(T_IDXS[1])
+      if duration != self._native_first_interval:
+        if self.solver.custom_update(np.array([1.0, duration])) != 0:
+          raise RuntimeError('MPC artifact does not support interval-rest integration')
+        self._native_first_interval = duration
+      stage = 'native_solve'
       self.diagnostic_solve_calls += 1
       self.solution_status = int(self.solver.solve())
       self.diagnostic_last_solver_return = self.solution_status
@@ -2237,3 +2367,13 @@ class LongitudinalMpc:
 if __name__ == "__main__":
   ocp = gen_long_ocp()
   AcadosOcpSolver.generate(ocp, json_file=JSON_FILE)
+  # This vendored template calls the custom hook without returning its int.
+  # Propagate it so Python can reject an incompatible or failed native update.
+  solver_source = os.path.join(EXPORT_DIR, 'acados_solver_long.c')
+  with open(solver_source) as source:
+    generated = source.read()
+  missing_return = '    custom_update_function(capsule, data, data_len);'
+  if generated.count(missing_return) != 1:
+    raise RuntimeError('Unexpected acados custom-update template; verify status propagation')
+  with open(solver_source, 'w') as source:
+    source.write(generated.replace(missing_return, '    return custom_update_function(capsule, data, data_len);'))
