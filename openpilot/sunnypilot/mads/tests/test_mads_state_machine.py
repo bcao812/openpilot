@@ -48,12 +48,16 @@ class TestMADSStateMachine(OpenpilotTestCase):
   def setup_method(self):
     mocker = self._fixture("mocker")
     # Synthetic event 0 must not replace the real lkasEnable for later tests.
-    mocker.patch.dict(EVENTS_SP, {})
+    self._original_events = EVENTS_SP.copy()
     self.mads = MockMADS(mocker)
     self.state_machine = StateMachine(self.mads)
     self.events = self.mads.selfdrive.events
     self.events_sp = self.mads.selfdrive.events_sp
     self.state_machine.soft_disable_timer = int(SOFT_DISABLE_TIME / DT_CTRL)
+
+  def teardown_method(self):
+    EVENTS_SP.clear()
+    EVENTS_SP.update(self._original_events)
 
   def clear_events(self):
     self.events.clear()

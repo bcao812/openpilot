@@ -266,9 +266,20 @@ def test_controlsd_does_not_latch_a_temporary_eps_fault(controls_harness):
 
 
 def test_controlsd_keeps_an_existing_stop_while_the_eps_takeover_is_latched(controls_harness):
+  from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
+
   harness = controls_harness
   assert harness.step()[0].latActive
-  harness.hold()
+  # This owner is already tracking. Establish HOLD through the normal stopping
+  # ramp instead of the helper's cold-OFF immediate-hold assumption.
+  harness.car_state.vEgo = 0.0
+  harness.car_state.standstill = True
+  harness.car_state.cruiseState.standstill = True
+  harness.plan.aTarget = -0.1
+  harness.plan.motionIntent.reasons = int(StopReason.MPC)
+  for _ in range(150):
+    command, motion = harness.step()
+  assert command.actuators.accel == -2.0 and motion.phase == 'hold'
   harness.car_state.steerFaultPermanent = True
   command, motion = harness.step()
   assert harness.control.lateral_takeover.latched
