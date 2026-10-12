@@ -16,6 +16,9 @@ from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import low_sp
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_mpc_problem_contract import NativeProblemRecorder
+from openpilot.selfdrive.controls.tests.test_radar_fusion_mpc import (
+  EPOCH_NS, action, advance as advance_lead, fused_state, object_lead,
+)
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
 
 
@@ -118,3 +121,40 @@ def test_nonfinite_measured_state_still_fails_before_native_solve(value):
     mpc.update(radar_state(), reference=MpcReference(20.0))
   assert mpc.solution_status == MPC_INVALID_INPUT
   native.solve.assert_not_called()
+
+
+@pytest.mark.parametrize('speed_kph', [20.0, 60.0, 80.0, 90.0, 100.0])
+@pytest.mark.parametrize('lead_slot', [0, 1])
+def test_formal_target_identity_switch_retains_immediate_braking_with_short_standard_time(speed_kph, lead_slot):
+  speed = speed_kph * CV.KPH_TO_MS
+  mpc = LongitudinalMpc(speed_based_following=True)
+  mpc.set_cur_state(speed, 0.0)
+  reference = MpcReference(speed + 5.0)
+  original = object_lead(1, distance=6.0 + 1.45 * speed + 8.0, speed=speed, ego_speed=speed)
+  for frame in range(6):
+    stamp = EPOCH_NS + frame * 50_000_000
+    advance_lead(original, stamp)
+    previous = mpc.prepare_reference_history(stamp, valid=frame > 0)
+    mpc.set_weights(previous, personality=STANDARD)
+    mpc.update(fused_state(display=(original,)), personality=STANDARD, reference=reference,
+               now_ns=stamp, reference_ns=stamp)
+    assert mpc.solution_status == 0
+  assert action(mpc) > 0.0
+  assert mpc.source_object_identity == ('radar-test', 1)
+
+  stamp += 50_000_000
+  advance_lead(original, stamp)
+  replacement = object_lead(2, distance=.75 * (6.0 + 1.25 * speed), speed=speed - 4.0,
+                            ego_speed=speed, acceleration=-1.0, epoch=stamp)
+  replacement.evidence.generation = 1
+  radar = fused_state(display=(replacement,) if lead_slot == 0 else (original, replacement))
+  previous = mpc.prepare_reference_history(stamp, valid=True)
+  mpc.set_weights(previous, personality=STANDARD)
+  mpc.update(radar, personality=STANDARD, reference=reference, now_ns=stamp, reference_ns=stamp)
+  assert mpc.solution_status == 0
+  assert mpc.source_object_identity == ('radar-test', 2)
+  assert ('radar-test', 2) in mpc.object_influence_identities
+  assert action(mpc) < 0.0
+  np.testing.assert_allclose(mpc.params[:, 4], get_T_FOLLOW(STANDARD, v_ego=speed))
+  np.testing.assert_array_equal(mpc.params[:, 5], LEAD_DANGER_FACTOR)
+  assert np.min(mpc.a_solution[:-1]) >= -3.5 - 1e-3
