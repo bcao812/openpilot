@@ -148,7 +148,7 @@ def get_lead_approach_urgency(v_ego: float, radar_state, actuator_delay: float, 
   if isinstance(personality, (bool, np.bool_)):
     return 0.0
   try:
-    t_follow = get_T_FOLLOW(personality)
+    t_follow = get_T_FOLLOW(personality, v_ego=v_ego)
   except NotImplementedError:
     return 0.0
   safe_ego_distance = get_safe_obstacle_distance(v_ego, t_follow)
@@ -286,7 +286,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
   def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, trace=None, diagnostics=None):
     self.CP = CP
     self.CP_SP = CP_SP
-    self.mpc = LongitudinalMpc(dt=dt)
+    self.longitudinal_mode = resolve_longitudinal_mode(CP, CP_SP)
+    self.unified = self.longitudinal_mode == LongitudinalMode.UNIFIED
+    self.mpc = LongitudinalMpc(dt=dt, speed_based_following=self.unified)
     LongitudinalPlannerSP.__init__(self, self.CP, CP_SP, self.mpc)
     self.fcw = False
     self.dt = dt
@@ -297,9 +299,6 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.observation_attempt = None
     self.observation_result = None
     self._radar_publication = None
-    self.longitudinal_mode = resolve_longitudinal_mode(CP, CP_SP)
-    self.unified = self.longitudinal_mode == LongitudinalMode.UNIFIED
-
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
     self.pitch_bias = PitchBiasEstimator(self.dt)
     self._passive_input_times = dict.fromkeys(PASSIVE_PITCH_INPUTS, 0)

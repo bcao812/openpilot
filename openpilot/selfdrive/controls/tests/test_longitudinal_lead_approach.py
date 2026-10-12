@@ -70,7 +70,7 @@ def test_recorded_approach_geometry_is_eligible_before_the_target_has_started_br
 @pytest.mark.parametrize('personality', PERSONALITIES)
 def test_weight_blends_between_existing_comfort_and_danger_geometry(personality):
   speed, closing, delay = 20.0, 5.0, 0.5
-  safe = get_safe_obstacle_distance(speed, get_T_FOLLOW(personality))
+  safe = get_safe_obstacle_distance(speed, get_T_FOLLOW(personality, v_ego=speed))
   lead_stop = get_stopped_equivalence_factor(speed - closing)
   danger, comfort = LEAD_DANGER_FACTOR * safe - lead_stop, safe - lead_stop
   reservation = closing * (delay + DT_MDL)
@@ -86,7 +86,9 @@ def test_weight_blends_between_existing_comfort_and_danger_geometry(personality)
 def test_more_relaxed_personality_responds_earlier_at_the_same_geometry():
   radar = approach_radar(20.0, 65.0, 5.0)
   values = [urgency(radar, 20.0, personality=personality) for personality in PERSONALITIES]
-  assert 0.0 < values[0] < values[1] < values[2] < 1.0
+  # Standard shares the short geometric target below 80 km/h; its separate
+  # acceleration/jerk weights still differ from aggressive.
+  assert 0.0 < values[0] == values[1] < values[2] < 1.0
 
 
 @pytest.mark.parametrize('speed,expected', [(5.0, 0.0), (7.5, 0.5), (10.0, 1.0)])
@@ -216,7 +218,7 @@ def test_warm_approach_reduces_installed_native_history_cost_only(speed, gap, cl
     assert planner.mpc.solution_status == 0
     assert planner.mpc.x0[1] == state['carState'].vEgo
     assert np.all(planner.mpc.params[:, 5] == LEAD_DANGER_FACTOR)
-    assert np.all(planner.mpc.params[:, 4] == get_T_FOLLOW(state['selfdriveState'].personality))
+    assert np.all(planner.mpc.params[:, 4] == get_T_FOLLOW(state['selfdriveState'].personality, v_ego=speed))
     assert np.min(planner.mpc.params[:, 0]) == -3.5
     assert -3.5 <= planner.output_a_target <= 2.0
     assert state['radarState'].to_dict() == before

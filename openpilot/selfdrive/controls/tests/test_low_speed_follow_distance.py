@@ -174,7 +174,8 @@ def test_unified_producer_selects_comfort_distance_without_changing_personality(
   assert planner.unified
   assert planner.mpc.solution_status == 0
   assert update.call_args.kwargs['reference'].comfort_stop_distance == pytest.approx(distance)
-  np.testing.assert_array_equal(planner.mpc.params[:, 4], np.full(N+1, follow_time))
+  expected_time = 1.25 if personality == log.LongitudinalPersonality.standard else follow_time
+  np.testing.assert_array_equal(planner.mpc.params[:, 4], np.full(N+1, expected_time))
   # No real lead: the virtual cruise geometry keeps its original base.
   np.testing.assert_array_equal(planner.mpc.params[:, COMFORT_STOP_DISTANCE], 6.0)
 

@@ -159,11 +159,24 @@ def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
     raise NotImplementedError("Longitudinal personality not supported")
 
 
-def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
+def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, *, v_ego=None):
+  """Select headway; a measured speed opts standard into the UNIFIED policy.
+
+  Static/code-generation and legacy callers retain the nominal personality
+  value. Runtime consumers of the speed policy share one value for the whole
+  horizon, including comfort, risk and virtual-obstacle geometry.
+  """
+  if v_ego is not None and (not isinstance(v_ego, Real) or isinstance(v_ego, (bool, np.bool_)) or not np.isfinite(v_ego)):
+    raise ValueError("Invalid following-policy speed")
   if personality==log.LongitudinalPersonality.relaxed:
     return 1.75
   elif personality==log.LongitudinalPersonality.standard:
-    return 1.45
+    if v_ego is None:
+      return 1.45
+    # Full shortening through 80 km/h, with zero slope at both ends of the
+    # 80--100 km/h transition. Keep the standard acceleration/jerk weights.
+    blend = float(np.clip((v_ego - 80.0 / 3.6) / (20.0 / 3.6), 0.0, 1.0))
+    return 1.25 + 0.20 * blend * blend * (3.0 - 2.0 * blend)
   elif personality==log.LongitudinalPersonality.aggressive:
     return 1.25
   else:
@@ -356,8 +369,9 @@ def gen_long_ocp():
 
 
 class LongitudinalMpc:
-  def __init__(self, dt=DT_MDL):
+  def __init__(self, dt=DT_MDL, *, speed_based_following=False):
     self.dt = dt
+    self.speed_based_following = speed_based_following
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self._native_first_interval = float(T_IDXS[1])
     self.diagnostic_solve_calls = 0
@@ -2017,7 +2031,6 @@ class LongitudinalMpc:
     self.effective_rest_reason = ''
     self.rest_recovery_position_limit = None
     self.diagnostic_rest_goal = None
-    t_follow = get_T_FOLLOW(personality)
     self.solve_time = 0.0
 
     if retained_loss_reason is not None:
@@ -2026,6 +2039,7 @@ class LongitudinalMpc:
     if not np.all(np.isfinite(self.x0)):
       self.fail(MPC_INVALID_INPUT, stage='initial_state', detail='Nonfinite initial state')
       return
+    t_follow = get_T_FOLLOW(personality, v_ego=self.x0[1] if self.speed_based_following else None)
     fusion_active = bool(getattr(radarstate, 'fusionActive', False))
     stale_permitted = getattr(radarstate, 'fusionActive', False) is True and allow_stale_prediction is True
     if fusion_active != self._was_fusion_active:
