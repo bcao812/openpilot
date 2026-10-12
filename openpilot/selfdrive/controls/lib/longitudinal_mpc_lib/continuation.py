@@ -13,8 +13,7 @@ import numpy as np
 
 
 MAX_DONOR_SOURCE_AGE_NS = 200_000_000
-MAX_STALE_PREDICTION_NS = 100_000_000
-STALE_MEASUREMENT_STATUS = -7
+STALE_MEASUREMENT_STATUS = -7  # Retired wire status; never an eligible continuation input.
 TERMINAL_ACCEL_TOL = 1e-3  # m/s^2; eligibility, not a relaxed acceptance bound
 TERMINAL_JERK_TOL = 1e-3  # m/s^3
 DONOR_CAP_TOL = 1e-9  # same strict physical precision as the MPC candidate checks
@@ -43,9 +42,6 @@ class ContinuationProblem:
   linear_constraints: tuple
   lead_trajectories: tuple
   stop_required: bool
-  # A separate, fixed lease for an explicitly admitted stale-measurement
-  # hypothesis. Zero keeps old/manual problems ineligible for this mode.
-  prediction_expiry_ns: int = 0
 
 
 @dataclass(frozen=True)
@@ -84,7 +80,7 @@ class ContinuationResult:
   donor_max_braking_relaxation: float = 0.0
 
 
-def build_candidate(donor, problem, *, now_ns, times, integrate, validate, allow_stale_prediction=False):
+def build_candidate(donor, problem, *, now_ns, times, integrate, validate):
   """Shift acceleration, then integrate once from the current measured x0.
 
   The native grids before/after elapsed time have different jerk boundaries.
@@ -98,17 +94,11 @@ def build_candidate(donor, problem, *, now_ns, times, integrate, validate, allow
   if (not isinstance(donor, ContinuationDonor) or not isinstance(problem, ContinuationProblem)
       or not isinstance(donor.problem, ContinuationProblem)):
     return ContinuationResult(False, 'missing_donor_or_current_problem')
-  if not isinstance(allow_stale_prediction, bool):
-    return ContinuationResult(False, 'invalid_stale_prediction_mode')
   clocks = (now_ns, donor.source_ns, donor.producer_ns, donor.instance_ns,
             problem.reference_ns, problem.consumed_ns, problem.evidence_expiry_ns, donor.problem.evidence_expiry_ns)
-  if allow_stale_prediction:
-    clocks += (problem.prediction_expiry_ns, donor.problem.prediction_expiry_ns)
   if not all(valid_timestamp(value) for value in clocks):
     return ContinuationResult(False, 'invalid_continuation_clock')
-  current_expiry = problem.prediction_expiry_ns if allow_stale_prediction else problem.evidence_expiry_ns
-  donor_expiry = donor.problem.prediction_expiry_ns if allow_stale_prediction else donor.problem.evidence_expiry_ns
-  deadline = min(int(current_expiry), int(donor_expiry),
+  deadline = min(int(problem.evidence_expiry_ns), int(donor.problem.evidence_expiry_ns),
                  int(donor.source_ns) + MAX_DONOR_SOURCE_AGE_NS)
   common = dict(evidence_expiry_ns=deadline, donor_source_ns=int(donor.source_ns),
                 donor_producer_ns=int(donor.producer_ns), donor_instance_ns=int(donor.instance_ns),
@@ -125,17 +115,6 @@ def build_candidate(donor, problem, *, now_ns, times, integrate, validate, allow
     return reject('continuation_evidence_expired')
   if donor.problem.reference_ns != donor.source_ns:
     return reject('donor_source_identity_mismatch')
-  if allow_stale_prediction:
-    # The donor must have been genuinely fresh when accepted. Prediction
-    # does not retroactively qualify an already-expired successful reference.
-    if (donor.problem.consumed_ns != donor.producer_ns
-        or donor.producer_ns > donor.problem.evidence_expiry_ns):
-      return reject('donor_original_evidence_invalid')
-    if (donor.problem.prediction_expiry_ns < donor.problem.evidence_expiry_ns
-        or problem.prediction_expiry_ns < problem.evidence_expiry_ns
-        or donor.problem.prediction_expiry_ns - donor.problem.evidence_expiry_ns > MAX_STALE_PREDICTION_NS
-        or problem.prediction_expiry_ns - problem.evidence_expiry_ns > MAX_STALE_PREDICTION_NS):
-      return reject('invalid_prediction_deadline')
   if donor.problem.stop_required or problem.stop_required:
     return reject('continuation_stop_required')
   if problem.x0.shape != (3,) or not np.all(np.isfinite(problem.x0)):
@@ -167,11 +146,6 @@ def build_candidate(donor, problem, *, now_ns, times, integrate, validate, allow
       return reject('donor_terminal_not_constant_speed', tail)
   accelerations = np.interp(np.minimum(shifted_times, times[-1]), times, donor.states[:, 2])
   accelerations[shifted_times > times[-1]] = donor.states[-1, 2] if conditioned else 0.0
-  if allow_stale_prediction:
-    # Conditioning precedes integration and every witness check. The measured
-    # initial acceleration is not a command and is never rewritten to zero.
-    ceiling = min(0.0, float(donor.applied_accel_ceiling)) if conditioned else 0.0
-    accelerations[1:] = np.minimum(accelerations[1:], ceiling)
   accelerations[0] = problem.x0[2]
   jerks = np.diff(accelerations) / np.diff(times)
   states = np.empty_like(donor.states)
@@ -210,8 +184,7 @@ def build_candidate(donor, problem, *, now_ns, times, integrate, validate, allow
       if (last_reason := validate(corner_problem, corner_states, jerks)):
         break
     else:
-      reason = 'validated_stale_measurement_prediction' if allow_stale_prediction else 'validated_previous_trajectory'
-      return ContinuationResult(True, reason, frozen_array(states), frozen_array(jerks), tail,
+      return ContinuationResult(True, 'validated_previous_trajectory', frozen_array(states), frozen_array(jerks), tail,
                                  **common, speed_tolerance=speed_tolerance, accel_tolerance=accel_tolerance,
                                  corner_checks=checks, **details)
   return reject('no_certified_state_envelope_' + last_reason, tail, corner_checks=checks, **details)

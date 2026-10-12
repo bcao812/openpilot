@@ -14,7 +14,7 @@ from openpilot.selfdrive.controls.lib.legacy_longcontrol import long_control_sta
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode, resolve_longitudinal_mode
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
   CONTINUATION_STATUSES, INACTIVE_NATIVE_RECOVERY_REASON, ContinuationBudget, ContinuationDonor, ContinuationHistory, ContinuationOffer,
-  STALE_MEASUREMENT_STATUS, braking_only_continuation, execution_target, validate_continuation,
+  execution_target, validate_continuation,
 )
 from openpilot.selfdrive.controls.lib.motion_supervisor import (DEGRADED_ACCEL, MAX_CONTROL_GAP_NS, MotionPhase, MotionReferenceKind, MotionResponseKind,
                                                                MotionSupervisor, StopReason, ROLLING_STOP_ACCEL,
@@ -144,7 +144,6 @@ class LongControl:
       clock_valid = self.continuation_budget.note_failure(now_ns, episode_start_ns=episode)
       current_state = self.continuation_history.current_state(now_ns) if history_valid else None
       if (clock_valid and current_state is not None and solver_status in CONTINUATION_STATUSES and continuation_input_valid is True
-          and (solver_status != STALE_MEASUREMENT_STATUS or braking_only_continuation(continuation))
           and limits_valid and last_output_valid and stop_accel_valid and not force_decel
           and not should_stop and not CS.standstill and not CS.cruiseState.standstill and CS.vEgo >= CLOSE_LEAD_STOP_SPEED
           and self.motion_supervisor.can_continue_track and intent is not None and intent.is_braking_valid()

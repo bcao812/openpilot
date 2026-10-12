@@ -44,8 +44,7 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import (MOTION_INTENT_VE
 from openpilot.selfdrive.controls.lib.longitudinal_observation import observe_trace
 from openpilot.selfdrive.controls.lib.parking_approach import ParkingApproach
 from openpilot.selfdrive.controls.lib.planner_continuation import PlannerContinuation
-from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, valid_timestamp
-from openpilot.selfdrive.controls.lib.turn_lead_guard import TurnLeadGuard
+from openpilot.selfdrive.controls.lib.reference_timing import valid_timestamp
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource as LongitudinalPlanSourceSP
 
@@ -134,8 +133,8 @@ def cruise_accel_limit(params, speed, steering_angle, e2e_allowed, coast_accel, 
 
 
 def departing_lead_rejection(radar_state, speed, delay, *, minimum_gap_base=LEAD_DEPARTURE_MIN_GAP, now_ns=None,
-                             held_identity=None, allow_unbound_physical=False, maximum_speed=STOP_SPEED):
-  """Return the first failed departure gate and its object, or None."""
+                             maximum_speed=STOP_SPEED):
+  """Check the current formal objects, without binding release to an old ID."""
   if not (not isinstance(maximum_speed, bool) and math.isfinite(maximum_speed) and STOP_SPEED <= maximum_speed <= LEAD_LAUNCH_MAX_SPEED
           and math.isfinite(speed) and 0.0 <= speed < maximum_speed and math.isfinite(delay)
           and 0.0 <= delay <= 1.0 and radar_state.leadOne.present
@@ -143,12 +142,6 @@ def departing_lead_rejection(radar_state, speed, delay, *, minimum_gap_base=LEAD
           and LEAD_DEPARTURE_MIN_GAP <= minimum_gap_base <= CREEP_FOLLOW_MIN_GAP):
     return 'departure_inputs', None
   minimum_gap = minimum_gap_base + speed * (delay + DT_MDL) + speed ** 2 / (2.0 * COMFORT_BRAKE)
-  primary_identity = lead_identity(radar_state.leadOne)
-  if held_identity is not None and primary_identity != held_identity:
-    return 'held_identity_mismatch', primary_identity
-  unbound_physical = primary_identity is not None and held_identity is None
-  if unbound_physical and allow_unbound_physical is not True:
-    return 'unbound_identity', primary_identity
   for lead in control_leads(radar_state):
     if not lead.present:
       continue
@@ -158,17 +151,6 @@ def departing_lead_rejection(radar_state, speed, delay, *, minimum_gap_base=LEAD
       return 'nonfinite_lead', identity
     evidence = getattr(lead.as_reader() if hasattr(lead, 'as_reader') else lead, 'evidence', None)
     lateral = evidence.pathOffset if getattr(evidence, 'version', 0) == 1 else lead.yRel
-    if getattr(evidence, 'version', 0) == 1 and identity != primary_identity:
-      if not unbound_physical:
-        # A known blocking vehicle may depart ahead of another distant car.
-        # With no known barrier, each formal lead must instead pass
-        # the full departure checks below; a new ID cannot stand in for an
-        # independently observed stationary or occluded obstacle.
-        if not qualified_lead(lead, 'brake', 0.95, now_ns=now_ns):
-          return 'secondary_brake_unqualified', identity
-        if lead.dRel + min(lead.vRel, 0.0) * CREEP_FINISH_T < minimum_gap:
-          return 'secondary_gap', identity
-        continue
     if lead.dRel < minimum_gap:
       return 'lead_gap', identity
     if not qualified_lead(lead, 'departure', 0.95, now_ns=now_ns):
@@ -186,9 +168,8 @@ def departing_lead_rejection(radar_state, speed, delay, *, minimum_gap_base=LEAD
   return None
 
 
-def has_departing_lead(radar_state, speed, delay, *, minimum_gap_base=LEAD_DEPARTURE_MIN_GAP, now_ns=None, held_identity=None):
-  return departing_lead_rejection(radar_state, speed, delay, minimum_gap_base=minimum_gap_base,
-                                  now_ns=now_ns, held_identity=held_identity) is None
+def has_departing_lead(radar_state, speed, delay, *, minimum_gap_base=LEAD_DEPARTURE_MIN_GAP, now_ns=None):
+  return departing_lead_rejection(radar_state, speed, delay, minimum_gap_base=minimum_gap_base, now_ns=now_ns) is None
 
 
 class RadarInputView:
@@ -215,16 +196,10 @@ class UnifiedLongitudinalPlanner:
     self.reference_initialized = False
     self.reference_source_epoch_ns = None
     self._forward_execution_instance_ns = 0
-    self.turn_lead_guard = TurnLeadGuard()
-    self.turn_accel_limited = False
     self.radar_settings = ObserverSettings()
     self._radar_params = Params()
     self._radar_settings_next_ns = 0
     self._radar_update_ns = 0
-    self.radar_held_identity = None
-    self.radar_release_identity = None
-    self._radar_stop_candidate = None
-    self._radar_stop_pending = {}
     self.radar_consumption = RadarConsumption()
     self._radar_consumed_ns = None
     self._radar_consumed_view = None
@@ -257,11 +232,7 @@ class UnifiedLongitudinalPlanner:
     self.continuation.invalidate(reason, now_ns=self._radar_update_ns, keep_offer=preserve_continuation, failure=failure)
     if not preserve_continuation:
       self.cruise_response.clear()
-    self.turn_lead_guard.clear()
-    self.turn_accel_limited = False
     self.stop_distance_policy.clear()
-    self._radar_stop_candidate = None
-    self._radar_stop_pending.clear()
     self.parking_approach.clear()
     self.parking_policy_distances = None
     self.parking_mpc_distances = None
@@ -526,7 +497,7 @@ class UnifiedLongitudinalPlanner:
         stage=stage, rejected_identity=rejected_identity,
         input_mono_ns={name: str(state.logMonoTime.get(name)) for name in ('carState', 'modelV2', 'radarState', 'controlsState')},
         plan_producer_mono_ns=str(timing.producer_ns) if timing is not None else None,
-        held_identity=self.radar_held_identity, primary_identity=lead_identity(radar.leadOne),
+        primary_identity=lead_identity(radar.leadOne),
         consumer_degraded=self.radar_consumption.degraded,
         producer_healthy=getattr(radar, 'fusionHealthy', None), producer_degraded=getattr(radar, 'fusionDegraded', None),
         consumption_mono_ns=str(self._radar_consumed_ns) if self._radar_consumed_ns is not None else None,
@@ -537,56 +508,6 @@ class UnifiedLongitudinalPlanner:
       )
     except Exception:
       pass
-
-  def adopt_executed_radar_stop(self, state, *, now_ns):
-    """Bind an object barrier only after the owner adopted its stop request.
-
-    Detection/qualification and display-only influence records cannot create
-    a HOLD. The existing owner timing receipt identifies the actual preceding
-    reference; missing feedback is not evidence that a held object cleared.
-    """
-    candidate = self._radar_stop_candidate
-    self._radar_stop_candidate = None
-    if candidate is not None:
-      self._radar_stop_pending[candidate[2]] = candidate
-    # A valid plan can be published just before the next planner tick, with
-    # the owner's acknowledgement arriving afterwards. Retain a bounded
-    # pending set for one plan lease plus one feedback lease, without treating
-    # one missed acknowledgement as proof that the stop was never executed.
-    self._radar_stop_pending = {
-      stamp: value for stamp, value in self._radar_stop_pending.items()
-      if 0 <= now_ns - stamp <= 500_000_000 and value[3] == self.producer_instance_ns
-    }
-    if len(self._radar_stop_pending) > 16:
-      self._radar_stop_pending = dict(sorted(self._radar_stop_pending.items())[-16:])
-    receipt_services = ('carControl', 'controlsState')
-    if (not all(getattr(state, 'seen', {}).get(service, False) and state.valid.get(service, False)
-                for service in receipt_services)
-        or not state.all_checks(service_list=list(receipt_services))):
-      return
-    control, controls = state['carControl'], state['controlsState']
-    motion = controls.motionState
-    candidate = self._radar_stop_pending.get(motion.referenceProducerMonoTime)
-    if candidate is None:
-      return
-    identity, source_ns, producer_ns, instance_ns = candidate
-    control_ns = state.logMonoTime.get('carControl', 0)
-    controls_ns = state.logMonoTime.get('controlsState', 0)
-    if (not all(isinstance(stamp, int) and not isinstance(stamp, bool) and producer_ns < stamp <= now_ns
-                and now_ns - stamp <= 250_000_000 for stamp in (control_ns, controls_ns))
-        or not motion.enabled or motion.phase not in ('approach', 'hold') or not motion.resolvedStop
-        or motion.degraded or motion.waitingForFreshInput or not motion.reasons & int(StopReason.MPC | StopReason.CLOSE_LEAD)
-        or not math.isfinite(control.actuators.accel) or control.actuators.accel > 0.0
-        or motion.referenceTimingVersion != REFERENCE_TIMING_VERSION or not motion.referenceTimingValid
-        or motion.referenceProducerInstanceMonoTime != instance_ns
-        or motion.referenceProducerMonoTime != producer_ns
-        or motion.referenceSourceMonoTime != source_ns or motion.referenceEpochMonoTime != source_ns
-        or not producer_ns < motion.referenceConsumerMonoTime <= min(control_ns, controls_ns)):
-      return
-    del self._radar_stop_pending[producer_ns]
-    if self.radar_held_identity is None or self.radar_held_identity == identity:
-      self.radar_held_identity = identity
-      self.radar_release_identity = None
 
   def independent_constraint(self, state, reference_accel, *, speed, maximum_accel, cruise_ceiling,
                              cruise_speed, active, healthy, reset, forced_decel):
@@ -660,35 +581,6 @@ class UnifiedLongitudinalPlanner:
     reset = state['controlsState'].longControlState == LongCtrlState.off or car_state.vCruise == V_CRUISE_UNSET or not active
     radar = state['radarState']
     motion = state['controlsState'].motionState
-    motion_ns = state.logMonoTime.get('controlsState', 0)
-    released = (self.radar_release_identity is not None and self.radar_release_identity == self.radar_held_identity
-                and motion.enabled and motion.phase in ('release', 'track')
-                and 0 < motion_ns <= now_ns and now_ns - motion_ns <= 250_000_000)
-    scope_exit = (not self.radar_settings.control_requested(planner.CP, planner.CP_SP)
-                  or not state['selfdriveState'].experimentalMode or not planner.dec.enabled())
-    if not active or released:
-      self.radar_held_identity = None
-      self.radar_release_identity = None
-      self._radar_stop_candidate = None
-      self._radar_stop_pending.clear()
-    else:
-      self.adopt_executed_radar_stop(state, now_ns=now_ns)
-    if scope_exit:
-      # A configuration change prevents new radar stop claims. It is not
-      # evidence that an already executed physical stop obstacle departed.
-      self._radar_stop_candidate = None
-      self._radar_stop_pending.clear()
-    retention_reason = self.continuation.retain_measurement_loss(
-      radar, now_ns, active=bool(active and not scope_exit),
-      healthy=bool(healthy and getattr(radar, 'fusionHealthy', False) and not getattr(radar, 'fusionDegraded', False)),
-      speed=speed, publication_ns=state.logMonoTime.get('radarState'),
-    )
-    if self.fusion_admitted:
-      clear_session = getattr(radar, 'fusionSessionId', '')
-      cleared = getattr(radar, 'fusionClearedTracks', ())
-      if (self.radar_held_identity is not None and self.radar_held_identity[0] == clear_session
-          and self.radar_held_identity[1] in cleared and getattr(radar, 'fusionHealthy', False)):
-        self.radar_held_identity = None
     retain_rest_continuity = healthy and active and not reset and self.e2e_allowed
     if not retain_rest_continuity:
       self.model_reference_adapter.clear_rest_continuity()
@@ -742,26 +634,6 @@ class UnifiedLongitudinalPlanner:
       # when another policy supplies the lower speed target. update_targets
       # has already checked the active curve outputs for finite values.
       maximum_accel = min(maximum_accel, float(np.clip(vision_curve.output_a_target, ACCEL_MIN, ACCEL_MAX)))
-    turn_ceiling = self.turn_lead_guard.update(
-      now_ns=now_ns, model_ns=state.logMonoTime.get('modelV2'), radar_ns=state.logMonoTime.get('radarState'),
-      enabled=healthy and active and not reset and not forced_decel and planner.unified,
-      speed=speed, standstill=bool(car_state.standstill), steering_angle=steering,
-      steer_ratio=planner.CP.steerRatio, wheelbase=planner.CP.wheelbase,
-      model_curvature=model.action.desiredCurvature,
-      lead_one=state['radarState'].leadOne, lead_two=state['radarState'].leadTwo, ceiling_max=ACCEL_MAX,
-      independent_braking=(self.e2e_allowed and (model.action.desiredAcceleration < 0.0 or model.action.shouldStop)
-                           or scc_braking
-                           or policy.source != LongitudinalPlanSourceSP.cruise and policy_accel < 0.0
-                           or cruise_speed < (self.turn_lead_guard.hold_speed if self.turn_lead_guard.hold_speed is not None else speed)),
-    )
-    self.turn_accel_limited = turn_ceiling is not None and turn_ceiling < maximum_accel
-    if turn_ceiling is not None:
-      # A disappearing lead in a following turn is not evidence of clear road.
-      # Keep this ceiling in both the native reference and the existing single
-      # arbitration. It does not invent a lead, a stop goal or radar authority.
-      maximum_accel = min(maximum_accel, turn_ceiling)
-    if self.turn_lead_guard.hold_speed is not None:
-      cruise_speed = min(cruise_speed, self.turn_lead_guard.hold_speed)
     if healthy:
       cruise_ceiling = self.cruise_response.update(
         cruise_speed, speed, maximum_accel, measured_accel=measured_accel, reset=reset)
@@ -815,12 +687,11 @@ class UnifiedLongitudinalPlanner:
     # model ego velocity remains ambiguous. Model evidence is retained, never
     # rewritten as FORWARD; explicit model braking/rest and perception faults
     # withdraw the exception before building this tick's MPC problem.
-    unbound_launch = self.radar_held_identity is None and lead_identity(radar.leadOne) is not None
+    physical_launch = lead_identity(radar.leadOne) is not None
     launch_rejection = departing_lead_rejection(
-      radar, speed, delay, now_ns=now_ns, held_identity=self.radar_held_identity,
-      allow_unbound_physical=unbound_launch, maximum_speed=LEAD_LAUNCH_MAX_SPEED,
+      radar, speed, delay, now_ns=now_ns, maximum_speed=LEAD_LAUNCH_MAX_SPEED,
     )
-    if launch_rejection is None and unbound_launch:
+    if launch_rejection is None and physical_launch:
       launch_rejection = self.unbound_radar_departure_rejection(state, now_ns=now_ns,
                                                               launch_continuation=self.lead_launch.active)
     raw_speed = float(car_state.vEgoRaw)
@@ -832,8 +703,7 @@ class UnifiedLongitudinalPlanner:
       and healthy and active and not reset and self.e2e_allowed and not forced_decel and not planner.fcw
       and not motion.degraded and not motion.waitingForFreshInput
       and not self.radar_consumption.degraded and not getattr(radar, 'fusionRiskUnresolved', False)
-      and not self.turn_lead_guard.lost and not scc_braking
-      and (turn_ceiling is None or turn_ceiling > 0.0)
+      and not scc_braking
       and policy.source == LongitudinalPlanSourceSP.cruise and policy_accel >= 0.0
       and cruise_speed >= CREEP_SPEED and cruise_ceiling > 0.0
       and not model.action.shouldStop and not model.meta.hardBrakePredicted
@@ -892,7 +762,7 @@ class UnifiedLongitudinalPlanner:
                           and model.action.desiredAcceleration >= STOP_RELEASE_ACCEL
                           and (self.model_evidence is None or self.model_evidence.allows_external_departure)
                           and has_departing_lead(state['radarState'], speed, delay, minimum_gap_base=LEAD_DEPARTURE_MIN_GAP,
-                                                 now_ns=now_ns, held_identity=self.radar_held_identity))
+                                                 now_ns=now_ns))
     compact_activation = ((not car_state.standstill and state['controlsState'].longControlState == LongCtrlState.pid)
                           or observed_departure)
     uncertainty = self.parking_approach.uncertainty_cache.update(
@@ -949,8 +819,7 @@ class UnifiedLongitudinalPlanner:
     continuation_permitted = bool(
       planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl and planner.unified
       and active and healthy and not reset and not forced_decel and not car_state.standstill
-      and speed >= CLOSE_LEAD_STOP_SPEED and not planner.fcw and not retention_reason
-      and self.radar_held_identity is None and not self.turn_lead_guard.lost
+      and speed >= CLOSE_LEAD_STOP_SPEED and not planner.fcw
       and planner.source == LongitudinalPlanSourceSP.cruise and cruise_speed > STOP_SPEED
       and not model.action.shouldStop and not model.meta.hardBrakePredicted and self.model_reference_mode != 'invalid'
       and (not self.e2e_allowed or ordinary_model_motion)
@@ -960,22 +829,11 @@ class UnifiedLongitudinalPlanner:
     constraint_kwargs = dict(speed=speed, maximum_accel=maximum_accel, cruise_ceiling=cruise_ceiling,
                              cruise_speed=cruise_speed, active=active, healthy=healthy, reset=reset,
                              forced_decel=forced_decel)
-    if retention_reason:
-      ceiling = self.independent_constraint(state, planner.output_a_target, **constraint_kwargs)[0]
-      self.continuation.independent_braking_accel = ceiling if math.isfinite(ceiling) and ceiling < 0.0 else None
     planner.mpc.update(state['radarState'], personality=state['selfdriveState'].personality, reference=reference,
-                       now_ns=now_ns, reference_ns=source_epoch_ns,
-                       retained_loss_reason=(f'{retention_reason}: {self.continuation.retained_measurements}' if retention_reason else None),
-                       allow_stale_prediction=bool(continuation_permitted and self.radar_consumption.degraded
-                                                   and getattr(radar, 'fusionHealthy', False) and not getattr(radar, 'fusionDegraded', False)
-                                                   and self.continuation.donor is not None))
+                       now_ns=now_ns, reference_ns=source_epoch_ns)
     if planner.mpc.solution_status != 0:
       self.lead_launch.clear('solver_failure')
       self.lead_launch_active = False
-      if retention_reason:
-        self.continuation.reason = retention_reason
-        self.fail_mpc(state, speed, planner.output_a_target)
-        return
       offer = self.continuation.attempt(
         planner.mpc, state, planner.reference_timing.pending, now_ns=now_ns,
         permitted=continuation_permitted, scope=continuation_scope, action_t=delay + DT_MDL,
@@ -1129,7 +987,7 @@ class UnifiedLongitudinalPlanner:
     # Independent lead departure may be confirmed while the MPC reference is
     # still unwinding braking history. The owner keeps the held brake until
     # this evidence is confirmed and the actual target is positive.
-    unbound_physical = self.radar_held_identity is None and lead_identity(radar.leadOne) is not None
+    current_physical = lead_identity(radar.leadOne) is not None
     departure_stage, rejected_identity = None, None
     if not qualified:
       departure_stage = 'planning_qualification'
@@ -1145,15 +1003,14 @@ class UnifiedLongitudinalPlanner:
       departure_stage = 'model_action_margin'
     elif cruise_speed < CREEP_SPEED:
       departure_stage = 'cruise_speed'
-    elif unbound_physical and output <= 0.0:
+    elif current_physical and output <= 0.0:
       departure_stage = 'nonpositive_target'
     else:
-      if unbound_physical:
+      if current_physical:
         departure_stage = self.unbound_radar_departure_rejection(state, now_ns=now_ns,
                                                                 launch_continuation=self.lead_launch_active)
       if departure_stage is None:
-        rejection = departing_lead_rejection(radar, speed, delay, now_ns=now_ns, held_identity=self.radar_held_identity,
-                                             allow_unbound_physical=unbound_physical,
+        rejection = departing_lead_rejection(radar, speed, delay, now_ns=now_ns,
                                              maximum_speed=LEAD_LAUNCH_MAX_SPEED if self.lead_launch_active else STOP_SPEED)
         if rejection is not None:
           departure_stage, rejected_identity = rejection
@@ -1161,16 +1018,6 @@ class UnifiedLongitudinalPlanner:
     observe(planner.observation, "departure", planner.observation_attempt, forward_reference, planner.mpc.v_solution,
             trajectory_departure, lead_departure, qualified, no_model_risk)
     release_allowed = bool(trajectory_departure or lead_departure)
-    if self.radar_held_identity is not None and not lead_departure:
-      # A new track, an expired point or a disappearing packet cannot release
-      # a stop held for another physical vehicle, even if the model accelerates.
-      release_allowed = False
-    if self.turn_lead_guard.lost or turn_ceiling is not None and turn_ceiling <= 0.0:
-      # Lost-target speed support and a zero execution ceiling cannot certify
-      # departure, even when another candidate wins with a negative target.
-      # Preserve the raw motion description while withdrawing movement permission.
-      moving_lead = release_allowed = False
-      departure_stage = 'turn_lead_lost' if self.turn_lead_guard.lost else 'turn_acceleration_ceiling'
     self.log_departure_blocked(
       state, now_ns=now_ns, active=active, release_allowed=release_allowed, output=output,
       stage=departure_stage, rejected_identity=rejected_identity, admission_reasons=admission_reasons, no_model_risk=no_model_risk,
@@ -1206,15 +1053,7 @@ class UnifiedLongitudinalPlanner:
                             or ordinary_model_motion and raw_kind in (MotionReferenceKind.MOVING, MotionReferenceKind.FORWARD)
                             and cruise_command < model.action.desiredAcceleration))
     coast_selected = coast_applicable and cruise_selected
-    turn_response = (self.turn_accel_limited and active and healthy and not reset and not forced_decel and not reasons
-                     and output >= 0.0 and raw_kind in (MotionReferenceKind.UNKNOWN, MotionReferenceKind.MOVING,
-                                                        MotionReferenceKind.FORWARD))
-    if turn_response:
-      # The bounded acceleration target cannot carry MODEL's positive-I
-      # permission, including the zero target and gradual recovery. Stronger
-      # braking and raw stop semantics keep their original contracts below.
-      response_kind = MotionResponseKind.ABSOLUTE_ACC
-    elif coast_selected:
+    if coast_selected:
       response_kind = MotionResponseKind.CRUISE_COAST
       # A negative coast request is execution shaping, never a departure
       # certificate inherited from the unconstrained native trajectory.
@@ -1256,22 +1095,6 @@ class UnifiedLongitudinalPlanner:
         # FCW blocks drive qualification, not this negative response. This
         # deliberately covers only the existing urgency subset.
         response_kind = MotionResponseKind.LEAD_BRAKING
-    self.radar_release_identity = self.radar_held_identity if release_allowed and lead_departure else None
-    # An object may propose an identity barrier only when it owns the MPC or
-    # close-lead stop. The owner can still be braking toward that stop while
-    # the delay-compensated planner target is positive; its matching receipt,
-    # not this target's sign, proves that the stop was actually adopted.
-    # Independent model/cruise stops and mere detections cannot claim it.
-    primary = radar.leadOne
-    primary_identity = lead_identity(primary)
-    independent_stop = reasons & (StopReason.E2E | StopReason.CRUISE | StopReason.FORCE_DECEL)
-    if (active and healthy and self.fusion_admitted and not reset and not forced_decel and not independent_stop
-        and not model_stop_evidence
-        and reasons & (StopReason.MPC | StopReason.CLOSE_LEAD) and not self.reference_overridden
-        and primary_identity is not None and primary_identity == planner.mpc.source_object_identity
-        and primary_identity in planner.mpc.object_influence_identities
-        and qualified_lead(primary, 'stop', 0.98, now_ns=now_ns) and primary.vLead < STOP_SPEED):
-      self._radar_stop_candidate = primary_identity, source_epoch_ns, now_ns, self.producer_instance_ns
     planner.motion_intent = MotionIntent(
       mode=int(planner.longitudinal_mode), reasons=int(reasons), moving_lead=moving_lead, release_allowed=release_allowed,
       allow_creep=bool(active and healthy), valid=bool(healthy and car_state.vCruise != V_CRUISE_UNSET),

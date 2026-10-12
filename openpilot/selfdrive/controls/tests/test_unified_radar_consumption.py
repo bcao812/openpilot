@@ -10,14 +10,13 @@ from openpilot.selfdrive.controls.lib.lead_qualification import control_leads
 from openpilot.selfdrive.controls.lib.longitudinal_planner import has_safe_moving_lead
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumptionView
-from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingProducer
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import has_departing_lead
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state
-from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import CapturingPublisher, bounded_submaster, new_event, serialized
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import CapturingPublisher
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
 from openpilot.selfdrive.controls.tests.test_radar_consumption import (
-  CONSUMPTION, PUBLICATION, SESSION, expiring_lead, measured, native_frame, radar_frame,
+  CONSUMPTION, PUBLICATION, expiring_lead, measured, native_frame, radar_frame,
 )
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
@@ -106,8 +105,8 @@ def test_irrelevant_measured_expiry_does_not_veto_primary_follow_or_departure(sp
     assert not has_safe_moving_lead(state['radarState'], speed, .3, now_ns=CONSUMPTION)
     assert has_safe_moving_lead(view, speed, .3, now_ns=CONSUMPTION)
   else:
-    assert not has_departing_lead(state['radarState'], speed, .3, now_ns=CONSUMPTION, held_identity=(SESSION, 5))
-    assert has_departing_lead(view, speed, .3, now_ns=CONSUMPTION, held_identity=(SESSION, 5))
+    assert not has_departing_lead(state['radarState'], speed, .3, now_ns=CONSUMPTION)
+    assert has_departing_lead(view, speed, .3, now_ns=CONSUMPTION)
 
 
 @pytest.mark.parametrize('kind', ['caution', 'bad_caution', 'inner'])
@@ -128,7 +127,7 @@ def test_only_the_formal_secondary_lead_can_veto_the_primary_departure(kind, for
   if speed:
     assert has_safe_moving_lead(frame, speed, .3, now_ns=CONSUMPTION) is expected
   else:
-    assert has_departing_lead(frame, speed, .3, now_ns=CONSUMPTION, held_identity=(SESSION, 5)) is expected
+    assert has_departing_lead(frame, speed, .3, now_ns=CONSUMPTION) is expected
 
 
 @pytest.mark.parametrize('source', ['radar', 'fused'])
@@ -181,11 +180,8 @@ def test_retired_predicted_entry_matches_no_object_without_failure_braking_or_fc
 
 
 @pytest.mark.parametrize('initial_publication', [PUBLICATION, CONSUMPTION])
-def test_expiry_diagnostic_clears_without_releasing_an_already_adopted_hold(initial_publication):
-  planner = enabled_planner(1.0)
-  # This component starts with an established object barrier. Acquisition and
-  # actual braking are verified by the rolling owner/CAN pipeline below.
-  planner.reference_planner.radar_held_identity = (SESSION, 7)
+def test_expiry_then_current_empty_publications_keep_native_planning_available(initial_publication):
+  planner = enabled_planner(5.0)
   expired = expiring_lead(relevant=True)
   raw = radar_frame(expired, display=(expired,))
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
@@ -193,33 +189,18 @@ def test_expiry_diagnostic_clears_without_releasing_an_already_adopted_hold(init
       now = CONSUMPTION + elapsed
       publication = initial_publication if elapsed == 0 else now
       frame = raw if elapsed == 0 else radar_frame(publication=publication)
-      state = state_at(frame, now=now, publication=publication)
+      state = state_at(frame, speed=5.0, target=20.0, now=now, publication=publication)
       planner.update(state, now_ns=now)
-      assert planner.reference_planner.radar_held_identity == (SESSION, 7)
-      assert planner.reference_planner.radar_release_identity is None
-      if elapsed == 0:
-        # Keeping the relevant expired object invalid intentionally uses the
-        # failure braking path; this must not erase the accepted obstacle.
-        assert planner.reference_planner.radar_consumption.degraded
-        assert planner.mpc.solution_status != 0 and not planner.motion_intent.valid
-        assert planner.output_a_target < 0.0
-      else:
-        # Fresh empty publications carry no persistent loss diagnostic, but
-        # the already executed stop still needs its own departure evidence.
-        assert not planner.reference_planner.radar_consumption.degraded
-        assert planner.reference_planner._radar_consumed_ns == now
-      assert not state['radarState'].fusionRiskUnresolved
+      assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
+      assert not planner.reference_planner.radar_consumption.degraded
+      assert planner.reference_planner._radar_consumed_ns == now
+      assert not planner.fcw and not planner.output_should_stop
       publisher = CapturingPublisher()
       with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=now):
         planner.publish(state, publisher)
-      assert not publisher.messages['longitudinalPlan'].longitudinalPlan.radarRiskUnresolved
-      # A positive planner target is not permission for the owner to release.
-      assert not publisher.messages['longitudinalPlan'].longitudinalPlan.motionIntent.releaseAllowed
-      assert not planner.motion_intent.moving_lead and not planner.motion_intent.release_allowed
-    state['carState'].gasPressed = True
-    planner.update(state, now_ns=now + 1_000_000)
-  assert not planner.reference_planner.radar_consumption.degraded
-  assert planner.reference_planner.radar_held_identity is None
+      event = publisher.messages['longitudinalPlan']
+      assert event.valid and not event.longitudinalPlan.radarRiskUnresolved
+      assert not event.longitudinalPlan.continuation.valid
 
 
 @pytest.mark.parametrize('degraded,risk_unresolved', [(False, False), (True, False), (False, True), (True, True)])
@@ -248,7 +229,7 @@ def test_history_flags_do_not_change_healthy_lead_acceleration_or_motion_intent(
       planner.reference_planner.radar_consumption.update(
         native_frame(radar_frame(expired, publication=old, display=(expired,))), publication_ns=old, now_ns=old + 60_000_000, speed=10.0,
       )
-      assert planner.reference_planner.radar_consumption.degraded
+      assert planner.reference_planner.radar_consumption.expired_identities
     primary = formal_lead(now_ns=PUBLICATION, source=source, dRel=40.0, vLead=5.5, vLeadK=5.5, vRel=.5,
                           evidence={'trackId': 5})
     state = state_at(radar_frame(primary, display=(primary,), degraded=diagnostic == 'degraded',
@@ -262,7 +243,6 @@ def test_history_flags_do_not_change_healthy_lead_acceleration_or_motion_intent(
     plan = publisher.messages['longitudinalPlan'].longitudinalPlan
     assert not plan.radarRiskUnresolved
     assert planner.output_a_target > 0.0 and not planner.output_should_stop
-    assert planner.reference_planner.radar_held_identity is None
     assert not planner.reference_planner.radar_consumption.degraded
     outputs.append((planner.output_a_target, planner.mpc.params.copy(), plan.motionIntent.to_dict(),
                     [row.to_dict() for row in plan.objectInfluences]))
@@ -270,202 +250,6 @@ def test_history_flags_do_not_change_healthy_lead_acceleration_or_motion_intent(
     assert actual[0] == outputs[0][0]
     np.testing.assert_array_equal(actual[1], outputs[0][1])
     assert actual[2:] == outputs[0][2:]
-
-
-def radar_stop_acknowledgement(planner, *, track=7, producer=PUBLICATION, now=CONSUMPTION):
-  state = state_at(radar_frame(), speed=0.0, now=now)
-  state.seen = dict.fromkeys(state, True)
-  source = producer - 10_000_000
-  assert planner.reference_timing.qualify_source(source, 0.0, 0.0, producer) == source
-  planner.reference_timing.set_initial_state(0.0, 0.0)
-  instance = planner.reference_timing.pending.instance_ns
-  motion = state['controlsState'].motionState
-  motion.phase, motion.resolvedStop, motion.reasons = 'hold', True, int(StopReason.CLOSE_LEAD)
-  motion.referenceTimingVersion, motion.referenceTimingValid = REFERENCE_TIMING_VERSION, True
-  motion.referenceSourceMonoTime = motion.referenceEpochMonoTime = source
-  motion.referenceProducerMonoTime, motion.referenceProducerInstanceMonoTime = producer, instance
-  motion.referenceConsumerMonoTime = producer + 10_000_000
-  state['carControl'].actuators.accel = -.5
-  return state, ((SESSION, track), source, producer, instance)
-
-
-@pytest.mark.parametrize('defect', [
-  'none', 'approach', 'mpc_only', 'missing_candidate', 'wrong_source', 'wrong_producer', 'wrong_instance', 'unconsumed',
-  'stale_feedback', 'degraded', 'waiting', 'not_stopping', 'unresolved', 'independent_stop', 'positive_accel',
-])
-def test_only_matching_executed_object_stop_receipt_can_create_an_identity_hold(defect):
-  planner = enabled_planner(0.0)
-  ref = planner.reference_planner
-  state, candidate = radar_stop_acknowledgement(planner)
-  ref._radar_stop_candidate = candidate if defect != 'missing_candidate' else None
-  motion = state['controlsState'].motionState
-  now = CONSUMPTION
-  if defect == 'approach':
-    motion.phase = 'approach'
-  elif defect == 'mpc_only':
-    motion.reasons = int(StopReason.MPC)
-  elif defect == 'wrong_source':
-    motion.referenceSourceMonoTime += 1
-  elif defect == 'wrong_producer':
-    motion.referenceProducerMonoTime += 1
-  elif defect == 'wrong_instance':
-    motion.referenceProducerInstanceMonoTime += 1
-  elif defect == 'unconsumed':
-    motion.referenceConsumerMonoTime = PUBLICATION
-  elif defect == 'stale_feedback':
-    now += 250_000_001
-  elif defect == 'degraded':
-    motion.degraded = True
-  elif defect == 'waiting':
-    motion.waitingForFreshInput = True
-  elif defect == 'not_stopping':
-    motion.phase = 'track'
-  elif defect == 'unresolved':
-    motion.resolvedStop = False
-  elif defect == 'independent_stop':
-    motion.reasons = int(StopReason.E2E)
-  elif defect == 'positive_accel':
-    state['carControl'].actuators.accel = .1
-  ref.adopt_executed_radar_stop(state, now_ns=now)
-  assert ref.radar_held_identity == ((SESSION, 7) if defect in ('none', 'approach', 'mpc_only') else None)
-  assert ref._radar_stop_candidate is None
-
-
-@pytest.mark.parametrize('service,defect', [
-  ('controlsState', 'none'), ('carControl', 'invalid'), ('controlsState', 'unseen'),
-  ('carControl', 'dead'), ('controlsState', 'bad_frequency'),
-])
-def test_acknowledgement_requires_actual_submaster_transport_health(service, defect):
-  planner = enabled_planner(0.0)
-  state, candidate = radar_stop_acknowledgement(planner)
-  real = bounded_submaster(['carControl', 'controlsState'])
-  incoming = []
-  for name in real.data:
-    event = new_event(name, CONSUMPTION)
-    setattr(event, name, state[name])
-    incoming.append(serialized(event))
-  real.update_msgs(CONSUMPTION / 1e9, incoming)
-  if defect == 'invalid':
-    real.valid[service] = False
-  elif defect == 'unseen':
-    real.seen[service] = False
-  elif defect == 'dead':
-    real.alive[service] = False
-  elif defect == 'bad_frequency':
-    real.ignore_average_freq.remove(service)
-    real.freq_ok[service] = False
-  ref = planner.reference_planner
-  ref._radar_stop_candidate = candidate
-  ref.adopt_executed_radar_stop(real, now_ns=CONSUMPTION)
-  assert ref.radar_held_identity == ((SESSION, 7) if defect == 'none' else None)
-  if defect != 'none':
-    assert candidate[2] in ref._radar_stop_pending
-    real.valid[service] = real.seen[service] = real.alive[service] = real.freq_ok[service] = True
-    ref.adopt_executed_radar_stop(real, now_ns=CONSUMPTION)
-    assert ref.radar_held_identity == (SESSION, 7)
-
-
-def test_late_ack_survives_a_new_planner_candidate_without_overwriting_an_adopted_hold():
-  planner = enabled_planner(0.0)
-  ref = planner.reference_planner
-  old_state, old_candidate = radar_stop_acknowledgement(planner)
-  old_state['controlsState'].motionState.referenceTimingValid = False
-  ref._radar_stop_candidate = old_candidate
-  ref.adopt_executed_radar_stop(old_state, now_ns=CONSUMPTION)
-  assert ref.radar_held_identity is None and old_candidate[2] in ref._radar_stop_pending
-  new_state, new_candidate = radar_stop_acknowledgement(
-    planner, track=8, producer=PUBLICATION + 50_000_000, now=CONSUMPTION + 50_000_000)
-  new_state['controlsState'].motionState.referenceTimingValid = False
-  ref._radar_stop_candidate = new_candidate
-  ref.adopt_executed_radar_stop(new_state, now_ns=CONSUMPTION + 50_000_000)
-  assert set(ref._radar_stop_pending) == {old_candidate[2], new_candidate[2]}
-  old_state['controlsState'].motionState.referenceTimingValid = True
-  ref.adopt_executed_radar_stop(old_state, now_ns=CONSUMPTION + 100_000_000)
-  assert ref.radar_held_identity == (SESSION, 7)
-  new_state['controlsState'].motionState.referenceTimingValid = True
-  ref.adopt_executed_radar_stop(new_state, now_ns=CONSUMPTION + 100_000_000)
-  assert ref.radar_held_identity == (SESSION, 7) and not ref._radar_stop_pending
-
-
-def test_pending_stop_receipts_have_inclusive_age_and_count_bounds_and_cannot_cross_restart():
-  planner = enabled_planner(0.0)
-  ref = planner.reference_planner
-  for index in range(17):
-    producer = PUBLICATION + index * 10_000_000
-    state, candidate = radar_stop_acknowledgement(planner, track=index + 1, producer=producer, now=producer + 20_000_000)
-    state.seen['controlsState'] = False
-    ref._radar_stop_candidate = candidate
-    ref.adopt_executed_radar_stop(state, now_ns=producer + 20_000_000)
-  assert len(ref._radar_stop_pending) == 16
-  assert PUBLICATION not in ref._radar_stop_pending and PUBLICATION + 10_000_000 in ref._radar_stop_pending
-  oldest = PUBLICATION + 10_000_000
-  ref.adopt_executed_radar_stop(state, now_ns=oldest + 500_000_000)
-  assert oldest in ref._radar_stop_pending
-  ref.adopt_executed_radar_stop(state, now_ns=oldest + 500_000_001)
-  assert oldest not in ref._radar_stop_pending
-  planner.reference_timing = ReferenceTimingProducer()
-  restarted = PUBLICATION + 600_000_000
-  assert planner.reference_timing.qualify_source(restarted, 0.0, 0.0, restarted) == restarted
-  ref.adopt_executed_radar_stop(state, now_ns=restarted)
-  assert not ref._radar_stop_pending and ref.radar_held_identity is None
-
-
-@pytest.mark.parametrize('scope', ['alpha', 'dec', 'experimental', 'driver_exit'])
-def test_configuration_exit_disables_new_claims_without_releasing_an_acknowledged_hold(scope):
-  planner = enabled_planner(0.0)
-  ref = planner.reference_planner
-  ack, candidate = radar_stop_acknowledgement(planner)
-  ref._radar_stop_candidate = candidate
-  ref.adopt_executed_radar_stop(ack, now_ns=CONSUMPTION)
-  assert ref.radar_held_identity == (SESSION, 7)
-  now = CONSUMPTION + 50_000_000
-  state = state_at(radar_frame(publication=now), speed=0.0, now=now, publication=now)
-  if scope == 'alpha':
-    Params().put_bool('AlphaLongitudinalEnabled', False, block=True)
-  elif scope == 'experimental':
-    state['selfdriveState'].experimentalMode = False
-  elif scope == 'driver_exit':
-    state['selfdriveState'].enabled = False
-  with patch.object(planner.dec, 'enabled', return_value=scope != 'dec'), patch.object(planner.dec, 'mode', return_value='acc'):
-    planner.update(state, now_ns=now)
-  assert ref._radar_stop_candidate is None and not ref._radar_stop_pending
-  assert ref.radar_held_identity == (None if scope == 'driver_exit' else (SESSION, 7))
-  if scope != 'driver_exit':
-    assert not planner.motion_intent.release_allowed
-
-
-def test_rolling_radar_stop_is_adopted_by_real_owner_before_dropout_preserves_the_stop():
-  from openpilot.selfdrive.car.tests.honda_radar_control_test_support import IdealPlant, Target, control_pipeline
-  from openpilot.selfdrive.controls.tests.test_radar_fusion_scenarios import target_motion
-
-  # Reuse the established, consistent-motion stop fixture: decoded Honda CAN
-  # drives the ideal plant; no lead, MPC result, owner ACK or request is patched.
-  plant = IdealPlant(6.0, delay=.2, response_time=.25)
-  rolling_identity = None
-  with control_pipeline(speed=plant.speed, cruise=10.0) as pipeline:
-    ref = pipeline.planner.reference_planner
-    for frame in range(160):
-      position, lead_speed = target_motion(frame * .05)
-      distance = position - plant.position
-      assert distance > 0.0
-      row = pipeline.step(speed=plant.speed, accel=plant.accel, radar=[Target(distance, lead_speed)], plant=plant)
-      candidate = ref._radar_stop_candidate
-      if candidate is not None and row['speed'] > .2:
-        assert row['reasons'] & int(StopReason.MPC | StopReason.CLOSE_LEAD)
-        assert candidate[0] == pipeline.planner.mpc.source_object_identity
-        assert candidate[0] in pipeline.planner.mpc.object_influence_identities
-        assert not ref.reference_overridden
-        assert ref.model_evidence is None or not (ref.model_evidence.no_forward or ref.model_evidence.has_rest_intent)
-        assert any(owner['phase'] == 'approach' and owner['stop'] and owner['accel'] <= 0.0 for owner in row['owner'])
-        rolling_identity = candidate[0]
-      if rolling_identity is not None and ref.radar_held_identity == rolling_identity:
-        break
-    assert rolling_identity is not None and ref.radar_held_identity == rolling_identity
-    for _ in range(20):
-      row = pipeline.step(speed=plant.speed, accel=plant.accel, observer_online=False, plant=plant)
-      assert ref.radar_held_identity == rolling_identity and not row['release']
-      assert all(owner['phase'] in ('approach', 'hold') and owner['stop'] and owner['accel'] <= 0.0 for owner in row['owner'])
-      assert not any(sample['release'] or sample['accel'] > 0.0 for sample in row['can'])
 
 
 @pytest.mark.parametrize('stop_request', ['explicit_action', 'typed_rest'])
@@ -483,8 +267,6 @@ def test_red_light_stop_does_not_assign_a_far_stationary_detection_a_hold_that_b
       planner.update(state, now_ns=CONSUMPTION)
       assert planner.output_should_stop
       assert planner.motion_intent.reasons & int(StopReason.E2E if stop_request == 'explicit_action' else StopReason.MPC)
-      assert planner.reference_planner._radar_stop_candidate is None
-      assert planner.reference_planner.radar_held_identity is None
       now = CONSUMPTION + 50_000_000
       state = state_at(radar_frame(publication=now, degraded=include_far_radar, risk_unresolved=include_far_radar),
                        speed=0.0, now=now, publication=now)
@@ -498,7 +280,6 @@ def test_red_light_stop_does_not_assign_a_far_stationary_detection_a_hold_that_b
       model.action.desiredAcceleration = .5
       planner.update(state, now_ns=now)
     assert planner.motion_intent.valid and planner.mpc.solution_status == 0
-    assert planner.reference_planner.radar_held_identity is None
     assert planner.motion_intent.release_allowed and not planner.output_should_stop
     outputs.append(planner.output_a_target)
   assert outputs[0] > 0.0 and outputs[1] == pytest.approx(outputs[0], abs=1e-6, rel=0.0)
@@ -513,9 +294,9 @@ def test_scope_exit_discards_current_expiry_without_a_driver_reset(current_expir
   with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
     planner.update(state, now_ns=CONSUMPTION)
     assert ref.fusion_admitted
-    assert ref.radar_consumption.degraded is current_expiry
-    if current_expiry:
-      assert planner.mpc.solution_status != 0 and not planner.motion_intent.valid
+    assert bool(ref.radar_consumption.expired_identities) is current_expiry
+    assert not ref.radar_consumption.degraded
+    assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
     now = CONSUMPTION + 100_000_000
     state = state_at(radar_frame(publication=now, risk_unresolved=True), now=now, publication=now)
     state['selfdriveState'].experimentalMode = False
@@ -537,7 +318,7 @@ def test_invalid_current_plan_does_not_reuse_previous_expiry_diagnostic(failure,
     expired = expiring_lead(relevant=True)
     ref.radar_consumption.update(native_frame(radar_frame(expired, display=(expired,))),
                                  publication_ns=PUBLICATION, now_ns=CONSUMPTION, speed=5.0)
-    assert ref.radar_consumption.degraded
+    assert ref.radar_consumption.expired_identities
   state = state_at(radar_frame(degraded=True, risk_unresolved=True), speed=5.0)
   if failure == 'source_epoch':
     state.logMonoTime['carState'] = CONSUMPTION + 1
@@ -581,7 +362,7 @@ def test_invalid_radar_transport_cannot_confirm_departure_after_previous_expiry(
     expired = expiring_lead(relevant=True)
     state = state_at(radar_frame(expired, display=(expired,)))
     ref.radar_input_state(state, CONSUMPTION)
-    assert ref.radar_consumption.degraded
+    assert ref.radar_consumption.expired_identities
     now = CONSUMPTION + 100_000_000
     primary = formal_lead(now_ns=now, vLead=1.0, vLeadK=1.0, vRel=1.0, evidence={'trackId': 9})
     state = state_at(radar_frame(primary, publication=now, display=(primary,)), speed=0.0, now=now, publication=now)
@@ -642,7 +423,6 @@ def test_retired_edge_ttc_cannot_limit_acceleration_or_publish_a_control_influen
       planner.update(state, now_ns=CONSUMPTION)
     assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
     assert not planner.fcw and not planner.output_should_stop
-    assert planner.reference_planner.radar_held_identity is None
     assert planner.output_a_target > 0.0
     publisher = CapturingPublisher()
     with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=CONSUMPTION):
@@ -682,7 +462,6 @@ def test_extra_edge_has_no_acceleration_stop_or_new_hold_authority_near_rest(spe
     with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
       planner.update(state, now_ns=CONSUMPTION)
     assert planner.mpc.solution_status == 0
-    assert planner.reference_planner.radar_held_identity is None
     arms.append(planner)
   before, after = arms
   # The native goal, cruise history, final command and stop reasons all match.
@@ -694,11 +473,10 @@ def test_extra_edge_has_no_acceleration_stop_or_new_hold_authority_near_rest(spe
   assert after.motion_intent.release_allowed == before.motion_intent.release_allowed
 
 
-def test_edge_caution_preserves_an_existing_model_stop_and_held_vehicle():
+def test_edge_caution_preserves_a_current_model_stop():
   arms = []
   for include_edge in (False, True):
     planner = enabled_planner(0.0)
-    planner.reference_planner.radar_held_identity = (SESSION, 5)
     edge = caution_lead(now_ns=PUBLICATION, dRel=1.0, vLead=-1.0, vLeadK=-1.0, vRel=-1.0,
                          evidence={'trackId': 12})
     state = state_at(radar_frame(*((edge,) if include_edge else ())), speed=0.0)
@@ -708,7 +486,6 @@ def test_edge_caution_preserves_an_existing_model_stop_and_held_vehicle():
          patch.object(planner.dec, 'active', return_value=True), patch.object(planner.dec, 'mode', return_value='blended'):
       planner.update(state, now_ns=CONSUMPTION)
     assert planner.output_a_target <= -2.0 and planner.output_should_stop
-    assert planner.reference_planner.radar_held_identity == (SESSION, 5)
     arms.append(planner)
   assert arms[0].motion_intent.reasons == arms[1].motion_intent.reasons
   assert arms[0].motion_intent.release_allowed == arms[1].motion_intent.release_allowed

@@ -33,22 +33,25 @@ def test_current_compatible_visual_probability_also_qualifies_identity_binding(p
 @pytest.mark.parametrize('probability, fused', [
   (.799, False), (.8, True), (math.nan, False), (math.inf, False), (-.1, False), (1.01, False), (None, False),
 ], ids=['below-threshold', 'at-threshold', 'nan', 'infinity', 'negative', 'above-one', 'missing'])
-def test_current_raw_probability_gates_identity_separately_from_filtered_visual_lead(probability, fused):
+def test_current_raw_probability_gates_visual_membership_and_stronger_identity_binding(probability, fused):
   values = scene(leads=[vision(probability=.94)], bindings=[binding()])
   values['model']['leadsV3'][0]['prob'] = probability
   result = HondaRadarControl().update(**values)
   target = next(lead for lead in present_leads(result) if lead['evidence']['trackId'] == 1)
   assert target['evidence']['source'] == ('fused' if fused else 'radar')
   assert target['dRel'] == 20.0 and target['vLeadK'] == 10.0 and target['aLeadK'] == -.4
-  if not fused:
-    # The ordinary visual object keeps its existing filtered probability and
-    # purpose flags; the extra gate grants no new component/identity authority.
+  visual_present = probability is not None and math.isfinite(probability) and .5 < probability <= 1
+  if visual_present and not fused:
+    # The current weak visual observation remains usable for ordinary braking,
+    # but its old confidence grants neither strong purpose nor identity.
     visual = next(lead for lead in present_leads(result) if lead['evidence']['source'] == 'vision')
-    assert visual['modelProb'] == .94 and visual['dRel'] == 20.0
-    assert visual['evidence']['brakeQualified'] and visual['evidence']['stopQualified']
+    assert visual['modelProb'] == probability and visual['dRel'] == 20.0
+    assert visual['evidence']['brakeQualified'] and not visual['evidence']['stopQualified']
     assert visual['evidence']['positionMonoTime'] == START
     assert visual['evidence']['velocityMonoTime'] == START
-  assert len(present_leads(result)) == (1 if fused else 2)
+  else:
+    assert not any(lead['evidence']['source'] == 'vision' for lead in present_leads(result))
+  assert len(present_leads(result)) == 1 + int(visual_present and not fused)
 
 
 def test_older_observer_binding_cannot_qualify_new_raw_weak_visual_components():
@@ -58,7 +61,7 @@ def test_older_observer_binding_cannot_qualify_new_raw_weak_visual_components():
   values['observation_ns'] = previous['observation_ns']
   values['model']['leadsV3'][0]['prob'] = .2
   result = HondaRadarControl().update(**values)
-  assert result.healthy and len(present_leads(result)) == 2
+  assert result.healthy and len(present_leads(result)) == 1
   assert all(lead['evidence']['source'] != 'fused' for lead in present_leads(result))
   target = next(lead for lead in present_leads(result) if lead['evidence']['trackId'] == 1)
   assert target['evidence']['positionMonoTime'] == START
@@ -74,7 +77,7 @@ def test_filtered_probability_cannot_authorize_borrowing_current_raw_weak_motion
   result = HondaRadarControl().update(**values)
   assert all(lead['evidence']['source'] != 'fused' for lead in present_leads(result))
   if component == 'velocity':
-    assert len(present_leads(result)) == 1 and present_leads(result)[0]['evidence']['source'] == 'vision'
+    assert not present_leads(result)
   else:
     target = next(lead for lead in present_leads(result) if lead['evidence']['trackId'] == 1)
     assert target['vLeadK'] == 10.0 and target['aLeadK'] == 0.0
@@ -90,7 +93,7 @@ def test_visual_confidence_recovery_does_not_restore_a_withdrawn_radar_identity(
   result = controller.update(**weak)
   assert all(lead['evidence']['reason'] != 'visionFallback' for lead in present_leads(result))
   assert not controller._tracks
-  assert any(lead['evidence']['source'] == 'vision' for lead in present_leads(result))
+  assert not present_leads(result)
   recovered = controller.update(**observer_gap(2, leads=[vision(distance=distance, speed=speed)]))
   assert len(present_leads(recovered)) == 1
   current = present_leads(recovered)[0]

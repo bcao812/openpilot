@@ -195,6 +195,69 @@ def test_repeated_positive_plan_expires_at_the_consumer_before_submaster_alive_e
   assert motion.planMonoTime == origin
 
 
+def test_new_model_waits_for_current_plan_then_withdrawn_lead_reason_clears_in_that_control_tick():
+  """B2 permits the disclosed old-plan interval, not an extra target latch."""
+  harness = ControlsHarness()
+  harness.car_state.vEgo = 0.7
+  harness.car_state.standstill = False
+  harness.plan.aTarget = -0.7
+  harness.plan.motionIntent.reasons = int(StopReason.CLOSE_LEAD)
+  command, motion = harness.step()
+  assert motion.phase == 'approach' and motion.resolvedStop
+  old_plan_ns = motion.planMonoTime
+  old_model_ns = motion.modelMonoTime
+
+  # The new perception no longer supplies any qualified vision object. Radar
+  # selection belongs to the producer; the consumer still has its old plan.
+  model = harness.events['modelV2'].modelV2
+  for lead in model.leadsV3:
+    lead.prob = 0.0
+  model.action.shouldStop = False
+  model.action.desiredAcceleration = 0.0
+  command, motion = harness.step(new_plan=False)
+  assert harness.control.sm.logMonoTime['modelV2'] > old_model_ns
+  assert motion.planMonoTime == old_plan_ns and motion.modelMonoTime == old_model_ns
+  assert motion.reasons & int(StopReason.CLOSE_LEAD)
+  assert not motion.degraded and command.longActive
+
+  # A fresh valid producer decision withdraws the old target. It must not
+  # spend another confirmation period satisfying that target's former stop.
+  harness.plan.aTarget = 0.0
+  harness.plan.motionIntent.reasons = 0
+  harness.plan.motionIntent.releaseAllowed = True
+  command, motion = harness.step()
+  assert motion.planMonoTime == harness.now_ns
+  assert motion.modelMonoTime == harness.control.sm.logMonoTime['modelV2']
+  assert not motion.reasons & int(StopReason.CLOSE_LEAD)
+  assert not motion.resolvedStop and not motion.degraded
+  assert command.longActive and not command.cruiseControl.resume
+  # Existing command continuity can take time; consuming the new decision
+  # does not manufacture a positive acceleration or erase actuator limits.
+  assert -0.7 <= command.actuators.accel <= 0.0
+
+
+@pytest.mark.parametrize('older_input', ['model', 'reference'])
+def test_new_models_do_not_extend_an_older_plan_input_deadline(older_input):
+  harness = ControlsHarness()
+  origin = harness.now_ns + CONTROL_STEP_NS
+  older = origin - 80_000_000
+  kwargs = {'model_time_ns': older} if older_input == 'model' else {'reference_source_ns': older}
+  command, motion = harness.step(now_ns=origin, **kwargs)
+  assert command.actuators.accel > 0.0 and not motion.degraded
+  old_plan_ns = motion.planMonoTime
+  deadline = older + PLAN_LEASE_NS
+  while harness.now_ns + CONTROL_STEP_NS <= deadline:
+    command, motion = harness.step(new_plan=False)
+    assert harness.control.sm.logMonoTime['modelV2'] == harness.now_ns
+    assert motion.planMonoTime == old_plan_ns
+    assert not motion.degraded
+  command, motion = harness.step(new_plan=False)
+  assert harness.now_ns > deadline
+  assert harness.now_ns - old_plan_ns < PLAN_LEASE_NS
+  assert motion.degraded and command.actuators.accel <= DEGRADED_ACCEL + 1e-6
+  assert motion.planMonoTime == old_plan_ns
+
+
 @pytest.mark.parametrize('fault', ['invalid', 'unknown_reason', 'expired'])
 def test_degraded_tracking_cannot_issue_resume_when_oem_reports_standstill(fault):
   harness = ControlsHarness()

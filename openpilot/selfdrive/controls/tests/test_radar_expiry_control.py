@@ -1,4 +1,4 @@
-"""New expiry handling keeps a moving car's existing failure braking path."""
+"""Age-only expiry replans from current inputs through the real owner."""
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +19,8 @@ from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import st
   ('late_publication', 'radar'), ('late_publication', 'fused'),
   ('publisher', 'radar'), ('publisher', 'fused'),
 ])
-def test_expired_near_obstacle_does_not_turn_ongoing_braking_into_cruise(boundary, source):
+@pytest.mark.parametrize('current_action', [0.5, -1.5])
+def test_expired_near_obstacle_replans_and_preserves_current_model_braking(boundary, source, current_action):
   for name in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
     Params().put_bool(name, True, block=True)
   planner, owner = make_planner_owner(speed=10.0, initial_accel=-1.0)
@@ -29,7 +30,7 @@ def test_expired_near_obstacle_does_not_turn_ongoing_braking_into_cruise(boundar
   rd = make_radard()
   update_with_result(rd, frame)
 
-  def step(now):
+  def step(now, action=0.5):
     state = state_at(frame, speed=10.0, target=22.0, now=now)
     state['carState'].aEgo = -1.0
     if boundary == 'publisher':
@@ -39,10 +40,11 @@ def test_expired_near_obstacle_does_not_turn_ongoing_braking_into_cruise(boundar
       state['radarState'] = native_frame(frame)
       if boundary == 'late_publication':
         state.logMonoTime['radarState'] = now - 1_000_000
-    # The visual model asks for forward motion and supplies no visual lead.
-    assert state['modelV2'].action.desiredAcceleration > 0.0
+    # No current visual object is invented; independent current action is kept.
+    state['modelV2'].action.desiredAcceleration = action
     assert not state['radarState'].visionLeadOne.present
-    with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
+    with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='blended'), \
+         patch.object(planner, 'is_e2e', return_value=True):
       planner.update(state, now_ns=now)
     publisher = CapturingPublisher()
     with patch('openpilot.selfdrive.controls.lib.longitudinal_planner.time.monotonic_ns', return_value=now + 1_000_000):
@@ -61,11 +63,18 @@ def test_expired_near_obstacle_does_not_turn_ongoing_braking_into_cruise(boundar
   before, first_commands = step(PUBLICATION + 20_000_000)
   assert before.solverStatus == 0 and before.aTarget < 0.0
   assert max(first_commands) < 0.0
-  after, commands = step(PUBLICATION + 60_000_000)
-  assert after.solverStatus != 0 and not after.motionIntent.valid
-  assert after.aTarget <= before.aTarget and after.motionIntent.brakingAccel <= before.aTarget
-  assert max(commands) <= min(0.0, first_commands[-1])
-  assert not after.motionIntent.releaseAllowed
-  assert planner.reference_planner.radar_held_identity is None
+  native_calls = planner.mpc.diagnostic_solve_calls
+  after, commands = step(PUBLICATION + 60_000_000, current_action)
+  assert planner.mpc.diagnostic_solve_calls == native_calls + 1
+  assert after.solverStatus == 0 and after.motionIntent.valid
+  assert not owner.motion_degraded and not after.continuation.valid
+  assert not planner.mpc._source_leads
   expiry = rd.publication_expiry if boundary == 'publisher' else planner.reference_planner.radar_consumption
-  assert expiry.degraded
+  assert expiry.expired_identities and not expiry.degraded
+  if current_action < 0.0:
+    assert after.aTarget <= current_action and max(commands) <= 0.0
+  else:
+    # Normal reference/PID history may shape release, but old target geometry
+    # does not remain a failure-braking cap on the new native plan.
+    assert after.reference.constraintAccel > 0.0
+    assert not after.shouldStop

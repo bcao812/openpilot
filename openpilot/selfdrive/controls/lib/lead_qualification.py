@@ -230,7 +230,8 @@ def _qualified_snapshot(lead, purpose, min_model_prob, now_ns, require_active_wi
   return purpose != 'departure' or ground > 0.0 and relative > 0.0
 
 
-def _qualified_lead_evidence(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_active_window=True):
+def _qualified_lead_evidence(lead, purpose, min_model_prob=0.95, *, now_ns=None, require_active_window=True,
+                             _for_expiry=False):
   """Check a purpose without granting another purpose's authority.
 
   ``now_ns`` is the caller's monotonic event time, never wall time. Omitting it
@@ -242,8 +243,13 @@ def _qualified_lead_evidence(lead, purpose, min_model_prob=0.95, *, now_ns=None,
   Historical predicted/coasting records remain readable but grant none.
   ``require_active_window`` remains a compatibility argument; retired occupancy
   windows do not grant or expire an ordinary lead's measurement authority.
+  ``_for_expiry`` is a private structural check for retirement only. It ignores
+  measurement-age bounds while retaining current estimate/model health and
+  every other evidence check; its result must never grant control authority.
   """
-  if type(lead) is _StructSnapshot and lead._cache_safe and (now_ns is None or type(now_ns) is int):
+  if not isinstance(_for_expiry, bool):
+    return False
+  if not _for_expiry and type(lead) is _StructSnapshot and lead._cache_safe and (now_ns is None or type(now_ns) is int):
     return _qualified_snapshot(lead, purpose, min_model_prob, now_ns, require_active_window)
   if purpose not in PURPOSES or _read(lead, 'present', False) is not True or not isinstance(require_active_window, bool):
     return False
@@ -282,7 +288,8 @@ def _qualified_lead_evidence(lead, purpose, min_model_prob=0.95, *, now_ns=None,
     return False
   maximum_age = MAX_MEASUREMENT_AGE_NS
   if (not 0 <= reference - estimate <= MAX_ESTIMATE_AGE_NS
-      or any(not 0 <= reference - stamp <= maximum_age or abs(estimate - stamp) > maximum_age for stamp in (position, velocity))
+      or any(stamp > reference or not _for_expiry and
+             (reference - stamp > maximum_age or abs(estimate - stamp) > maximum_age) for stamp in (position, velocity))
       or not 0 <= reference - model <= MAX_MODEL_AGE_NS):
     return False
   if _read(evidence, 'positionValid', False) is not True or _read(evidence, 'velocityValid', False) is not True:

@@ -41,6 +41,8 @@ def failure_request(kind):
                          evidence={'conflictEnd': .10, 'followQualified': False})
       if kind in ('extra_stale', 'formal_stale'):
         lead.evidence.positionMonoTime -= 500_000_000
+      elif kind == 'formal_invalid':
+        lead.evidence.positionValid = False
       elif kind == 'extra_future':
         lead.evidence.pathState, lead.evidence.conflictStart = 'entering', .02
       elif kind == 'extra_caution':
@@ -48,7 +50,7 @@ def failure_request(kind):
       elif kind == 'extra_malformed':
         lead.dRel = float('nan')
       objects.append(lead)
-    slots = tuple(objects) if kind == 'formal_stale' else ()
+    slots = tuple(objects) if kind in ('formal_stale', 'formal_invalid') else ()
     state['radarState'] = native_frame(radar_frame(*objects, publication=stamp, display=slots))
     if kind == 'solver':
       planner.mpc.solver = Mock(wraps=planner.mpc.solver)
@@ -70,7 +72,7 @@ def test_extra_objects_never_create_failure_braking_fcw_or_control_influence(kin
   assert not plan.objectInfluences
 
 
-@pytest.mark.parametrize('kind', ['solver', 'formal_stale'])
+@pytest.mark.parametrize('kind', ['solver', 'formal_invalid'])
 def test_ordinary_failure_reaches_owner_and_can_without_extra_urgent_authority(kind):
   planner, controller, state, plan, commands = failure_request(kind)
   assert planner.mpc.solution_status != 0 and not plan.motionIntent.valid

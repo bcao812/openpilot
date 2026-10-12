@@ -90,7 +90,7 @@ def test_qualified_native_donor_has_separate_candidate_without_rewriting_failure
   assert message.longitudinalPlan.aTarget <= -0.5
 
 
-@pytest.mark.parametrize('status', [-1, -6])
+@pytest.mark.parametrize('status', [-1, -6, -7])
 def test_input_or_retired_failure_keeps_original_protection_and_never_offers_continuation(status):
   planner, state = ready_planner()
   fail_next(planner, state, status=status)

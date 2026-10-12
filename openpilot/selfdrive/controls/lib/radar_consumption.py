@@ -1,12 +1,11 @@
 """One immutable formal-lead view for a radarState planner tick.
 
 A measured object may cross its deadline before or after publication.
-Remove irrelevant expired formal leads without carrying missing-object risks
-into later messages. Relevant expiry and malformed formal input retain the
-existing failure braking path. Extra radar objects never acquire control roles.
+Remove age-expired formal leads from this tick's candidates, without carrying
+their geometry or absence into later decisions. Malformed evidence and whole
+input-health failures remain separate. Extra radar objects never acquire control roles.
 Well-formed future-entry predictions are retired before assigning control roles.
 """
-from openpilot.selfdrive.car.honda_radar_relevance import loss_relevant
 from openpilot.selfdrive.controls.lib.lead_qualification import (
   MAX_ESTIMATE_AGE_NS, MAX_MEASUREMENT_AGE_NS, MAX_MODEL_AGE_NS,
   _ControlLeadView, _StructSnapshot, _as_reader, _finite, _future_entry, _integer, _object_key, _qualified_lead_evidence, _read,
@@ -80,12 +79,13 @@ class RadarConsumptionView(_ControlLeadView):
 def _measurement_expired_at(lead, now_ns):
   """Classify age-only loss without admitting it at an earlier source clock.
 
-  Source-time qualification checks the unmodified evidence's structure and
-  original lifetime. Current estimate/model evidence must still be fresh;
-  only the position or velocity measurement may have expired. The result is
-  used solely for retirement/loss handling, never as a control qualification.
+  Validate the unmodified evidence's structure and current estimate/model
+  clocks; only position or velocity measurement ages may be expired, including
+  expiry before publication. No earlier clock or refreshed stamp is used to
+  admit the object. This result only removes candidates; it grants no authority.
   """
-  if not _integer(now_ns, 1) or not _qualified_lead_evidence(lead, 'brake', 0.0):
+  if (not _integer(now_ns, 1)
+      or not _qualified_lead_evidence(lead, 'brake', 0.0, now_ns=now_ns, _for_expiry=True)):
     return False
   evidence = _read(lead, 'evidence')
   if str(_read(evidence, 'source')) not in ('radar', 'fused'):
@@ -131,16 +131,6 @@ def _qualified_objects(radar, qualified_ns):
   return tuple(objects)
 
 
-def _relevant_at_consumption(lead, now_ns, speed):
-  evidence = _read(lead, 'evidence')
-  elapsed = (now_ns - _read(evidence, 'estimateMonoTime')) / 1e9
-  # This bounded constant-velocity alignment only classifies current expiry;
-  # it never refreshes the expired hypothesis or supplies a new MPC input.
-  ground_speed = _read(lead, 'vLead')
-  distance = _read(lead, 'dRel') + (ground_speed - speed) * elapsed
-  return loss_relevant(distance=distance, ego_speed=speed, path_state=str(_read(evidence, 'pathState')))
-
-
 class RadarConsumption:
   def __init__(self):
     self.clear()
@@ -168,7 +158,8 @@ class RadarConsumption:
 
     The caller records the actual qualification clock and creates its Event
     before this check. The supplied publication timestamp remains unchanged.
-    Relevant expiry retains the invalid object for this frame's failure braking.
+    Every age-only expired object retires, including a formerly close object.
+    Its old distance cannot create an independent veto on current planning.
     """
     return self._update(radar, qualified_ns=qualified_ns, publication_ns=publication_ns,
                         now_ns=publication_ns, speed=speed)
@@ -212,13 +203,6 @@ class RadarConsumption:
       if not measurement_expired:
         continue
       identity = lead_identity(lead)
-      relevant = _relevant_at_consumption(lead, now_ns, speed)
-      # A degraded flag is diagnostic, not a braking command. The same relevant
-      # obstacle must retain failure braking whether its measurement crossed
-      # the measurement deadline before or after publication.
-      if relevant:
-        self.degraded = True
-        continue
       removed.add(_object_key(lead))
       identities.append(identity)
     self.expired_identities = tuple(identities)

@@ -425,11 +425,15 @@ class HondaRadarControl:
       value = raw[index] if index < len(raw) else {'present': False}
       lead = dict(value) if isinstance(value, dict) else value.to_dict()
       if lead.get('present') is True:
-        fields = ('dRel', 'yRel', 'vRel', 'vLead', 'vLeadK', 'aLeadK', 'aLeadTau', 'modelProb')
-        if not _finite(*(lead.get(key) for key in fields)) or not 0 <= lead['modelProb'] <= 1:
+        hypothesis = hypotheses[index] if hypotheses is not None and index < len(hypotheses) else None
+        probability = _read(hypothesis, 'prob')
+        fields = ('dRel', 'yRel', 'vRel', 'vLead', 'vLeadK', 'aLeadK', 'aLeadTau')
+        if not _finite(*(lead.get(key) for key in fields), probability) or not .5 < probability <= 1:
           lead = {'present': False}
         else:
-          hypothesis = hypotheses[index] if index < len(hypotheses) else None
+          # Recheck current membership and qualification at the adapter
+          # boundary; an old/filtered modelProb is not current detection.
+          lead['modelProb'] = probability
           sx, sv = _first(hypothesis, 'xStd', 2.0), _first(hypothesis, 'vStd', 2.0)
           sx = max(.5, min(20.0, float(sx))) if _finite(sx) and sx >= 0 else 20.0
           sv = max(.5, min(20.0, float(sv))) if _finite(sv) and sv >= 0 else 20.0
@@ -452,10 +456,9 @@ class HondaRadarControl:
 
   @staticmethod
   def _identity_visions(visions, model):
-    # radard's modelProb has a delayed falling edge for ordinary visual leads.
-    # Borrowing current motion components or continuing a physical identity
-    # also needs the current raw hypothesis, independent of that display and
-    # ordinary-vision qualification. Keep the original objects unchanged.
+    # Borrowing motion components or continuing a physical identity needs a
+    # stronger current raw hypothesis than ordinary visual qualification.
+    # Keep the original objects unchanged.
     hypotheses = _read(model, 'leadsV3', ())
     result = []
     for index, vision in enumerate(visions):

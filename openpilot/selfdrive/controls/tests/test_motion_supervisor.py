@@ -330,18 +330,18 @@ def test_current_raw_stops_take_priority_over_rolling_creep_withdrawal(reason):
   assert not harness.supervisor.degraded
 
 
-def test_rolling_creep_withdrawal_keeps_a_retained_close_lead_after_its_raw_bit_clears():
+def test_rolling_creep_withdrawal_does_not_keep_a_withdrawn_close_lead():
   harness = MotionHarness()
   for _ in range(60):
     assert harness.step(MotionIntent(reasons=StopReason.CLOSE_LEAD), v_ego=0.8, a_target=-0.35)
   assert harness.supervisor.reasons == StopReason.CLOSE_LEAD | StopReason.CREEP
-  # The producer has withdrawn its raw bit, but the owner's existing close-
-  # lead hysteresis still applies at this speed and negative target. Removing
-  # the independent creep reason must not withdraw that retained stop.
+  # The current producer withdraws the close target and independently clears
+  # creep. The negative current target still brakes through normal tracking;
+  # the owner must not add a stop based on the previously detected target.
   for _ in range(20):
-    assert harness.step(MotionIntent(release_allowed=True), v_ego=0.8, a_target=-0.35)
-    assert harness.supervisor.reasons == StopReason.CLOSE_LEAD
-    assert harness.supervisor.phase == MotionPhase.APPROACH
+    assert not harness.step(MotionIntent(release_allowed=True), v_ego=0.8, a_target=-0.35)
+    assert harness.supervisor.reasons == StopReason.NONE
+    assert harness.supervisor.phase == MotionPhase.RELEASE
     assert harness.supervisor.creep_total_t == 0.0
     assert not harness.supervisor.degraded
 
@@ -505,13 +505,14 @@ def test_late_moving_evidence_cannot_undo_an_existing_creep_stop():
   assert harness.supervisor.moving_lead_t == 0.0
 
 
-def test_close_lead_noise_does_not_own_a_second_latch():
+def test_withdrawn_close_lead_does_not_latch_or_require_positive_acceleration():
   harness = MotionHarness()
   harness.step(MotionIntent(reasons=StopReason.CLOSE_LEAD), v_ego=1.3, a_target=-0.7)
   for _ in range(25):
-    assert harness.step(v_ego=1.3, a_target=-0.7)
-    assert harness.supervisor.reasons == StopReason.CLOSE_LEAD
-  assert not harness.step(MotionIntent(release_allowed=True), v_ego=1.3, a_target=-2.5)
+    assert not harness.step(MotionIntent(allow_creep=False), v_ego=1.3, a_target=-0.7)
+    assert harness.supervisor.reasons == StopReason.NONE
+  assert harness.step(MotionIntent(reasons=StopReason.CLOSE_LEAD), v_ego=1.3, a_target=-0.7)
+  assert not harness.step(MotionIntent(allow_creep=False), v_ego=1.3, a_target=-2.5)
   assert not harness.supervisor.reasons
 
 

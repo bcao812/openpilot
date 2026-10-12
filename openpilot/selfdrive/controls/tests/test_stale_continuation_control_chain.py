@@ -1,7 +1,7 @@
-"""Consumer/alert policy for the separate stale-measurement continuation wire.
+"""The retired -7 wire status cannot execute or suppress a planning fault.
 
-These tests reclassify a real, validated numerical offer to isolate the
-receiver's status policy. Producer stale geometry is tested independently.
+A real status4 offer is reclassified to test the receiver independently;
+current-object retirement and native replanning are tested separately.
 """
 from unittest.mock import patch
 
@@ -35,7 +35,7 @@ def test_stale_status_cannot_execute_or_hide_an_accelerating_offer():
   assert command.actuators.accel <= -0.5 and can['BRAKE_REQUEST'] == 1
 
 
-def test_braking_only_stale_offer_is_diagnostic_until_its_fixed_deadline():
+def test_even_a_braking_only_offer_cannot_revive_the_retired_stale_status():
   # Cap the donor before integration and native-donor validation, rather than
   # editing any candidate trajectory or changing the measured initial state.
   with patch.object(UnifiedLongitudinalPlanner, 'independent_constraint',
@@ -46,20 +46,9 @@ def test_braking_only_stale_offer_is_diagnostic_until_its_fixed_deadline():
   assert braking_only_continuation(ContinuationOffer.from_message(event.longitudinalPlan.continuation))
   stale_status(chain, event)
   original = chain.plan_event.to_dict()
-  deadline = chain.plan_event.longitudinalPlan.continuation.validUntilMonoTime
   observe_at(daemon, chain, START + 100_000_000, offset_ns=2_000_000)
-  assert log.OnroadEvent.EventName.longitudinalControlUnavailable not in daemon.events.names
-  for offset in range(100, 200, 10):
-    sample = START + offset * 1_000_000
-    command, motion, can = chain.consume(sample)
-    assert motion.continuationActive and not motion.degraded
-    assert command.actuators.accel <= 0.0 and can['ACCEL_COMMAND'] <= 0.0
-    observe_at(daemon, chain, sample)
-    assert log.OnroadEvent.EventName.longitudinalControlUnavailable not in daemon.events.names
-    assert motion.continuationValidUntilMonoTime == deadline
-  command, motion, can = chain.consume(START + 200_000_000)
-  observe_at(daemon, chain, START + 200_000_000)
+  assert log.OnroadEvent.EventName.longitudinalControlUnavailable in daemon.events.names
+  command, motion, can = chain.consume(START + 100_000_000)
   assert not motion.continuationActive and motion.degraded
   assert command.actuators.accel <= -0.5 and can['BRAKE_REQUEST'] == 1
-  assert log.OnroadEvent.EventName.longitudinalControlUnavailable in daemon.events.names
   assert chain.plan_event.to_dict() == original

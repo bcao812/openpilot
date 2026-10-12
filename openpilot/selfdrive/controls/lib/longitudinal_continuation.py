@@ -21,9 +21,10 @@ from openpilot.selfdrive.modeld.constants import index_function
 
 
 CONTINUATION_VERSION = 1
-# Match the native proposal gate. The retired occupancy status (-6) must not
-# authorize a received offer after its producer path has been removed.
-CONTINUATION_STATUSES = (4, STALE_MEASUREMENT_STATUS)
+# Only a native numerical failure may use a revalidated successful trajectory.
+# Retired occupancy (-6) and stale-measurement (-7) offers must not regain
+# execution authority after their old-object producer paths have been removed.
+CONTINUATION_STATUSES = (4,)
 CONTINUATION_EPISODE_NS = 100_000_000
 CONTINUATION_DONOR_SOURCE_NS = 200_000_000
 NATIVE_RECOVERY_NS = 500_000_000

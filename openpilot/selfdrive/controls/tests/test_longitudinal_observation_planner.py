@@ -27,7 +27,6 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VER
 from openpilot.selfdrive.controls.lib.parking_approach import ParkingApproach, VisionLeadUncertainty
 from openpilot.selfdrive.controls.lib.planner_continuation import PlannerContinuation
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
-from openpilot.selfdrive.controls.lib.turn_lead_guard import TurnLeadGuard
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_state, patch_sampled_accel
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -60,7 +59,7 @@ def snapshot_value(value):
     # The backing store is the dependency; copying a native handle only creates
     # an unequal Python identity. Loaded policy values remain in radar_settings.
     return (type(value).__qualname__, value.get_param_path())
-  if isinstance(value, (ParkingApproach, VisionLeadUncertainty, RadarConsumption, TurnLeadGuard,
+  if isinstance(value, (ParkingApproach, VisionLeadUncertainty, RadarConsumption,
                         PlannerContinuation, ContinuationBudget)):
     return (type(value).__qualname__, snapshot_value(vars(value)))
   if isinstance(value, OrderedDict):

@@ -471,7 +471,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
           reference_accepted=bool(not ref.reference_overridden and abs(self.output_a_target - ref.reference_accel) < 1e-6
                                   and ref.constraint_accel > ref.reference_accel + 1e-6),
           independent_stop=independent_stop, object_stop=bool(intent.reasons & (StopReason.MPC | StopReason.CLOSE_LEAD)),
-          held_identity=ref.radar_held_identity, release_identity=ref.radar_release_identity,
+          held_identity=None, release_identity=None,
           standstill=bool(sm['carState'].standstill), target_accel=float(self.output_a_target), accel_min=ACCEL_MIN, accel_max=ACCEL_MAX,
         )
       except (AttributeError, TypeError, ValueError, OverflowError):

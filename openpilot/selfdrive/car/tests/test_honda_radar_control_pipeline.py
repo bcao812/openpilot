@@ -9,7 +9,6 @@ from openpilot.selfdrive.car.honda_radar_control import CUT_IN_REASON, SWEPT_HAL
 from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE, SCOPE_MAX_AGE_NS, ObserverSettings
 from openpilot.selfdrive.car.tests import honda_radar_control_test_support as pipeline_support
 from openpilot.selfdrive.car.tests.honda_radar_control_test_support import Target, control_pipeline
-from openpilot.selfdrive.controls.lib.drive_helpers import STOP_SPEED
 from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 
 
@@ -41,8 +40,6 @@ def body_row(pipeline, kind, side):
   row['mpc_body_follow_geometry'] = [int(lead.evidence.followGeometryMonoTime) for lead in body_leads]
   row['fcw_count'], row['fcw'] = int(mpc.crash_cnt), bool(pipeline.planner.fcw)
   row['consumer_degraded'] = planner.radar_consumption.degraded
-  assert planner.radar_held_identity is None and planner._radar_stop_candidate is None
-  assert not planner._radar_stop_pending and planner.radar_release_identity is None
   return row
 
 
@@ -153,8 +150,6 @@ def test_driver_edges_preserve_fresh_confirmed_body_during_long_visual_gap(inter
       assert all(not owner['active'] and owner['phase'] == 'off' and owner['accel'] == 0.0 for owner in row['owner'])
       assert all(not command['active'] and not command['brake'] and command['accel'] == 0.0
                  and not command['release'] and not command['resume'] for command in row['can'])
-      assert pipeline.planner.reference_planner.radar_held_identity is None
-      assert not pipeline.planner.reference_planner._radar_stop_pending
     last_manual_ns = rows[-1]['source_ns']
     for _ in range(12):
       row = pipeline.step(speed=8.0, radar=[target])
@@ -166,10 +161,7 @@ def test_driver_edges_preserve_fresh_confirmed_body_during_long_visual_gap(inter
       assert row['long_active'] and pipeline.state['carControl'].longActive
       motion = pipeline.state['controlsState'].motionState
       assert motion.referenceTimingValid and motion.referenceSourceMonoTime == row['source_ns'] > last_manual_ns
-      # This moving fixture never manufactures a stop ACK. Recovery consumes
-      # its new owner publication, with no remembered object HOLD to borrow.
-      assert pipeline.planner.reference_planner.radar_held_identity is None
-      assert not pipeline.planner.reference_planner._radar_stop_pending
+      # Recovery consumes the new owner publication and current body target.
       assert all(owner['active'] and owner['phase'] != 'hold' for owner in row['owner'])
       assert all(command['active'] for command in row['can'])
     record(record_property, f'confirmed_body_driver_edge_{intervention}', rows)
@@ -207,14 +199,9 @@ def test_confirmed_body_history_still_yields_to_current_out_or_identity_change(c
     record(record_property, f'confirmed_body_revocation_{change}', rows)
 
 
-def establish_prior_object_hold(pipeline):
-  """Explicit lifecycle-test premise, paired with the actual owner receipt.
-
-  These stationary fixtures test an already established barrier, not how the
-  car attributed its original stop. Rolling acquisition is verified separately
-  by the unchanged ideal-plant trajectory and its real MPC/owner/CAN chain.
-  """
-  state, ref = pipeline.state, pipeline.planner.reference_planner
+def assert_current_radar_hold(pipeline):
+  """Check the real sensed target and executed hold without injecting a latch."""
+  state = pipeline.state
   evidence = state['radarState'].leadOne.evidence
   identity = (evidence.sessionId, int(evidence.trackId))
   assert state['radarState'].leadOne.present and evidence.stopQualified
@@ -223,10 +210,6 @@ def establish_prior_object_hold(pipeline):
   assert motion.reasons & int(StopReason.MPC | StopReason.CLOSE_LEAD)
   assert motion.referenceTimingValid and not motion.degraded and not motion.waitingForFreshInput
   assert state['carControl'].actuators.accel <= 0.0
-  ref._radar_stop_candidate = (identity, int(motion.referenceSourceMonoTime), int(motion.referenceProducerMonoTime),
-                              int(motion.referenceProducerInstanceMonoTime))
-  ref.adopt_executed_radar_stop(state, now_ns=max(state.logMonoTime['carControl'], state.logMonoTime['controlsState']))
-  assert ref.radar_held_identity == identity
   return identity
 
 
@@ -272,8 +255,7 @@ def test_same_car_uses_radar_motion_and_brakes_through_long_visual_gap(record_pr
   assert abs(bound['dRel'] - rows[23]['sensor_targets'][0]['distance']) < .35
   assert abs(bound['vLeadK'] - 4.0) < .35
   identity = bound['evidence']['trackId']
-  # The final one second is beyond the obsolete 500 ms visual-loss cap and
-  # beyond the formal vision probability filter's disappearance interval.
+  # Fresh radar remains independently usable throughout a long visual gap.
   for row in rows[34:]:
     lead = row['radar']['leadOne']
     assert lead['present'] and lead['evidence']['source'] == 'radar'
@@ -458,18 +440,23 @@ def test_third_lateral_object_cannot_brake_via_future_entry_or_extra_object(reco
       [sample['accel'] for sample in baseline[row['frame']]['can']], abs=1e-6)
 
 
-@pytest.mark.parametrize('outcome', ['dropout', 'departure'])
-def test_established_radar_hold_survives_dropout_and_releases_for_same_car_departure(outcome, record_property):
-  """Dropout/departure lifecycle after an explicitly established object hold."""
+@pytest.mark.parametrize('outcome', ['still_present', 'absent', 'departure', 'new_identity'])
+def test_current_radar_and_model_determine_hold_or_release_without_old_identity(outcome, record_property):
+  """A current obstacle stops; its old identity does not veto a new clear scene."""
   rows = []
   with control_pipeline(speed=0.0) as pipeline:
     for frame in range(100):
       elapsed = max(0.0, (frame - 28) * .05)
       departing = outcome == 'departure' and frame >= 28
       target = Target(3.0 + .4 * elapsed**2 if departing else 3.0, .8 * elapsed if departing else 0.0)
-      rows.append(pipeline.step(speed=0.0, radar=[target], observer_online=outcome != 'dropout' or frame < 28))
+      targets = [target]
+      if frame >= 28 and outcome == 'absent':
+        targets = []
+      elif frame >= 28 and outcome == 'new_identity':
+        targets = [Target(12.0 + 3.0 * elapsed, 3.0, oem_id=2)]
+      rows.append(pipeline.step(speed=0.0, radar=targets))
       if frame == 27:
-        establish_prior_object_hold(pipeline)
+        assert_current_radar_hold(pipeline)
   record(record_property, f'hold_{outcome}', rows)
   held = rows[27]['radar']['leadOne']
   assert rows[27]['radar']['fusionHealthy'] and held['present']
@@ -477,83 +464,81 @@ def test_established_radar_hold_survives_dropout_and_releases_for_same_car_depar
   assert held['evidence']['trackId'] > 0
   assert all(owner['phase'] == 'hold' and owner['stop'] for row in rows[20:28] for owner in row['owner'])
   assert any(sample['stop'] and sample['brake'] for row in rows[20:28] for sample in row['can'])
-  if outcome == 'dropout':
-    frozen = rows[27]['observer_ns'], rows[27]['observer_position_ns']
-    assert all((row['observer_ns'], row['observer_position_ns']) == frozen for row in rows[28:])
+  if outcome == 'absent':
+    # Healthy observer publications continue. Its raw asynchronous target
+    # expires before this tail; an empty event list alone is not a new scan.
+    assert all(row['observer_ns'] > rows[27]['observer_ns'] for row in rows[28:])
     assert all(not obj['evidence']['coasting'] and obj['evidence']['source'] != 'predicted'
                for row in rows[28:] for obj in objects(row))
-    assert not any(obj['evidence']['trackId'] == held['evidence']['trackId']
-                   for row in rows[36:] for obj in objects(row))
-    assert any(row['radar'].get('fusionDegraded', False) for row in rows[36:])
-    assert not any(row['radar']['fusionRiskUnresolved'] for row in rows)
-    # The executed object-specific HOLD remains its own state. Sensor loss
-    # cannot release it even though no persistent missing-ID risk is kept.
+    assert all(not objects(row) for row in rows[36:])
+    assert all(row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded'] for row in rows[36:])
+    assert all(not row['reasons'] & int(StopReason.CLOSE_LEAD) for row in rows[36:])
+  elif outcome == 'still_present':
     for row in rows[36:]:
+      lead = row['radar']['leadOne']
+      assert lead['present'] and lead['evidence']['stopQualified']
+      assert lead['evidence']['positionMonoTime'] == row['source_ns']
       assert not row['release']
       assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
       assert all(sample['brake'] and not sample['release'] and sample['accel'] <= 0.0 for sample in row['can'])
-  else:
-    assert not any(row['radar']['fusionRiskUnresolved'] for row in rows)
+  elif outcome == 'departure':
     identity = rows[27]['radar']['leadOne']['evidence']['trackId']
     assert all(row['radar']['leadOne']['evidence']['trackId'] == identity for row in rows[28:])
+  else:
+    assert all(row['radar']['leadOne']['present'] for row in rows[36:])
+    assert all(row['radar']['leadOne']['evidence']['trackId'] != held['evidence']['trackId'] for row in rows[36:])
+  assert not any(row['radar']['fusionRiskUnresolved'] for row in rows)
+  if outcome != 'still_present':
     assert any(row['release'] and not row['stop'] for row in rows[28:])
     assert any(sample['release'] and not sample['stop'] and sample['accel'] > 0.0
                for row in rows[28:] for sample in row['can'])
 
 
 @pytest.mark.parametrize('scope_exit', ['experimental_disabled', 'dec_disabled', 'scope_stale'])
-def test_scope_exit_cannot_release_radar_hold_before_driver_starts_a_new_engagement(scope_exit, record_property):
-  """Configuration/transport loss cannot release an explicitly established hold."""
+def test_scope_exit_keeps_current_model_stop_and_allows_fresh_release_without_reengagement(scope_exit, record_property):
+  """Scope health is explicit; a past target creates no permanent stop duty."""
   rows = []
   with control_pipeline(speed=0.0) as pipeline:
     for _ in range(28):
       rows.append(pipeline.step(speed=0.0, radar=[Target(3.0, 0.0)]))
     assert all(owner['phase'] == 'hold' and owner['stop'] for row in rows[20:] for owner in row['owner'])
-    held_identity = establish_prior_object_hold(pipeline)
+    assert_current_radar_hold(pipeline)
     if scope_exit == 'experimental_disabled':
       pipeline.params.put_bool('ExperimentalMode', False, block=True)
     elif scope_exit == 'dec_disabled':
       pipeline.params.put_bool('DynamicExperimentalControl', False, block=True)
     pipeline.settings = ObserverSettings.read(pipeline.params)
     revoked = []
+    side_target = Target(20.0, 0.0, lateral=7.0, slot=1, oem_id=2)
     for frame in range(48):
       # Stop selfdriveState updates for 1.2 seconds, then restore them. The
       # source timestamp remains old; the fusion gate itself is not mocked.
       online = scope_exit != 'scope_stale' or frame >= 24
-      # One speed-estimator excursion is not a departure receipt. It occurs
-      # after each scope gate has actually revoked the radar publication.
-      speed = STOP_SPEED + .05 if frame == 18 else 0.0
-      row = pipeline.step(speed=speed, radar=[Target(3.0, 0.0)], scope_online=online)
+      # A new model stop is a current independent reason to keep braking.
+      # No old radar ID is injected or needed for this negative control.
+      row = pipeline.step(speed=0.0, radar=[side_target], scope_online=online, model_stop=True, model_accel=-1.0)
       rows.append(row)
       revoked.append(row)
-      assert pipeline.planner.reference_planner.radar_held_identity == held_identity
       assert not row['release']
-      phases = ('hold', 'approach') if frame == 18 else ('hold',)
-      assert all(owner['phase'] in phases and owner['stop'] for owner in row['owner'])
+      assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
       assert all(sample['brake'] and sample['stop'] and not sample['release'] and sample['accel'] <= 0.0
                  for sample in row['can'])
     assert any(not row['radar'].get('fusionActive', False) for row in revoked)
     if scope_exit == 'scope_stale':
       assert any(row['radar'].get('fusionActive', False) for row in revoked[30:])
 
-    # A real driver disengagement is a separate lifecycle, unlike a missing
-    # sensor or DEC publication. Give the next engagement fresh healthy scans
-    # of an independent out-of-path target, with no old blocking vehicle.
+    # Fresh current forward output replaces the stop. No driver cancellation
+    # or old target departure/OUT receipt is required to clear a former ID.
     pipeline.params.put_bool('ExperimentalMode', True, block=True)
     pipeline.params.put_bool('DynamicExperimentalControl', True, block=True)
     pipeline.settings = ObserverSettings.read(pipeline.params)
-    side_target = Target(20.0, 0.0, lateral=7.0, slot=1, oem_id=2)
-    for _ in range(24):
-      row = pipeline.step(speed=0.0, radar=[side_target], engaged=False)
-      rows.append(row)
-      assert pipeline.planner.reference_planner.radar_held_identity is None
-      assert all(not sample['active'] and not sample['release'] for sample in row['can'])
-    reengaged = [pipeline.step(speed=0.0, radar=[side_target]) for _ in range(48)]
-    rows.extend(reengaged)
-    assert pipeline.planner.reference_planner.radar_held_identity is None
-    assert any(row['release'] and not row['stop'] for row in reengaged)
+    resumed = [pipeline.step(speed=0.0, radar=[side_target], visual=[Target(40.0 + .3 * frame, 6.0)])
+               for frame in range(48)]
+    rows.extend(resumed)
+    assert all(row['long_active'] for row in resumed)
+    assert any(row['release'] and not row['stop'] for row in resumed)
     assert any(sample['active'] and sample['release'] and sample['accel'] > 0.0
-               for row in reengaged for sample in row['can'])
+               for row in resumed for sample in row['can'])
   record(record_property, f'hold_scope_exit_{scope_exit}', rows)
 
 
@@ -625,16 +610,16 @@ def test_scope_feedback_failure_is_distinct_from_an_explicit_exit(scope, enabled
 
 
 @pytest.mark.parametrize('feedback_fault', ['invalid', 'invalid_dec_off', 'stale', 'future', 'unseen'])
-def test_feedback_gap_preserves_real_radar_hold_without_latched_loss(feedback_fault, record_property):
-  """Invalid scope cannot remove the explicitly established object-hold premise."""
+def test_feedback_gap_preserves_current_stop_and_recovery_uses_current_targets(feedback_fault, record_property):
+  """Input health stays observable while new model/target evidence owns motion."""
   rows = []
   with control_pipeline(speed=0.0) as pipeline:
     for _ in range(28):
       rows.append(pipeline.step(speed=0.0, radar=[Target(3.0, 0.0)]))
-    held = establish_prior_object_hold(pipeline)
+    former_identity = assert_current_radar_hold(pipeline)
     assert all(owner['phase'] == 'hold' and owner['stop'] for owner in rows[-1]['owner'])
     for _ in range(10):
-      rows.append(pipeline.step(speed=0.0, observer_online=False))
+      rows.append(pipeline.step(speed=0.0, observer_online=False, model_stop=True, model_accel=-1.0))
     adapter = pipeline.radard.fusion_control
     assert rows[-1]['radar']['fusionDegraded'] and not rows[-1]['radar']['fusionRiskUnresolved']
     for _ in range(12):
@@ -652,43 +637,48 @@ def test_feedback_gap_preserves_real_radar_hold_without_latched_loss(feedback_fa
         state.logMonoTime['longitudinalPlanSP'] += 1_000_000_000
       if feedback_fault == 'unseen':
         state.seen['longitudinalPlanSP'] = False
-      # A different, healthy visual lead remains available, but it cannot
-      # prove departure of the previously adopted stopped radar vehicle.
-      row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
+      # A current independent model stop still vetoes the fresh farther visual
+      # target. This stop does not depend on the missing prior radar identity.
+      row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False, model_stop=True, model_accel=-1.0)
       rows.append(row)
       assert pipeline.radard.fusion_control is adapter
       assert not row['radar']['fusionActive'] and row['radar']['fusionReason'] == 'controlScopeUnavailable'
       assert row['radar']['fusionDegraded'] and not row['radar']['fusionRiskUnresolved']
       assert row['radar'].get('radarObjects', []) == []
       assert row['radar']['leadOne'] == row['radar']['visionLeadOne'] and row['radar']['leadOne']['present']
-      assert pipeline.planner.reference_planner.radar_held_identity == held
       assert not row['release']
+      assert row['reasons'] & int(StopReason.E2E)
+      assert not row['reasons'] & int(StopReason.CLOSE_LEAD)
       assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
       assert all(sample['brake'] and not sample['release'] and sample['accel'] <= 0.0 for sample in row['can'])
-    # Scope recovery alone leaves the current observer stale and does not
-    # release the explicitly established object HOLD.
-    row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
+    # Scope recovery leaves the observer stale. The separate current model
+    # stop remains; recovering a scope receipt alone is not a release input.
+    row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False, model_stop=True, model_accel=-1.0)
     rows.append(row)
     assert row['radar']['fusionActive'] and row['radar']['fusionDegraded']
     assert not row['radar']['fusionRiskUnresolved'] and not row['release']
-    # Fresh sensing restores current object authority independently of the
-    # old HOLD. A stationary close lead still supplies no departure proof.
+    # Fresh sensing supplies a different current close stationary target.
+    # It must still prevent release after its own qualification completes.
     for _ in range(12):
-      row = pipeline.step(speed=0.0, radar=[Target(3.0, 0.0)])
+      row = pipeline.step(speed=0.0, radar=[Target(3.0, 0.0, oem_id=2)])
       rows.append(row)
     assert row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
     assert not row['radar']['fusionRiskUnresolved']
     assert not pipeline.planner.reference_planner.radar_consumption.degraded
-    assert pipeline.planner.reference_planner.radar_held_identity == held
     lead = row['radar']['leadOne']
     assert lead['present'] and lead['evidence']['brakeQualified'] and lead['evidence']['stopQualified']
+    assert (lead['evidence']['sessionId'], lead['evidence']['trackId']) != former_identity
     assert not lead['evidence']['coasting'] and not row['release']
     assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
     assert all(sample['brake'] and not sample['release'] and sample['accel'] <= 0.0 for sample in row['can'])
-    # A fresh explicit configuration exit is a different lifecycle boundary.
-    pipeline.params.put_bool('ExperimentalMode', False, block=True)
-    for _ in range(21):  # allow the ordinary one-second settings refresh
-      row = pipeline.step(speed=0.0, visual=[Target(40.0, 6.0)], observer_online=False)
-      rows.append(row)
-    assert not row['radar']['fusionActive'] and not row['radar']['fusionRiskUnresolved']
+    # A newly qualified moving target may release with current forward model
+    # input, without requiring a receipt from either historical stopped ID.
+    moving = [pipeline.step(speed=0.0, radar=[Target(12.0 + .15 * frame, 3.0, oem_id=3)])
+              for frame in range(48)]
+    rows.extend(moving)
+    assert all(row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded'] for row in moving[8:])
+    assert all(row['long_active'] for row in moving)
+    assert any(row['release'] and not row['stop'] for row in moving)
+    assert any(sample['active'] and sample['release'] and sample['accel'] > 0.0
+               for row in moving for sample in row['can'])
   record(record_property, f'scope_feedback_{feedback_fault}', rows)

@@ -136,12 +136,13 @@ def test_real_producer_owner_and_can_accept_two_bounded_failures_then_restore_or
   assert second.to_dict() == before_expiry
 
 
-def test_retired_occupancy_failure_never_produces_a_continuation():
+@pytest.mark.parametrize('status', [-6, -7])
+def test_retired_object_failure_never_produces_a_continuation(status):
   chain = ContinuationChain()
   chain.establish_native_donor()
   previous = chain.controls.command.actuators.accel
-  failed = chain.produce(START + 100_000_000, -6)
-  assert not failed.valid and failed.longitudinalPlan.solverStatus == -6
+  failed = chain.produce(START + 100_000_000, status)
+  assert not failed.valid and failed.longitudinalPlan.solverStatus == status
   assert not failed.longitudinalPlan.continuation.valid
   assert chain.planner.reference_planner.continuation.reason == 'unclassified_or_input_failure'
   command, motion, can = chain.consume(START + 100_000_000)
@@ -151,17 +152,18 @@ def test_retired_occupancy_failure_never_produces_a_continuation():
   assert can['ACCEL_COMMAND'] <= -0.5 and can['BRAKE_REQUEST'] and can['GAS_COMMAND'] <= 0
 
 
-def test_retired_status_cannot_execute_an_otherwise_valid_offer_or_hide_the_event():
+@pytest.mark.parametrize('status', [-6, -7])
+def test_retired_status_cannot_execute_an_otherwise_valid_offer_or_hide_the_event(status):
   from openpilot.selfdrive.selfdrived.tests.test_continuation_events import established_events, observe_at
 
   daemon, chain = established_events()
   event = chain.produce(START + 100_000_000, 4)
   assert event.longitudinalPlan.continuation.valid
   changed = event.as_builder()
-  changed.longitudinalPlan.solverStatus = -6
+  changed.longitudinalPlan.solverStatus = status
   chain.plan_event = serialized(changed)
   expected = event.to_dict()
-  expected['longitudinalPlan']['solverStatus'] = -6
+  expected['longitudinalPlan']['solverStatus'] = status
   assert chain.plan_event.to_dict() == expected
 
   # With a still-healthy owner receipt, the event observer must reject the

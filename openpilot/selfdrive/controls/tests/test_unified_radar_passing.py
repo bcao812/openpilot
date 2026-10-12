@@ -71,7 +71,8 @@ def run_case(*, extra_kind=None, initial_accel=.16649655997753143, action_cap=.3
       native_frame(radar_frame(expired, publication=publication, display=(expired,))), publication_ns=publication,
       now_ns=EPOCH_NS - 40_000_000, speed=SPEED,
     )
-    assert planner.reference_planner.radar_consumption.degraded
+    assert planner.reference_planner.radar_consumption.expired_identities
+    assert not planner.reference_planner.radar_consumption.degraded
   with controlled_mode(planner):
     planner.update(state, now_ns=EPOCH_NS)
   publisher = CapturingPublisher()

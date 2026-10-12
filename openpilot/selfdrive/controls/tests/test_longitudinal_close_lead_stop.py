@@ -257,16 +257,16 @@ def test_low_speed_lag_plant_meets_independent_clearance(delay, offset, speed, r
 
 
 @pytest.mark.parametrize('acceleration', [-1.5, -2.0, -3.5, STOP_RELEASE_ACCEL, 0.5])
-def test_current_stop_owner_preserves_braking_until_qualified_departure(acceleration):
+def test_current_close_lead_stop_preserves_braking_while_the_current_reason_remains(acceleration):
   harness = warm_tracking_harness(1.3, -0.4)
   harness.step(-0.7, MotionIntent(reasons=StopReason.CLOSE_LEAD))
-  output = harness.step(acceleration, MotionIntent(allow_creep=False))
+  output = harness.step(acceleration, MotionIntent(reasons=StopReason.CLOSE_LEAD, allow_creep=False))
   assert np.isfinite(output) and -3.5 <= output <= 0.0
   if acceleration < 0.0:
     assert output <= acceleration
 
 
-def test_close_lead_stop_owner_does_not_chatter_on_distance_noise():
+def test_close_lead_stop_owner_follows_current_geometry_without_historical_latching():
   harness = warm_tracking_harness(1.3, -0.4)
   state = near_stop_state()
   harness.step(-0.7, MotionIntent(reasons=StopReason.CLOSE_LEAD))
@@ -274,7 +274,8 @@ def test_close_lead_stop_owner_does_not_chatter_on_distance_noise():
     state['radarState'].leadOne.dRel = distance
     reason = StopReason.CLOSE_LEAD if close_stop(state) else StopReason.NONE
     harness.step(-0.7, MotionIntent(reasons=reason, allow_creep=False))
-    assert harness.control.resolved_should_stop
+    assert harness.control.resolved_should_stop == bool(reason)
+    assert not harness.control.motion_degraded
 
 
 @pytest.mark.parametrize('target', [0.5, float('nan'), float('inf'), float('-inf')])

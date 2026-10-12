@@ -64,9 +64,10 @@ def make_radard():
 @pytest.mark.parametrize('source,caution', [
   ('radar', False), ('fused', False),
 ])
+@pytest.mark.parametrize('relevant', [False, True])
 @pytest.mark.parametrize('after_deadline', [0, 1])
-def test_publisher_removes_only_naturally_expired_measurement_at_actual_event_time(source, caution, after_deadline):
-  old = measured(source=source, caution=caution)
+def test_publisher_removes_naturally_expired_measurement_at_actual_event_time(source, caution, relevant, after_deadline):
+  old = measured(source=source, caution=caution, relevant=relevant)
   fresh = formal_lead(now_ns=PUBLICATION, evidence={'trackId': 9})
   frame = radar_frame(old, fresh, display=(old, fresh))
   rd = make_radard()
@@ -80,6 +81,7 @@ def test_publisher_removes_only_naturally_expired_measurement_at_actual_event_ti
   assert not event.radarState.radarObjects
   assert event.radarState.leadOne.evidence.to_dict() == before['leadOne']['evidence']
   assert not event.radarState.fusionClearedTracks and not event.radarState.fusionRiskUnresolved
+  assert not event.radarState.fusionDegraded and not rd.publication_expiry.degraded
   assert rd.radar_state.to_dict() == before
 
 
@@ -147,10 +149,10 @@ def test_publication_expiry_does_not_survive_scope_gap_or_empty_messages(source)
   old = measured(source=source, relevant=True)
   update_with_result(rd, radar_frame(old, display=(old,)))
   event = publish_at(rd, CONSUMPTION)
-  assert event.radarState.leadOne.present and not event.radarState.fusionRiskUnresolved
-  assert not rd.publication_expiry.expired_identities
-  assert event.radarState.fusionDegraded and not event.radarState.fusionClearedTracks
-  assert rd.publication_expiry.degraded
+  assert not event.radarState.leadOne.present and not event.radarState.fusionRiskUnresolved
+  assert rd.publication_expiry.expired_identities == ((SESSION, 7),)
+  assert not event.radarState.fusionDegraded and not event.radarState.fusionClearedTracks
+  assert not rd.publication_expiry.degraded
   now = CONSUMPTION + 50_000_000
   update_with_result(rd, radar_frame(publication=now), now, enabled=False, scope_missing=True)
   gap = publish_at(rd, now + 1)
@@ -172,9 +174,12 @@ def test_configuration_exit_does_not_reuse_previous_publication_expiry():
   rd = make_radard()
   old = expiring_lead(relevant=True)
   update_with_result(rd, radar_frame(old, display=(old,)))
-  publish_at(rd, CONSUMPTION)
-  assert rd.publication_expiry.degraded
+  removed = publish_at(rd, CONSUMPTION)
+  assert not removed.radarState.leadOne.present
+  assert rd.publication_expiry.expired_identities == ((SESSION, 7),)
+  assert not rd.publication_expiry.degraded
   now = CONSUMPTION + 50_000_000
   update_with_result(rd, radar_frame(publication=now), now, enabled=False)
   event = publish_at(rd, now + 1)
   assert not rd.publication_expiry.degraded and not event.radarState.fusionRiskUnresolved
+  assert not rd.publication_expiry.expired_identities

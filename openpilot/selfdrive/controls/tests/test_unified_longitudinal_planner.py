@@ -351,39 +351,34 @@ def test_positive_forward_speed_does_not_discard_measured_braking():
   assert planner.mpc.x0[2] == -0.5
 
 
-@pytest.mark.parametrize('held', [False, True])
 @pytest.mark.parametrize('speed,delay,gap,allowed', [
   (0.0, .5, 2.999, False), (0.0, .5, 3.0, True), (0.0, .5, 4.0, True),
   (.2, .5, 3.0, False), (.2, .5, 3.117, False), (.2, .5, 3.119, True),
   (.2, 1.0, 3.217, False), (.2, 1.0, 3.219, True),
 ])
-def test_departure_default_gap_is_three_metres_with_reaction_and_braking_reserve(held, speed, delay, gap, allowed):
+def test_departure_default_gap_is_three_metres_with_reaction_and_braking_reserve(speed, delay, gap, allowed):
   from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
   from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, SESSION, radar_frame
 
   primary = formal_lead(now_ns=PUBLICATION, dRel=gap, vLead=1.0, vLeadK=1.0, vRel=1.0 - speed,
                         evidence={'trackId': 5})
   radar = radar_frame(primary, display=(primary,))
-  identity = (SESSION, 5) if held else None
-  rejection = departing_lead_rejection(radar, speed, delay, now_ns=CONSUMPTION, held_identity=identity,
-                                       allow_unbound_physical=True)
+  rejection = departing_lead_rejection(radar, speed, delay, now_ns=CONSUMPTION)
   assert rejection == (None if allowed else ('lead_gap', (SESSION, 5)))
-  if held:
-    assert has_departing_lead(radar, speed, delay, now_ns=CONSUMPTION, held_identity=identity) is allowed
-    assert not has_departing_lead(radar, speed, delay, minimum_gap_base=5.0, now_ns=CONSUMPTION, held_identity=identity)
+  assert has_departing_lead(radar, speed, delay, now_ns=CONSUMPTION) is allowed
+  assert not has_departing_lead(radar, speed, delay, minimum_gap_base=5.0, now_ns=CONSUMPTION)
 
 
 @pytest.mark.parametrize('defect,reason', [
   ('qualification', 'lead_departure_unqualified'), ('stale', 'lead_departure_unqualified'),
   ('lateral', 'lead_path_offset'), ('relative_speed', 'lead_departure_unqualified'),
-  ('lead_speed', 'lead_speed'), ('stopping', 'lead_stopping'), ('identity', 'held_identity_mismatch'),
+  ('lead_speed', 'lead_speed'), ('stopping', 'lead_stopping'),
 ])
 def test_three_metre_departure_keeps_the_other_lead_guards(defect, reason):
   from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
   from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, SESSION, radar_frame
 
   primary = formal_lead(now_ns=PUBLICATION, dRel=3.2, vLead=1.0, vLeadK=1.0, vRel=1.0, evidence={'trackId': 5})
-  identity = (SESSION, 5)
   if defect == 'qualification':
     primary.evidence.departureQualified = False
   elif defect == 'stale':
@@ -396,38 +391,26 @@ def test_three_metre_departure_keeps_the_other_lead_guards(defect, reason):
     primary.vLead = primary.vLeadK = primary.vRel = .49
   elif defect == 'stopping':
     primary.aLeadK = -.4
-  elif defect == 'identity':
-    identity = (SESSION, 7)
   radar = radar_frame(primary, display=(primary,))
-  assert departing_lead_rejection(radar, 0.0, .5, now_ns=CONSUMPTION, held_identity=identity) == (reason, (SESSION, 5))
-  assert not has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION, held_identity=identity)
+  assert departing_lead_rejection(radar, 0.0, .5, now_ns=CONSUMPTION) == (reason, (SESSION, 5))
+  assert not has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION)
 
 
-@pytest.mark.parametrize('speed,gap,relative_speed,allowed', [
-  (0.0, 2.999, 0.0, False), (0.0, 3.0, 0.0, True),
-  (.2, 3.117, 0.0, False), (.2, 3.119, 0.0, True),
-  (.2, 3.517, -.2, False), (.2, 3.519, -.2, True),
-])
-def test_departure_secondary_lead_keeps_projected_gap_reserve(speed, gap, relative_speed, allowed):
+@pytest.mark.parametrize('gap,speed,allowed', [(2.99, 1.0, False), (3.0, 1.0, True), (8.0, 0.0, False)])
+def test_current_secondary_lead_must_meet_departure_geometry_and_motion(gap, speed, allowed):
   from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
-  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, SESSION, radar_frame
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, radar_frame
 
-  primary = formal_lead(now_ns=PUBLICATION, dRel=3.2, vLead=1.0, vLeadK=1.0, vRel=1.0 - speed,
-                        evidence={'trackId': 5})
-  secondary = formal_lead(now_ns=PUBLICATION, dRel=gap, vLead=speed + relative_speed, vLeadK=speed + relative_speed,
-                          vRel=relative_speed, evidence={'trackId': 7})
+  primary = formal_lead(now_ns=PUBLICATION, dRel=3.2, vLead=1.0, vLeadK=1.0, vRel=1.0, evidence={'trackId': 5})
+  secondary = formal_lead(now_ns=PUBLICATION, dRel=gap, vLead=speed, vLeadK=speed, vRel=speed, evidence={'trackId': 7})
   radar = radar_frame(primary, secondary, display=(primary, secondary))
-  identity = (SESSION, 5)
-  rejection = departing_lead_rejection(radar, speed, .5, now_ns=CONSUMPTION, held_identity=identity)
-  assert rejection == (None if allowed else ('secondary_gap', (SESSION, 7)))
-  assert has_departing_lead(radar, speed, .5, now_ns=CONSUMPTION, held_identity=identity) is allowed
+  assert has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION) is allowed
 
 
-@pytest.mark.parametrize('held', ['none', 'matching', 'different'])
 @pytest.mark.parametrize('other', ['none', 'departing', 'stationary', 'occluded', 'caution'])
-def test_unbound_physical_departure_requires_formal_leads_without_replacing_a_held_identity(held, other):
+def test_current_physical_departure_uses_only_current_formal_leads(other):
   from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
-  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, SESSION, radar_frame
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, radar_frame
 
   primary = formal_lead(now_ns=PUBLICATION, dRel=15.0, vLead=1.0, vLeadK=1.0, vRel=1.0, evidence={'trackId': 5})
   objects = [primary]
@@ -439,18 +422,7 @@ def test_unbound_physical_departure_requires_formal_leads_without_replacing_a_he
       objects[-1].evidence.source = 'predicted'
       objects[-1].evidence.coasting = True
   radar = radar_frame(*objects, display=(primary,) if other == 'caution' else tuple(objects))
-  identity = None if held == 'none' else (SESSION, 5 if held == 'matching' else 7)
-  rejection = departing_lead_rejection(radar, 0.0, .5, now_ns=CONSUMPTION, held_identity=identity, allow_unbound_physical=True)
-  allowed = held != 'different' and other != 'occluded' and (held == 'matching' or other != 'stationary')
-  assert (rejection is None) is allowed
-  if held == 'none':
-    assert not has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION)
-    if other in ('stationary', 'occluded'):
-      assert rejection == ('lead_departure_unqualified', (SESSION, 7))
-  elif held == 'different':
-    assert rejection == ('held_identity_mismatch', (SESSION, 5))
-  elif other == 'occluded':
-    assert rejection == ('secondary_brake_unqualified', (SESSION, 7))
+  assert has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION) is (other in ('none', 'departing', 'caution'))
 
 
 @pytest.mark.parametrize('speed,standstill,consumed', [
@@ -505,7 +477,7 @@ def test_unbound_radar_departure_uses_current_health_without_retaining_previous_
     lost = expiring_lead(publication=old, relevant=True, track=99)
     reference.radar_consumption.update(native_frame(radar_frame(lost, publication=old, display=(lost,))),
                                        publication_ns=old, now_ns=old + 60_000_000, speed=10.0)
-    assert reference.radar_consumption.degraded
+    assert reference.radar_consumption.expired_identities
   with patch.object(planner.dec, 'enabled', return_value=True):
     view = state if defect == 'unconsumed' else reference.radar_input_state(state, CONSUMPTION)
   if defect == 'wrong_publication':
@@ -513,10 +485,9 @@ def test_unbound_radar_departure_uses_current_health_without_retaining_previous_
   elif defect == 'invalid_message':
     state.valid['radarState'] = False
   rejection = reference.unbound_radar_departure_rejection(view, now_ns=CONSUMPTION + (defect == 'wrong_tick'))
-  assert (rejection is None) is (defect in ('none', 'previous_expiry', 'legacy_producer_risk'))
-  assert reference.radar_consumption.degraded is (defect == 'current_expiry')
-  if defect == 'current_expiry':
-    assert rejection == 'radar_measurement_expired'
+  assert (rejection is None) is (defect in ('none', 'previous_expiry', 'legacy_producer_risk', 'current_expiry'))
+  assert not reference.radar_consumption.degraded
+  assert bool(reference.radar_consumption.expired_identities) is (defect == 'current_expiry')
 
 
 @pytest.mark.parametrize('field', ['fusionHealthy', 'fusionDegraded'])
@@ -552,16 +523,13 @@ def run_unbound_physical_departure(condition='none', *, frames=24):
   for name in ('AlphaLongitudinalEnabled', 'ExperimentalMode', 'DynamicExperimentalControl'):
     Params().put_bool(name, True, block=True)
   reference = planner.reference_planner
-  assert reference.radar_held_identity is None
   state['carState'].vEgo = -1.9180846832417676e-23
-  if condition == 'held_mismatch':
-    reference.radar_held_identity = (SESSION, 7)
-  elif condition == 'previous_expiry':
+  if condition == 'previous_expiry':
     old = 1_800_000_000
     lost = expiring_lead(publication=old, relevant=True, track=99)
     reference.radar_consumption.update(native_frame(radar_frame(lost, publication=old, display=(lost,))),
                                        publication_ns=old, now_ns=old + 60_000_000, speed=10.0)
-    assert reference.radar_consumption.degraded
+    assert reference.radar_consumption.expired_identities
   elif condition == 'model_stop':
     state['modelV2'].action.shouldStop = True
   records = []
@@ -596,14 +564,13 @@ def run_unbound_physical_departure(condition='none', *, frames=24):
 
 
 @pytest.mark.parametrize('condition', [
-  'none', 'previous_expiry', 'legacy_producer_risk', 'held_mismatch', 'stationary_other', 'occluded_other',
+  'none', 'previous_expiry', 'legacy_producer_risk', 'stationary_other', 'occluded_other',
   'side_primary', 'model_stop', 'unhealthy',
 ])
 def test_actual_hold_uses_unbound_departure_only_when_all_independent_guards_hold(condition):
   reference, records = run_unbound_physical_departure(condition)
   if condition in ('none', 'previous_expiry', 'legacy_producer_risk'):
     assert any(released and not held and max(outputs) > 0.0 for _, released, held, outputs in records)
-    assert reference.radar_held_identity is None  # current evidence never invents an adopted physical barrier
     assert not reference.radar_consumption.degraded
   else:
     assert all(not released and held and max(outputs) <= 0.0 for _, released, held, outputs in records)
@@ -613,15 +580,15 @@ def test_departure_diagnostics_are_rate_limited_and_logging_failure_does_not_cha
   outcomes, logs = [], []
   for failure in (None, RuntimeError('transport unavailable')):
     with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.cloudlog.event', side_effect=failure) as event:
-      _, records = run_unbound_physical_departure('held_mismatch', frames=120)
+      _, records = run_unbound_physical_departure('unhealthy', frames=120)
     outcomes.append(records)
     logs.append([call for call in event.call_args_list if call.args[0] == 'longitudinal_departure_blocked_v1'])
   assert outcomes[0] == outcomes[1]
   assert len(logs[0]) == len(logs[1]) == 2
   for recorded in logs:
     first, last = (call.kwargs for call in recorded)
-    assert first['stage'] == last['stage'] == 'held_identity_mismatch'
+    assert first['stage'] == last['stage'] == 'radar_producer_unhealthy'
     assert first['wait_seconds'] >= .5
     assert int(last['decision_mono_ns']) - int(first['decision_mono_ns']) >= 5_000_000_000
-    assert first['held_identity'][1] == 7 and first['primary_identity'][1] == 5
+    assert first['primary_identity'][1] == 5 and 'held_identity' not in first
     assert set(first['input_mono_ns']) == {'carState', 'modelV2', 'radarState', 'controlsState'}

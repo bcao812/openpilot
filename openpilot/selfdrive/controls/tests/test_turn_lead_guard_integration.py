@@ -1,4 +1,4 @@
-"""Native planner -> wire intent -> owner checks for lost leads in a turn.
+"""Current-input planner -> wire intent -> owner checks after turn lead loss.
 
 These are request-level contracts with prescribed vehicle measurements, not
 closed-loop stopping-distance or road-performance claims. DEC is unchanged;
@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from openpilot.common.prefix import OpenpilotPrefix
-from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, MotionResponseKind
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
 
@@ -55,37 +55,32 @@ def step(planner, control, state, frame):
 
 
 @pytest.mark.parametrize('experimental', [False, True])
-@pytest.mark.parametrize('initial_i', [-0.3, 0.3])
-def test_missing_lead_ceiling_reaches_controller_without_positive_integrator(experimental, initial_i):
-  with pipeline(experimental=experimental) as (planner, control, state):
+@pytest.mark.parametrize('speed', [0.8, 3.0])
+def test_current_empty_turn_has_no_old_lead_speed_or_acceleration_ceiling(experimental, speed):
+  with pipeline(experimental=experimental, speed=speed, measured_accel=0.0) as (planner, control, state):
     set_lead(state, True)
     for frame in range(8):
       step(planner, control, state, frame)
     set_lead(state, False)
-    control.pid.i = initial_i
-    for frame in range(8, 15):
+    for frame in range(8, 32):
       plan, outputs = step(planner, control, state, frame)
-      assert planner.reference_planner.turn_lead_guard.lost
-      assert planner.mpc.x0[2] == pytest.approx(0.4)
-      assert plan.aTarget <= 0.0
-      assert plan.reference.constraintAccel <= 0.0
-      if plan.aTarget == 0.0:
-        assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
-        assert not plan.motionIntent.releaseAllowed
-      assert max(outputs) <= 1e-7
-      assert control.pid.i <= 0.0
+      assert plan.reference.constraintAccel > 0.0
+      assert not planner.mpc._source_leads
+      assert not plan.motionIntent.reasons
+    # Normal current cruise/model inputs can recover speed; no old target
+    # must return and no straight-road confirmation is needed.
+    assert plan.aTarget > 0.0 and max(outputs) > 0.0
 
 
 def test_empty_turn_without_previous_lead_retains_normal_acceleration():
   with pipeline() as (planner, control, state):
     for frame in range(12):
       plan, outputs = step(planner, control, state, frame)
-      assert not planner.reference_planner.turn_lead_guard.armed
     assert plan.aTarget > 0.2
     assert max(outputs) > 0.1
 
 
-def test_stronger_model_braking_is_not_replaced_by_zero_ceiling():
+def test_current_model_braking_still_wins_after_old_lead_disappears():
   with pipeline() as (planner, control, state):
     set_lead(state, True)
     for frame in range(8):
@@ -94,109 +89,23 @@ def test_stronger_model_braking_is_not_replaced_by_zero_ceiling():
     state['modelV2'].action.desiredAcceleration = -1.5
     for frame in range(8, 14):
       plan, outputs = step(planner, control, state, frame)
-      assert planner.reference_planner.turn_lead_guard.lost
       assert plan.aTarget <= -1.5
       assert max(outputs) <= 0.0
+      assert not planner.mpc._source_leads
 
 
-def test_turn_holds_first_loss_speed_and_allows_bounded_resistance_correction():
+def test_a_new_current_lead_brakes_after_an_empty_turn():
   with pipeline(measured_accel=0.0) as (planner, control, state):
     set_lead(state, True)
     for frame in range(8):
       step(planner, control, state, frame)
     set_lead(state, False)
-    step(planner, control, state, 8)
-    assert planner.reference_planner.turn_lead_guard.hold_speed == 3.0
-    # Prescribed speed loss isolates the command response; this is not a
-    # claim that a particular grade or actuator has been simulated.
-    state['carState'].vEgo = 2.8
-    for frame in range(9, 24):
-      plan, outputs = step(planner, control, state, frame)
-      assert planner.reference_planner.turn_lead_guard.hold_speed == 3.0
-      assert plan.aTarget <= .1 + 1e-7
-      assert max(outputs) <= .1 + 1e-7
-      assert not plan.motionIntent.releaseAllowed
-    assert plan.aTarget > 0.0
-    assert max(outputs) > 0.0
-    assert plan.motionIntent.responseKind == MotionResponseKind.ABSOLUTE_ACC
-    state['carState'].vEgo = 3.1
-    plan, outputs = step(planner, control, state, 24)
-    assert plan.aTarget <= 0.0
-    assert max(outputs) <= 1e-7
-
-
-def test_speed_recovery_never_overrides_a_new_braking_constraint():
-  with pipeline(measured_accel=0.0) as (planner, control, state):
-    set_lead(state, True)
-    for frame in range(8):
+    for frame in range(8, 18):
       step(planner, control, state, frame)
-    set_lead(state, False)
-    step(planner, control, state, 8)
-    state['carState'].vEgo = 2.5
-    state['modelV2'].action.desiredAcceleration = -1.5
-    for frame in range(9, 15):
-      plan, outputs = step(planner, control, state, frame)
-      assert planner.reference_planner.turn_lead_guard.speed_recovery_blocked
-      assert plan.aTarget <= -1.5
-      assert max(outputs) <= 0.0
-    state['modelV2'].action.desiredAcceleration = 1.1
-    for frame in range(15, 30):
-      plan, outputs = step(planner, control, state, frame)
-      assert planner.reference_planner.turn_lead_guard.accel_ceiling == 0.0
-      assert plan.aTarget <= 0.0
-      assert max(outputs) <= 0.0
-      assert not plan.motionIntent.releaseAllowed
-
-
-def test_short_loss_and_lead_flicker_cannot_release_full_acceleration():
-  with pipeline(measured_accel=0.0) as (planner, control, state):
     set_lead(state, True)
-    for frame in range(10):
-      step(planner, control, state, frame)
-    set_lead(state, False)
-    plan, _ = step(planner, control, state, 10)
-    assert plan.aTarget <= 0.0
-    set_lead(state, True)
-    for frame in range(11, 20):
-      plan, outputs = step(planner, control, state, frame)
-      ceiling = planner.reference_planner.turn_lead_guard.accel_ceiling
-      assert ceiling is not None
-      assert ceiling <= max(0.0, (frame - 15) * 0.05) + 1e-9
-      assert plan.aTarget <= ceiling + 1e-7
-      assert max(outputs) <= ceiling + 1e-7
-    set_lead(state, False)
-    plan, outputs = step(planner, control, state, 20)
-    assert plan.aTarget <= 0.0
-    assert max(outputs) <= 1e-7
-
-
-def test_manual_takeover_revokes_guard_history():
-  with pipeline() as (planner, control, state):
-    set_lead(state, True)
-    for frame in range(8):
-      step(planner, control, state, frame)
-    set_lead(state, False)
-    step(planner, control, state, 8)
-    assert planner.reference_planner.turn_lead_guard.lost
-    state['carState'].gasPressed = True
-    consume(planner, control, state, 9)
-    assert not planner.reference_planner.turn_lead_guard.armed
-    assert planner.reference_planner.turn_lead_guard.accel_ceiling is None
-
-
-@pytest.mark.parametrize('speed', [0.8, 1.1])
-@pytest.mark.parametrize('measured_accel', [0.0, 0.4])
-def test_turn_ceiling_does_not_create_creep_stop(speed, measured_accel):
-  with pipeline(speed=speed, measured_accel=measured_accel) as (planner, control, state):
-    set_lead(state, True)
-    for frame in range(8):
-      step(planner, control, state, frame)
-    set_lead(state, False)
-    for frame in range(8, 40):
-      plan, outputs = step(planner, control, state, frame)
-      assert planner.reference_planner.turn_lead_guard.lost
-      assert plan.aTarget == 0.0
-      assert plan.motionIntent.reasons == 0
-      assert not plan.motionIntent.releaseAllowed
-      assert not plan.motionIntent.movingLead
-      assert max(outputs) <= 1e-7
+    lead = state['radarState'].leadOne
+    lead.dRel, lead.vRel, lead.vLead = 5.0, -3.0, 0.0
+    for frame in range(18, 23):
+      plan, outputs = consume(planner, control, state, frame)
+      assert plan.solverStatus == 0 and plan.motionIntent.valid
+      assert plan.aTarget < 0.0 and max(outputs) <= 0.0
