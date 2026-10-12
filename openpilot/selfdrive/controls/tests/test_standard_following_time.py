@@ -129,7 +129,10 @@ def test_formal_target_identity_switch_retains_immediate_braking_with_short_stan
   speed = speed_kph * CV.KPH_TO_MS
   mpc = LongitudinalMpc(speed_based_following=True)
   mpc.set_cur_state(speed, 0.0)
-  reference = MpcReference(speed + 5.0)
+  # Match ordinary UNIFIED ACC: cruise acceleration is bounded outside the
+  # native lead problem. A virtual cruise goal would own the first-node label
+  # during this positive warm-up, even when a lead constrains later nodes.
+  reference = MpcReference(None)
   original = object_lead(1, distance=6.0 + 1.45 * speed + 8.0, speed=speed, ego_speed=speed)
   for frame in range(6):
     stamp = EPOCH_NS + frame * 50_000_000
