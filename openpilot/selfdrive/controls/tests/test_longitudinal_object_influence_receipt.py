@@ -117,8 +117,7 @@ def test_native_plan_readers_and_builders_preserve_the_accepted_receipt(input_ki
   plan = log.LongitudinalPlan.new_message(modelMonoTime=now, solverStatus=0, aTarget=-1.0,
                                         motionIntent={'valid': True, 'ready': True, 'releaseAllowed': False},
                                         objectInfluences=[expected])
-  owner = NS(unified=True, motion_input_constrained=False, motion_phase=NS(text='track'), resolved_should_stop=False,
-             motion_supervisor=NS(rest_braking_accel_limit=None))
+  owner = NS(unified=True, motion_input_constrained=False, motion_phase=NS(text='track'), resolved_should_stop=False)
   car_state = NS(gasPressed=False, brakePressed=False)
   before = plan.to_dict()
   source = plan if input_kind == 'builder' else plan.as_reader()

@@ -146,9 +146,6 @@ def accepted_object_influences(plan, owner, car_state, *, long_active, plan_vali
       or _read(plan, 'solverStatus', -1) != 0 or not _integer(model_ns, 1)
       or not 0 <= now_ns - model_ns <= INFLUENCE_LEASE_NS):
     return []
-  supervisor = _read(owner, 'motion_supervisor')
-  if _read(supervisor, 'rest_braking_accel_limit') is not None:
-    return []
   phase_value = _read(owner, 'motion_phase')
   phase = _read(phase_value, 'text', phase_value)
   resolved_stop = _read(owner, 'resolved_should_stop', False)

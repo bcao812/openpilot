@@ -230,9 +230,7 @@ class MotionSupervisor:
     self._rearm_after_fault = False
     self._rearm_plan_time_ns = 0
     self._rearm_model_time_ns = 0
-    self._rest_braking_instance_high_ns = 0
-    self._rest_braking_plan_high_ns = 0
-    self._rest_braking_model_high_ns = 0
+    self._producer_instance_high_ns = 0
     self._continuation_plan_time_ns = 0
     self._continuation_model_time_ns = 0
     self._continuation_recovery_required = False
@@ -253,7 +251,7 @@ class MotionSupervisor:
     return (self.phase == MotionPhase.TRACK and not self.reasons and not self.resolved_should_stop
             and not self.degraded and not self.waiting_for_fresh_input
             and not self._require_new_input and not self._rearm_after_fault
-            and self._last_plan_time_ns is not None and self.rest_braking_accel_limit is None)
+            and self._last_plan_time_ns is not None)
 
   def reset(self):
     self.phase = MotionPhase.OFF
@@ -269,51 +267,11 @@ class MotionSupervisor:
     self._reset_creep()
     self._last_now_ns = None
     self._require_new_input = bool(self._latest_input_ids()[0])
-    self._clear_rest_braking()
 
-  def _clear_rest_braking(self):
-    # Reset controller-output evidence without erasing retired producer identity.
-    self._rest_braking_accel = None
-    self._rest_braking_instance_ns = 0
-    self._rest_braking_origin = None
-    self._pending_rest_braking = None
-    self.rest_braking_accel_limit = None
-
-  def _observe_rest_braking_identity(self, intent, plan_time_ns, model_time_ns):
-    instance = intent.producer_instance_ns
-    if instance > self._rest_braking_instance_high_ns:
-      self._clear_rest_braking()
-      self._rest_braking_instance_high_ns = instance
-    # A newly accepted stop plan can use the same still-fresh model.
-    # Confirm its final output once; the separate drive/release rearm rule below
-    # still requires both identities to advance after a fault.
-    fresh = (plan_time_ns > self._rest_braking_plan_high_ns and model_time_ns >= self._rest_braking_model_high_ns)
-    self._rest_braking_plan_high_ns = max(self._rest_braking_plan_high_ns, plan_time_ns)
-    self._rest_braking_model_high_ns = max(self._rest_braking_model_high_ns, model_time_ns)
-    return fresh
-
-  def confirm_braking_output(self, output_accel, accel_limits, *, now_ns):
-    """Consume this frame's pending cause after the final controller clip.
-
-    A producer envelope is not the final controller output. This records a
-    clipped command, not delivered deceleration. Repeated calls cannot mint
-    another event, and later zero samples never update the stored magnitude.
-    """
-    pending, self._pending_rest_braking = self._pending_rest_braking, None
-    output_valid = (accel_limits is not None and len(accel_limits) == 2 and self._finite_values(output_accel, *accel_limits)
-                    and CarControllerParams.BOSCH_ACCEL_MIN <= accel_limits[0] <= output_accel <= accel_limits[1]
-                    and accel_limits[1] <= CarControllerParams.BOSCH_ACCEL_MAX and output_accel <= DEGRADED_ACCEL)
-    if self.phase == MotionPhase.HOLD or not output_valid:
-      self._clear_rest_braking()
-      return
-    if pending is not None:
-      instance, _, _, pending_now_ns = pending
-      if now_ns != pending_now_ns or instance != self._rest_braking_instance_high_ns:
-        self._clear_rest_braking()
-        return
-      self._rest_braking_accel = float(output_accel)
-      self._rest_braking_instance_ns = instance
-      self._rest_braking_origin = pending
+  def _observe_producer_identity(self, intent):
+    # This is a transport high-water mark, not stored target or braking
+    # authority. Disabled control must not allow a retired producer to return.
+    self._producer_instance_high_ns = max(self._producer_instance_high_ns, intent.producer_instance_ns)
 
   def _reset_creep(self):
     self.creep_t = 0.0
@@ -373,7 +331,7 @@ class MotionSupervisor:
     if not (model_time_ns <= plan_time_ns <= now_ns
             and now_ns - plan_time_ns <= PLAN_LEASE_NS and now_ns - model_time_ns <= MODEL_LEASE_NS):
       return False
-    if intent.producer_instance_ns < self._rest_braking_instance_high_ns or intent.producer_instance_ns > plan_time_ns:
+    if intent.producer_instance_ns < self._producer_instance_high_ns or intent.producer_instance_ns > plan_time_ns:
       return False
     for last_plan_time, last_model_time, last_intent, last_target in (
       (self._last_plan_time_ns, self._last_model_time_ns, self._last_intent, self._last_target),
@@ -524,7 +482,7 @@ class MotionSupervisor:
       # grants neither drive/release authority nor a reset of the fault budget.
       self._rearm_after_fault = False
     self.inactive_input_valid = not self._rearm_after_fault
-    self._observe_rest_braking_identity(intent, plan_time_ns, model_time_ns)
+    self._observe_producer_identity(intent)
     # Even an ineligible off sample establishes the rearm barrier. Repeated
     # inactive calls cannot erase it or turn this sample into a new drive plan.
     self._last_plan_time_ns, self._last_model_time_ns = plan_time_ns, model_time_ns
@@ -538,8 +496,6 @@ class MotionSupervisor:
     self.continuation_active = False
     self.inactive_input_valid = False
     self.degraded_braking_accel = None
-    self._pending_rest_braking = None
-    self.rest_braking_accel_limit = None
     if not active:
       self._observe_inactive(v_ego, a_ego, a_target, intent, plan_time_ns, model_time_ns, now_ns, plan_valid, solver_status, standby_input)
       return False
@@ -574,7 +530,6 @@ class MotionSupervisor:
       self._continuation_plan_time_ns = int(plan_time_ns)
       self._continuation_model_time_ns = int(model_time_ns)
       self._continuation_recovery_required = True
-      self._clear_rest_braking()
       return False
     if (self._continuation_recovery_required
         and (not self._timestamp_valid(plan_time_ns) or not self._timestamp_valid(model_time_ns)
@@ -586,19 +541,11 @@ class MotionSupervisor:
       self._degrade(v_ego, standstill)
       if (braking_plan_valid is True and type(solver_status) is int and solver_status != 0 and clock_valid and vehicle_values_valid
           and self._valid_braking_input(intent, a_target, plan_time_ns, model_time_ns, now_ns)):
-        fresh = self._observe_rest_braking_identity(intent, plan_time_ns, model_time_ns)
-        if (intent.rest_goal_rejected and solver_status in (-4, -5)
-            and intent.producer_instance_ns > 0):
-          if fresh:
-            self._pending_rest_braking = (intent.producer_instance_ns, plan_time_ns, model_time_ns, now_ns)
-        else:
-          self._clear_rest_braking()
+        self._observe_producer_identity(intent)
         self.degraded_braking_accel = float(intent.braking_accel)
         self._last_braking_plan_time_ns, self._last_braking_model_time_ns = plan_time_ns, model_time_ns
         self._last_braking_intent, self._last_braking_target = intent, a_target
         self._require_new_input = True
-      else:
-        self._clear_rest_braking()
       return self.resolved_should_stop
 
     plan_step = None if self._last_plan_time_ns is None else (plan_time_ns - self._last_plan_time_ns) / 1e9
@@ -607,14 +554,8 @@ class MotionSupervisor:
     new_input = latest_plan_time == 0 or plan_time_ns > latest_plan_time and model_time_ns > latest_model_time
     self._last_plan_time_ns, self._last_model_time_ns = plan_time_ns, model_time_ns
     self._last_intent, self._last_target = intent, a_target
-    fresh_rest_input = self._observe_rest_braking_identity(intent, plan_time_ns, model_time_ns)
-    if (intent.reference_kind not in (MotionReferenceKind.EXACT_ZERO, MotionReferenceKind.REST)
-        or intent.reference_kind == MotionReferenceKind.REST and fresh_rest_input):
-      # A different normal REST ends the old zero chain. Its own executed
-      # negative output may independently establish a new cause below.
-      self._clear_rest_braking()
+    self._observe_producer_identity(intent)
     if self._require_new_input and not new_input:
-      self._clear_rest_braking()
       self.degraded_braking_accel = min(a_target, DEGRADED_ACCEL)
       if not self._rearm_after_fault:
         self._wait_for_fresh_input(v_ego, standstill)
@@ -627,16 +568,6 @@ class MotionSupervisor:
     self._rearm_plan_time_ns = self._rearm_model_time_ns = 0
     self.waiting_for_fresh_input = False
     self.degraded = False
-    if (intent.reference_kind == MotionReferenceKind.REST
-        and intent.producer_instance_ns > 0 and fresh_rest_input):
-      # Source semantics and accepted transport are necessary but not an output
-      # acknowledgement. LongControl confirms only its final clipped brake;
-      # this does not add a raw stop reason, a deadline or release permission.
-      self._pending_rest_braking = (intent.producer_instance_ns, plan_time_ns, model_time_ns, now_ns)
-    if (intent.reference_kind == MotionReferenceKind.EXACT_ZERO and self._rest_braking_accel is not None
-        and intent.producer_instance_ns == self._rest_braking_instance_ns):
-      self.rest_braking_accel_limit = self._rest_braking_accel
-
     if self.phase == MotionPhase.OFF and standstill:
       self.phase = MotionPhase.HOLD
       self.reasons = StopReason.HOLD

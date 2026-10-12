@@ -7,7 +7,7 @@ unhealthy transport are separate negative controls.
 
 import pytest
 
-from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionPhase, StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionPhase, MotionReferenceKind, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import warm_tracking_harness
 from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarness
 
@@ -93,3 +93,43 @@ def test_withdrawal_removes_added_stop_ramp_but_follows_current_nonpositive_targ
   # transition; no absent-object stop ramp or extra positive action is added.
   assert all(-0.7 <= output <= target for output in outputs)
   assert outputs[-1] == pytest.approx(target)
+
+
+@pytest.mark.parametrize('rejected_status', [0, -4, -5])
+@pytest.mark.parametrize('current_target', [-0.3, 0.0])
+def test_current_zero_does_not_inherit_previous_rest_executed_braking(rejected_status, current_target):
+  harness = warm_tracking_harness(10.0, -0.5)
+  rest = MotionIntent(reference_kind=MotionReferenceKind.REST, producer_instance_ns=1_000_000_000,
+                      allow_creep=False, valid=rejected_status == 0,
+                      rest_goal_rejected=rejected_status != 0, braking_accel=-1.0 if rejected_status else None)
+  assert harness.step(-1.0, rest, plan_valid=rejected_status == 0,
+                       solver_status=rejected_status, braking_plan_valid=rejected_status != 0) == -1.0
+  owner = harness.control.motion_supervisor
+
+  current_zero = MotionIntent(reference_kind=MotionReferenceKind.EXACT_ZERO,
+                              producer_instance_ns=1_000_000_000, allow_creep=False)
+  previous = -1.0
+  for _ in range(30):
+    output = harness.step(current_target, current_zero)
+    assert previous <= output <= current_target
+    assert output - previous <= 0.08 + 1e-9
+    previous = output
+    assert not owner.resolved_should_stop
+    assert not owner.degraded
+  assert output == pytest.approx(current_target)
+
+
+@pytest.mark.parametrize('current_reason', [StopReason.MPC, StopReason.E2E, StopReason.CLOSE_LEAD])
+def test_current_zero_preserves_current_stop_and_actual_hold_without_prior_rest_cap(current_reason):
+  harness = MotionHarness()
+  rest = MotionIntent(reference_kind=MotionReferenceKind.REST, producer_instance_ns=1_000_000_000, allow_creep=False)
+  harness.step(rest, a_target=-1.0, v_ego=10.0)
+  owner = harness.supervisor
+
+  current_zero = MotionIntent(reference_kind=MotionReferenceKind.EXACT_ZERO, producer_instance_ns=1_000_000_000,
+                              reasons=current_reason, allow_creep=False)
+  assert harness.step(current_zero, a_target=0.0, v_ego=0.0, standstill=True)
+  assert owner.phase == MotionPhase.HOLD
+  assert owner.reasons & current_reason
+  assert owner.reasons & StopReason.HOLD
+  assert not owner.degraded

@@ -151,10 +151,11 @@ def test_republishing_old_measurements_does_not_refresh_their_control_age(field)
 
 @pytest.mark.parametrize('field', ['positionMonoTime', 'velocityMonoTime'])
 @pytest.mark.parametrize('age_ns,expected', [
-  (202_280_000, True), (213_990_000, True), (224_140_000, True),
-  (230_000_000, True), (230_000_001, False),
+  (199_999_999, True), (200_000_000, True), (200_000_001, False),
+  (202_280_000, False), (213_990_000, False), (224_140_000, False),
+  (230_000_000, False), (230_000_001, False),
 ])
-def test_measurement_deadline_admits_recorded_consumer_ages_and_expires_after_230ms(field, age_ns, expected):
+def test_measurement_deadline_is_200ms_without_the_former_230ms_extension(field, age_ns, expected):
   lead = formal_lead(evidence={field: NOW - age_ns})
   snapshot = _StructSnapshot({**vars(lead), 'evidence': vars(lead.evidence).copy()})
   for candidate in (lead, snapshot):
@@ -162,7 +163,7 @@ def test_measurement_deadline_admits_recorded_consumer_ages_and_expires_after_23
     assert getattr(candidate.evidence, field) == NOW - age_ns
 
 
-def test_measurement_extension_does_not_extend_model_lifetime():
+def test_measurement_retirement_does_not_extend_model_lifetime():
   lead = formal_lead(evidence={'modelMonoTime': NOW - 200_000_001})
   snapshot = _StructSnapshot({**vars(lead), 'evidence': vars(lead.evidence).copy()})
   assert not qualified_lead(lead, 'brake', now_ns=NOW)

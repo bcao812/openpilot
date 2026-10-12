@@ -13,7 +13,10 @@ from openpilot.selfdrive.car.honda_radar_relevance import HORIZON
 
 
 MAX_CONTROL_OBJECTS = 34  # Historical wire/display bound; control uses only the two formal lead slots.
-MAX_MEASUREMENT_AGE_NS = 230_000_000
+# Consumer-side sampling allowance; a newer publication never renews it.
+# Expired objects leave the current candidate set instead of extending this
+# boundary or requiring their later return/OUT before planning can proceed.
+MAX_MEASUREMENT_AGE_NS = 200_000_000
 MAX_MODEL_AGE_NS = 200_000_000
 MAX_ESTIMATE_AGE_NS = 250_000_000
 MAX_POSITION_STD = 20.0

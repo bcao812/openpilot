@@ -451,7 +451,9 @@ def test_current_radar_and_model_determine_hold_or_release_without_old_identity(
       target = Target(3.0 + .4 * elapsed**2 if departing else 3.0, .8 * elapsed if departing else 0.0)
       targets = [target]
       if frame >= 28 and outcome == 'absent':
-        targets = []
+        # Keep real radar traffic alive with an out-of-path observation. An
+        # empty raw CAN stream tests radarSilence, not healthy target absence.
+        targets = [Target(20.0, 0.0, lateral=7.0, slot=1, oem_id=2)]
       elif frame >= 28 and outcome == 'new_identity':
         targets = [Target(12.0 + 3.0 * elapsed, 3.0, oem_id=2)]
       rows.append(pipeline.step(speed=0.0, radar=targets))
@@ -471,6 +473,7 @@ def test_current_radar_and_model_determine_hold_or_release_without_old_identity(
     assert all(not obj['evidence']['coasting'] and obj['evidence']['source'] != 'predicted'
                for row in rows[28:] for obj in objects(row))
     assert all(not objects(row) for row in rows[36:])
+    assert all(row['observer']['reason'] == 'observing' for row in rows[36:])
     assert all(row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded'] for row in rows[36:])
     assert all(not row['reasons'] & int(StopReason.CLOSE_LEAD) for row in rows[36:])
   elif outcome == 'still_present':

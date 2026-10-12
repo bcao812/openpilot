@@ -65,6 +65,32 @@ def test_measurement_deadline_is_inclusive_and_removal_does_not_refresh_a_stamp(
   assert raw.fusionClearedTracks == view.fusionClearedTracks == ()
 
 
+@pytest.mark.parametrize('source', ['radar', 'fused'])
+@pytest.mark.parametrize('field', ['positionMonoTime', 'velocityMonoTime'])
+@pytest.mark.parametrize('boundary', ['before_publication', 'after_publication'])
+@pytest.mark.parametrize('age_ns,present', [
+  (200_000_000, True), (200_000_001, False),
+  (202_280_000, False), (213_990_000, False), (224_140_000, False), (230_000_000, False),
+])
+def test_original_200ms_deadline_retires_former_extension_without_invalidating_current_objects(source, field, boundary,
+                                                                                             age_ns, present):
+  publication = CONSUMPTION if boundary == 'before_publication' else PUBLICATION
+  expired = formal_lead(now_ns=publication, source=source, dRel=6.6, vLead=0.0, vLeadK=0.0, vRel=-10.0,
+                        evidence={field: CONSUMPTION - age_ns})
+  current = formal_lead(now_ns=publication, source='vision', dRel=60.0, vLead=10.0, vLeadK=10.0, vRel=0.0)
+  native = native_frame(radar_frame(expired, current, publication=publication, display=(expired, current)))
+  original = native.to_dict()
+  consumer = RadarConsumption()
+  view = consume_frame(consumer, native, publication=publication)
+  assert view.leadOne.present is present and view.leadTwo.present
+  assert qualified_lead(view.leadOne, 'brake', 0.0, now_ns=CONSUMPTION) is present
+  assert qualified_lead(view.leadTwo, 'brake', 0.0, now_ns=CONSUMPTION)
+  assert consumer.expired_identities == (() if present else ((SESSION, 7),))
+  assert not consumer.degraded and not view.fusionRiskUnresolved
+  assert native.to_dict() == original
+  assert getattr(native.leadOne.evidence, field) == CONSUMPTION - age_ns
+
+
 def measured(*, source='radar', caution=False, publication=PUBLICATION, relevant=False, track=7):
   factory = caution_lead if caution else formal_lead
   changes = {'source': source} if not caution else {}

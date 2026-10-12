@@ -104,16 +104,33 @@ def test_publisher_retires_future_entry_from_objects_and_display_without_degrada
 
 
 @pytest.mark.parametrize('source', ['radar', 'fused'])
+@pytest.mark.parametrize('relevant', [False, True])
+def test_publisher_removes_age_only_expiry_already_present_at_qualification(source, relevant):
+  old = measured(source=source, relevant=relevant)
+  old.evidence.positionMonoTime = PUBLICATION - MAX_MEASUREMENT_AGE_NS - 1
+  fresh = formal_lead(now_ns=PUBLICATION, evidence={'trackId': 9})
+  rd = make_radard()
+  update_with_result(rd, radar_frame(old, fresh, display=(old, fresh)))
+  before = rd.radar_state.to_dict()
+  event = publish_at(rd, CONSUMPTION)
+  assert event.valid and not event.radarState.leadOne.present
+  assert event.radarState.leadTwo.present and event.radarState.leadTwo.evidence.trackId == 9
+  assert event.radarState.leadOne.evidence.to_dict() == before['leadOne']['evidence']
+  assert rd.publication_expiry.expired_identities == ((SESSION, 7),)
+  assert not event.radarState.fusionDegraded and not rd.publication_expiry.degraded
+  assert not event.radarState.fusionClearedTracks and not event.radarState.fusionRiskUnresolved
+  assert rd.radar_state.to_dict() == before
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused'])
 @pytest.mark.parametrize('defect', [
-  'old_at_qualification', 'old_model_at_publication', 'different_formal_slot', 'invalid_position', 'future_measurement',
+  'old_model_at_publication', 'different_formal_slot', 'invalid_position', 'future_measurement',
 ])
-def test_publication_expiry_cannot_erase_malformed_or_previously_stale_objects(source, defect):
+def test_publication_expiry_cannot_erase_malformed_objects_or_invalid_current_input_clocks(source, defect):
   old = measured(source=source)
   frame = radar_frame(old, display=(old,))
   maximum_age = MAX_MEASUREMENT_AGE_NS
-  if defect == 'old_at_qualification':
-    old.evidence.positionMonoTime = PUBLICATION - maximum_age - 1
-  elif defect == 'old_model_at_publication':
+  if defect == 'old_model_at_publication':
     old.evidence.modelMonoTime = PUBLICATION - maximum_age + 50_000_000
   elif defect == 'different_formal_slot':
     from copy import deepcopy

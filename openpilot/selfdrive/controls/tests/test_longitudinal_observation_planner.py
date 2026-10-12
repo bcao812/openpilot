@@ -15,6 +15,7 @@ from openpilot.common.longitudinal_logging import CHECK_FLAGS, LOGGING_MARKERS, 
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
+from openpilot.selfdrive.controls.lib.lead_launch import LeadLaunch, LeadLaunchSample
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import ContinuationBudget
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
@@ -60,7 +61,7 @@ def snapshot_value(value):
     # an unequal Python identity. Loaded policy values remain in radar_settings.
     return (type(value).__qualname__, value.get_param_path())
   if isinstance(value, (ParkingApproach, VisionLeadUncertainty, RadarConsumption,
-                        PlannerContinuation, ContinuationBudget)):
+                        PlannerContinuation, ContinuationBudget, LeadLaunch)):
     return (type(value).__qualname__, snapshot_value(vars(value)))
   if isinstance(value, OrderedDict):
     # The vision cache evicts its oldest entry; ordering is control state too.
@@ -125,7 +126,7 @@ def control_snapshot(planner):
 
 
 @pytest.mark.parametrize('mutation', ['braking_latch', 'decision', 'model_payload', 'model_clock', 'model_poison', 'cache_order',
-                                     'continuation_budget', 'continuation_request'])
+                                     'continuation_budget', 'continuation_request', 'lead_launch_confirmation', 'lead_launch_measurement'])
 def test_control_snapshot_detects_parking_state_and_model_cache_mutations(mutation):
   baseline, observed = make_planner(diagnostics=False), make_planner(diagnostics=True)
   for planner in (baseline, observed):
@@ -154,6 +155,10 @@ def test_control_snapshot_detects_parking_state_and_model_cache_mutations(mutati
     observed.reference_planner.continuation.budget.note_failure(1_000_000_000)
   elif mutation == 'continuation_request':
     observed.reference_planner.continuation.independent_braking_accel = -1.0
+  elif mutation == 'lead_launch_confirmation':
+    observed.reference_planner.lead_launch.confirmed_ns = 50_000_000
+  elif mutation == 'lead_launch_measurement':
+    observed.reference_planner.lead_launch.leads = (LeadLaunchSample(('radar', 'session', 1), 6.0, 0.7, 0.2, 0.0),)
   else:
     cache._models.move_to_end(950_000_000)
 

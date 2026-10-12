@@ -8,6 +8,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 from openpilot.cereal import messaging
 from openpilot.selfdrive.car.honda_radar_control import HondaRadarControl
 from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE
@@ -157,3 +159,55 @@ def test_invalid_model_health_is_not_converted_to_healthy_empty_output():
   assert initial.valid
   invalid = produce(producer, 1, (0.0, 0.0), model_valid=False)
   assert not invalid.valid
+
+
+def test_generic_radar_matching_needs_current_visual_membership_above_low_speed_override():
+  producer = make_producer()
+  points = [{'trackId': 42, 'dRel': 20.0, 'yRel': .4, 'vRel': 0.0},
+            {'trackId': 43, 'dRel': 80.0, 'yRel': 0.0, 'vRel': 0.0}]
+  initial = produce(producer, 0, (.99, 0.0), points=points, speed=10.0)
+  lead = initial.radarState.leadOne
+  assert initial.valid and lead.present and lead.radar and lead.radarTrackId == 42
+  assert lead.yRel == pytest.approx(.4)
+
+  # Both radar points remain current. At this speed the generic vision-match
+  # path requires a current hypothesis; the old high confidence cannot match.
+  absent = produce(producer, 1, (0.0, 0.0), points=points, speed=10.0)
+  assert absent.valid and not absent.radarState.leadOne.present
+  assert not absent.radarState.leadTwo.present
+  assert set(producer.tracks) == {42, 43}
+
+  recovered = produce(producer, 2, (.6, 0.0), points=points, speed=10.0)
+  lead = recovered.radarState.leadOne
+  assert recovered.valid and lead.present and lead.radar and lead.radarTrackId == 42
+  assert lead.modelProb == pytest.approx(.6)
+  assert lead.yRel == pytest.approx(.4)
+
+
+@pytest.mark.parametrize('flags,flags_sp,expected_lateral', [
+  (0, 0, .4),
+  (0, HyundaiFlagsSP.ENHANCED_SCC, 0.0),
+  (HyundaiFlags.CANFD_CAMERA_SCC, 0, 0.0),
+  (HyundaiFlags.CAMERA_SCC, 0, 0.0),
+], ids=['radar-coordinates', 'enhanced-scc', 'canfd-camera-scc', 'camera-scc'])
+def test_hyundai_lateral_coordinate_choice_does_not_retain_old_visual_qualification(flags, flags_sp, expected_lateral):
+  producer = make_producer()
+  producer.CP = SimpleNamespace(brand='hyundai', flags=flags)
+  producer.CP_SP = SimpleNamespace(flags=flags_sp)
+  point = {'trackId': 42, 'dRel': 20.0, 'yRel': .4, 'vRel': 0.0}
+  initial = produce(producer, 0, (.99, 0.0), points=[point], speed=10.0)
+  assert initial.valid and initial.radarState.leadOne.present
+  assert initial.radarState.leadOne.yRel == pytest.approx(expected_lateral)
+
+  weak = produce(producer, 1, (.6, 0.0), points=[point], speed=10.0)
+  lead = weak.radarState.leadOne
+  assert weak.valid and lead.present and lead.radar and lead.radarTrackId == 42
+  assert lead.modelProb == pytest.approx(.6)
+  assert lead.yRel == pytest.approx(expected_lateral)
+
+  absent = produce(producer, 2, (.5, 0.0), points=[point], speed=10.0)
+  assert absent.valid and not absent.radarState.leadOne.present
+  assert not absent.radarState.visionLeadOne.present
+  recovered = produce(producer, 3, (.99, 0.0), points=[point], speed=10.0)
+  assert recovered.valid and recovered.radarState.leadOne.radarTrackId == 42
+  assert recovered.radarState.leadOne.yRel == pytest.approx(expected_lateral)

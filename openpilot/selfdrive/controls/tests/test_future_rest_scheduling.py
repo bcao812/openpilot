@@ -20,10 +20,10 @@ from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolate
 from openpilot.selfdrive.controls.tests.test_due_rest_reference import typed_due_reference
 from openpilot.selfdrive.controls.tests.test_motion_supervisor import MotionHarness
 from openpilot.selfdrive.controls.tests.test_mpc_rest_numerics import assert_future_primal_witness, integrate
-from openpilot.selfdrive.controls.tests.test_rest_braking_continuity import INSTANCE_NS, rejected_intent, tracking, zero_intent
+from openpilot.selfdrive.controls.tests.test_rest_braking_continuity import follow_current_target, rejected_intent, tracking, zero_intent
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, SOURCE_NS, evidence, stopping_curve
 from openpilot.selfdrive.controls.tests.test_typed_reference_mpc import typed_reference
-from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ACCEL_LIMITS, ControlHarness
+from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness
 from openpilot.selfdrive.controls.tests.test_unified_longitudinal_mpc import radar_state
 
 
@@ -260,54 +260,51 @@ def normal_rest_intent():
 
 
 @pytest.mark.parametrize('rejected', [False, True])
-def test_actual_clipped_stop_braking_continues_without_requiring_a_prior_failure_code(rejected):
+def test_actual_clipped_rest_braking_yields_to_a_new_current_zero_request(rejected):
   harness = tracking()
   intent = rejected_intent() if rejected else normal_rest_intent()
   kwargs = {'plan_valid': False, 'braking_plan_valid': True, 'solver_status': -4} if rejected else {}
   assert harness.step(-3.5, intent, accel_limits=(-2.0, 1.0), **kwargs) == -2.0
-  supervisor = harness.control.motion_supervisor
-  origin = supervisor._rest_braking_origin
-  assert origin == (INSTANCE_NS, harness.plan_time_ns, harness.model_time_ns, harness.now_ns)
-  assert supervisor.phase == MotionPhase.TRACK and not supervisor.resolved_should_stop
-  assert harness.step(-0.1, zero_intent()) == -2.0
-  assert supervisor.rest_braking_accel_limit == -2.0 and supervisor._rest_braking_origin == origin
-  assert not supervisor.degraded and not supervisor.reasons
+  assert harness.control.motion_phase == MotionPhase.TRACK
+  assert not harness.control.resolved_should_stop
+  outputs = follow_current_target(harness)
+  assert outputs[0] > -2.0
+  assert not harness.control.motion_supervisor.reasons
 
 
-def test_a_normal_rest_description_without_final_output_confirmation_cannot_arm_continuity():
+def test_normal_rest_description_alone_does_not_create_an_owned_stop():
   harness = MotionHarness()
-  harness.step(normal_rest_intent(), a_target=-3.0, v_ego=10.0)
-  assert harness.supervisor._pending_rest_braking is not None
-  assert harness.supervisor._rest_braking_origin is None
-  harness.step(zero_intent(), a_target=-0.1, v_ego=10.0)
-  assert harness.supervisor._rest_braking_origin is None and harness.supervisor.rest_braking_accel_limit is None
+  assert not harness.step(normal_rest_intent(), a_target=-3.0, v_ego=10.0)
+  assert harness.supervisor.phase == MotionPhase.TRACK
+  assert not harness.step(zero_intent(), a_target=-0.1, v_ego=10.0)
+  assert not harness.supervisor.degraded
+  assert not harness.supervisor.reasons
 
 
-def test_repeated_normal_rest_identity_cannot_reconfirm_a_stronger_output():
+def test_repeated_normal_rest_identity_cannot_be_mutated_into_a_new_zero_request():
   harness = MotionHarness()
   intent = normal_rest_intent()
-  harness.step(intent, a_target=-3.0, v_ego=10.0)
-  harness.supervisor.confirm_braking_output(-1.0, ACCEL_LIMITS, now_ns=harness.now_ns)
-  origin = harness.supervisor._rest_braking_origin
-  harness.step(intent, a_target=-3.0, v_ego=10.0, new_plan=False, new_model=False)
-  harness.supervisor.confirm_braking_output(-3.0, ACCEL_LIMITS, now_ns=harness.now_ns)
-  assert harness.supervisor._rest_braking_accel == -1.0 and harness.supervisor._rest_braking_origin == origin
-  harness.step(zero_intent(), a_target=-0.1, v_ego=10.0)
-  assert harness.supervisor.rest_braking_accel_limit == -1.0
+  assert not harness.step(intent, a_target=-3.0, v_ego=10.0)
+  assert not harness.step(intent, a_target=-3.0, v_ego=10.0, new_plan=False, new_model=False)
+  assert not harness.supervisor.degraded
+  harness.step(zero_intent(), a_target=-0.1, v_ego=10.0, new_plan=False, new_model=False)
+  assert harness.supervisor.degraded
 
 
-def test_a_normal_rest_plan_waiting_for_rearm_cannot_confirm_a_new_stop_output():
+def test_normal_rest_plan_needs_new_model_evidence_after_an_input_fault():
   harness = MotionHarness()
   harness.step(rejected_intent(), a_target=-3.5, v_ego=10.0, plan_valid=False, braking_plan_valid=True, solver_status=-4)
-  harness.supervisor.confirm_braking_output(-3.5, ACCEL_LIMITS, now_ns=harness.now_ns)
+  assert harness.supervisor.degraded
   harness.step(normal_rest_intent(), a_target=-3.0, v_ego=10.0, new_model=False)
-  assert harness.supervisor._pending_rest_braking is None and harness.supervisor._rest_braking_origin is None
-  harness.supervisor.confirm_braking_output(-3.0, ACCEL_LIMITS, now_ns=harness.now_ns)
-  assert harness.supervisor._rest_braking_origin is None
+  assert harness.supervisor.degraded
+  assert harness.supervisor.degraded_braking_accel == -3.0
+  assert not harness.step(zero_intent(), a_target=-0.1, v_ego=10.0)
+  assert not harness.supervisor.degraded
 
 
-def test_positive_final_output_does_not_arm_normal_rest_continuity():
+def test_normal_reference_type_does_not_replace_the_current_execution_request():
   harness = ControlHarness()
   harness.state.vEgo = 10.0
   assert harness.step(1.0, normal_rest_intent()) > 0.0
-  assert harness.control.motion_supervisor._rest_braking_origin is None
+  assert harness.step(-0.1, zero_intent()) == -0.1
+  assert not harness.control.motion_degraded

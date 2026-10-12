@@ -280,7 +280,7 @@ def test_continuation_freezes_pid_and_confirmation_with_nonzero_state_error_unti
   calls = []
   with ExitStack() as stack:
     for obj, names in ((owner.pid, ('update', 'reset')),
-                       (owner.motion_supervisor, ('confirm_braking_output', 'complete_release'))):
+                       (owner.motion_supervisor, ('complete_release',))):
       for name in names:
         calls.append(stack.enter_context(patch.object(obj, name, wraps=getattr(obj, name))))
     if owner.launch_response is not None:

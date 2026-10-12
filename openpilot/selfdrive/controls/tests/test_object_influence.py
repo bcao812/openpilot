@@ -36,7 +36,7 @@ def receipt(records, *, phase='track', resolved_stop=False, constrained=False, *
   plan = NS(objectInfluences=records, modelMonoTime=NOW, solverStatus=0, aTarget=-1.0,
             motionIntent=NS(valid=True, ready=True, releaseAllowed=False))
   owner = NS(unified=True, motion_input_constrained=constrained, motion_phase=NS(text=phase), resolved_should_stop=resolved_stop,
-             long_control_state='stopping' if resolved_stop else 'pid', motion_supervisor=NS(rest_braking_accel_limit=None))
+             long_control_state='stopping' if resolved_stop else 'pid')
   car = NS(gasPressed=False, brakePressed=False)
   kwargs = {'long_active': True, 'plan_valid': True, 'plan_ns': NOW, 'now_ns': NOW, 'output_accel': -1.0}
   for key, value in changes.items():
@@ -145,8 +145,7 @@ def test_following_has_visible_low_strength_and_braking_request_scales_monotonic
                                      {'car_gasPressed': True}, {'car_brakePressed': True}, {'owner_unified': False},
                                      {'now_ns': NOW + 250_000_001}, {'plan_ns': NOW + 1}, {'plan_solverStatus': 1},
                                      {'independent_stop': True}, {'output_accel': float('nan')},
-                                     {'plan_motionIntent': NS(valid=False, ready=True, releaseAllowed=False)},
-                                     {'owner_motion_supervisor': NS(rest_braking_accel_limit=-1.5)}])
+                                     {'plan_motionIntent': NS(valid=False, ready=True, releaseAllowed=False)}])
 def test_owner_rejection_and_independent_stop_clear_receipts(changes):
   assert not receipt([record()], **changes)
 
