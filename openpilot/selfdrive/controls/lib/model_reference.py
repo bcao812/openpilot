@@ -302,6 +302,57 @@ def stationary_lead_departure_compatible(evidence, *, actual_standstill, measure
   return bool(np.isfinite(distance) and distance > 0.0 and np.max(progress) > max(float(progress[0]), STOP_SPEED))
 
 
+def lead_launch_model_compatible(evidence):
+  """Retain model risks while a separately confirmed lead supplies movement.
+
+  This does not reclassify UNKNOWN or grant release. A bounded, weak initial
+  sign ambiguity need not supply the ego speed target for following a moving
+  lead. Rest goals, later stops, substantial reverse travel and invalid source
+  identities remain vetoes. These bounds define an engineering scope, not a
+  calibrated model-error distribution.
+  """
+  if (evidence is None or evidence.raw_velocity is None or evidence.raw_motion is None
+      or evidence.has_rest_intent or evidence.no_forward):
+    return False
+  source = evidence.source
+  model_ns, anchor_ns, consumed_ns = source.model_mono_time_ns, source.anchor_mono_time_ns, source.consumed_mono_time_ns
+  if (source.epoch_basis != 'publication_proxy' or source.physical_prediction_epoch_ns is not None
+      or not all(_timestamp(value) for value in (model_ns, anchor_ns, consumed_ns))
+      or not 0 <= consumed_ns - model_ns <= MODEL_LEASE_NS
+      or not 0 <= consumed_ns - anchor_ns <= REFERENCE_MAX_AGE_NS):
+    return False
+  if model_ns > anchor_ns:
+    if source.proxy_age_s is not None:
+      return False
+  elif source.proxy_age_s != (anchor_ns - model_ns) / 1e9:
+    return False
+  allowed_unknowns = {'model_proxy_after_initial_state', 'backward_then_forward_is_ambiguous',
+                      'isolated_zero_has_no_rest_support'}
+  if (evidence.unknown is not None and evidence.unknown.reason not in allowed_unknowns
+      or evidence.raw_motion.unknown is not None and evidence.raw_motion.unknown.reason not in allowed_unknowns):
+    return False
+  times = np.asarray(ModelConstants.T_IDXS, dtype=float)
+  raw = evidence.raw_velocity
+  if raw.shape != times.shape or not np.all(np.isfinite(raw)) or np.min(raw) < -0.05 or raw[-1] <= 0.0:
+    return False
+  # Only near-rest ambiguity before the ordinary forward-evidence horizon is
+  # eligible. Never erase a stop after meaningful forward motion, or a later
+  # zero/negative prediction hidden by the parser's negative-prefix UNKNOWN.
+  nonpositive = raw <= 0.0
+  if (np.any(nonpositive & (times > FORWARD_HORIZON_S))
+      or np.any(nonpositive & np.maximum.accumulate(raw > STOP_SPEED))):
+    return False
+  reverse_distance = 0.0
+  for left, right, duration in zip(raw[:-1], raw[1:], np.diff(times), strict=True):
+    if left <= 0.0 and right <= 0.0:
+      reverse_distance -= 0.5 * (left + right) * duration
+    elif left < 0.0:
+      reverse_distance += 0.5 * left * left / (right - left) * duration
+    elif right < 0.0:
+      reverse_distance += 0.5 * right * right / (left - right) * duration
+  return bool(reverse_distance <= 0.02)
+
+
 class ModelReferenceAdapter:
   """A bounded production adapter; it does not invent traffic-event labels.
 

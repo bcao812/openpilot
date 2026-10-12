@@ -21,12 +21,15 @@ from openpilot.selfdrive.controls.lib.drive_helpers import (CLOSE_LEAD_STOP_SPEE
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_VERSION
 from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MODEL_AGE_NS, control_leads, lead_identity, qualified_lead
+from openpilot.selfdrive.controls.lib.lead_launch import LeadLaunch, LeadLaunchSample, LEAD_LAUNCH_MAX_SPEED, STANDSTILL_RESIDUE
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   LEAD_DANGER_FACTOR, STOP_DISTANCE, MPC_INVALID_INPUT, MpcOutcome, MpcReference, T_IDXS,
 )
-from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter, normalize_standstill_speed, stationary_lead_departure_compatible
+from openpilot.selfdrive.controls.lib.model_reference import (
+  ModelReferenceAdapter, lead_launch_model_compatible, normalize_standstill_speed, stationary_lead_departure_compatible,
+)
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   CONTROL_N_T_IDX, ALLOW_THROTTLE_THRESHOLD, MIN_ALLOW_THROTTLE_SPEED,
   LEAD_BRAKING_MIN_CHANGE_SCALE, CREEP_FOLLOW_MIN_ACCEL, CREEP_FOLLOW_MODEL_MARGIN,
@@ -131,9 +134,10 @@ def cruise_accel_limit(params, speed, steering_angle, e2e_allowed, coast_accel, 
 
 
 def departing_lead_rejection(radar_state, speed, delay, *, minimum_gap_base=LEAD_DEPARTURE_MIN_GAP, now_ns=None,
-                             held_identity=None, allow_unbound_physical=False):
+                             held_identity=None, allow_unbound_physical=False, maximum_speed=STOP_SPEED):
   """Return the first failed departure gate and its object, or None."""
-  if not (math.isfinite(speed) and 0.0 <= speed < STOP_SPEED and math.isfinite(delay)
+  if not (not isinstance(maximum_speed, bool) and math.isfinite(maximum_speed) and STOP_SPEED <= maximum_speed <= LEAD_LAUNCH_MAX_SPEED
+          and math.isfinite(speed) and 0.0 <= speed < maximum_speed and math.isfinite(delay)
           and 0.0 <= delay <= 1.0 and radar_state.leadOne.present
           and not isinstance(minimum_gap_base, bool) and math.isfinite(minimum_gap_base)
           and LEAD_DEPARTURE_MIN_GAP <= minimum_gap_base <= CREEP_FOLLOW_MIN_GAP):
@@ -227,6 +231,8 @@ class UnifiedLongitudinalPlanner:
     self.fusion_admitted = False
     self.cruise_response = CruiseResponse(dt=getattr(planner, 'dt', DT_MDL), init_a=init_a)
     self.model_reference_adapter = ModelReferenceAdapter()
+    self.lead_launch = LeadLaunch()
+    self.lead_launch_active = False
     self.stop_distance_policy = LowSpeedStopDistance()
     self.parking_approach = ParkingApproach()
     self.parking_policy_distances = None
@@ -246,6 +252,8 @@ class UnifiedLongitudinalPlanner:
 
   def invalidate(self, speed, reason, *, preserve_continuation=False, failure=True):
     planner = self.planner
+    self.lead_launch.clear(reason)
+    self.lead_launch_active = False
     self.continuation.invalidate(reason, now_ns=self._radar_update_ns, keep_offer=preserve_continuation, failure=failure)
     if not preserve_continuation:
       self.cruise_response.clear()
@@ -459,7 +467,7 @@ class UnifiedLongitudinalPlanner:
       return RadarInputView(state, radar)
     return state
 
-  def unbound_radar_departure_rejection(self, state, *, now_ns):
+  def unbound_radar_departure_rejection(self, state, *, now_ns, launch_continuation=False):
     """Qualify the current radar publication before using its departure evidence."""
     radar = state['radarState']
     publication_ns = state.logMonoTime.get('radarState')
@@ -483,7 +491,10 @@ class UnifiedLongitudinalPlanner:
     if primary_identity is None or primary_identity[0] != getattr(radar, 'fusionSessionId', None):
       return 'radar_session_mismatch'
     speed = normalize_standstill_speed(state['carState'].vEgo, actual_standstill=state['carState'].standstill)
-    if state['carState'].standstill is not True or not math.isfinite(speed) or not 0.0 <= speed <= 0.05:
+    stationary = state['carState'].standstill is True and math.isfinite(speed) and 0.0 <= speed <= 0.05
+    continuing = (launch_continuation and self.lead_launch.active and math.isfinite(speed)
+                  and 0.0 <= speed < LEAD_LAUNCH_MAX_SPEED)
+    if not stationary and not continuing:
       return 'ego_not_stationary'
     return None
 
@@ -598,7 +609,8 @@ class UnifiedLongitudinalPlanner:
     source = LongitudinalPlanSource.cruise
     if cruise_speed <= STOP_SPEED:
       ceiling = min(ceiling, CarControllerParams.BOSCH_GAS_LOOKUP_BP[0])
-    if self.e2e_allowed and self.model_reference_mode != 'invalid' and model.action.desiredAcceleration < ceiling:
+    if (self.e2e_allowed and self.model_reference_mode != 'invalid' and model.action.desiredAcceleration < ceiling
+        and not (self.lead_launch_active and model.action.desiredAcceleration >= 0.0)):
       ceiling = float(model.action.desiredAcceleration)
       source = LongitudinalPlanSource.e2e
     evidence = self.model_evidence
@@ -610,6 +622,7 @@ class UnifiedLongitudinalPlanner:
 
   def update(self, state, *, now_ns):
     self.continuation.begin()
+    self.lead_launch_active = False
     state = self.radar_input_state(state, now_ns)
     self._radar_update_ns = now_ns
     planner = self.planner
@@ -798,6 +811,56 @@ class UnifiedLongitudinalPlanner:
       # without adding a second ordinary velocity target to this same MPC.
       model_position = model_velocity = model_acceleration = None
       self.model_reference_mode = 'action_capped_absolute'
+    # A confirmed lead can supply a bounded launch target while near-zero
+    # model ego velocity remains ambiguous. Model evidence is retained, never
+    # rewritten as FORWARD; explicit model braking/rest and perception faults
+    # withdraw the exception before building this tick's MPC problem.
+    unbound_launch = self.radar_held_identity is None and lead_identity(radar.leadOne) is not None
+    launch_rejection = departing_lead_rejection(
+      radar, speed, delay, now_ns=now_ns, held_identity=self.radar_held_identity,
+      allow_unbound_physical=unbound_launch, maximum_speed=LEAD_LAUNCH_MAX_SPEED,
+    )
+    if launch_rejection is None and unbound_launch:
+      launch_rejection = self.unbound_radar_departure_rejection(state, now_ns=now_ns,
+                                                              launch_continuation=self.lead_launch.active)
+    raw_speed = float(car_state.vEgoRaw)
+    can_start_launch = (bool(car_state.standstill) and math.isfinite(raw_speed) and raw_speed == 0.0
+                        and -STANDSTILL_RESIDUE <= float(car_state.vEgo) <= 0.05
+                        and motion.phase == 'hold' and motion.resolvedStop)
+    launch_enabled = (
+      planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl and planner.unified
+      and healthy and active and not reset and self.e2e_allowed and not forced_decel and not planner.fcw
+      and not motion.degraded and not motion.waitingForFreshInput
+      and not self.radar_consumption.degraded and not getattr(radar, 'fusionRiskUnresolved', False)
+      and not self.turn_lead_guard.lost and not scc_braking
+      and (turn_ceiling is None or turn_ceiling > 0.0)
+      and policy.source == LongitudinalPlanSourceSP.cruise and policy_accel >= 0.0
+      and cruise_speed >= CREEP_SPEED and cruise_ceiling > 0.0
+      and not model.action.shouldStop and not model.meta.hardBrakePredicted
+      and model.action.desiredAcceleration >= 0.0
+      and lead_launch_model_compatible(self.model_evidence) and launch_rejection is None
+      and math.isfinite(raw_speed) and raw_speed >= 0.0
+      and (float(car_state.vEgo) >= 0.0 or can_start_launch)
+    )
+    launch_samples = []
+    if launch_enabled:
+      for slot, lead in enumerate(control_leads(radar)):
+        if not lead.present:
+          continue
+        lead_evidence = getattr(lead, 'evidence', None)
+        physical = lead_identity(lead)
+        identity = (str(lead_evidence.source), physical) if physical is not None else ('vision', slot)
+        lateral = lead_evidence.pathOffset if getattr(lead_evidence, 'version', 0) == 1 else lead.yRel
+        launch_samples.append(LeadLaunchSample(identity, float(lead.dRel), float(lead.vLead), float(lead.vRel), float(lateral)))
+    self.lead_launch_active = self.lead_launch.update(
+      now_ns=now_ns, model_ns=state.logMonoTime.get('modelV2'), radar_ns=state.logMonoTime.get('radarState'),
+      enabled=bool(launch_enabled), can_start=can_start_launch, speed=speed, leads=tuple(launch_samples),
+    )
+    if self.lead_launch_active:
+      model_position = model_velocity = model_acceleration = None
+      self.model_reference_mode = 'lead_launch'
+      # Use the existing ACC acceleration envelope, never a positive floor.
+      maximum_accel = min(maximum_accel, float(get_max_accel(speed)))
     has_rest_goal = self.model_evidence is not None and self.model_evidence.rest_goal is not None
     self.entered_rest_goal = has_rest_goal and not self._model_rest_active
     self._model_rest_active = has_rest_goal
@@ -813,6 +876,7 @@ class UnifiedLongitudinalPlanner:
     # Unadmitted raw model signs do not select between two cruise policies.
     native_cruise_external = (
       healthy and active and not reset and not forced_decel
+      and not self.lead_launch_active
       and policy.source == LongitudinalPlanSourceSP.cruise and cruise_speed > STOP_SPEED
       and ((not self.e2e_allowed and self.model_evidence is None) or ordinary_model_motion)
       and model_position is model_velocity is model_acceleration is None
@@ -860,7 +924,7 @@ class UnifiedLongitudinalPlanner:
     reference = MpcReference(
       cruise_speed=None if native_cruise_external else cruise_speed, accel_min=ACCEL_MIN, accel_max=maximum_accel,
       model_position=model_position, model_velocity=model_velocity, model_acceleration=model_acceleration,
-      typed_model=None if ordinary_model_motion else self.model_evidence, allow_future_rest_reschedule=True,
+      typed_model=None if ordinary_model_motion or self.lead_launch_active else self.model_evidence, allow_future_rest_reschedule=True,
       allow_interval_rest=True,
       comfort_stop_distance=comfort_distance, lead_risk_stop_distances=lead_risk_distances,
     )
@@ -906,6 +970,8 @@ class UnifiedLongitudinalPlanner:
                                                    and getattr(radar, 'fusionHealthy', False) and not getattr(radar, 'fusionDegraded', False)
                                                    and self.continuation.donor is not None))
     if planner.mpc.solution_status != 0:
+      self.lead_launch.clear('solver_failure')
+      self.lead_launch_active = False
       if retention_reason:
         self.continuation.reason = retention_reason
         self.fail_mpc(state, speed, planner.output_a_target)
@@ -920,6 +986,12 @@ class UnifiedLongitudinalPlanner:
     # Eligibility below consumes the current solve's collision warning, never
     # the preceding plan's flag.
     planner.fcw = planner.mpc.crash_cnt > 2 and not car_state.standstill
+    if self.lead_launch_active and planner.fcw:
+      self.lead_launch.clear('fcw')
+      self.lead_launch_active = False
+      # A collision warning found by the current solve cannot spend the
+      # pre-solve launch permission, even if its immediate sample is positive.
+      constraint_kwargs['maximum_accel'] = min(constraint_kwargs['maximum_accel'], 0.0)
     (planner.v_desired_trajectory, planner.a_desired_trajectory,
      planner.j_desired_trajectory) = planner.mpc.sample_solution(CONTROL_N_T_IDX)
     planner._observe(actionHorizonKnown=True, actionHorizon=float(delay + DT_MDL))
@@ -1009,7 +1081,9 @@ class UnifiedLongitudinalPlanner:
     self._forward_execution_instance_ns = self.producer_instance_ns if executed_forward else 0
     if low_speed_preference_stop and not executed_forward:
       reasons |= StopReason.MPC
-    model_allows_external_departure = (evidence is None or evidence.allows_external_departure
+    if reasons and self.lead_launch_active:
+      self.lead_launch.clear('raw_stop_veto')
+    model_allows_external_departure = (self.lead_launch_active or evidence is None or evidence.allows_external_departure
                                       or stationary_lead_departure_compatible(
                                         evidence, actual_standstill=bool(car_state.standstill), measured_speed=float(car_state.vEgo)))
     # P's ordinary action can request departure without raw speed growth.
@@ -1026,10 +1100,10 @@ class UnifiedLongitudinalPlanner:
       and model.action.desiredAcceleration >= STOP_RELEASE_ACCEL and output > 0.0
       and (output >= STOP_RELEASE_ACCEL or departure_accel is not None and departure_accel >= STOP_RELEASE_ACCEL)
     )
-    model_allows_trajectory_departure = evidence is None or evidence.allows_departure or ordinary_absolute_departure
+    model_allows_trajectory_departure = self.lead_launch_active or evidence is None or evidence.allows_departure or ordinary_absolute_departure
     no_model_risk = (model_allows_external_departure and not model.action.shouldStop
                      and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL
-                     and model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN)
+                     and (self.lead_launch_active or model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN))
     # This confirms continued rolling; it grants neither release nor extra
     # throttle. Keep the original reaction/stopping reserve and lead guards,
     # while aligning its base with the compact goal and the selected native
@@ -1060,7 +1134,7 @@ class UnifiedLongitudinalPlanner:
       departure_stage = 'model_action_stop'
     elif not model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL:
       departure_stage = 'model_action_acceleration'
-    elif not model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN:
+    elif not self.lead_launch_active and not model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN:
       departure_stage = 'model_action_margin'
     elif cruise_speed < CREEP_SPEED:
       departure_stage = 'cruise_speed'
@@ -1068,10 +1142,12 @@ class UnifiedLongitudinalPlanner:
       departure_stage = 'nonpositive_target'
     else:
       if unbound_physical:
-        departure_stage = self.unbound_radar_departure_rejection(state, now_ns=now_ns)
+        departure_stage = self.unbound_radar_departure_rejection(state, now_ns=now_ns,
+                                                                launch_continuation=self.lead_launch_active)
       if departure_stage is None:
         rejection = departing_lead_rejection(radar, speed, delay, now_ns=now_ns, held_identity=self.radar_held_identity,
-                                             allow_unbound_physical=unbound_physical)
+                                             allow_unbound_physical=unbound_physical,
+                                             maximum_speed=LEAD_LAUNCH_MAX_SPEED if self.lead_launch_active else STOP_SPEED)
         if rejection is not None:
           departure_stage, rejected_identity = rejection
     lead_departure = departure_stage is None
