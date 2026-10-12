@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from openpilot.common.prefix import OpenpilotPrefix
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import CRASH_DISTANCE
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_planner_owner, make_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import CruiseTarget, LongitudinalPlannerSP, LongitudinalPlanSource
@@ -109,3 +110,45 @@ def test_a_new_current_lead_brakes_after_an_empty_turn():
       plan, outputs = consume(planner, control, state, frame)
       assert plan.solverStatus == 0 and plan.motionIntent.valid
       assert plan.aTarget < 0.0 and max(outputs) <= 0.0
+      # Check the newly solved request trajectory against current geometry;
+      # a zero native status alone does not exclude a predicted collision.
+      mpc = planner.mpc
+      assert mpc.lead_clearance_minimum(mpc._lead_trajectories[0], mpc.x_sol, mpc.j_solution) > CRASH_DISTANCE
+
+
+@pytest.mark.parametrize('speed,distance,lead_speed', [
+  (3.0, 40.0, 0.0),  # Distant stationary target outside the history-cost support.
+  (3.0, 5.0, 6.0),   # Nearby current target is moving away.
+  (0.8, 20.0, 0.8),  # Normal low-speed following remains available.
+])
+def test_nonconflicting_current_leads_keep_reference_smoothing_and_normal_motion(speed, distance, lead_speed):
+  with pipeline(speed=speed, measured_accel=0.0) as (planner, control, state):
+    set_lead(state, True)
+    for frame in range(8):
+      step(planner, control, state, frame)
+    set_lead(state, False)
+    for frame in range(8, 18):
+      step(planner, control, state, frame)
+    set_lead(state, True)
+    lead = state['radarState'].leadOne
+    lead.dRel, lead.vRel, lead.vLead = distance, lead_speed - speed, lead_speed
+    for frame in range(18, 23):
+      plan, outputs = step(planner, control, state, frame)
+      assert planner.mpc._cost_weights[4] > 0.0
+      assert plan.aTarget > 0.0 and max(outputs) > 0.0
+
+
+@pytest.mark.parametrize('speed', [0.0, 0.2, 0.8])
+def test_current_low_speed_stop_still_brakes_and_holds(speed):
+  with pipeline(speed=speed, measured_accel=0.0) as (planner, control, state):
+    set_lead(state, True)
+    lead = state['radarState'].leadOne
+    lead.dRel, lead.vRel, lead.vLead = 5.0, -speed, 0.0
+    state['modelV2'].action.shouldStop = True
+    state['modelV2'].action.desiredAcceleration = -0.5
+    for frame in range(6):
+      plan, outputs = consume(planner, control, state, frame)
+      assert plan.solverStatus == 0 and plan.motionIntent.valid
+      assert plan.aTarget <= -0.5 and max(outputs) <= 0.0
+      assert plan.shouldStop and not plan.motionIntent.releaseAllowed
+      assert control.resolved_should_stop

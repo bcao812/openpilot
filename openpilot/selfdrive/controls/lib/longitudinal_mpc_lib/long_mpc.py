@@ -724,6 +724,38 @@ class LongitudinalMpc:
     """
     self.a_prev[:] = 0.0
 
+  def reject_reference_cost_for_current_collision(self):
+    """Do not penalize leaving an old accelerating path that hits a current lead.
+
+    This checks only this update's already-qualified raw lead trajectories,
+    against the old acceleration reference integrated from the current ego
+    state. Its horizon ends at the last node with a nonzero history cost;
+    neither an old object nor a new retention/response timer is introduced.
+    Rejecting this comfort reference changes no physical bound or jerk cost.
+    The native solver still constructs and checks a new current-input plan.
+    """
+    if not self._lead_trajectories or self._cost_weights[4] <= 0.0:
+      return False
+    count = int(np.count_nonzero(self.accel_change_cost_scale(T_IDXS) > 0.0))
+    accelerations = self.a_prev[:count].copy()
+    if (count < 2 or not np.all(np.isfinite(accelerations))
+        or not np.any(accelerations[1:] > 0.0)):
+      return False
+    accelerations[0] = self.x0[2]
+    times = T_IDXS[:count]
+    jerks = np.diff(accelerations) / np.diff(times)
+    states = np.empty((count, X_DIM))
+    states[0] = self.x0
+    for stage, duration in enumerate(np.diff(times)):
+      states[stage+1] = self.integrate_jerk(states[stage], jerks[stage], float(duration))
+    if not any(self.lead_clearance_minimum(trajectory[:count], states, jerks, times=times) < CRASH_DISTANCE
+               for trajectory in self._lead_trajectories):
+      return False
+    self.discard_prepared_reference_cost()
+    self._cost_weights[4] = 0.0
+    self._costs_pending = True
+    return True
+
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
     """Prepare base costs; update installs only the final reference problem."""
     self._cost_weights = np.asarray(cost_weights, dtype=float).copy()
@@ -2029,6 +2061,9 @@ class LongitudinalMpc:
       np.column_stack((trajectory[:, 0] + (self.lead_initial_state(lead, reference_ns=reference_ns)[0] - trajectory[0, 0]), trajectory[:, 1]))
       for lead, trajectory in zip(leads, lead_trajectories, strict=True) if lead.present
     )
+    if (reference is not None and self._reference_pending_ns is not None
+        and self._reference_pending_ns == reference_ns):
+      self.reject_reference_cost_for_current_collision()
     recovery_leads = tuple(zip(self._source_leads, self._lead_trajectories, strict=True))
     if recovery_leads and all(lead.vLead >= 0.0 for lead, _ in recovery_leads):
       limit = self.x0[0] + min(trajectory[0, 0] for _, trajectory in recovery_leads) - CRASH_DISTANCE
