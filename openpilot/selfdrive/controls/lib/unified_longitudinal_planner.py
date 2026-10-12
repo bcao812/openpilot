@@ -824,9 +824,9 @@ class UnifiedLongitudinalPlanner:
       launch_rejection = self.unbound_radar_departure_rejection(state, now_ns=now_ns,
                                                               launch_continuation=self.lead_launch.active)
     raw_speed = float(car_state.vEgoRaw)
-    can_start_launch = (bool(car_state.standstill) and math.isfinite(raw_speed) and raw_speed == 0.0
-                        and -STANDSTILL_RESIDUE <= float(car_state.vEgo) <= 0.05
-                        and motion.phase == 'hold' and motion.resolvedStop)
+    stationary_measurement = (bool(car_state.standstill) and math.isfinite(raw_speed) and raw_speed == 0.0
+                              and -STANDSTILL_RESIDUE <= float(car_state.vEgo) <= 0.05)
+    can_start_launch = stationary_measurement and motion.phase == 'hold' and motion.resolvedStop
     launch_enabled = (
       planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl and planner.unified
       and healthy and active and not reset and self.e2e_allowed and not forced_decel and not planner.fcw
@@ -840,7 +840,7 @@ class UnifiedLongitudinalPlanner:
       and model.action.desiredAcceleration >= 0.0
       and lead_launch_model_compatible(self.model_evidence) and launch_rejection is None
       and math.isfinite(raw_speed) and raw_speed >= 0.0
-      and (float(car_state.vEgo) >= 0.0 or can_start_launch)
+      and (float(car_state.vEgo) >= 0.0 or stationary_measurement)
     )
     launch_samples = []
     if launch_enabled:
@@ -1083,6 +1083,13 @@ class UnifiedLongitudinalPlanner:
       reasons |= StopReason.MPC
     if reasons and self.lead_launch_active:
       self.lead_launch.clear('raw_stop_veto')
+      self.lead_launch_active = False
+      (self.constraint_accel, self.constraint_source, cruise_command, coast_applicable) = self.independent_constraint(
+        state, self.reference_accel, **constraint_kwargs)
+      output = min(output, self.constraint_accel)
+      self.reference_overridden = output != self.reference_accel
+      if self.reference_overridden:
+        planner.mpc.source = self.constraint_source
     model_allows_external_departure = (self.lead_launch_active or evidence is None or evidence.allows_external_departure
                                       or stationary_lead_departure_compatible(
                                         evidence, actual_standstill=bool(car_state.standstill), measured_speed=float(car_state.vEgo)))

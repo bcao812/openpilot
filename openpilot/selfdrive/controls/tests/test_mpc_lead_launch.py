@@ -1,4 +1,6 @@
 """Real MPC/owner coverage for weak-model lead launch and subsequent risks."""
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 
@@ -76,6 +78,19 @@ def test_new_cut_in_with_stop_request_cancels_launch_in_the_same_continuous_hist
   assert plan.shouldStop and plan.motionIntent.reasons & int(StopReason.E2E)
   assert owner.motion_phase == MotionPhase.HOLD and owner.resolved_should_stop
   assert max(outputs) <= 0.0
+
+
+def test_current_solve_stop_veto_also_clears_the_action_cap_exception():
+  planner, owner, state = held_weak_model_case()
+  for frame in range(20, 39):
+    step(planner, owner, state, frame)
+  assert planner.reference_planner.lead_launch_active
+  with patch('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.should_stop_for_close_lead', return_value=True):
+    plan, outputs = step(planner, owner, state, 39)
+  assert not planner.reference_planner.lead_launch_active and not planner.reference_planner.lead_launch.active
+  assert not plan.motionIntent.releaseAllowed and plan.motionIntent.reasons & int(StopReason.CLOSE_LEAD)
+  assert plan.aTarget <= state['modelV2'].action.desiredAcceleration + 1e-6
+  assert owner.resolved_should_stop and max(outputs) <= 0.0
 
 
 @pytest.mark.parametrize('risk', ['negative_action', 'model_stop', 'hard_brake', 'driver_gas', 'rollback', 'no_lead'])
