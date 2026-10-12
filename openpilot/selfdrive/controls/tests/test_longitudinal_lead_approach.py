@@ -111,7 +111,9 @@ def test_speed_and_closing_fades_are_continuous():
 
 
 def test_delay_reservation_can_raise_urgency_without_changing_the_lead():
-  radar = approach_radar(20.0, 72.0, 5.0)
+  comfort = get_safe_obstacle_distance(20.0, get_T_FOLLOW(log.LongitudinalPersonality.standard, v_ego=20.0))
+  comfort -= get_stopped_equivalence_factor(15.0)
+  radar = approach_radar(20.0, comfort + 2.0, 5.0)
   before = deepcopy(radar)
   values = [urgency(radar, 20.0, delay=float(delay)) for delay in np.linspace(0.0, 1.0, 21)]
   assert values[0] == 0.0 and values[-1] > 0.0
@@ -218,7 +220,7 @@ def test_warm_approach_reduces_installed_native_history_cost_only(speed, gap, cl
     assert planner.mpc.solution_status == 0
     assert planner.mpc.x0[1] == state['carState'].vEgo
     assert np.all(planner.mpc.params[:, 5] == LEAD_DANGER_FACTOR)
-    assert np.all(planner.mpc.params[:, 4] == get_T_FOLLOW(state['selfdriveState'].personality, v_ego=speed))
+    assert np.all(planner.mpc.params[:, 4] == get_T_FOLLOW(state['selfdriveState'].personality, v_ego=state['carState'].vEgo))
     assert np.min(planner.mpc.params[:, 0]) == -3.5
     assert -3.5 <= planner.output_a_target <= 2.0
     assert state['radarState'].to_dict() == before

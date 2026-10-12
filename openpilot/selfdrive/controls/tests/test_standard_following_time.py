@@ -102,9 +102,11 @@ def test_same_live_planner_enters_and_leaves_the_transition_without_a_latch():
   for frame, speed_kph in enumerate((80.0, 85.0, 90.0, 95.0, 100.0, 95.0, 90.0, 85.0, 80.0)):
     speed = speed_kph * CV.KPH_TO_MS
     state = make_state(speed=speed, target=speed + 5.0)
+    state['selfdriveState'].personality = STANDARD
     planner.update(state, now_ns=advance(state, frame))
     assert planner.mpc.solution_status == 0
-    np.testing.assert_allclose(planner.mpc.params[:, 4], get_T_FOLLOW(STANDARD, v_ego=speed))
+    assert planner.motion_intent.valid
+    np.testing.assert_allclose(planner.mpc.params[:, 4], get_T_FOLLOW(STANDARD, v_ego=state['carState'].vEgo))
 
 
 @pytest.mark.parametrize('value', [float('nan'), float('inf')])

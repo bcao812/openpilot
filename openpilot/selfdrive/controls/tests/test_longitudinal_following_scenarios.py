@@ -50,7 +50,8 @@ def rate_limit_evidence(raw_commands, wire_commands, automatic_pairs, rate_limit
 
 def simulate_following(
   *, scenario='moving', delay=0.5, response_time=0.4, duration=25.0, initial_speed=1.1, lead_speed=0.8, initial_gap=7.0,
-  offset=0.0, noise=0.0, diagnostics=None, platform=CAR.HONDA_ACCORD, braking_bias=0.0, measurement_filter=False
+  offset=0.0, noise=0.0, diagnostics=None, platform=CAR.HONDA_ACCORD, braking_bias=0.0, measurement_filter=False,
+  personality=None, lead_event_time=5.0, cut_in_gap=4.0, cut_in_speed=0.0,
 ):
   """Ideal acceleration/lag plant, not a calibrated Honda or rollback model."""
   params = CarInterface.get_non_essential_params(platform)
@@ -67,6 +68,8 @@ def simulate_following(
   state = cruise_state()
   state['modelV2'] = state['modelV2'].as_builder()
   state['selfdriveState'] = state['selfdriveState'].as_builder()
+  if personality is not None:
+    state['selfdriveState'].personality = personality
   state['carState'].vCruise = max(20.0, initial_speed + 5.0) * 3.6
   state['carState'].cruiseState.available = True
   delayed = deque([0.0] * max(1, round(delay / DT_CTRL)))
@@ -110,9 +113,9 @@ def simulate_following(
         state['modelV2'].position.x = [float(model_speed * sample) for sample in ModelConstants.T_IDXS]
         state['modelV2'].acceleration.x = [0.0] * len(ModelConstants.T_IDXS)
         state['modelV2'].orientationRate.z = [0.001] * len(ModelConstants.T_IDXS)
-      if scenario == 'cut_in' and frame == round(5.0 / DT_CTRL):
-        gap, lead_speed = 4.0, 0.0
-      lead_accel = -min(3.0, lead_speed / DT_CTRL) if scenario == 'lead_stop' and timestamp >= 5.0 else 0.0
+      if scenario == 'cut_in' and frame == round(lead_event_time / DT_CTRL):
+        gap, lead_speed = cut_in_gap, cut_in_speed
+      lead_accel = -min(3.0, lead_speed / DT_CTRL) if scenario == 'lead_stop' and timestamp >= lead_event_time else 0.0
       lead_speed = max(0.0, lead_speed + lead_accel * DT_CTRL)
       for lead in (state['radarState'].leadOne, state['radarState'].leadTwo):
         lead.present = not (scenario == 'lead_loss' and 5.0 <= timestamp < 5.5)
@@ -134,8 +137,11 @@ def simulate_following(
             {
               't': timestamp,
               'speed': speed,
+              'acceleration': acceleration,
+              'lead_speed': lead_speed,
               'gap': gap,
               'target': command,
+              't_follow': float(planner.mpc.params[0, 4]),
               'stop': bool(planner.output_should_stop),
               'creep': bool(getattr(planner, 'creep_stop', False)),
               'latched': bool(getattr(planner, 'stop_latched', False)),
@@ -191,7 +197,7 @@ def simulate_following(
       )
   values = np.asarray(history)
   steady = values[:, 0] >= duration - 10.0
-  braking = values[(values[:, 0] >= 5.0) & (values[:, 4] < -1.0), 0]
+  braking = values[(values[:, 0] >= lead_event_time) & (values[:, 4] < -1.0), 0]
   automatic_pairs = (values[1:, 8] == 1) & (values[:-1, 8] == 1)
   jerk = np.diff(values[:, 4])[automatic_pairs] / DT_CTRL
   return {
@@ -210,7 +216,7 @@ def simulate_following(
     'reference_kinds': sorted(set(values[:, 11].astype(int).tolist())),
     **rate_limit_evidence(raw_commands, values[:, 4], automatic_pairs),
     'minimum_jerk_down': float(np.min(jerk)),
-    'brake_response': float(braking[0] - 5.0) if len(braking) else None,
+    'brake_response': float(braking[0] - lead_event_time) if len(braking) else None,
     'switches': switch_metrics(can_rows),
     'conflicts': sum(row['can_brake'] and row['can_gas'] > 0 for row in can_rows),
   }
