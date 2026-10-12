@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from openpilot.selfdrive.controls.lib.lead_launch import LeadLaunch, LeadLaunchSample
-from openpilot.selfdrive.controls.lib.model_reference import lead_launch_model_compatible, stationary_lead_departure_compatible
+from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter, lead_launch_model_compatible, stationary_lead_departure_compatible
 from openpilot.selfdrive.controls.tests.test_typed_model_reference import MODEL_TIMES, SOURCE_NS, evidence
 
 
@@ -146,4 +146,13 @@ def test_launch_does_not_admit_a_stale_or_mutated_model_identity():
   ref = evidence(LOGGED_WEAK_VELOCITY, 0.0)
   assert not lead_launch_model_compatible(replace(ref, source=replace(ref.source, consumed_mono_time_ns=SOURCE_NS + 300_000_000)))
   assert not lead_launch_model_compatible(None)
-
+  adapter = ModelReferenceAdapter()
+  assert lead_launch_model_compatible(evidence(LOGGED_WEAK_VELOCITY, 0.0, adapter=adapter))
+  changed = LOGGED_WEAK_VELOCITY.copy()
+  changed[-1] += 0.1
+  mutated = evidence(changed, 0.0, adapter=adapter)
+  assert mutated.unknown.reason == 'model_mutated_with_same_identity'
+  assert not lead_launch_model_compatible(mutated)
+  regressed = evidence(LOGGED_WEAK_VELOCITY, 0.0, adapter=adapter, model_ns=SOURCE_NS - 1)
+  assert regressed.unknown.reason == 'model_publication_regressed'
+  assert not lead_launch_model_compatible(regressed)
