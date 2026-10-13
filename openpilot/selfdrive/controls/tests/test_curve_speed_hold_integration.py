@@ -73,7 +73,8 @@ def test_stronger_model_braking_wins_over_comfortable_curve_recovery():
       assert max(outputs) <= 0.
 
 
-def test_driver_release_speed_survives_real_planner_owner_handoff():
+@pytest.mark.parametrize('predicted_lateral,current_lateral', [(1.5, .5), (2.633, .959), (3.267, 3.1)])
+def test_driver_release_speed_survives_real_planner_owner_handoff(predicted_lateral, current_lateral):
   with curve_pipeline() as (planner, control, state):
     for frame in range(6):
       step(planner, control, state, frame)
@@ -84,8 +85,8 @@ def test_driver_release_speed_survives_real_planner_owner_handoff():
       state['carState'].vEgo = speed
       state['modelV2'].velocity.x = [speed] * len(ModelConstants.T_IDXS)
       state['modelV2'].position.x = [float(speed * t) for t in ModelConstants.T_IDXS]
-      state['modelV2'].orientationRate.z = [1.5 / speed] * len(ModelConstants.T_IDXS)
-      state['controlsState'].curvature = .5 / speed ** 2
+      state['modelV2'].orientationRate.z = [predicted_lateral / speed] * len(ModelConstants.T_IDXS)
+      state['controlsState'].curvature = current_lateral / speed ** 2
       _, outputs = step(planner, control, state, frame)
       assert not planner.scc.vision.is_active
       assert outputs == [0.] * 5
@@ -106,6 +107,50 @@ def test_driver_release_speed_survives_real_planner_owner_handoff():
       assert max(outputs) <= 0.
     assert abs(plan.aTarget) < .05
     assert max(abs(value) for value in outputs) < .05
+
+
+@pytest.mark.parametrize('guard', ['lead', 'model', 'saturation'])
+def test_driver_choice_keeps_independent_braking_and_saturation_authority(guard):
+  with curve_pipeline(speed=20., predicted_lateral=3.267, current_lateral=3.1,
+                      experimental=guard == 'model') as (planner, control, state):
+    for frame in range(6):
+      step(planner, control, state, frame)
+    state['carState'].gasPressed = True
+    state['carControl'].longActive = False
+    state['carControl'].cruiseControl.override = True
+    step(planner, control, state, 6)
+    state['carState'].gasPressed = False
+    state['carControl'].longActive = True
+    state['carControl'].cruiseControl.override = False
+    for frame in range(7, 14):
+      step(planner, control, state, frame)
+      assert planner.scc.vision.driver_speed == 20.
+      assert planner.scc.vision.output_v_target == 20.
+      assert planner.scc.vision.output_a_target == 0.
+    if guard == 'lead':
+      lead = state['radarState'].leadOne
+      lead.present = True
+      lead.dRel, lead.vLead, lead.vRel = 25., 10., -10.
+      lead.aLeadK, lead.aLeadTau, lead.modelProb = -2., 1.5, .99
+    elif guard == 'model':
+      state['modelV2'].action.desiredAcceleration = -2.5
+    else:
+      lateral = state['controlsState'].lateralControlState.init('pidState')
+      lateral.active = lateral.saturated = True
+    for frame in range(14, 22):
+      plan, outputs = step(planner, control, state, frame)
+      assert plan.motionIntent.valid and plan.solverStatus == 0
+      assert planner.scc.vision.driver_speed == 20.
+      if guard == 'saturation':
+        assert planner.scc.vision.output_v_target < 20.
+        assert planner.scc.vision.output_a_target < 0.
+      else:
+        assert planner.scc.vision.output_v_target == 20.
+        assert planner.scc.vision.output_a_target == 0.
+      if guard == 'model':
+        assert plan.aTarget <= -2.5
+    assert plan.aTarget < 0.
+    assert max(outputs) < 0.
 
 
 def test_lateral_saturation_prevents_recovery_in_the_owner():

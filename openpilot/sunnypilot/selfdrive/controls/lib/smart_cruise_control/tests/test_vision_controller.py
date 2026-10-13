@@ -210,8 +210,69 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     assert controller.output_v_target == 11.
     self._set_curve(13., 3., .5)
     controller.update(self.sm, True, False, 13., 0., 30.)
-    assert controller.output_v_target < 13.
+    assert controller.output_v_target == 13.
+    assert controller.output_a_target == 0.
+
+  @parameterized.expand([(32.575 / 3.6, 2.633, .959),
+                         (27.580 / 3.6, 1.865, 1.471),
+                         (36.109 / 3.6, 3.267, 3.100)])
+  def test_m003_driver_release_selects_speed_over_current_and_predicted_geometry(self, speed, predicted, current):
+    controller = self._adaptive_controller(speed=8., predicted_lateral=1.5, current_lateral=.5)
+    self._set_curve(speed, predicted, current)
+    self.sm['carState'].gasPressed = True
+    controller.update(self.sm, True, True, speed, .6, 60. / 3.6)
+    self.sm['carState'].gasPressed = False
+    for _ in range(12):
+      controller.update(self.sm, True, False, speed, .6, 60. / 3.6)
+      assert controller.driver_speed == speed
+      assert controller.output_v_target == speed
+      assert controller.output_a_target == 0.
+
+  @parameterized.expand([('entering', .5), ('turning', 3.1)])
+  def test_driver_speed_error_does_not_reapply_geometric_deceleration(self, _, current):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=3.267, current_lateral=current)
+    self.sm['carState'].gasPressed = True
+    controller.update(self.sm, True, True, 10., 0., 30.)
+    self.sm['carState'].gasPressed = False
+    controller.update(self.sm, True, False, 10., 0., 30.)
+    for speed, acceleration in [(10.04, -.01), (9.6, .1), (7., .5)]:
+      self._set_curve(speed, 3.267, current)
+      controller.update(self.sm, True, False, speed, 0., 30.)
+      assert controller.output_v_target == 10.
+      assert abs(controller.output_a_target - acceleration) < 1e-8
+
+  def test_driver_choice_preserves_saturation_slowdown_and_recovers_after_it_clears(self):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=3.267, current_lateral=3.1)
+    self.sm['carState'].gasPressed = True
+    controller.update(self.sm, True, True, 10., 0., 30.)
+    self.sm['carState'].gasPressed = False
+    controller.update(self.sm, True, False, 10., 0., 30.)
+    assert controller.output_v_target == 10.
+    lateral = self.sm['controlsState'].lateralControlState.init('pidState')
+    lateral.active = lateral.saturated = True
+    controller.update(self.sm, True, False, 9.6, 0., 30.)
+    assert controller.driver_speed == 10.
+    assert controller.output_v_target < 9.6
     assert controller.output_a_target < 0.
+    lateral.saturated = False
+    controller.update(self.sm, True, False, 9.6, 0., 30.)
+    assert controller.output_v_target == 10.
+    assert 0. < controller.output_a_target <= .5
+
+  @parameterized.expand([('prediction',), ('current',)])
+  def test_driver_choice_does_not_hide_invalid_curve_inputs(self, field):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=3.267, current_lateral=3.1)
+    self.sm['carState'].gasPressed = True
+    controller.update(self.sm, True, True, 10., 0., 30.)
+    self.sm['carState'].gasPressed = False
+    controller.update(self.sm, True, False, 10., 0., 30.)
+    if field == 'prediction':
+      self.sm['modelV2'].orientationRate.z = [float('nan')] * len(ModelConstants.T_IDXS)
+    else:
+      self.sm['controlsState'].curvature = float('nan')
+    controller.update(self.sm, True, False, 10., 0., 30.)
+    assert not np.isfinite(controller.output_v_target)
+    assert not np.isfinite(controller.output_a_target)
 
   @parameterized.expand([('brake',), ('disable',), ('non_pedal_override',), ('curve_exit',)])
   def test_driver_preference_is_not_carried_into_another_cycle(self, reason):
@@ -243,6 +304,28 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     controller.update(self.sm, True, False, 15., 0., 30.)
     assert controller.driver_speed is None
     assert controller.output_v_target > 15.
+
+  def test_continuous_bends_share_driver_choice_until_the_curve_cycle_clears(self):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=3.267, current_lateral=3.1)
+    self.sm['carState'].gasPressed = True
+    controller.update(self.sm, True, True, 10., 0., 30.)
+    self.sm['carState'].gasPressed = False
+    controller.update(self.sm, True, False, 10., 0., 30.)
+    # The existing SCC cycle uses curvature magnitude; a connected reverse
+    # bend without a clear interval is still part of that same cycle.
+    self._set_curve(10., -3.267, -3.1)
+    for _ in range(12):
+      controller.update(self.sm, True, False, 10., 0., 30.)
+      assert controller.output_v_target == controller.driver_speed == 10.
+      assert controller.output_a_target == 0.
+    self._set_curve(10., 0., 0.)
+    for _ in range(10):
+      controller.update(self.sm, True, False, 10., 0., 30.)
+    assert controller.driver_speed is None
+    self._set_curve(10., 3.267, 3.1)
+    controller.update(self.sm, True, False, 10., 0., 30.)
+    assert controller.output_v_target < 10.
+    assert controller.output_a_target < 0.
 
   def test_threshold_flicker_does_not_restart_the_curve_cycle(self):
     controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)

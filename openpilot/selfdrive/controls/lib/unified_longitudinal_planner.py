@@ -636,7 +636,7 @@ class UnifiedLongitudinalPlanner:
                   and vision_curve.adaptive_curve_speed and vision_curve.is_active)
     scc_braking = scc_active and vision_curve.output_v_target < speed and vision_curve.output_a_target < 0.0
     if scc_active:
-      # Current geometry owns curve braking and bounded recovery, including
+      # SCC owns curve braking and bounded recovery to its selected speed, including
       # a zero acceleration ceiling when lateral control is saturated.
       # Other policies and independent model/lead braking can lower it.
       maximum_accel = min(maximum_accel, float(np.clip(vision_curve.output_a_target, ACCEL_MIN, ACCEL_MAX)))

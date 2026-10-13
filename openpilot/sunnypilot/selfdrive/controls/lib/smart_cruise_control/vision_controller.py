@@ -27,7 +27,7 @@ _TURNING_LAT_ACC_TH = 1.6  # Lat Acc threshold to trigger turning state.
 _LEAVING_LAT_ACC_TH = 1.3  # Lat Acc threshold to trigger leaving turn state.
 _FINISH_LAT_ACC_TH = 1.1  # Lat Acc threshold to trigger the end of the turn cycle.
 
-_A_LAT_REG_MAX = 2.  # Maximum lateral acceleration
+_A_LAT_REG_MAX = 2.  # Automatic curve comfort target, not a measured tire/steering limit.
 
 _NO_OVERSHOOT_TIME_HORIZON = 4.  # s. Time to use for velocity desired based on a_target when not overshooting.
 
@@ -92,14 +92,17 @@ class SmartCruiseControlVision:
             or not np.isfinite(self.max_pred_lat_acc) or self.max_pred_lat_acc < 0.
             or not (np.isfinite(self.v_target) or self.v_target == float('inf') and self.max_pred_lat_acc == 0.)):
           return float('nan')
-        # Follow this frame's geometry, including the curve the car is still
-        # in. The planner enforces our acceleration ceiling while recovering;
-        # neither a low entry speed nor a second horizon deduction limits it.
-        target = self.v_target
-        if self.current_lat_acc > 0.:
-          target = min(target, self.v_ego * (_A_LAT_REG_MAX / self.current_lat_acc) ** 0.5)
-        if self.driver_speed is not None:
-          target = min(target, self.driver_speed)
+        # A pedal release selects this cycle's speed over the automatic
+        # geometry policy. Actual steering saturation still invokes the
+        # geometric slowdown and prevents acceleration toward that choice.
+        if self.driver_speed is not None and not self.steering_limited:
+          target = self.driver_speed
+        else:
+          target = self.v_target
+          if self.current_lat_acc > 0.:
+            target = min(target, self.v_ego * (_A_LAT_REG_MAX / self.current_lat_acc) ** 0.5)
+          if self.driver_speed is not None:
+            target = min(target, self.driver_speed)
         if self.steering_limited:
           target = min(target, self.v_ego)
         if include_cruise:
@@ -217,7 +220,7 @@ class SmartCruiseControlVision:
       self.driver_speed = None
     elif self._gas_pressed and not gas_pressed and was_in_curve:
       # Use release speed, not the maximum reached earlier while the pedal
-      # was down. Current geometry, cruise and lateral capability still win.
+      # was down. Cruise and steering saturation retain their authority.
       self.driver_speed = self.v_ego
     self._gas_pressed = gas_pressed
     self.state = VisionState.overriding if gas_pressed or self.long_override else self._curve_state
@@ -312,9 +315,11 @@ class SmartCruiseControlVision:
       speed_error = min(curve_target, max(self.v_ego, self.v_cruise_setpoint)) - self.v_ego
       if not np.isfinite(speed_error):
         return float('nan')
-      if speed_error >= 0.0:
-        # Recover toward current geometry (or this turn's driver setpoint)
-        # with a bounded request. Independent lead/model braking still wins.
+      if speed_error >= 0.0 or self.driver_speed is not None and not self.steering_limited:
+        # Track the driver's selected speed without reintroducing geometric
+        # braking through the entering/turning tables on a small overshoot.
+        # Positive recovery remains bounded; independent lead/model braking
+        # and actual steering saturation still win.
         a_target = min(_LEAVING_ACC, speed_error / _NO_OVERSHOOT_TIME_HORIZON)
       else:
         if self.state == VisionState.entering:
