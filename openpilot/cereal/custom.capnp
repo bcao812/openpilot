@@ -710,6 +710,29 @@ struct HondaRadarObservations {
     bodyMonoTime @42 :UInt64;  # original F0 time; AUX cannot extend its lifetime
     bodyAvailableMonoTime @43 :UInt64;  # latest F0..F3 time
     bodyValid @44 :Bool = false;  # geometric estimate, not control permission
+    positionVelocity @45 :PositionVelocityQuality;
+  }
+
+  struct PositionVelocityQuality {
+    # Independent current-position consistency; not OEM-calibrated accuracy.
+    # Version 0 / missing data cannot establish a qualified position fallback.
+    version @0 :UInt8;
+    positionSeq @1 :UInt64;
+    positionMonoTime @2 :UInt64;
+    sampleCount @3 :UInt16;
+    span @4 :Float64;
+    shortSpeed @5 :Float64;  # ground speed in latest position's ego frame
+    longSpeed @6 :Float64;
+    speedStd @7 :Float64;  # engineering fit value, not calibrated sigma
+    windowDifference @8 :Float64;
+    windowDifferenceStd @9 :Float64;
+    innovationBias @10 :Float64;  # signed mean standardized position innovation
+    posteriorCorrection @11 :Float64;  # max recent position-induced dv, m/s
+    posteriorCorrectionRatio @12 :Float64;
+    posteriorSpeedDifference @13 :Float64;
+    consistentSamples @14 :UInt16;
+    qualified @15 :Bool = false;
+    reason @16 :Text;
   }
 
   struct FusionLead {

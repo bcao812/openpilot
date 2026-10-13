@@ -16,6 +16,7 @@ from capnp.lib.capnp import _DynamicListBuilder, _DynamicListReader, _DynamicStr
 from opendbc.car.honda.bosch_a_radar import radar_scan_continuous
 from openpilot.selfdrive.car.honda_radar_body import RadarBody, measured_radar_body
 from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL
+from openpilot.selfdrive.car.honda_radar_velocity import PositionVelocityQuality
 
 VERSION = 'bosch-a-shadow-3'
 MAX_TRACKS = 32
@@ -318,6 +319,7 @@ class Track:
   # Six distinct position samples; AUX updates never add a sample.
   positions: deque = field(default_factory=lambda: deque(maxlen=6))
   body: RadarBody | None = None
+  position_velocity: PositionVelocityQuality = field(default_factory=PositionVelocityQuality)
 
   @property
   def mature(self):
@@ -743,6 +745,8 @@ class HondaRadarFusion:
         elif not continuous:
           birth_reason = 'positionGap' if stamp - track.position_ns > MAX_AGE_NS else 'lifecycleReset'
           track = None
+      position_innovation = position_innovation_covariance = None
+      position_correction = (0.0, 0.0)
       if track is None:
         track = self._birth(observation, ego, birth_reason, old_track)
       else:
@@ -763,10 +767,15 @@ class HondaRadarFusion:
         if saturation_recovery:
           # Qualify the ordinary position AND velocity corrections on private
           # state. A rejected AUX must never publish the old identity active.
-          track = replace(track, positions=deque(track.positions, maxlen=6))
+          track = replace(track, positions=deque(track.positions, maxlen=6), position_velocity=track.position_velocity.copy())
+        prior_velocity = float(mean[2]), float(mean[3])
+        position_innovation = dx, dy
+        position_innovation_covariance = (float(covariance[0, 0]) + POSITION_NOISE**2,
+                                          float(covariance[0, 1]), float(covariance[1, 1]) + (.3 + .01 * x)**2)
         track.mean, track.covariance, track.epoch_ns = mean, covariance, stamp
         track.measure(0, x, POSITION_NOISE**2)
         track.measure(1, y, (.3 + .01 * x)**2)
+        position_correction = float(track.mean[2]) - prior_velocity[0], float(track.mean[3]) - prior_velocity[1]
         track.innovation = math.hypot(dx, dy)
         track.count += 1
         track.previous_position_ns, track.previous_position_seq = track.position_ns, track.position_seq
@@ -780,6 +789,18 @@ class HondaRadarFusion:
       track.slot_reassigned_ns = track.slot_reassigned_seq = 0
       track.saturation_recovery = None
       track.positions.append((stamp, x, y))
+      quality_ego = self.history.at(track.position_velocity.epoch_ns) if track.position_velocity.epoch_ns else ego
+      if quality_ego is None:
+        # A missing ego transform cannot reuse old quality support. This does
+        # not manufacture a new radar identity or erase current native data.
+        track.position_velocity = PositionVelocityQuality()
+        quality_ego = ego
+      track.position_velocity.observe(stamp=stamp, sequence=seq, x=x, y=y,
+        ego_speed=quality_ego.speed, ego_yaw=quality_ego.yaw, speed_x=float(track.mean[2]),
+        velocity_variance=float(track.covariance[2, 2]), position_variance=POSITION_NOISE**2,
+        lateral_position_variance=(.3 + .01 * x)**2, innovation=position_innovation,
+        innovation_covariance=position_innovation_covariance, correction=position_correction,
+        velocity_covariance=(float(track.covariance[2, 2]), float(track.covariance[2, 3]), float(track.covariance[3, 3])))
       # Only a newly accepted position scan can replace its width. Missing or
       # invalid new bounds erase the old extent; a late AUX never renews it.
       track.body = measured_radar_body(observation, now_ns)
@@ -866,6 +887,7 @@ class HondaRadarFusion:
           'accelerationGood': velocity_good and track.acceleration_good,
           'lateralPositionVariance': lateral_position_variance, 'lateralVelocityVariance': lateral_velocity_variance,
           'lateralVelocityValid': lateral_velocity_valid,
+          'positionVelocity': track.position_velocity.snapshot(active=track.active),
           **self._body_snapshot(track, mean, int(model.timestampEof), now_ns)})
       if track.active:
         candidates.append((track, mean, covariance, relation, motion, coasting, velocity_good))
