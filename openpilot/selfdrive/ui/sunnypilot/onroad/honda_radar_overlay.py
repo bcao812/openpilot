@@ -1,11 +1,13 @@
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import pyray as rl
 
 from openpilot.cereal import log, messaging
 from openpilot.common.swaglog import cloudlog
-from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarLabelPoint, RadarOverlayState, project_radar_point
+from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import (
+  RadarLabelPoint, RadarOverlayState, project_radar_coordinates, project_radar_point,
+)
 from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import accepted_influences, influence_rgb, radar_influence_strength
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import FontWeight, gui_app
@@ -25,6 +27,7 @@ class RadarLabelLayout:
   marker: rl.Vector2
   text_position: rl.Vector2
   lines: tuple[tuple[rl.Vector2, rl.Vector2], ...]
+  text: str
 
 
 class HondaRadarOverlay:
@@ -56,7 +59,8 @@ class HondaRadarOverlay:
       self.enabled = ui_state.params.get_bool('HondaBoschARadarOverlay')
       self.camera_offset = ui_state.params.get('CameraOffset', return_default=True) if ui_state.active_bundle else 0.0
       self.next_params_ns = now + 1_000_000_000
-      self.layout_key = None
+      # The layout key below already includes the offset. Polling unchanged
+      # settings needs no new projection; scope and freshness remain per-frame.
     sm = ui_state.sm
     cp = ui_state.CP
     if (not self.enabled or cp is None or cp.carFingerprint != 'HONDA_ACCORD' or not cp.openpilotLongitudinalControl
@@ -102,7 +106,7 @@ class HondaRadarOverlay:
       for start, end in label.lines:
         rl.draw_line_ex(start, end, BOUNDARY_LINE_WIDTH, color)
       rl.draw_circle_v(label.marker, MARKER_RADIUS, color)
-      rl.draw_text_ex(self.font, label.point.text, label.text_position, LABEL_FONT_SIZE, 0, color)
+      rl.draw_text_ex(self.font, label.text, label.text_position, LABEL_FONT_SIZE, 0, color)
 
   def _layout_labels(self, points, transform, camera_height, rect):
     labels = []
@@ -121,7 +125,7 @@ class HondaRadarOverlay:
       lines = []
       label_x, label_top = x, y - MARKER_RADIUS
       if point.boundary_laterals is not None:
-        ends = [project_radar_point(replace(point, lateral=lateral), transform, camera_height, self.camera_offset)
+        ends = [project_radar_coordinates(point.distance, lateral, transform, camera_height, self.camera_offset)
                 for lateral in point.boundary_laterals]
         if len(ends) == 2 and all(end is not None for end in ends):
           left, right = (rl.Vector2(*end) for end in ends)
@@ -137,7 +141,8 @@ class HondaRadarOverlay:
           label_top = min(left.y, right.y, y) - BOUNDARY_TICK_HEIGHT / 2
       # Never shift detections to make room for text. Only the transparent
       # distance label is centered above the projected span (or lone dot).
-      size = measure_text_cached(self.font, point.text, LABEL_FONT_SIZE)
+      text = point.text
+      size = measure_text_cached(self.font, text, LABEL_FONT_SIZE)
       text_position = rl.Vector2(label_x - size.x / 2, label_top - LABEL_GAP - size.y)
-      labels.append(RadarLabelLayout(point, marker, text_position, tuple(lines)))
+      labels.append(RadarLabelLayout(point, marker, text_position, tuple(lines), text))
     return labels

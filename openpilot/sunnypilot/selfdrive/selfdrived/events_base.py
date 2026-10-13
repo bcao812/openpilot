@@ -114,7 +114,14 @@ class EventsBase:
     bisect.insort(self.events, event_name)
 
   def clear(self) -> None:
-    self.event_counters = {k: (v + 1 if k in self.events else 0) for k, v in self.event_counters.items()}
+    previous = self.event_counters
+    counters = dict.fromkeys(previous, 0)
+    # Event IDs are integers (add_from_msg converts schema enums to their raw ID).
+    # Duplicates still count as one frame, and unknown IDs do not add counter keys.
+    for event in set(self.events):
+      if event in previous:
+        counters[event] = previous[event] + 1
+    self.event_counters = counters
     self.events = self.static_events.copy()
 
   def contains(self, event_type: str) -> bool:

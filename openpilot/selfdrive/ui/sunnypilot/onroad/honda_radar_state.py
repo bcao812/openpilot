@@ -225,10 +225,14 @@ class RadarOverlayState:
 
 
 def project_radar_point(point, transform, height, offset=0.0):
+  return project_radar_coordinates(point.distance, point.lateral, transform, height, offset)
+
+
+def project_radar_coordinates(distance, lateral, transform, height, offset=0.0):
   # Same calibrated vehicle->camera convention as ModelRenderer. Height is a
   # ground-plane display assumption; no unknown radar elevation is invented.
-  xyz = (point.distance, -point.lateral + offset, height)
-  if not all(math.isfinite(v) for v in xyz) or point.distance <= 0:
+  xyz = (distance, -lateral + offset, height)
+  if not all(math.isfinite(v) for v in xyz) or distance <= 0:
     return None
   projected = [sum(row[i] * xyz[i] for i in range(3)) for row in transform]
   if not all(math.isfinite(v) for v in projected) or projected[2] <= 1e-6:

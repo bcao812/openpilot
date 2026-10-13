@@ -7,7 +7,9 @@ import unittest
 from openpilot.selfdrive.ui.tests.test_sunnylink_removed import HeadlessUITestCase
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import SETTINGS, START, can_message, configuration, scan_frames, state
 from openpilot.selfdrive.car.honda_radar_observer import HondaRadarObserver
-from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarLabelPoint, RadarOverlayState, project_radar_point
+from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import (
+  RadarLabelPoint, RadarOverlayState, project_radar_coordinates, project_radar_point,
+)
 
 
 def sample():
@@ -259,6 +261,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
          patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)) as measure, \
          patch.object(renderer, 'radar_influence_strength', return_value=0.0) as strength, \
          patch.object(renderer, 'project_radar_point', wraps=project_radar_point) as project, \
+         patch.object(renderer, 'project_radar_coordinates', wraps=project_radar_coordinates) as project_boundary, \
          patch.object(rl, 'draw_circle_v') as circles, patch.object(rl, 'draw_line_ex') as lines, \
          patch.object(rl, 'draw_rectangle_rec') as backgrounds, patch.object(rl, 'draw_text_ex') as draw:
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
@@ -283,6 +286,15 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       self.assertEqual(project.call_count, 1)  # same observation and camera transform
       self.assertEqual(measure.call_count, 1)
       self.assertEqual(draw.call_args_list[0].args[2].x, original_x)
+      self.assertEqual(overlay.labels[0].text, '54.1')
+      # Polling unchanged settings preserves both geometry and displayed text.
+      previous_labels = overlay.labels
+      overlay.next_params_ns = 0
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      self.assertIs(overlay.labels, previous_labels)
+      self.assertEqual(project.call_count, 1)
+      self.assertEqual(measure.call_count, 1)
+      self.assertEqual(draw.call_args.args[1], '54.1')
       view.model_renderer._car_space_transform[0, 0] += 25
       draw.reset_mock()
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
@@ -297,7 +309,8 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       draw.reset_mock()
       lines.reset_mock()
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
-      self.assertEqual(project.call_count, 5)
+      self.assertEqual(project.call_count, 3)
+      self.assertEqual(project_boundary.call_count, 2)
       self.assertEqual(measure.call_count, 3)
       self.assertEqual(lines.call_count, 3)  # span plus the two real end ticks
       self.assertEqual((circles.call_args.args[0].x, circles.call_args.args[0].y), (original_marker.x, original_marker.y))
@@ -315,11 +328,25 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       draw.reset_mock()
       lines.reset_mock()
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
-      self.assertEqual(project.call_count, 5)
+      self.assertEqual(project.call_count, 3)
+      self.assertEqual(project_boundary.call_count, 2)
       self.assertEqual(measure.call_count, 3)
       for call in (*lines.call_args_list, circles.call_args, draw.call_args):
         self.assertEqual((call.args[-1].r, call.args[-1].g, call.args[-1].b), renderer.influence_rgb(0.6))
         self.assertEqual(call.args[-1].a, 140)
+      # A real offset change takes effect in this frame, including the bounds.
+      previous_labels = overlay.labels
+      previous_x = circles.call_args.args[0].x
+      ui.active_bundle = True
+      params.get.return_value = 0.35
+      overlay.next_params_ns = 0
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      self.assertIsNot(overlay.labels, previous_labels)
+      self.assertEqual(project.call_count, 4)
+      self.assertEqual(project_boundary.call_count, 4)
+      self.assertAlmostEqual(circles.call_args.args[0].x, previous_x + 1000 * 0.35 / point.distance, places=3)
+      self.assertEqual(draw.call_args.args[1], '54.1')
+      self.assertEqual(draw.call_args.args[-1].a, 140)
       clock.return_value = START + 210_000_000
       view.client.timestamp_eof = START + 200_000_000
       draw.reset_mock()

@@ -164,28 +164,35 @@ class TestPreparedPolygon(HeadlessUITestCase):
 
 
 class TestModelPolygonCache(HeadlessUITestCase):
-  def make_renderer(self):
+  def make_renderer(self, path_width=0.9):
     from openpilot.selfdrive.ui.onroad import model_renderer as model
+    from openpilot.selfdrive.ui.sunnypilot.onroad import model_renderer as model_sp
+    from openpilot.selfdrive.ui.ui_state import UIStatus
 
     x = np.linspace(1, 80, 33, dtype=np.float32)
     lines = [SimpleNamespace(x=x, y=np.full(33, y, dtype=np.float32), z=np.ones(33)) for y in (0, -4, -2, 2, 4, -6, 6)]
-    model_message = SimpleNamespace(position=lines[0], laneLines=lines[1:5], roadEdges=lines[5:],
+    model_message = SimpleNamespace(frameId=7, position=lines[0], laneLines=lines[1:5], roadEdges=lines[5:],
                                     laneLineProbs=[0.8] * 4, roadEdgeStds=[0.1, 0.2], acceleration=SimpleNamespace(x=np.zeros(33)))
 
     class Messages(dict):
       recv_frame = {'extrinsicsCalibration': 1, 'modelV2': 1}
       updated = {'carParams': False, 'modelV2': True, 'radarState': False}
-      valid = {'radarState': False}
+      valid = {'radarState': False, 'selfdriveStateSP': False}
+      logMonoTime = {'modelV2': 123}
 
     sm = Messages(modelV2=model_message, selfdriveState=SimpleNamespace(experimentalMode=False),
                   extrinsicsCalibration=SimpleNamespace(height=[1.22]), longitudinalPlan=SimpleNamespace(allowThrottle=True))
-    state = SimpleNamespace(sm=sm, started_frame=0, active_bundle=False, rainbow_path=False)
+    state = SimpleNamespace(sm=sm, started_frame=0, active_bundle=False, rainbow_path=False, status=UIStatus.ENGAGED)
     self.enterContext(patch.object(model, "ui_state", state))
+    self.enterContext(patch.object(model_sp, "ui_state", state))
     self.enterContext(patch.object(model, "Params", return_value=Mock(get=Mock(return_value=None))))
     self.enterContext(patch.object(model.gui_app, "font", return_value=rl.Font()))
     self.enterContext(patch.object(model.gui_app, "mark_phase"))
     renderer = model.ModelRenderer()
-    self.enterContext(patch.object(renderer, "_get_path_half_width", return_value=0.9))
+    if path_width is None:
+      self.enterContext(patch.object(renderer, "_get_path_half_width", wraps=renderer._get_path_half_width))
+    else:
+      self.enterContext(patch.object(renderer, "_get_path_half_width", return_value=path_width))
     renderer.set_rect(rl.Rectangle(0, 0, 2160, 1080))
     renderer.set_transform(np.array([[0, 20, 1080], [-2, 0, 850], [0, 0, 1]], dtype=np.float32))
     return renderer, sm
@@ -193,6 +200,191 @@ class TestModelPolygonCache(HeadlessUITestCase):
   @staticmethod
   def shapes(renderer):
     return [*renderer._lane_lines, *renderer._road_edges, renderer._path]
+
+  def make_uncached_reference(self, renderer, path_width=0.9):
+    reference = type(renderer)()
+    reference.set_rect(rl.Rectangle(renderer.rect.x, renderer.rect.y, renderer.rect.width, renderer.rect.height))
+    reference.set_transform(renderer._car_space_transform.copy())
+    if path_width is None:
+      self.enterContext(patch.object(reference, "_get_path_half_width", wraps=reference._get_path_half_width))
+    else:
+      self.enterContext(patch.object(reference, "_get_path_half_width", return_value=path_width))
+    update_model = reference._update_model
+
+    def refresh(*args, **kwargs):
+      reference._path_geometry_key = None
+      reference._exp_gradient_key = None
+      return update_model(*args, **kwargs)
+
+    self.enterContext(patch.object(reference, "_update_model", side_effect=refresh))
+    return reference
+
+  def assert_same_frame(self, renderer, reference, frames, rect=None):
+    start = len(frames)
+    renderer._render(renderer.rect if rect is None else rect)
+    actual = frames[start:]
+    start = len(frames)
+    reference._render(reference.rect if rect is None else rect)
+    # Full triangle-strip bytes, count, shader colors/stops/origin and draw color.
+    self.assertEqual(actual, frames[start:])
+    self.assertEqual(renderer._width_filter.x, reference._width_filter.x)
+    self.assertEqual(renderer._blend_filter.x, reference._blend_filter.x)
+    return actual
+
+  def test_unchanged_radar_reuses_path_and_gradient_with_exact_draw_inputs(self):
+    renderer, sm = self.make_renderer()
+    reference = self.make_uncached_reference(renderer)
+    sm.valid['radarState'] = True
+    sm['radarState'] = SimpleNamespace(leadOne=SimpleNamespace(present=True, dRel=30.0, yRel=0.0))
+    sm['selfdriveState'].experimentalMode = True
+    sm['modelV2'].acceleration.x = np.linspace(-2, 2, 33)
+    with capture_polygons() as frames:
+      original = self.assert_same_frame(renderer, reference, frames)
+      old_path, old_gradient = renderer._path.polygon, renderer._exp_gradient
+      sm.updated['modelV2'] = False
+      sm.updated['radarState'] = True
+      for offset in (0.2, -0.5, 0.0):
+        # A fresh radar message can change unrelated lateral data without changing path length.
+        sm['radarState'].leadOne = SimpleNamespace(present=True, dRel=30.0, yRel=offset)
+        width_calls = renderer._get_path_half_width.call_count
+        with patch.object(renderer, "_map_line_to_polygon", wraps=renderer._map_line_to_polygon) as project:
+          self.assertEqual(original, self.assert_same_frame(renderer, reference, frames))
+        self.assertEqual(project.call_count, 0)
+        self.assertEqual(renderer._get_path_half_width.call_count, width_calls + 1)
+        self.assertIs(renderer._path.polygon, old_path)
+        self.assertIs(renderer._exp_gradient, old_gradient)
+
+  def test_path_cache_invalidates_current_geometry_inputs_without_timestamp_shortcuts(self):
+    renderer, sm = self.make_renderer()
+    reference = self.make_uncached_reference(renderer)
+    sm.valid['radarState'] = True
+    lead = SimpleNamespace(present=True, dRel=30.0)
+    sm['radarState'] = SimpleNamespace(leadOne=lead)
+    sm['selfdriveState'].experimentalMode = True
+    with capture_polygons() as frames:
+      self.assert_same_frame(renderer, reference, frames)
+      sm.updated['modelV2'] = False
+      sm.updated['radarState'] = True
+      for change in ('lead_distance', 'lead_withdrawal', 'lead_return', 'height', 'raw_path', 'model_same_stamp',
+                     'new_model_frame', 'transform', 'layout', 'clip'):
+        with self.subTest(change=change):
+          old_path = renderer._path.polygon
+          old_vertices = prepared_points(old_path)
+          sm.updated['modelV2'] = False
+          rect = None
+          if change == 'lead_distance':
+            lead.dRel = 10.0
+          elif change == 'lead_withdrawal':
+            lead.present = False
+          elif change == 'lead_return':
+            lead.present = True
+          elif change == 'height':
+            sm['extrinsicsCalibration'].height[0] += 0.1
+          elif change == 'raw_path':
+            for current in (renderer, reference):
+              current._path.raw_points[:, 1] += 0.5
+          elif change in ('model_same_stamp', 'new_model_frame'):
+            # The same frameId/mono time with different payload must also invalidate.
+            old_stamp = (sm['modelV2'].frameId, sm.logMonoTime['modelV2'])
+            sm['modelV2'].position.y += 0.25
+            sm.updated['modelV2'] = True
+            if change == 'new_model_frame':
+              sm['modelV2'].frameId += 1
+              sm.logMonoTime['modelV2'] += 50_000_000
+            else:
+              self.assertEqual(old_stamp, (sm['modelV2'].frameId, sm.logMonoTime['modelV2']))
+          elif change == 'transform':
+            transform = renderer._car_space_transform.copy()
+            transform[0, 2] += 25
+            for current in (renderer, reference):
+              current.set_transform(transform)
+          elif change == 'layout':
+            for current in (renderer, reference):
+              current.set_rect(rl.Rectangle(900, 100, 120, 800))
+          elif change == 'clip':
+            # _render receives the live clip rectangle even without a layout notification.
+            rect = rl.Rectangle(4000, 0, 2160, 1080)
+          self.assert_same_frame(renderer, reference, frames, rect)
+          self.assertIsNot(renderer._path.polygon, old_path)
+          if change != 'layout':
+            self.assertFalse(np.array_equal(old_vertices, prepared_points(renderer._path.polygon)))
+
+  def test_gradient_acceleration_and_mode_updates_match_full_recomputation(self):
+    renderer, sm = self.make_renderer()
+    reference = self.make_uncached_reference(renderer)
+    sm['selfdriveState'].experimentalMode = True
+    with capture_polygons() as frames:
+      first = self.assert_same_frame(renderer, reference, frames)
+      old_path, old_gradient = renderer._path.polygon, renderer._exp_gradient
+      sm.updated['modelV2'] = False
+      sm.updated['radarState'] = True
+      # Isolate the gradient input: geometry is unchanged, including the path width.
+      for current in (renderer, reference):
+        current._acceleration_x[:] = np.linspace(-2, 2, 33)
+      accelerated = self.assert_same_frame(renderer, reference, frames)
+      self.assertIs(renderer._path.polygon, old_path)
+      self.assertIsNot(renderer._exp_gradient, old_gradient)
+      self.assertNotEqual(first[-1][2], accelerated[-1][2])
+      sm['selfdriveState'].experimentalMode = False
+      normal = self.assert_same_frame(renderer, reference, frames)
+      self.assertNotEqual(normal[-1][2], accelerated[-1][2])
+      sm['selfdriveState'].experimentalMode = True
+      self.assertEqual(accelerated, self.assert_same_frame(renderer, reference, frames))
+      # Gradient depends on the layout's vertical origin and height, not just the vertices.
+      for current in (renderer, reference):
+        current.set_rect(rl.Rectangle(0, 100, 2160, 800))
+      shifted = self.assert_same_frame(renderer, reference, frames)
+      self.assertNotEqual(shifted[-1][2], accelerated[-1][2])
+
+  def test_real_width_filter_and_per_frame_throttle_colors_keep_original_cadence(self):
+    from openpilot.selfdrive.ui.sunnypilot.onroad import model_renderer as model_sp
+    from openpilot.selfdrive.ui.ui_state import UIStatus
+
+    renderer, sm = self.make_renderer(path_width=None)
+    reference = self.make_uncached_reference(renderer, path_width=None)
+    renderer._longitudinal_control = reference._longitudinal_control = True
+    with capture_polygons() as frames:
+      self.assert_same_frame(renderer, reference, frames)
+      sm.updated['modelV2'] = False
+      sm.updated['radarState'] = True
+      sm['longitudinalPlan'].allowThrottle = False
+      previous = renderer._path.polygon
+      model_sp.ui_state.status = UIStatus.DISENGAGED
+      for _ in range(30):
+        width_calls = renderer._get_path_half_width.call_count
+        self.assert_same_frame(renderer, reference, frames)
+        self.assertEqual(renderer._get_path_half_width.call_count, width_calls + 1)
+        self.assertIsNot(renderer._path.polygon, previous)
+        previous = renderer._path.polygon
+      model_sp.ui_state.status = UIStatus.ENGAGED
+      self.assert_same_frame(renderer, reference, frames)
+      width_calls = renderer._get_path_half_width.call_count
+      previous = renderer._path.polygon
+      sm.updated['radarState'] = False
+      sm['longitudinalPlan'].allowThrottle = True
+      before = self.assert_same_frame(renderer, reference, frames)
+      after = self.assert_same_frame(renderer, reference, frames)
+      self.assertIs(renderer._path.polygon, previous)
+      self.assertEqual(renderer._get_path_half_width.call_count, width_calls)
+      self.assertNotEqual(before[-1][2], after[-1][2])
+
+  def test_path_cache_releases_replaced_geometry_and_gradients(self):
+    renderer, sm = self.make_renderer()
+    sm['selfdriveState'].experimentalMode = True
+    with capture_polygons() as frames:
+      renderer._render(renderer.rect)
+      sm.updated['modelV2'] = False
+      sm.updated['radarState'] = True
+      polygons, gradients = [], []
+      for _ in range(30):
+        renderer._path.raw_points[:, 1] += 0.1
+        renderer._render(renderer.rect)
+        polygons.append(weakref.ref(renderer._path.polygon))
+        gradients.append(weakref.ref(renderer._exp_gradient))
+        frames.clear()
+    gc.collect()
+    self.assertEqual(sum(ref() is not None for ref in polygons), 1)
+    self.assertEqual(sum(ref() is not None for ref in gradients), 1)
 
   def test_repeated_frames_reuse_prepared_geometry_and_keep_dynamic_color(self):
     renderer, sm = self.make_renderer()

@@ -74,6 +74,8 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     self._lane_lines = [ModelPoints() for _ in range(4)]
     self._road_edges = [ModelPoints() for _ in range(2)]
     self._acceleration_x = np.empty((0,), dtype=np.float32)
+    self._path_geometry_key = None
+    self._exp_gradient_key = None
 
     # Transform matrix (3x3 for car space to screen space)
     self._car_space_transform = np.zeros((3, 3), dtype=np.float32)
@@ -223,15 +225,28 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       max_distance = clamp(lead_d - min(lead_d * 0.35, 10.0), 0.0, max_distance)
 
     max_idx = self._get_path_length_idx(path_x_array, max_distance)
-    self._path.set_projected_points(self._map_line_to_polygon(
-      self._path.raw_points, self._get_path_half_width(), self._path_offset_z, max_idx, max_distance, allow_invert=False
-    ))
+    # Advance the width filter on every original update, even if its result allows reuse.
+    half_width = self._get_path_half_width()
+    clip = self._clip_region
+    path_key = (self._path.raw_points.tobytes(), self._car_space_transform.tobytes(),
+                half_width, self._path_offset_z, max_idx, max_distance, clip.x, clip.y, clip.width, clip.height)
+    if update_lane_geometry or path_key != self._path_geometry_key:
+      self._path.set_projected_points(self._map_line_to_polygon(
+        self._path.raw_points, half_width, self._path_offset_z, max_idx, max_distance, allow_invert=False
+      ))
+      # One current projection only; a new model/transform still refreshes it unconditionally.
+      self._path_geometry_key = path_key
 
     self._update_experimental_gradient()
 
   def _update_experimental_gradient(self):
     """Pre-calculate experimental mode gradient colors"""
     if not self._experimental_mode:
+      self._exp_gradient_key = None
+      return
+
+    gradient_key = (self._path.projected_points.tobytes(), self._acceleration_x.tobytes(), self._rect.y, self._rect.height)
+    if gradient_key == self._exp_gradient_key:
       return
 
     max_len = min(len(self._path.projected_points) // 2, len(self._acceleration_x))
@@ -289,6 +304,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       colors=segment_colors,
       stops=gradient_stops,
     )
+    self._exp_gradient_key = gradient_key
 
   def _update_lead_vehicle(self, d_rel, v_rel, point, rect):
     speed_buff, lead_buff = 10.0, 40.0

@@ -12,7 +12,8 @@ import openpilot.cereal.messaging as messaging
 from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, StopReason
 from openpilot.selfdrive.selfdrived.engagement_policy import (
-  CONTROL_STEP_NS, EPS_EVENTS, HOLD_EXTRA_NS, EngagementPolicy, LongitudinalEvents,
+  CONTROL_STEP_NS, EPS_EVENTS, EXECUTION_LEASE_NS, HOLD_EXTRA_NS, INPUT_LEASE_NS,
+  EngagementPolicy, LongitudinalEvents, fresh_service,
 )
 from openpilot.selfdrive.selfdrived.events import ET, Events
 from openpilot.selfdrive.selfdrived.state import StateMachine
@@ -25,6 +26,76 @@ State = log.SelfdriveState.OpenpilotState
 MadsState = custom.ModularAssistiveDrivingSystem.ModularAssistiveDrivingSystemState
 LongState = car.CarControl.Actuators.LongControlState
 NOW = 10_000_000_000
+
+
+@pytest.mark.parametrize('flag', ['seen', 'valid', 'alive', 'freq_ok'])
+@pytest.mark.parametrize('value', [False, None, 0, 1, 'true', [], [True]])
+def test_fresh_service_requires_literal_true_and_short_circuits_in_order(flag, value):
+  order = ('seen', 'valid', 'alive', 'freq_ok', 'logMonoTime')
+  reads = []
+
+  class FlagMap(dict):
+    def __init__(self, name, result):
+      super().__init__(modelV2=result)
+      self.name = name
+
+    def get(self, service):
+      reads.append((self.name, service))
+      return super().get(service)
+
+  sm = SimpleNamespace(**{name: FlagMap(name, True) for name in order[:4]})
+  setattr(sm, flag, FlagMap(flag, value))
+  # No timestamp map is installed: a failed health check must not read it.
+  result = fresh_service(sm, 'modelV2', NOW)
+  assert result is False
+  assert reads == [(name, 'modelV2') for name in order[:order.index(flag) + 1]]
+
+
+@pytest.mark.parametrize('lease_ns', [EXECUTION_LEASE_NS, INPUT_LEASE_NS, 1_500_000_000])
+@pytest.mark.parametrize('position,expected', [
+  ('now', True), ('deadline', True), ('expired', False), ('future', False),
+  ('zero', False), ('negative', False), ('float', False), ('bool', False), ('missing', False),
+])
+def test_fresh_service_keeps_timestamp_type_and_inclusive_deadline(lease_ns, position, expected):
+  stamps = {'now': NOW, 'deadline': NOW - lease_ns, 'expired': NOW - lease_ns - 1,
+            'future': NOW + 1, 'zero': 0, 'negative': -1, 'float': float(NOW), 'bool': True}
+  sm = SimpleNamespace(**{name: {'modelV2': True} for name in ('seen', 'valid', 'alive', 'freq_ok')},
+                       logMonoTime={} if position == 'missing' else {'modelV2': stamps[position]})
+  assert fresh_service(sm, 'modelV2', NOW, lease_ns) is expected
+
+
+@pytest.mark.parametrize('now_ns', [None, True, float(NOW), '10000000000', 0, -1])
+def test_fresh_service_does_not_coerce_the_clock(now_ns):
+  sm = SimpleNamespace(**{name: {'modelV2': True} for name in ('seen', 'valid', 'alive', 'freq_ok')},
+                       logMonoTime={'modelV2': NOW})
+  assert fresh_service(sm, 'modelV2', now_ns) is False
+
+
+@pytest.mark.parametrize('flag', ['seen', 'valid', 'alive', 'freq_ok', 'logMonoTime'])
+@pytest.mark.parametrize('defect', ['missing_attribute', 'invalid_mapping', 'missing_service'])
+def test_fresh_service_keeps_the_original_exception_and_missing_key_behavior(flag, defect):
+  def reference(sm):
+    return (all(getattr(sm, name).get('modelV2') is True for name in ('seen', 'valid', 'alive', 'freq_ok'))
+            and type(sm.logMonoTime.get('modelV2')) is int
+            and 0 < sm.logMonoTime.get('modelV2') <= NOW
+            and NOW - sm.logMonoTime.get('modelV2') <= EXECUTION_LEASE_NS)
+
+  def inputs():
+    sm = SimpleNamespace(**{name: {'modelV2': True} for name in ('seen', 'valid', 'alive', 'freq_ok')},
+                         logMonoTime={'modelV2': NOW})
+    if defect == 'missing_attribute':
+      delattr(sm, flag)
+    else:
+      setattr(sm, flag, None if defect == 'invalid_mapping' else {})
+    return sm
+
+  def outcome(call):
+    try:
+      return ('result', call(inputs()))
+    except (AttributeError, TypeError) as error:
+      return ('exception', type(error), str(error))
+
+  assert outcome(lambda sm: fresh_service(sm, 'modelV2', NOW)) == outcome(reference)
 
 
 class Streams(dict):

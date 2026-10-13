@@ -36,7 +36,8 @@ def fresh_time(stamp, now_ns, lease_ns):
 
 
 def fresh_service(sm, service, now_ns, lease_ns=EXECUTION_LEASE_NS):
-  return (all(getattr(sm, flag).get(service) is True for flag in ('seen', 'valid', 'alive', 'freq_ok'))
+  return (sm.seen.get(service) is True and sm.valid.get(service) is True
+          and sm.alive.get(service) is True and sm.freq_ok.get(service) is True
           and fresh_time(sm.logMonoTime.get(service), now_ns, lease_ns))
 
 
