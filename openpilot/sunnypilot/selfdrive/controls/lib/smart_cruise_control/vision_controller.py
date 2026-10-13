@@ -193,6 +193,8 @@ class SmartCruiseControlVision:
     was_in_curve = self._curve_state in ACTIVE_STATES
     if self._curve_state == VisionState.disabled:
       self._curve_state = VisionState.enabled
+      if self.steering_limited or self.current_lat_acc >= _TURNING_LAT_ACC_TH:
+        self._curve_state = VisionState.entering
     elif self._curve_state == VisionState.enabled:
       if (self.steering_limited or self.current_lat_acc >= _TURNING_LAT_ACC_TH
           or self.v_ego > MIN_V and self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH):

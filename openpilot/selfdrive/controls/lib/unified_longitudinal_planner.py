@@ -626,7 +626,7 @@ class UnifiedLongitudinalPlanner:
     steering = car_state.steeringAngleDeg - state['vehicleParameters'].angleOffsetDeg
     maximum_accel = cruise_accel_limit(planner.CP, speed, steering, self.e2e_allowed, coast_accel, planner.allow_throttle)
     vision_curve = planner.scc.vision
-    scc_active = (healthy and active and not reset and not forced_decel
+    scc_active = (healthy and active and not forced_decel
                   and vision_curve.adaptive_curve_speed and vision_curve.is_active)
     scc_braking = scc_active and vision_curve.output_v_target < speed and vision_curve.output_a_target < 0.0
     if scc_active:

@@ -90,6 +90,9 @@ def test_driver_release_speed_survives_real_planner_owner_handoff():
       assert not planner.scc.vision.is_active
       assert outputs == [0.] * 5
     state['carState'].gasPressed = False
+    # Pedal release can still carry a positive measured acceleration. It is
+    # the cruise response's reset seed, not permission to exceed the setpoint.
+    state['carState'].aEgo = .6
     step(planner, control, state, 9)
     assert planner.scc.vision.driver_speed == 12.
     state['carControl'].longActive = True
@@ -99,6 +102,8 @@ def test_driver_release_speed_survives_real_planner_owner_handoff():
       assert planner.cruise_target.speed == 12.
       assert planner.scc.vision.output_a_target == 0.
       assert plan.motionIntent.valid and plan.solverStatus == 0
+      assert plan.aTarget <= 0.
+      assert max(outputs) <= 0.
     assert abs(plan.aTarget) < .05
     assert max(abs(value) for value in outputs) < .05
 
@@ -115,6 +120,18 @@ def test_lateral_saturation_prevents_recovery_in_the_owner():
       assert plan.aTarget <= 0.
       assert max(outputs) <= 0.
       assert plan.motionIntent.valid and plan.solverStatus == 0
+
+
+def test_saturated_reengagement_has_no_initial_acceleration_permission():
+  with curve_pipeline() as (planner, control, state):
+    state['carState'].aEgo = .6
+    lateral = state['controlsState'].lateralControlState.init('pidState')
+    lateral.active = lateral.saturated = True
+    plan, outputs = step(planner, control, state, 0)
+    assert planner.scc.vision.is_active
+    assert planner.cruise_target.speed == state['carState'].vEgo
+    assert plan.aTarget <= 0.
+    assert max(outputs) <= 0.
 
 
 def test_sharp_predicted_curve_keeps_physical_mpc_acceleration_bounds_ordered():
