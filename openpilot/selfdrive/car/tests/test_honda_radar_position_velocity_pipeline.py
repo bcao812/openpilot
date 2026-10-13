@@ -11,11 +11,13 @@ import json
 import math
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE
 from openpilot.selfdrive.car.tests import honda_radar_control_test_support as pipeline_support
 from openpilot.selfdrive.car.tests.honda_radar_control_test_support import Target, control_pipeline
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 
@@ -36,12 +38,24 @@ def record(record_property, name, rows):
   record_property(name, json.dumps(rows, separators=(',', ':'), allow_nan=False))
 
 
-def capture(pipeline, row, *, truth_speed, truth_distance):
+def capture(pipeline, row, *, truth_speed, truth_distance, predict_gap=False):
   observation = pipeline.state[SERVICE]
   row['truth_speed'], row['truth_distance'] = truth_speed, truth_distance
   row['fusion_tracks'] = [track.to_dict() for track in observation.fusion.tracks]
   row['raw_observations'] = [sample.to_dict() for sample in observation.observations]
   row['consumer_degraded'] = pipeline.planner.reference_planner.radar_consumption.degraded
+  if predict_gap:
+    # Analyse the already-solved ego plan against the known straight, constant-
+    # speed physical target, including frames where sensing did not admit it.
+    # This never enters the producer and is not an executed/closed-loop gap.
+    mpc = pipeline.planner.mpc
+    assert mpc._diagnostic_reference_ns == row['source_ns']
+    target_trajectory = np.column_stack((truth_distance + truth_speed * T_IDXS, np.full(len(T_IDXS), truth_speed)))
+    row['planned_truth_minimum_gap'] = mpc.lead_clearance_minimum(target_trajectory, mpc.x_sol, mpc.u_sol[:, 0])
+    row['truth_prediction'] = {'source_ns': row['source_ns'], 'times': T_IDXS.tolist(),
+                               'ego_states': mpc.x_sol.tolist(), 'ego_jerks': mpc.u_sol[:, 0].tolist(),
+                               'lead_positions': target_trajectory[:, 0].tolist(),
+                               'meaning': 'Predicted clearance of this MPC plan; no executed-motion feedback'}
   return row
 
 
@@ -91,7 +105,7 @@ def run_closing_truth(case, *, native_velocity=False, visual=False, frames=28):
         distance = initial_distance + (lead_speed - ego_speed) * frame * STEP
         target = Target(distance, lead_speed, oem_id=25)
         row = pipeline.step(speed=ego_speed, radar=[target], visual=[target] if visual else [])
-        rows.append(capture(pipeline, row, truth_speed=lead_speed, truth_distance=distance))
+        rows.append(capture(pipeline, row, truth_speed=lead_speed, truth_distance=distance, predict_gap=True))
   return rows
 
 
@@ -102,9 +116,17 @@ def timing_and_peak(rows):
   first_brake = next((row['time'] + STEP for row in rows
                       if any(command['active'] and command['brake'] and command['accel'] < -.1
                              for command in row['can'])), None)
+
+  def minimum_predicted_gap(start):
+    return min((row['planned_truth_minimum_gap'] for row in rows
+                if start is not None and row['time'] >= start and 'planned_truth_minimum_gap' in row), default=None)
+
   return {'first_lead': first_lead, 'first_brake_upper_bound': first_brake,
           'minimum_plan_accel': min(row['target'] for row in rows),
-          'minimum_can_accel': min(command['accel'] for row in rows for command in row['can'])}
+          'minimum_can_accel': min(command['accel'] for row in rows for command in row['can']),
+          'planned_truth_minimum_gap': minimum_predicted_gap(0.0),
+          'planned_truth_minimum_gap_after_first_lead': minimum_predicted_gap(first_lead),
+          'planned_truth_minimum_gap_from_half_second': minimum_predicted_gap(.5)}
 
 
 def current_quality(track):
@@ -265,10 +287,12 @@ def test_repeated_can_publications_do_not_count_as_independent_position_scans(re
 
 def test_new_range_errors_withdraw_quality_and_fresh_scans_restore_without_latched_target(record_property):
   error_frame, rows = 20, []
-  errors = {error_frame: 1.2, error_frame + 1: -1.2, error_frame + 2: 1.2}
+  errors = {error_frame: 2.8}
   with control_pipeline(speed=14.0, cruise=18.0) as pipeline:
     # One physical target continues the same motion. The range sensor has a
-    # short alternating error, below the existing 3 m position innovation floor.
+    # single artificial +2.8 m error below the old 3 m position innovation floor.
+    # The 500/300 ms fits have different sensitivity to its newest sample;
+    # smaller alternating errors need not fail their statistical comparison.
     # This is a quality withdrawal check, not a false-object/braking verdict.
     with sensor_input(pipeline, range_error=lambda frame: errors.get(frame, 0.0)):
       for frame in range(38):
@@ -307,6 +331,9 @@ def test_independent_current_velocity_does_not_wait_for_position_convergence(com
   record(record_property, f'position_quality_bypass_{component}', rows)
   independently_qualified = []
   for row in rows:
+    if not row['radar']['fusionActive']:
+      assert row['frame'] == 0  # Only DEC's first legacy-vision bootstrap lacks fusion evidence.
+      continue
     tracks = {track['trackId']: track for track in row['fusion_tracks']}
     assert_formal_position_quality(row)
     for lead in formal_objects(row):

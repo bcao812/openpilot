@@ -16,6 +16,9 @@ from dataclasses import dataclass, field, replace
 import math
 from numbers import Real
 from openpilot.selfdrive.car.honda_radar_relevance import loss_relevant
+from openpilot.selfdrive.car.honda_radar_velocity import (
+  LONG_WINDOW_NS, MAX_SAMPLES, MIN_CONSISTENT_SAMPLES, MIN_SAMPLES, MIN_SPAN, VERSION as POSITION_VELOCITY_VERSION,
+)
 
 
 VERSION = 1
@@ -305,9 +308,64 @@ _TRACK_FIELDS = ('trackId', 'oemTrackId', 'generation', 'slot', 'positionSeq', '
                  'previousPositionSeq', 'previousPositionMonoTime', 'acceleration', 'accelerationGood',
                  'lateralPositionVariance', 'lateralVelocityVariance', 'lateralVelocityValid',
                  'bodyValid', 'bodyMonoTime', 'bodyAvailableMonoTime', 'bodyWidth',
-                 'bodyLeftX', 'bodyLeftY', 'bodyRightX', 'bodyRightY')
+                 'bodyLeftX', 'bodyLeftY', 'bodyRightX', 'bodyRightY', 'positionVelocity')
 _BINDING_FIELDS = ('modelIndex', 'present', 'probability', 'trackId', 'candidateTrackId', 'identityState', 'rejectionMonoTime',
                    'bindingStartMonoTime', 'bindingSamples', 'bindingAnchorX', 'bindingAnchorY', 'identityReason', 'reason')
+_POSITION_VELOCITY_FIELDS = ('version', 'positionSeq', 'positionMonoTime', 'sampleCount', 'span', 'shortSpeed', 'longSpeed',
+                             'speedStd', 'windowDifference', 'windowDifferenceStd', 'innovationBias', 'posteriorCorrection',
+                             'posteriorCorrectionRatio', 'posteriorSpeedDifference', 'consistentSamples', 'qualified', 'reason')
+_POSITION_VELOCITY_METRICS = ('span', 'shortSpeed', 'longSpeed', 'speedStd', 'windowDifference', 'windowDifferenceStd',
+                              'innovationBias', 'posteriorCorrection', 'posteriorCorrectionRatio', 'posteriorSpeedDifference')
+_POSITION_VELOCITY_NONNEGATIVE = ('speedStd', 'windowDifference', 'windowDifferenceStd', 'posteriorCorrection',
+                                  'posteriorCorrectionRatio', 'posteriorSpeedDifference')
+
+
+def _position_velocity_snapshot(evidence):
+  if evidence is None:
+    return None
+  # The publication identity must own its values. A capnp reader or nested
+  # mutable fixture must not rewrite the previously accepted signature.
+  values = (_read(evidence, key) for key in _POSITION_VELOCITY_FIELDS)
+  snapshot = []
+  for value in values:
+    if isinstance(value, Real) and not math.isfinite(value):
+      # Re-reading identical capnp bytes creates new NaN floats, which do not
+      # compare equal. Stable nonnumeric tokens preserve publication identity
+      # while the quality validator still rejects these invalid components.
+      value = ('nonfinite', 'nan' if math.isnan(value) else '+inf' if value > 0 else '-inf')
+    elif value is not None and not isinstance(value, (Real, str)):
+      value = 'invalidScalar'
+    snapshot.append(value)
+  return tuple(snapshot)
+
+
+def _position_velocity_state(evidence, position_seq, position_ns, observations):
+  if evidence is None:
+    return 'pending'
+  quality = dict(zip(_POSITION_VELOCITY_FIELDS, evidence, strict=True))
+  version = quality['version']
+  if version is None or _integer(version) and version == 0:
+    return 'pending'
+  if (not _integer(version) or version != POSITION_VELOCITY_VERSION
+      or not _integer(quality['positionSeq']) or quality['positionSeq'] != position_seq
+      or not _integer(quality['positionMonoTime']) or quality['positionMonoTime'] != position_ns
+      or not _integer(quality['sampleCount']) or not 0 <= quality['sampleCount'] <= min(MAX_SAMPLES, observations)
+      or not _integer(quality['consistentSamples']) or not 0 <= quality['consistentSamples'] <= min(MAX_SAMPLES, observations)
+      or not _finite(*(quality[key] for key in _POSITION_VELOCITY_METRICS))
+      or not 0 <= quality['span'] <= LONG_WINDOW_NS / 1e9
+      or any(quality[key] < 0 for key in _POSITION_VELOCITY_NONNEGATIVE)
+      or not isinstance(quality['qualified'], bool)):
+    return 'invalid'
+  count, span = quality['sampleCount'], quality['span']
+  if count < 2 and span != 0 or count >= 2 and span <= 0:
+    return 'invalid'
+  if not quality['qualified']:
+    return 'pending'
+  # These support checks validate the producer's flag; the producer owns the
+  # consistency thresholds and computes them from independent current scans.
+  if count < MIN_SAMPLES or span < MIN_SPAN or quality['consistentSamples'] < MIN_CONSISTENT_SAMPLES:
+    return 'invalid'
+  return 'qualified'
 
 
 class HondaRadarControl:
@@ -615,6 +673,8 @@ class HondaRadarControl:
         reason, healthy, fault = 'inputShape', False, True
       else:
         tracks = [{key: _read(t, key) for key in _TRACK_FIELDS} for t in source_tracks]
+        for track in tracks:
+          track['positionVelocity'] = _position_velocity_snapshot(track['positionVelocity'])
         bindings = [{key: _read(b, key) for key in _BINDING_FIELDS} for b in source_bindings]
         session, sequence = _read(observation, 'sessionId'), _read(observation, 'sequence')
         counters = (_read(_read(observation, 'counters'), 'dropped', 0), _read(_read(fusion, 'counters'), 'resets', 0))
@@ -687,7 +747,8 @@ class HondaRadarControl:
         continue
       if track['mature'] is not True or not _integer(track['observations']) or track['observations'] < MIN_OBSERVATIONS:
         continue
-      velocity_values = _finite(vx, vy, v_var) and -35 <= vx <= 80 and abs(vy) <= 30 and 0 <= v_var <= VELOCITY_MAX_VARIANCE
+      velocity_components = _finite(vx, vy, v_var) and -35 <= vx <= 80 and abs(vy) <= 30 and v_var >= 0
+      velocity_values = velocity_components and v_var <= VELOCITY_MAX_VARIANCE
       # Determine association in the current frame before borrowing any visual
       # component. The unresolved/different hypothesis is never a fallback.
       if not _finite(vy) or abs(vy) > 30:
@@ -715,18 +776,26 @@ class HondaRadarControl:
         if vision is not None:
           pvx, v_ns, v_var = vision['vLeadK'], eof, vision['evidence']['velocityStd'] ** 2
           component_reason = 'visionVelocity'
-        elif (velocity_values and v_var <= POSITION_SPEED_MAX_VARIANCE and track['observations'] >= 6
+        else:
+          quality = _position_velocity_state(track['positionVelocity'], p_seq, p_ns, track['observations'])
+          if quality == 'pending' and velocity_components:
+            # Current position evidence has not converged. Withdraw only this
+            # candidate; this is neither an input fault nor measured OUT. No
+            # old velocity/qualification survives the final current selection.
+            continue
+          if (quality == 'qualified' and velocity_values and v_var <= POSITION_SPEED_MAX_VARIANCE
+              and track['observations'] >= MIN_SAMPLES
               and _integer(track['previousPositionSeq']) and track['previousPositionSeq'] < p_seq
               and _fresh(track['previousPositionMonoTime'], p_ns)):
-          v_ns = p_ns
-          component_reason = 'positionVelocity'
-        else:
-          # A bad component on an unselected raw track is not a failure of
-          # either ordinary lead. Only a previously selected near lead can
-          # carry an existing measurement obligation into this frame.
-          if previous is not None and previous.selected_follow and previous.relevant:
-            failed_leads.add(identifier)
-          continue
+            v_ns = p_ns
+            component_reason = 'positionVelocity'
+          else:
+            # Corrupt components or contradictory quality still report the
+            # existing selected-near-lead failure; a raw unselected candidate
+            # cannot create a new global measurement obligation.
+            if previous is not None and previous.selected_follow and previous.relevant:
+              failed_leads.add(identifier)
+            continue
       # A borrowed component must also drive alignment of position over the
       # same interval; otherwise d and v would describe different trajectories.
       projection_dt = (eof - source_eof) / 1e9

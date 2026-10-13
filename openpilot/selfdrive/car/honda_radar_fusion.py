@@ -973,12 +973,23 @@ class HondaRadarFusion:
                     if (index, track.identifier) in self.bindings]
         if previous:
           old, binding = max(previous, key=lambda value: value[1].last_model_ns)
-          lead.update(binding.diagnostics())
+          # Identity rejection and its geometry must belong to one track.
+          # The nearest current candidate above may be a different object.
+          # Preserve the old pair's contradiction without assigning it to that
+          # new object or borrowing the new object's residuals.
+          lead.update(binding.diagnostics(), candidateTrackId=old.identifier,
+                      residualX=0.0, residualY=0.0, residualV=0.0, gateX=0.0, gateY=0.0)
           if old.identifier in rejected_checks:
             diagnostics, dx, dy, dv, gate_x, gate_y = rejected_checks[old.identifier]
             lead.update(candidateTrackId=old.identifier, residualX=dx, residualY=dy, residualV=dv, gateX=gate_x, gateY=gate_y)
             for name in ('residualDeltaX', 'residualDeltaY', 'bindingAnchorX', 'bindingAnchorY'):
               lead[name] = diagnostics[name]
+          else:
+            current_old = next((option for option in considered if option[1][0].identifier == old.identifier), None)
+            if current_old is not None:
+              _, candidate, dx, dy, gate_x, gate_y = current_old
+              lead.update(residualX=dx, residualY=dy, residualV=float(candidate[1][2]) - ego.speed - lead['vRel'],
+                          gateX=gate_x, gateY=gate_y)
           if not old.active:
             lead.update(candidateTrackId=old.identifier, reason='radarInvalid', identityReason=old.last_invalid_reason)
         result.append(lead)

@@ -199,6 +199,7 @@ class TestHondaRadarFusion(unittest.TestCase):
           for name in ('mean', 'covariance'):
             left, right = actual.pop(name), expected.pop(name)
             self.assertEqual((left.dtype, left.shape, left.tobytes()), (right.dtype, right.shape, right.tobytes()))
+          self.assertEqual(vars(actual.pop('position_velocity')), vars(expected.pop('position_velocity')))
           self.assertEqual(actual, expected)
         # Three equal sorting keys must retain position, AUX, then conflict.
         self.assertEqual(fusion.tracks[7].positions[-1][1], 20.0)
@@ -1194,6 +1195,53 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertTrue(old_binding.separation_latched)
     self.assertEqual(len(old_binding.samples), count)
     self.assertEqual(out['leads'][0]['distanceWeight'], 0)
+
+  def test_unmatched_rejection_never_belongs_to_a_different_current_candidate(self):
+    for hard_rejection in (True, False):
+      with self.subTest(hard_rejection=hard_rejection):
+        fusion = HondaRadarFusion()
+        lateral = 3.0 if hard_rejection else 0.0
+
+        def samples(frame):
+          return [observation(frame), observation(frame, distance=40.0, lateral=lateral, slot=1, oem=8)]
+
+        for frame in range(12):
+          out = advance(fusion, frame, samples(frame))
+        old_id = next(track['trackId'] for track in out['tracks'] if track['oemTrackId'] == 7)
+        other_id = next(track['trackId'] for track in out['tracks'] if track['oemTrackId'] == 8)
+        self.assertEqual(out['leads'][0]['identityState'], 'same')
+        if hard_rejection:
+          out = advance(fusion, 12, samples(12), distance=50.0, lateral=lateral)
+          self.assertEqual(out['leads'][0]['identityState'], 'different')
+        else:
+          advance(fusion, 12, samples(12), probability=.5)
+          self.assertFalse(fusion.bindings[(0, old_id)].anchor_ready)
+
+        stamp = START + 13 * STEP
+        sm = Inputs(stamp, distance=50.0, lateral=lateral)
+        if hard_rejection:
+          # Both objects still have current measurements. Only B is now in
+          # the path, but its 10 m range residual also misses the same gate.
+          sm['modelV2'].position.y = [0.0] + [-3.0] * 32
+        out = fusion.update(body(13, samples(13)), sm, stamp + 1)
+        lead = out['leads'][0]
+        self.assertEqual(lead['reason'], 'noMatch')
+        self.assertEqual(lead['trackId'], 0)
+        self.assertEqual(lead['candidateTrackId'], old_id)
+        self.assertNotEqual(lead['candidateTrackId'], other_id)
+        self.assertGreater(lead['rejectionMonoTime'], 0)
+        self.assertFalse(lead['independentPair'])
+        self.assertEqual(lead['distanceWeight'], 0)
+        self.assertEqual(lead['velocityWeight'], 0)
+        self.assertEqual(lead['identityState'], 'different' if hard_rejection else 'unresolved')
+        if hard_rejection:
+          # No eligible current geometry for A: zero gates mean not computed,
+          # not a zero residual measured on B or stale geometry copied from A.
+          self.assertEqual((lead['residualX'], lead['residualY'], lead['residualV'], lead['gateX'], lead['gateY']), (0.0,) * 5)
+          self.assertTrue(fusion.bindings[(0, old_id)].separation_latched)
+        else:
+          self.assertAlmostEqual(lead['residualX'], -30.0, delta=.01)
+          self.assertGreater(lead['gateX'], 0)
 
   def test_hard_rejection_survives_every_soft_gap(self):
     for reason in ('visionUnqualified', 'visionUncertainty', 'nearVision', 'noMatch', 'ambiguous',

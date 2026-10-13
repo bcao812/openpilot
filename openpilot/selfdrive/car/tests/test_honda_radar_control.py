@@ -20,6 +20,23 @@ def vision(distance=20.0, speed=10.0, ego=10.0, lateral=0.0, probability=.94, ac
           'modelProb': probability, 'radar': False, 'radarTrackId': -1}
 
 
+def position_velocity_quality(track, **changes):
+  # Hand-set evidence exercises this consumer's contract only. The CAN-chain
+  # tests separately check that real independent positions produce the flag.
+  observations = track['observations']
+  count = min(8, max(0, observations)) if type(observations) is int else 0
+  qualified = count >= 6
+  result = {'version': 1, 'positionSeq': track['positionSeq'], 'positionMonoTime': track['positionMonoTime'],
+            'sampleCount': count, 'span': max(0, count - 1) * STEP / 1e9,
+            'shortSpeed': track['groundSpeed'], 'longSpeed': track['groundSpeed'], 'speedStd': .5,
+            'windowDifference': 0.0, 'windowDifferenceStd': .2, 'innovationBias': 0.0,
+            'posteriorCorrection': .1, 'posteriorCorrectionRatio': .2, 'posteriorSpeedDifference': .1,
+            'consistentSamples': count, 'qualified': qualified,
+            'reason': 'converged' if qualified else 'insufficientSupport'}
+  result.update(changes)
+  return result
+
+
 def radar(frame=0, *, identifier=1, oem=7, distance=20.0, speed=10.0, lateral=0.0, lateral_speed=0.0, **changes):
   stamp = START + frame * STEP
   result = {'trackId': identifier, 'oemTrackId': oem, 'generation': 1, 'slot': 0,
@@ -31,6 +48,8 @@ def radar(frame=0, *, identifier=1, oem=7, distance=20.0, speed=10.0, lateral=0.
             'acceleration': -.4, 'accelerationGood': True, 'lastInvalidReason': '', 'lastInvalidMonoTime': 0,
             'previousPositionSeq': 9 + frame, 'previousPositionMonoTime': stamp - STEP}
   result.update(changes)
+  if 'positionVelocity' not in changes:
+    result['positionVelocity'] = position_velocity_quality(result)
   return result
 
 
@@ -796,7 +815,9 @@ def test_position_new_velocity_old_cannot_republish_previous_velocity():
                                       previousPositionMonoTime=0, previousPositionSeq=0)])
     result = controller.update(**values)
     assert not present_leads(result) and not controller._tracks
-    assert result.degraded is (frame == 1)
+    # Too few independent current positions are ordinary pending evidence;
+    # they do not turn a healthy sensor stream into a lead-health failure.
+    assert result.healthy and not result.degraded
     assert not result.cleared
   missing = controller.update(**scene(5, tracks=[]))
   assert not present_leads(missing) and not missing.degraded and not missing.cleared
@@ -821,6 +842,202 @@ def test_position_history_can_supply_supported_velocity_not_zero_substitution():
   assert evidence(result)['velocityMonoTime'] == START
   assert 'positionVelocity' in evidence(result)['reason']
   assert not evidence(result)['accelerationValid']
+
+
+@pytest.mark.parametrize('quality_changes', [
+  None, {'version': 0},
+  {'qualified': False, 'reason': 'insufficientSupport'},
+  {'sampleCount': 5, 'span': .24, 'consistentSamples': 2, 'qualified': False, 'reason': 'insufficientSupport'},
+  {'qualified': False, 'windowDifference': 7.0, 'reason': 'windowDisagreement'},
+  {'qualified': False, 'innovationBias': -3.0, 'reason': 'innovationBias'},
+  {'qualified': False, 'posteriorCorrection': 5.0, 'posteriorCorrectionRatio': 4.0, 'reason': 'posteriorCorrection'},
+  {'qualified': False, 'posteriorSpeedDifference': 8.0, 'reason': 'posteriorDisagreement'},
+])
+def test_pending_position_quality_withdraws_immediately_and_recovers_only_with_current_evidence(quality_changes):
+  controller = HondaRadarControl()
+  first = controller.update(**scene(tracks=[radar(velocityGood=False, velocityMonoTime=0)]))
+  assert evidence(first)['reason'].startswith('positionVelocity')
+  current = radar(1, velocityGood=False, velocityMonoTime=0)
+  current['positionVelocity'] = None if quality_changes is None else position_velocity_quality(current, **quality_changes)
+  pending = controller.update(**scene(1, tracks=[current]))
+  assert pending.healthy and not pending.degraded and not pending.cleared
+  assert not present_leads(pending) and not controller._tracks
+  assert pending.reason == 'noQualifiedObjects'
+  recovered = controller.update(**scene(2, tracks=[radar(2, velocityGood=False, velocityMonoTime=0)]))
+  assert recovered.healthy and not recovered.degraded and not recovered.cleared
+  assert evidence(recovered)['positionMonoTime'] == START + 2 * STEP
+  assert evidence(recovered)['velocityMonoTime'] == START + 2 * STEP
+
+
+@pytest.mark.parametrize('variance', [.3, 5.0, 15.0])
+def test_pending_position_quality_with_finite_uncertainty_does_not_degrade_another_lead(variance):
+  controller = HondaRadarControl()
+  initial = [radar(velocityGood=False), radar(identifier=2, oem=8, distance=30.0)]
+  assert len(present_leads(controller.update(**scene(tracks=initial)))) == 2
+  pending = radar(1, velocityGood=False, velocityVariance=variance)
+  pending['positionVelocity'] = position_velocity_quality(pending, qualified=False, reason='insufficientSupport')
+  other = radar(1, identifier=2, oem=8, distance=30.0)
+  result = controller.update(**scene(1, tracks=[pending, other]))
+  assert result.healthy and not result.degraded and not result.cleared
+  assert [lead['evidence']['trackId'] for lead in present_leads(result)] == [2]
+  assert set(controller._tracks) == {2}
+
+
+def test_pending_position_quality_is_not_measured_out():
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  current = radar(1, velocityGood=False, lateral=4.0)
+  current['positionVelocity'] = position_velocity_quality(current, qualified=False, reason='windowDisagreement')
+  result = controller.update(**scene(1, tracks=[current]))
+  assert result.healthy and not result.degraded and not result.cleared
+  assert not present_leads(result) and not controller._tracks and not controller._cleared
+
+
+@pytest.mark.parametrize('changes', [
+  {'version': 2}, {'version': True}, {'version': []}, {'positionSeq': 99}, {'positionMonoTime': START},
+  {'sampleCount': 17}, {'sampleCount': 5}, {'sampleCount': True}, {'consistentSamples': 2},
+  {'consistentSamples': 17}, {'span': .24}, {'span': .500001}, {'speedStd': -1.0},
+  {'windowDifference': -1.0}, {'posteriorCorrectionRatio': -1.0}, {'qualified': 1},
+])
+def test_contradictory_position_quality_preserves_existing_selected_lead_health_checks(changes):
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  current = radar(1, velocityGood=False)
+  current['positionVelocity'] = position_velocity_quality(current, **changes)
+  result = controller.update(**scene(1, tracks=[current]))
+  assert result.healthy and result.degraded and not result.cleared
+  assert not present_leads(result) and not controller._tracks
+
+
+@pytest.mark.parametrize('field', ['span', 'shortSpeed', 'longSpeed', 'speedStd', 'windowDifference', 'windowDifferenceStd',
+                                   'innovationBias', 'posteriorCorrection', 'posteriorCorrectionRatio', 'posteriorSpeedDifference'])
+def test_nonfinite_quality_is_corruption_even_when_marked_pending(field):
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  current = radar(1, velocityGood=False)
+  current['positionVelocity'] = position_velocity_quality(current, qualified=False, **{field: math.nan})
+  result = controller.update(**scene(1, tracks=[current]))
+  assert result.healthy and result.degraded and not result.cleared
+  assert not present_leads(result) and not controller._tracks
+
+
+@pytest.mark.parametrize('changes', [
+  {'groundSpeed': math.nan}, {'lateralSpeed': math.inf}, {'velocityVariance': math.nan}, {'velocityVariance': -1.0},
+])
+def test_pending_quality_cannot_hide_corrupt_current_velocity_components(changes):
+  controller = HondaRadarControl()
+  controller.update(**scene())
+  current = radar(1, velocityGood=False)
+  current['positionVelocity'] = position_velocity_quality(current, qualified=False)
+  current.update(changes)
+  result = controller.update(**scene(1, tracks=[current]))
+  assert result.healthy and result.degraded and not result.cleared
+  assert not present_leads(result) and not controller._tracks
+
+
+def test_corrupt_quality_on_a_new_unselected_track_does_not_create_a_health_obligation():
+  current = radar(velocityGood=False)
+  current['positionVelocity'] = position_velocity_quality(current, positionSeq=99)
+  result = HondaRadarControl().update(**scene(tracks=[current]))
+  assert result.healthy and not result.degraded and not result.cleared and not present_leads(result)
+
+
+@pytest.mark.parametrize('visual', [False, True])
+@pytest.mark.parametrize('quality_changes', [None, {'version': 0}, {'qualified': False}, {'positionSeq': 99}, {'speedStd': math.nan}])
+def test_native_or_current_same_car_visual_velocity_does_not_depend_on_position_convergence(visual, quality_changes):
+  current = radar(velocityGood=not visual, velocityMonoTime=0 if visual else START)
+  current['positionVelocity'] = None if quality_changes is None else position_velocity_quality(current, **quality_changes)
+  inputs = scene(tracks=[current], leads=[vision(speed=7.0)] if visual else None,
+                 bindings=[binding()] if visual else None)
+  result = HondaRadarControl().update(**inputs)
+  assert result.healthy and not result.degraded and not result.cleared
+  assert result.leads[0]['vLeadK'] == (7.0 if visual else 10.0)
+  assert evidence(result)['reason'].startswith('visionVelocity' if visual else 'radar')
+
+
+@pytest.mark.parametrize('visual', [False, True])
+@pytest.mark.parametrize('nonfinite', [math.nan, math.inf, -math.inf], ids=['nan', 'positive-infinity', 'negative-infinity'])
+def test_repeated_capnp_publication_with_unused_nonfinite_quality_preserves_its_identity(visual, nonfinite):
+  from openpilot.cereal import custom
+  controller = HondaRadarControl()
+  current = radar(velocityGood=not visual, velocityMonoTime=0 if visual else START)
+  current['positionVelocity']['speedStd'] = nonfinite
+  inputs = scene(tracks=[current], leads=[vision(speed=7.0)] if visual else None,
+                 bindings=[binding()] if visual else None)
+  wire = custom.HondaRadarObservations.new_message(**inputs['observation']).to_bytes()
+  for repeated in range(2):
+    # Parse the same bytes anew, so the test exercises the real scalar-reader
+    # behavior rather than reusing one Python NaN object in a dict fixture.
+    with custom.HondaRadarObservations.from_bytes(wire) as observation:
+      result = controller.update(**{**inputs, 'observation': observation, 'now_ns': inputs['now_ns'] + repeated})
+    assert result.healthy and not result.degraded and not result.cleared
+    assert result.leads[0]['vLeadK'] == (7.0 if visual else 10.0)
+    assert evidence(result)['reason'].startswith('visionVelocity' if visual else 'radar')
+
+  # Normalizing the signature must not make the same invalid metric usable
+  # when neither native velocity nor a current same-car visual lead exists.
+  fallback = radar(1, velocityGood=False, velocityMonoTime=0)
+  fallback['positionVelocity']['speedStd'] = nonfinite
+  inputs = scene(1, tracks=[fallback])
+  wire = custom.HondaRadarObservations.new_message(**inputs['observation']).to_bytes()
+  with custom.HondaRadarObservations.from_bytes(wire) as observation:
+    result = controller.update(**{**inputs, 'observation': observation})
+  assert result.healthy and result.degraded and not result.cleared
+  assert not present_leads(result) and not controller._tracks
+
+
+@pytest.mark.parametrize('visual', [False, True])
+def test_same_capnp_publication_cannot_replace_nan_quality_with_a_finite_value(visual):
+  from openpilot.cereal import custom
+  controller = HondaRadarControl()
+  current = radar(velocityGood=not visual, velocityMonoTime=0 if visual else START)
+  current['positionVelocity']['speedStd'] = math.nan
+  inputs = scene(tracks=[current], leads=[vision(speed=7.0)] if visual else None,
+                 bindings=[binding()] if visual else None)
+  wire = custom.HondaRadarObservations.new_message(**inputs['observation']).to_bytes()
+  with custom.HondaRadarObservations.from_bytes(wire) as observation:
+    assert present_leads(controller.update(**{**inputs, 'observation': observation}))
+  current['positionVelocity']['speedStd'] = .5
+  changed_wire = custom.HondaRadarObservations.new_message(**inputs['observation']).to_bytes()
+  with custom.HondaRadarObservations.from_bytes(changed_wire) as observation:
+    result = controller.update(**{**inputs, 'observation': observation, 'now_ns': inputs['now_ns'] + 1})
+  assert not result.healthy and result.degraded and result.reason == 'publicationOrder'
+  assert not controller._tracks and not result.cleared
+
+
+def test_same_publication_cannot_change_nested_quality_in_place():
+  controller = HondaRadarControl()
+  original = scene(tracks=[radar(velocityGood=False)])
+  assert present_leads(controller.update(**original))
+  original['now_ns'] += 1
+  original['observation']['fusion']['tracks'][0]['positionVelocity']['qualified'] = False
+  result = controller.update(**original)
+  assert not result.healthy and result.degraded and result.reason == 'publicationOrder'
+  assert not present_leads(result) and not controller._tracks and not result.cleared
+
+
+def test_new_publications_of_one_position_cannot_accumulate_convergence_support():
+  controller = HondaRadarControl()
+  current = radar(velocityGood=False)
+  current['positionVelocity'] = position_velocity_quality(current, sampleCount=5, span=.24,
+                                                          consistentSamples=2, qualified=False, reason='insufficientSupport')
+  for frame in range(3):
+    result = controller.update(**scene(frame, tracks=[current]))
+    assert result.healthy and not result.degraded and not result.cleared
+    assert not present_leads(result) and not controller._tracks
+
+
+def test_changed_quality_without_a_new_position_cannot_establish_first_occupancy():
+  controller = HondaRadarControl()
+  current = radar(velocityGood=False)
+  current['positionVelocity'] = position_velocity_quality(current, qualified=False)
+  assert not present_leads(controller.update(**scene(tracks=[current])))
+  current['positionVelocity'] = position_velocity_quality(current)
+  repeated = controller.update(**scene(1, tracks=[current]))
+  assert repeated.healthy and not repeated.degraded and not repeated.cleared
+  assert not present_leads(repeated) and not controller._tracks
+  fresh = controller.update(**scene(2, tracks=[radar(2, velocityGood=False)]))
+  assert evidence(fresh)['positionMonoTime'] == START + 2 * STEP
 
 
 @pytest.mark.parametrize('changes', [
