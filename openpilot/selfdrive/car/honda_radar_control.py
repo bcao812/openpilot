@@ -24,6 +24,8 @@ MAX_TRACKS = 32
 MAX_AGE_NS = 200_000_000
 MIN_OBSERVATIONS = 3
 MIN_SPAN_NS = 120_000_000
+# Current radar/fused motion only; visual fallback keeps its own 0.5 m/s gate.
+RADAR_DEPARTURE_MIN_SPEED = 0.3
 HORIZON = 10.0
 RADAR_TO_CAMERA = 1.52
 # Ordinary following still uses point/visual geometry. The independent cut-in
@@ -543,7 +545,7 @@ class HondaRadarControl:
         'accelerationValid': acceleration_valid, 'followQualified': following,
         'followGeometryMonoTime': eof if following else 0,
         'brakeQualified': following or cut_in, 'stopQualified': following,
-        'departureQualified': following and memory.vx > .5,
+        'departureQualified': following and memory.vx > RADAR_DEPARTURE_MIN_SPEED,
         'fcwQualified': following and memory.position_variance <= 2.25 and memory.velocity_variance <= 6.25,
         'cautionQualified': False,
         'physicalConflictValid': False, 'physicalConflictStart': 0.0, 'physicalConflictEnd': 0.0,

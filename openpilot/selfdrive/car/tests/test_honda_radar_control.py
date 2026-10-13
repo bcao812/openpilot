@@ -142,7 +142,7 @@ def test_static_lane_projection_still_rejects_invalid_lane_evidence(fault):
   assert path.points and not lane.points
 
 
-@pytest.mark.parametrize('speed', [0.0, -.2, -.7, 4.0, 10.0])
+@pytest.mark.parametrize('speed', [0.0, -.2, -.7, .2999, .3, .3001, .4, .5, 4.0, 10.0])
 def test_first_mature_radar_object_needs_no_visual_history_including_static(speed):
   result = HondaRadarControl().update(**scene(tracks=[radar(speed=speed)]))
   assert result.healthy and not result.degraded
@@ -152,7 +152,38 @@ def test_first_mature_radar_object_needs_no_visual_history_including_static(spee
   assert evidence(result)['source'] == 'radar'
   assert evidence(result)['followQualified'] and evidence(result)['stopQualified']
   assert evidence(result)['brakeQualified']
-  assert evidence(result)['departureQualified'] is (speed > .5)
+  assert evidence(result)['departureQualified'] is (speed > .3)
+
+
+@pytest.mark.parametrize('speed', [.2999, .3, .3001, .4, .5, .5001])
+def test_slow_fused_departure_keeps_the_visual_speed_threshold(speed):
+  visual = vision(speed=speed, ego=0.0, probability=.99, acceleration=0.0)
+  values = scene(tracks=[radar(speed=speed, acceleration=0.0)], leads=[visual], bindings=[binding()], ego=0.0)
+  fused = HondaRadarControl().update(**values)
+  lead = fused.leads[0]
+  assert lead['radar'] and lead['evidence']['source'] == 'fused'
+  assert lead['evidence']['departureQualified'] is (speed > .3)
+  assert lead['evidence']['brakeQualified'] and lead['evidence']['stopQualified']
+
+  visual_only = HondaRadarControl().update(**scene(tracks=[], leads=[visual], ego=0.0))
+  lead = visual_only.leads[0]
+  assert not lead['radar'] and lead['evidence']['source'] == 'vision'
+  assert lead['evidence']['departureQualified'] is (speed > .5)
+
+
+@pytest.mark.parametrize('defect', ['coasting', 'invalid_position', 'missing_velocity', 'out_of_path'])
+def test_slow_radar_motion_does_not_replace_current_measurement_qualification(defect):
+  track = radar(speed=.4, acceleration=0.0)
+  if defect == 'coasting':
+    track['coasting'] = True
+  elif defect == 'invalid_position':
+    track['positionMonoTime'] = 0
+  elif defect == 'missing_velocity':
+    track['velocityGood'] = False
+  else:
+    track['yRel'] = 4.0
+  result = HondaRadarControl().update(**scene(tracks=[track], ego=0.0))
+  assert not any(lead.get('present') and lead['evidence']['departureQualified'] for lead in result.leads)
 
 
 def test_radar_only_remains_authoritative_beyond_former_visual_gap_timeout():
@@ -438,7 +469,7 @@ def test_lateral_prediction_limits_preserve_current_longitudinal_authority(chang
     claim = evidence(result)
     assert claim['pathState'] == 'inPath' and claim['conflictEnd'] == 10.0
     assert all(claim[purpose + 'Qualified'] for purpose in ('follow', 'brake', 'stop', 'fcw'))
-    assert claim['departureQualified'] is (speed > .5)
+    assert claim['departureQualified'] is (speed > .3)
 
 
 def test_lateral_position_uncertainty_cannot_create_or_clear_an_obstacle():

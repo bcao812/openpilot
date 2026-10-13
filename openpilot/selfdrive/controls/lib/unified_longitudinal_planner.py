@@ -11,6 +11,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
+from openpilot.selfdrive.car.honda_radar_control import RADAR_DEPARTURE_MIN_SPEED
 from openpilot.selfdrive.car.honda_radar_observer_config import ObserverSettings
 from openpilot.selfdrive.controls.lib.cruise_response import (
   CRUISE_COAST_BP, CRUISE_COAST_MIN_SPEED, CRUISE_COAST_MAX_SPEED_ERROR, CRUISE_COAST_RISK_ACCEL,
@@ -157,7 +158,12 @@ def departing_lead_rejection(radar_state, speed, delay, *, minimum_gap_base=LEAD
       return 'lead_departure_unqualified', identity
     if abs(lateral) > 1.8:
       return 'lead_path_offset', identity
-    if lead.vLead < CREEP_FOLLOW_MIN_LEAD_SPEED:
+    # The lower departure threshold belongs to current radar/fused motion.
+    # A physical ID carried by vision fallback cannot lower the visual gate;
+    # rolling follow and legacy visual leads retain their existing threshold.
+    radar_motion = (getattr(evidence, 'version', 0) == 1 and str(evidence.source) in ('radar', 'fused')
+                    and lead.radar is True)
+    if (lead.vLead <= RADAR_DEPARTURE_MIN_SPEED if radar_motion else lead.vLead < CREEP_FOLLOW_MIN_LEAD_SPEED):
       return 'lead_speed', identity
     if lead.vRel < -CREEP_FOLLOW_MAX_CLOSING_SPEED:
       return 'lead_closing', identity

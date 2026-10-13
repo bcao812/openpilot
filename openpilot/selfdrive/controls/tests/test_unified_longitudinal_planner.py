@@ -388,12 +388,66 @@ def test_three_metre_departure_keeps_the_other_lead_guards(defect, reason):
   elif defect == 'relative_speed':
     primary.vRel = 0.0
   elif defect == 'lead_speed':
-    primary.vLead = primary.vLeadK = primary.vRel = .49
+    primary.vLead = primary.vLeadK = primary.vRel = .3
   elif defect == 'stopping':
     primary.aLeadK = -.4
   radar = radar_frame(primary, display=(primary,))
   assert departing_lead_rejection(radar, 0.0, .5, now_ns=CONSUMPTION) == (reason, (SESSION, 5))
   assert not has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION)
+
+
+@pytest.mark.parametrize('source,radar_motion,version', [
+  ('radar', True, 1), ('fused', True, 1), ('fused', False, 1), ('vision', False, 1), ('vision', False, 0),
+])
+@pytest.mark.parametrize('speed', [.2999, .3, .3001, .4, .4999, .5, .5001])
+def test_departure_speed_gate_is_specific_to_current_radar_motion(source, radar_motion, version, speed):
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, radar_frame
+
+  # Assert the independent consumer boundary even if a producer supplies true.
+  primary = formal_lead(now_ns=PUBLICATION, source=source, radar=radar_motion, modelProb=.99,
+                        dRel=6.0, vLead=speed, vLeadK=speed, vRel=speed, evidence={'version': version})
+  radar = radar_frame(primary, display=(primary,))
+  expected = speed > .3 if radar_motion else speed >= .5
+  assert has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION) is expected
+
+
+@pytest.mark.parametrize('source', ['radar', 'fused'])
+@pytest.mark.parametrize('defect,reason', [
+  ('none', None), ('qualification', 'lead_departure_unqualified'), ('stale', 'lead_departure_unqualified'),
+  ('coasting', 'lead_departure_unqualified'), ('relative_speed', 'lead_departure_unqualified'),
+  ('stopping', 'lead_stopping'), ('gap', 'lead_gap'),
+])
+def test_slow_departure_preserves_freshness_clearance_and_restop_guards(source, defect, reason):
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, radar_frame
+
+  primary = formal_lead(now_ns=PUBLICATION, source=source, dRel=6.0, vLead=.4, vLeadK=.4, vRel=.4)
+  if defect == 'qualification':
+    primary.evidence.departureQualified = False
+  elif defect == 'stale':
+    primary.evidence.velocityMonoTime = PUBLICATION - 200_000_000
+  elif defect == 'coasting':
+    primary.evidence.coasting = True
+  elif defect == 'relative_speed':
+    primary.vRel = 0.0
+  elif defect == 'stopping':
+    primary.aLeadK = -.06
+  elif defect == 'gap':
+    primary.dRel = 2.99
+  radar = radar_frame(primary, display=(primary,))
+  rejection = departing_lead_rejection(radar, 0.0, .5, now_ns=CONSUMPTION)
+  assert (rejection[0] if rejection else None) == reason
+
+
+def test_slow_radar_departure_does_not_lower_the_rolling_follow_threshold():
+  from openpilot.selfdrive.controls.lib.longitudinal_planner import has_safe_moving_lead
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, radar_frame
+
+  primary = formal_lead(now_ns=PUBLICATION, dRel=6.0, vLead=.4, vLeadK=.4, vRel=.05)
+  radar = radar_frame(primary, display=(primary,))
+  assert not has_safe_moving_lead(radar, .35, .5, now_ns=CONSUMPTION)
 
 
 @pytest.mark.parametrize('gap,speed,allowed', [(2.99, 1.0, False), (3.0, 1.0, True), (8.0, 0.0, False)])
@@ -512,7 +566,7 @@ def test_unknown_radar_health_cannot_be_interpreted_as_clear(field):
   assert reference.unbound_radar_departure_rejection(view, now_ns=CONSUMPTION) is not None
 
 
-def run_unbound_physical_departure(condition='none', *, frames=24):
+def run_unbound_physical_departure(condition='none', *, frames=24, lead_speed=1.6):
   from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume
   from openpilot.selfdrive.controls.tests.test_lead_qualification import caution_lead, formal_lead
   from openpilot.selfdrive.controls.tests.test_radar_consumption import SESSION, expiring_lead, native_frame, radar_frame
@@ -538,7 +592,8 @@ def run_unbound_physical_departure(condition='none', *, frames=24):
     for frame in range(20, 20 + frames):
       now = 1_000_000_000 + frame * 50_000_000
       factory = caution_lead if condition == 'side_primary' else formal_lead
-      primary = factory(now_ns=now, dRel=15.0, vLead=1.6, vLeadK=1.6, vRel=1.6, evidence={'trackId': 5})
+      primary = factory(now_ns=now, dRel=15.0, vLead=lead_speed, vLeadK=lead_speed, vRel=lead_speed,
+                        evidence={'trackId': 5})
       objects = [primary]
       if condition in ('stationary_other', 'occluded_other'):
         other = formal_lead(now_ns=now, dRel=8.0, vLead=0.0, vLeadK=0.0, vRel=0.0, evidence={'trackId': 7})
@@ -567,8 +622,9 @@ def run_unbound_physical_departure(condition='none', *, frames=24):
   'none', 'previous_expiry', 'legacy_producer_risk', 'stationary_other', 'occluded_other',
   'side_primary', 'model_stop', 'unhealthy',
 ])
-def test_actual_hold_uses_unbound_departure_only_when_all_independent_guards_hold(condition):
-  reference, records = run_unbound_physical_departure(condition)
+@pytest.mark.parametrize('lead_speed', [.4, 1.6])
+def test_actual_hold_uses_unbound_departure_only_when_all_independent_guards_hold(condition, lead_speed):
+  reference, records = run_unbound_physical_departure(condition, lead_speed=lead_speed)
   if condition in ('none', 'previous_expiry', 'legacy_producer_risk'):
     assert any(released and not held and max(outputs) > 0.0 for _, released, held, outputs in records)
     assert not reference.radar_consumption.degraded
