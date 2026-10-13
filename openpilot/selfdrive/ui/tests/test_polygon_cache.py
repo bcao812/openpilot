@@ -386,6 +386,37 @@ class TestModelPolygonCache(HeadlessUITestCase):
     self.assertEqual(sum(ref() is not None for ref in polygons), 1)
     self.assertEqual(sum(ref() is not None for ref in gradients), 1)
 
+  def test_width_changes_reprime_with_current_arrays_before_reusing_geometry(self):
+    renderer, sm = self.make_renderer()
+    reference = self.make_uncached_reference(renderer)
+    sm['selfdriveState'].experimentalMode = True
+    with capture_polygons() as frames:
+      self.assert_same_frame(renderer, reference, frames)
+      sm.updated['modelV2'] = False
+      sm.updated['radarState'] = True
+      for width, changed_input in ((0.8, 'raw'), (0.7, 'transform')):
+        for current in (renderer, reference):
+          current._get_path_half_width.return_value = width
+        self.assert_same_frame(renderer, reference, frames)
+        for _ in range(2):
+          old_path = renderer._path.polygon
+          for current in (renderer, reference):
+            if changed_input == 'raw':
+              current._path.raw_points[:, 1] += 0.5
+            else:
+              # No transform notification: the content guard must detect this too.
+              current._car_space_transform[0, 2] += 25
+          self.assert_same_frame(renderer, reference, frames)
+          self.assertIsNot(renderer._path.polygon, old_path)
+          self.assertFalse(np.array_equal(prepared_points(old_path), prepared_points(renderer._path.polygon)))
+          # Both the first steady-width update and later content mutations must
+          # leave a valid full key, so the next unchanged radar update can reuse.
+          old_path = renderer._path.polygon
+          with patch.object(renderer, '_map_line_to_polygon', wraps=renderer._map_line_to_polygon) as project:
+            self.assert_same_frame(renderer, reference, frames)
+          self.assertEqual(project.call_count, 0)
+          self.assertIs(renderer._path.polygon, old_path)
+
   def test_repeated_frames_reuse_prepared_geometry_and_keep_dynamic_color(self):
     renderer, sm = self.make_renderer()
     with capture_polygons() as frames:

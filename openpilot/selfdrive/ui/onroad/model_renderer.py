@@ -75,6 +75,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     self._road_edges = [ModelPoints() for _ in range(2)]
     self._acceleration_x = np.empty((0,), dtype=np.float32)
     self._path_geometry_key = None
+    self._projected_path_half_width = None
     self._exp_gradient_key = None
 
     # Transform matrix (3x3 for car space to screen space)
@@ -227,15 +228,21 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     max_idx = self._get_path_length_idx(path_x_array, max_distance)
     # Advance the width filter on every original update, even if its result allows reuse.
     half_width = self._get_path_half_width()
-    clip = self._clip_region
-    path_key = (self._path.raw_points.tobytes(), self._car_space_transform.tobytes(),
-                half_width, self._path_offset_z, max_idx, max_distance, clip.x, clip.y, clip.width, clip.height)
-    if update_lane_geometry or path_key != self._path_geometry_key:
+    path_key = None
+    # A changing width guarantees a miss. Radar-only filter steps need no array
+    # snapshots; the first steady-width update rebuilds once to prime a full key.
+    # New model/transform updates still prime it for the following radar update.
+    if update_lane_geometry or half_width == self._projected_path_half_width:
+      clip = self._clip_region
+      path_key = (self._path.raw_points.tobytes(), self._car_space_transform.tobytes(),
+                  half_width, self._path_offset_z, max_idx, max_distance, clip.x, clip.y, clip.width, clip.height)
+    if update_lane_geometry or path_key is None or path_key != self._path_geometry_key:
       self._path.set_projected_points(self._map_line_to_polygon(
         self._path.raw_points, half_width, self._path_offset_z, max_idx, max_distance, allow_invert=False
       ))
       # One current projection only; a new model/transform still refreshes it unconditionally.
       self._path_geometry_key = path_key
+      self._projected_path_half_width = half_width
 
     self._update_experimental_gradient()
 
