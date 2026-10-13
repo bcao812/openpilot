@@ -22,6 +22,12 @@ from openpilot.common.test import OpenpilotTestCase
 VisionState = custom.LongitudinalPlanSP.SmartCruiseControl.VisionState
 
 
+class DatedState(dict):
+  def __init__(self, values):
+    super().__init__(values)
+    self.logMonoTime = {'modelV2': 1_000_000_000}
+
+
 def _th_above_f32(th: float) -> float:
   """
   Return the next representable float32 *above* `th`.
@@ -127,30 +133,32 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     assert self.scc_v.output_v_target == V_CRUISE_UNSET
     assert self.scc_v.output_a_target == 0.
 
-  def _entry_hold_controller(self, *, speed, predicted_lateral, current_lateral):
-    controller = SmartCruiseControlVision(hold_entry_speed=True)
-    controller.state = VisionState.enabled
+  def _set_curve(self, speed, predicted_lateral, current_lateral):
     self.sm['modelV2'].velocity.x = [float(speed)] * len(ModelConstants.T_IDXS)
     self.sm['modelV2'].orientationRate.z = [float(predicted_lateral / speed)] * len(ModelConstants.T_IDXS)
     self.sm['controlsState'].curvature = current_lateral / speed ** 2
+
+  def _adaptive_controller(self, *, speed, predicted_lateral, current_lateral):
+    controller = SmartCruiseControlVision(adaptive_curve_speed=True)
+    self._set_curve(speed, predicted_lateral, current_lateral)
+    controller.update(self.sm, True, False, speed, 0., 30.)
     controller.update(self.sm, True, False, speed, 0., 30.)
     return controller
 
-  def test_comfortable_turn_holds_first_entry_speed_without_repeated_slowing(self):
-    controller = self._entry_hold_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+  def test_comfortable_turn_recovers_above_entry_speed_with_bounded_acceleration(self):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
     assert controller.state == VisionState.entering
-    assert controller.entry_speed == 10.
-    assert controller.output_v_target == 10.
-    assert controller.output_a_target == 0.
+    assert abs(controller.output_v_target - 10. * (2. / 1.5) ** .5) < 1e-5
+    assert 0. < controller.output_a_target <= .5
     for _ in range(20):
       controller.update(self.sm, True, False, 9.8, 0., 30.)
-      assert controller.entry_speed == 10.
-      assert controller.output_v_target == 10.
+      assert controller.output_v_target > 10.
+      assert controller.driver_speed is None
       assert 0. < controller.output_a_target <= .5
 
   def test_curve_requiring_deceleration_keeps_geometric_limit_without_double_horizon(self):
     speed = 25.1 / 3.6
-    controller = self._entry_hold_controller(speed=speed, predicted_lateral=2.25, current_lateral=1.17)
+    controller = self._adaptive_controller(speed=speed, predicted_lateral=2.25, current_lateral=1.17)
     assert controller.is_active
     assert abs(controller.output_v_target - speed * (2. / 2.25) ** .5) < 1e-5
     assert controller.output_v_target < speed
@@ -158,22 +166,185 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     # The old second horizon deduction made this roughly 14.5 km/h.
     assert controller.output_v_target * 3.6 > 23.
 
-  def test_entry_hold_still_slows_for_excess_current_lateral_acceleration(self):
-    controller = self._entry_hold_controller(speed=20., predicted_lateral=1.5, current_lateral=3.)
+  def test_adaptive_target_still_slows_for_excess_current_lateral_acceleration(self):
+    controller = self._adaptive_controller(speed=20., predicted_lateral=1.5, current_lateral=3.)
     assert controller.output_v_target <= 20. * (2. / 3.) ** .5 + 1e-5
     assert controller.output_a_target < 0.
 
-  def test_override_and_disable_clear_curve_entry_speed(self):
-    controller = self._entry_hold_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+  def test_non_pedal_override_and_disable_clear_curve_preference(self):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
     controller.update(self.sm, True, True, 10., 0., 30.)
-    assert controller.entry_speed is None
+    assert controller.driver_speed is None
     assert controller.output_v_target == V_CRUISE_UNSET
     controller.update(self.sm, False, False, 10., 0., 30.)
-    assert controller.entry_speed is None
+    assert controller.driver_speed is None
+
+  def test_gas_release_uses_release_speed_for_this_curve_even_with_delayed_override_bit(self):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    self.sm['carState'].gasPressed = True
+    for speed in (12., 14.):
+      self._set_curve(speed, 1.5, .5)
+      controller.update(self.sm, True, True, speed, 0., 30.)
+      assert controller.state == VisionState.overriding
+      assert controller.output_v_target == V_CRUISE_UNSET
+    self.sm['carState'].gasPressed = False
+    self._set_curve(12., 1.5, .5)
+    controller.update(self.sm, True, True, 12., 0., 30.)
+    assert controller.driver_speed == 12.
+    assert not controller.is_active
+    for _ in range(20):
+      controller.update(self.sm, True, False, 12., 0., 30.)
+      assert controller.output_v_target == 12.
+      assert controller.output_a_target == 0.
+
+    # A second pedal use replaces the setpoint; it never remembers a peak.
+    self.sm['carState'].gasPressed = True
+    self._set_curve(13., 1.5, .5)
+    controller.update(self.sm, True, False, 13., 0., 30.)
+    assert not controller.is_active
+    self.sm['carState'].gasPressed = False
+    controller.update(self.sm, True, False, 13., 0., 30.)
+    assert controller.output_v_target == controller.driver_speed == 13.
+
+    controller.update(self.sm, True, False, 13., 0., 11.)
+    assert controller.output_v_target == 11.
+    self._set_curve(13., 3., .5)
+    controller.update(self.sm, True, False, 13., 0., 30.)
+    assert controller.output_v_target < 13.
+    assert controller.output_a_target < 0.
+
+  @parameterized.expand([('brake',), ('disable',), ('non_pedal_override',), ('curve_exit',)])
+  def test_driver_preference_is_not_carried_into_another_cycle(self, reason):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    self.sm['carState'].gasPressed = True
+    controller.update(self.sm, True, True, 11., 0., 30.)
+    self.sm['carState'].gasPressed = False
+    controller.update(self.sm, True, False, 11., 0., 30.)
+    assert controller.driver_speed == 11.
+    self.sm['carState'].brakePressed = reason == 'brake'
+    if reason == 'curve_exit':
+      self._set_curve(11., 0., 0.)
+    for _ in range(12):
+      controller.update(self.sm, reason != 'disable', reason == 'non_pedal_override', 11., 0., 30.)
+    assert controller.driver_speed is None
+    self.sm['carState'].brakePressed = False
+    self._set_curve(10., 1.5, .5)
+    for _ in range(3):
+      controller.update(self.sm, True, False, 10., 0., 30.)
+    assert controller.output_v_target > 11.
+
+  def test_straight_road_pedal_release_does_not_choose_the_next_curve_speed(self):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=0., current_lateral=0.)
+    self.sm['carState'].gasPressed = True
+    controller.update(self.sm, True, True, 12., 0., 30.)
+    self.sm['carState'].gasPressed = False
+    controller.update(self.sm, True, False, 12., 0., 30.)
+    self._set_curve(15., 1.5, .5)
+    controller.update(self.sm, True, False, 15., 0., 30.)
+    assert controller.driver_speed is None
+    assert controller.output_v_target > 15.
+
+  def test_threshold_flicker_does_not_restart_the_curve_cycle(self):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    for predicted in [1.05] * 6 + [1.4] * 2 + [1.05] * 6 + [1.4] * 2:
+      self._set_curve(10., predicted, .5)
+      controller.update(self.sm, True, False, 10., 0., 30.)
+      assert controller.is_active
+      assert controller.output_v_target > 10.
+    self._set_curve(10., 0., 0.)
+    for _ in range(10):
+      controller.update(self.sm, True, False, 10., 0., 30.)
+    assert controller.state == VisionState.enabled
+
+  def test_reused_model_frame_does_not_advance_the_curve_clear_timer(self):
+    self.sm = DatedState(self.sm)
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    self._set_curve(10., 0., 0.)
+    for _ in range(30):
+      controller.update(self.sm, True, False, 10., 0., 30.)
+    assert controller.is_active
+    for _ in range(10):
+      self.sm.logMonoTime['modelV2'] += 50_000_000
+      controller.update(self.sm, True, False, 10., 0., 30.)
+    assert controller.state == VisionState.enabled
+
+  def test_model_gap_discards_driver_preference_before_recovery(self):
+    self.sm = DatedState(self.sm)
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    self.sm['carState'].gasPressed = True
+    self.sm.logMonoTime['modelV2'] += 50_000_000
+    controller.update(self.sm, True, True, 12., 0., 30.)
+    self.sm['carState'].gasPressed = False
+    self.sm.logMonoTime['modelV2'] += 50_000_000
+    controller.update(self.sm, True, False, 12., 0., 30.)
+    assert controller.driver_speed == 12.
+    self._set_curve(20., 1.5, .5)
+    self.sm.logMonoTime['modelV2'] += 500_000_000
+    controller.update(self.sm, True, False, 20., 0., 30.)
+    assert controller.driver_speed is None
+    self.sm.logMonoTime['modelV2'] += 50_000_000
+    controller.update(self.sm, True, False, 20., 0., 30.)
+    assert controller.output_v_target > 20.
+
+  def test_lingering_override_does_not_keep_a_pending_driver_setpoint(self):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    self.sm['carState'].gasPressed = True
+    controller.update(self.sm, True, True, 12., 0., 30.)
+    self.sm['carState'].gasPressed = False
+    for _ in range(6):
+      controller.update(self.sm, True, True, 12., 0., 30.)
+    assert controller.driver_speed is None
+    assert not controller.is_active
+
+  def test_current_curve_limits_recovery_even_if_the_prediction_is_straight(self):
+    controller = self._adaptive_controller(speed=20., predicted_lateral=1.5, current_lateral=1.8)
+    self._set_curve(20., 0., 1.8)
+    for _ in range(20):
+      controller.update(self.sm, True, False, 20., 0., 30.)
+      assert controller.is_active
+      assert abs(controller.output_v_target - 20. * (2. / 1.8) ** .5) < 1e-5
+
+  def test_lateral_saturation_blocks_recovery_without_relaxing_sharp_curve_braking(self):
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    lateral = self.sm['controlsState'].lateralControlState.pidState
+    lateral.active = lateral.saturated = True
+    controller.update(self.sm, True, False, 10., 0., 30.)
+    assert controller.output_v_target == 10.
+    assert controller.output_a_target == 0.
+    self._set_curve(10., 4., .5)
+    controller.update(self.sm, True, False, 10., 0., 30.)
+    assert controller.output_v_target < 10.
+    assert controller.output_a_target < 0.
+    lateral.saturated = False
+    self._set_curve(10., 1.5, .5)
+    controller.update(self.sm, True, False, 10., 0., 30.)
+    assert 0. < controller.output_a_target <= .5
+
+  @parameterized.expand([(0.001,), (0.01,), (0.1,)])
+  def test_small_geometric_overshoot_does_not_trigger_full_entering_deceleration(self, overshoot):
+    speed = 10.
+    predicted = 2. * (speed / (speed - overshoot)) ** 2
+    controller = self._adaptive_controller(speed=speed, predicted_lateral=predicted, current_lateral=.5)
+    assert -.2 < controller.output_a_target < 0.
+
+  @parameterized.expand([(27.71 / 3.6, 1.140, .100, 36.70 / 3.6),
+                         (20. / 3.6, 1.28, .3, 25. / 3.6)])
+  def test_marked_low_speed_cycles_recover_to_current_geometry(self, speed, predicted, current, expected):
+    controller = self._adaptive_controller(speed=8., predicted_lateral=1.5, current_lateral=.5)
+    self._set_curve(speed, predicted, current)
+    controller.update(self.sm, True, False, speed, 0., 30.)
+    assert abs(controller.output_v_target - expected) < .005
+    assert controller.output_v_target > speed
+    assert 0. < controller.output_a_target <= .5
+
+  def test_sharp_low_speed_curve_is_not_raised_to_the_activation_speed_floor(self):
+    controller = self._adaptive_controller(speed=6., predicted_lateral=4., current_lateral=2.)
+    assert controller.output_v_target < MIN_V
+    assert controller.output_a_target < 0.
 
   @parameterized.expand([(float('nan'),), (float('inf'),), (-float('inf'),)])
   def test_active_curve_hold_does_not_hide_invalid_predicted_lateral_acceleration(self, invalid):
-    controller = self._entry_hold_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
     self.sm['modelV2'].orientationRate.z = [invalid] * len(ModelConstants.T_IDXS)
     with np.errstate(invalid='ignore'):
       controller.update(self.sm, True, False, 10., 0., 30.)
@@ -182,14 +353,14 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
 
   @parameterized.expand([(float('nan'),), (float('inf'),)])
   def test_active_curve_hold_does_not_hide_invalid_current_curvature(self, invalid):
-    controller = self._entry_hold_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
     self.sm['controlsState'].curvature = invalid
     controller.update(self.sm, True, False, 10., 0., 30.)
     assert not np.isfinite(controller.output_v_target)
     assert not np.isfinite(controller.output_a_target)
 
   def test_active_curve_hold_rejects_negative_prediction_before_square_root(self):
-    controller = self._entry_hold_controller(speed=10., predicted_lateral=1.5, current_lateral=2.)
+    controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=2.)
     self.sm['modelV2'].velocity.x = [-1.] * len(ModelConstants.T_IDXS)
     controller.update(self.sm, True, False, 10., 0., 30.)
     assert not np.isfinite(controller.output_v_target)

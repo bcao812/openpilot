@@ -43,6 +43,10 @@ _TURNING_ACC_BP = [1.5, 2.3, 3.]  # absolute value of current lat acc
 
 _LEAVING_ACC = 0.5  # Conformable acceleration to regain speed while leaving a turn.
 
+_CURVE_CLEAR_TIME = 0.5  # Both current and predicted curvature must clear before a new cycle.
+_ENTERING_DECEL_FULL_ERROR = 1.0  # m/s. Fade the entering deceleration to zero near the target.
+_OVERRIDE_RELEASE_TIME = 0.25  # Allow the carControl override bit to follow pedal release.
+
 
 class SmartCruiseControlVision:
   v_target: float = 0
@@ -52,7 +56,7 @@ class SmartCruiseControlVision:
   output_v_target: float = V_CRUISE_UNSET
   output_a_target: float = 0.
 
-  def __init__(self, *, hold_entry_speed: bool = False):
+  def __init__(self, *, adaptive_curve_speed: bool = False):
     self.params = Params()
     self.frame = -1
     self.long_enabled = False
@@ -61,8 +65,15 @@ class SmartCruiseControlVision:
     self.is_active = False
     self.enabled = self.params.get_bool("SmartCruiseControlVision")
     self.v_cruise_setpoint = 0.
-    self.hold_entry_speed = hold_entry_speed
-    self.entry_speed = None
+    self.adaptive_curve_speed = adaptive_curve_speed
+    self.driver_speed = None
+    self.steering_limited = False
+    self._curve_state = VisionState.disabled
+    self._curve_clear_time = 0.
+    self._gas_pressed = False
+    self._pedal_override = False
+    self._override_release_time = 0.
+    self._model_mono_time = None
 
     self.state = VisionState.disabled
     self.current_lat_acc = 0.
@@ -71,21 +82,29 @@ class SmartCruiseControlVision:
   def get_a_target_from_control(self) -> float:
     return self.a_target
 
-  def get_v_target_from_control(self) -> float:
+  def get_v_target_from_control(self, *, include_cruise: bool = True) -> float:
     if self.is_active:
-      if self.hold_entry_speed:
-        if (self.entry_speed is None or not np.isfinite(self.entry_speed) or not np.isfinite(self.v_ego)
+      if self.adaptive_curve_speed:
+        if (not np.isfinite(self.v_ego) or self.v_ego < 0.
+            or not np.isfinite(self.v_cruise_setpoint) or self.v_cruise_setpoint < 0.
+            or self.driver_speed is not None and not np.isfinite(self.driver_speed)
             or not np.isfinite(self.current_lat_acc) or self.current_lat_acc < 0.
             or not np.isfinite(self.max_pred_lat_acc) or self.max_pred_lat_acc < 0.
             or not (np.isfinite(self.v_target) or self.v_target == float('inf') and self.max_pred_lat_acc == 0.)):
           return float('nan')
-        # The geometric target already represents the lateral-acceleration
-        # limit. Subtracting another four seconds of deceleration from it
-        # creates an unnecessarily lower speed target throughout the turn.
-        target = max(self.v_target, MIN_V)
-        if self.current_lat_acc > _A_LAT_REG_MAX:
+        # Follow this frame's geometry, including the curve the car is still
+        # in. The planner enforces our acceleration ceiling while recovering;
+        # neither a low entry speed nor a second horizon deduction limits it.
+        target = self.v_target
+        if self.current_lat_acc > 0.:
           target = min(target, self.v_ego * (_A_LAT_REG_MAX / self.current_lat_acc) ** 0.5)
-        return min(float(self.entry_speed), target)
+        if self.driver_speed is not None:
+          target = min(target, self.driver_speed)
+        if self.steering_limited:
+          target = min(target, self.v_ego)
+        if include_cruise:
+          target = min(target, self.v_cruise_setpoint)
+        return max(0., float(target))
       return max(self.v_target, MIN_V) + self.a_target * _NO_OVERSHOOT_TIME_HORIZON
 
     return V_CRUISE_UNSET
@@ -101,12 +120,20 @@ class SmartCruiseControlVision:
       rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
       vel_plan = np.array(sm['modelV2'].velocity.x)
 
-      self.current_lat_acc = self.v_ego ** 2 * abs(sm['controlsState'].curvature)
+      controls = sm['controlsState']
+      self.current_lat_acc = self.v_ego ** 2 * abs(controls.curvature)
+      if self.adaptive_curve_speed:
+        lateral = controls.lateralControlState
+        lateral = getattr(lateral, lateral.which())
+        self.steering_limited = bool(lateral.active and lateral.saturated)
+        if not len(rate_plan) or rate_plan.shape != vel_plan.shape:
+          self.max_pred_lat_acc = self.v_target = float('nan')
+          return
 
       # get the maximum lat accel from the model
       predicted_lat_accels = rate_plan * vel_plan
       self.max_pred_lat_acc = np.percentile(predicted_lat_accels, 97)
-      if self.hold_entry_speed and (not np.isfinite(self.max_pred_lat_acc) or self.max_pred_lat_acc < 0.):
+      if self.adaptive_curve_speed and (not np.isfinite(self.max_pred_lat_acc) or self.max_pred_lat_acc < 0.):
         self.v_target = float('nan')
         return
 
@@ -118,6 +145,78 @@ class SmartCruiseControlVision:
       # A straight prediction imposes no curve speed limit. Keep the unbounded
       # target explicit instead of relying on NumPy's divide-by-zero result.
       self.v_target = float("inf") if max_curve == 0. else (_A_LAT_REG_MAX / max_curve) ** 0.5
+
+  def _clear_curve(self) -> None:
+    self._curve_state = VisionState.disabled
+    self._curve_clear_time = 0.
+    self.driver_speed = None
+    self._gas_pressed = False
+    self._pedal_override = False
+    self._override_release_time = 0.
+
+  def _update_adaptive_state(self, sm: messaging.SubMaster) -> tuple[bool, bool]:
+    # Keep the geometric cycle current during pedal override, but publish no
+    # SCC authority until override ends. A non-pedal override clears it.
+    dt = DT_MDL
+    model_time = getattr(sm, 'logMonoTime', {}).get('modelV2')
+    if model_time is not None:
+      if self._model_mono_time is not None:
+        elapsed = (model_time - self._model_mono_time) * 1e-9
+        if elapsed < 0. or elapsed > _OVERRIDE_RELEASE_TIME:
+          self._clear_curve()
+        else:
+          dt = elapsed
+      self._model_mono_time = model_time
+
+    gas_pressed = bool(sm['carState'].gasPressed)
+    if not self.long_enabled or not self.enabled or sm['carState'].brakePressed:
+      self._clear_curve()
+      self.state = VisionState.disabled
+      return False, False
+
+    if gas_pressed:
+      self._pedal_override = True
+      self._override_release_time = 0.
+    elif not self.long_override:
+      self._pedal_override = False
+      self._override_release_time = 0.
+    elif self._pedal_override:
+      self._override_release_time += dt
+      if self._override_release_time > _OVERRIDE_RELEASE_TIME:
+        self._pedal_override = False
+    if self.long_override and not self._pedal_override:
+      self._clear_curve()
+      self.state = VisionState.overriding
+      return True, False
+
+    was_in_curve = self._curve_state in ACTIVE_STATES
+    if self._curve_state == VisionState.disabled:
+      self._curve_state = VisionState.enabled
+    elif self._curve_state == VisionState.enabled:
+      if self.v_ego > MIN_V and self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH:
+        self._curve_state = VisionState.entering
+    else:
+      if self.current_lat_acc < _FINISH_LAT_ACC_TH and self.max_pred_lat_acc < _ABORT_ENTERING_PRED_LAT_ACC_TH:
+        self._curve_clear_time += dt
+      else:
+        self._curve_clear_time = 0.
+      if self._curve_clear_time + 1e-9 >= _CURVE_CLEAR_TIME:
+        self._curve_state = VisionState.enabled
+        self._curve_clear_time = 0.
+      elif self.current_lat_acc >= _TURNING_LAT_ACC_TH:
+        self._curve_state = VisionState.turning
+      elif self._curve_state == VisionState.turning and self.current_lat_acc <= _LEAVING_LAT_ACC_TH:
+        self._curve_state = VisionState.leaving
+
+    if self._curve_state not in ACTIVE_STATES:
+      self.driver_speed = None
+    elif self._gas_pressed and not gas_pressed and was_in_curve:
+      # Use release speed, not the maximum reached earlier while the pedal
+      # was down. Current geometry, cruise and lateral capability still win.
+      self.driver_speed = self.v_ego
+    self._gas_pressed = gas_pressed
+    self.state = VisionState.overriding if gas_pressed or self.long_override else self._curve_state
+    return self.state in ENABLED_STATES, self.state in ACTIVE_STATES
 
   def _update_state_machine(self) -> tuple[bool, bool]:
     # ENABLED, ENTERING, TURNING, LEAVING, OVERRIDING
@@ -201,17 +300,22 @@ class SmartCruiseControlVision:
     else:
       raise NotImplementedError(f"SCC-V state not supported: {self.state}")
 
-    if self.hold_entry_speed and self.is_active:
-      speed_error = self.get_v_target_from_control() - self.v_ego
+    if self.adaptive_curve_speed and self.is_active:
+      # A lower cruise setting already has its own response. Do not mistake
+      # that reduction for geometric overshoot and add entering-state braking.
+      curve_target = self.get_v_target_from_control(include_cruise=False)
+      speed_error = min(curve_target, max(self.v_ego, self.v_cruise_setpoint)) - self.v_ego
       if not np.isfinite(speed_error):
         return float('nan')
       if speed_error >= 0.0:
-        # Hold the once-captured entry speed on an otherwise comfortable
-        # curve. Independent lead/model braking remains in the planner.
+        # Recover toward current geometry (or this turn's driver setpoint)
+        # with a bounded request. Independent lead/model braking still wins.
         a_target = min(_LEAVING_ACC, speed_error / _NO_OVERSHOOT_TIME_HORIZON)
       else:
-        # Preserve proactive braking when the predicted or current curve
-        # actually requires a lower speed; do not subtract its horizon twice.
+        if self.state == VisionState.entering:
+          a_target *= min(1., -speed_error / _ENTERING_DECEL_FULL_ERROR)
+        # Strong curve braking remains immediate; a tiny overshoot no longer
+        # triggers the full entering-state minimum deceleration.
         a_target = min(a_target, speed_error / _NO_OVERSHOOT_TIME_HORIZON)
     return a_target
 
@@ -226,14 +330,7 @@ class SmartCruiseControlVision:
     self._update_params()
     self._update_calculations(sm)
 
-    previously_active = self.state in ACTIVE_STATES
-    self.is_enabled, self.is_active = self._update_state_machine()
-    if self.hold_entry_speed:
-      if self.is_active:
-        if not previously_active or self.entry_speed is None:
-          self.entry_speed = self.v_ego
-      else:
-        self.entry_speed = None
+    self.is_enabled, self.is_active = self._update_adaptive_state(sm) if self.adaptive_curve_speed else self._update_state_machine()
     self.a_target = self._update_solution()
 
     self.output_v_target = self.get_v_target_from_control()

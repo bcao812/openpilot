@@ -37,7 +37,7 @@ class LongitudinalPlannerSP:
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP, mpc):
     self.events_sp = EventsSP()
     self.dec = DynamicExperimentalController(CP, mpc)
-    self.scc = SmartCruiseControl(hold_entry_speed=resolve_longitudinal_mode(CP, CP_SP) == LongitudinalMode.UNIFIED)
+    self.scc = SmartCruiseControl(adaptive_curve_speed=resolve_longitudinal_mode(CP, CP_SP) == LongitudinalMode.UNIFIED)
     self.resolver = SpeedLimitResolver()
     self.sla = SpeedLimitAssist(CP, CP_SP)
     self.generation = int(model_bundle.generation) if (model_bundle := get_active_bundle()) else None
@@ -83,7 +83,7 @@ class LongitudinalPlannerSP:
     # An active curve guard must not silently become unrestricted cruise
     # because comparisons with NaN happen to select another dictionary item.
     # UNIFIED explicitly rejects this invalid policy at its existing boundary.
-    if (self.scc.vision.hold_entry_speed and self.scc.vision.is_active
+    if (self.scc.vision.adaptive_curve_speed and self.scc.vision.is_active
         and not all(math.isfinite(value) for value in targets[LongitudinalPlanSource.sccVision])):
       self.source = LongitudinalPlanSource.sccVision
       self.cruise_target = CruiseTarget(self.source, float('nan'), float('nan'))

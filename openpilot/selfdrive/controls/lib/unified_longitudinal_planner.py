@@ -626,13 +626,13 @@ class UnifiedLongitudinalPlanner:
     steering = car_state.steeringAngleDeg - state['vehicleParameters'].angleOffsetDeg
     maximum_accel = cruise_accel_limit(planner.CP, speed, steering, self.e2e_allowed, coast_accel, planner.allow_throttle)
     vision_curve = planner.scc.vision
-    scc_braking = (healthy and active and not reset and not forced_decel
-                   and vision_curve.hold_entry_speed and vision_curve.is_active
-                   and vision_curve.output_v_target < speed and vision_curve.output_a_target < 0.0)
-    if scc_braking:
-      # The current/predicted geometry still owns necessary deceleration even
-      # when another policy supplies the lower speed target. update_targets
-      # has already checked the active curve outputs for finite values.
+    scc_active = (healthy and active and not reset and not forced_decel
+                  and vision_curve.adaptive_curve_speed and vision_curve.is_active)
+    scc_braking = scc_active and vision_curve.output_v_target < speed and vision_curve.output_a_target < 0.0
+    if scc_active:
+      # Current geometry owns curve braking and bounded recovery, including
+      # a zero acceleration ceiling when lateral control is saturated.
+      # Other policies and independent model/lead braking can lower it.
       maximum_accel = min(maximum_accel, float(np.clip(vision_curve.output_a_target, ACCEL_MIN, ACCEL_MAX)))
     if healthy:
       cruise_ceiling = self.cruise_response.update(

@@ -34,16 +34,16 @@ def step(planner, control, state, frame):
   return consume(planner, control, state, frame)
 
 
-def test_comfortable_curve_holds_entry_without_an_added_deceleration_request():
+def test_comfortable_curve_recovers_above_entry_with_bounded_request():
   with curve_pipeline() as (planner, control, state):
     for frame in range(12):
       plan, outputs = step(planner, control, state, frame)
     assert planner.source == LongitudinalPlanSource.sccVision
-    assert planner.scc.vision.entry_speed == 10.
-    assert planner.cruise_target.speed == pytest.approx(10.)
+    assert planner.scc.vision.driver_speed is None
+    assert planner.cruise_target.speed == pytest.approx(10. * (2. / 1.5) ** .5)
     assert plan.motionIntent.valid and plan.solverStatus == 0
-    assert plan.aTarget > -.05
-    assert min(outputs) > -.05
+    assert 0. < plan.aTarget <= .5
+    assert all(0. < value <= .5 for value in outputs)
     assert not plan.shouldStop
 
 
@@ -56,12 +56,12 @@ def test_m8_predicted_curve_still_sends_required_deceleration_to_owner():
     assert planner.cruise_target.speed * 3.6 > 23.
     assert planner.cruise_target.speed < state['carState'].vEgo
     assert plan.solverStatus == 0 and plan.motionIntent.valid
-    assert plan.aTarget < -.5
+    assert plan.aTarget < 0.
     assert max(outputs) < 0.
     assert not plan.shouldStop
 
 
-def test_stronger_model_braking_wins_over_comfortable_curve_hold():
+def test_stronger_model_braking_wins_over_comfortable_curve_recovery():
   with curve_pipeline(experimental=True) as (planner, control, state):
     for frame in range(8):
       step(planner, control, state, frame)
@@ -71,6 +71,50 @@ def test_stronger_model_braking_wins_over_comfortable_curve_hold():
       assert planner.reference_planner.e2e_allowed
       assert plan.aTarget <= -1.5
       assert max(outputs) <= 0.
+
+
+def test_driver_release_speed_survives_real_planner_owner_handoff():
+  with curve_pipeline() as (planner, control, state):
+    for frame in range(6):
+      step(planner, control, state, frame)
+    state['carState'].gasPressed = True
+    state['carControl'].longActive = False
+    state['carControl'].cruiseControl.override = True
+    for frame, speed in enumerate((12., 14., 12.), start=6):
+      state['carState'].vEgo = speed
+      state['modelV2'].velocity.x = [speed] * len(ModelConstants.T_IDXS)
+      state['modelV2'].position.x = [float(speed * t) for t in ModelConstants.T_IDXS]
+      state['modelV2'].orientationRate.z = [1.5 / speed] * len(ModelConstants.T_IDXS)
+      state['controlsState'].curvature = .5 / speed ** 2
+      _, outputs = step(planner, control, state, frame)
+      assert not planner.scc.vision.is_active
+      assert outputs == [0.] * 5
+    state['carState'].gasPressed = False
+    step(planner, control, state, 9)
+    assert planner.scc.vision.driver_speed == 12.
+    state['carControl'].longActive = True
+    state['carControl'].cruiseControl.override = False
+    for frame in range(10, 22):
+      plan, outputs = step(planner, control, state, frame)
+      assert planner.cruise_target.speed == 12.
+      assert planner.scc.vision.output_a_target == 0.
+      assert plan.motionIntent.valid and plan.solverStatus == 0
+    assert abs(plan.aTarget) < .05
+    assert max(abs(value) for value in outputs) < .05
+
+
+def test_lateral_saturation_prevents_recovery_in_the_owner():
+  with curve_pipeline() as (planner, control, state):
+    for frame in range(8):
+      step(planner, control, state, frame)
+    state['controlsState'].lateralControlState.pidState.active = True
+    state['controlsState'].lateralControlState.pidState.saturated = True
+    for frame in range(8, 16):
+      plan, outputs = step(planner, control, state, frame)
+      assert planner.cruise_target.speed <= state['carState'].vEgo
+      assert plan.aTarget <= 0.
+      assert max(outputs) <= 0.
+      assert plan.motionIntent.valid and plan.solverStatus == 0
 
 
 def test_sharp_predicted_curve_keeps_physical_mpc_acceleration_bounds_ordered():
