@@ -306,11 +306,13 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
 
   def test_lateral_saturation_blocks_recovery_without_relaxing_sharp_curve_braking(self):
     controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
-    lateral = self.sm['controlsState'].lateralControlState.pidState
+    lateral = self.sm['controlsState'].lateralControlState.init('pidState')
     lateral.active = lateral.saturated = True
-    controller.update(self.sm, True, False, 10., 0., 30.)
-    assert controller.output_v_target == 10.
-    assert controller.output_a_target == 0.
+    self._set_curve(10., .8, .5)
+    for _ in range(20):
+      controller.update(self.sm, True, False, 10., 0., 30.)
+      assert controller.output_v_target == 10.
+      assert controller.output_a_target == 0.
     self._set_curve(10., 4., .5)
     controller.update(self.sm, True, False, 10., 0., 30.)
     assert controller.output_v_target < 10.
@@ -319,6 +321,12 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     self._set_curve(10., 1.5, .5)
     controller.update(self.sm, True, False, 10., 0., 30.)
     assert 0. < controller.output_a_target <= .5
+
+  def test_current_lateral_limit_alone_can_activate_curve_braking(self):
+    controller = self._adaptive_controller(speed=20., predicted_lateral=.8, current_lateral=3.)
+    assert controller.is_active
+    assert controller.output_v_target < 20.
+    assert controller.output_a_target < 0.
 
   @parameterized.expand([(0.001,), (0.01,), (0.1,)])
   def test_small_geometric_overshoot_does_not_trigger_full_entering_deceleration(self, overshoot):

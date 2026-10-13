@@ -164,6 +164,7 @@ class SmartCruiseControlVision:
         elapsed = (model_time - self._model_mono_time) * 1e-9
         if elapsed < 0. or elapsed > _OVERRIDE_RELEASE_TIME:
           self._clear_curve()
+          self._curve_state = VisionState.enabled
         else:
           dt = elapsed
       self._model_mono_time = model_time
@@ -193,10 +194,12 @@ class SmartCruiseControlVision:
     if self._curve_state == VisionState.disabled:
       self._curve_state = VisionState.enabled
     elif self._curve_state == VisionState.enabled:
-      if self.v_ego > MIN_V and self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH:
+      if (self.steering_limited or self.current_lat_acc >= _TURNING_LAT_ACC_TH
+          or self.v_ego > MIN_V and self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH):
         self._curve_state = VisionState.entering
     else:
-      if self.current_lat_acc < _FINISH_LAT_ACC_TH and self.max_pred_lat_acc < _ABORT_ENTERING_PRED_LAT_ACC_TH:
+      if (not self.steering_limited and self.current_lat_acc < _FINISH_LAT_ACC_TH
+          and self.max_pred_lat_acc < _ABORT_ENTERING_PRED_LAT_ACC_TH):
         self._curve_clear_time += dt
       else:
         self._curve_clear_time = 0.

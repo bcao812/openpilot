@@ -107,8 +107,8 @@ def test_lateral_saturation_prevents_recovery_in_the_owner():
   with curve_pipeline() as (planner, control, state):
     for frame in range(8):
       step(planner, control, state, frame)
-    state['controlsState'].lateralControlState.pidState.active = True
-    state['controlsState'].lateralControlState.pidState.saturated = True
+    lateral = state['controlsState'].lateralControlState.init('pidState')
+    lateral.active = lateral.saturated = True
     for frame in range(8, 16):
       plan, outputs = step(planner, control, state, frame)
       assert planner.cruise_target.speed <= state['carState'].vEgo
