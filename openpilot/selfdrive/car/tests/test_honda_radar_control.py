@@ -180,10 +180,19 @@ def test_slow_radar_motion_does_not_replace_current_measurement_qualification(de
     track['positionMonoTime'] = 0
   elif defect == 'missing_velocity':
     track['velocityGood'] = False
+    track['previousPositionMonoTime'] = track['previousPositionSeq'] = 0
   else:
     track['yRel'] = 4.0
   result = HondaRadarControl().update(**scene(tracks=[track], ego=0.0))
   assert not any(lead.get('present') and lead['evidence']['departureQualified'] for lead in result.leads)
+
+
+def test_slow_radar_position_velocity_retains_its_current_sample_qualification():
+  track = radar(speed=.4, acceleration=0.0, velocityGood=False)
+  result = HondaRadarControl().update(**scene(tracks=[track], ego=0.0))
+  claim = evidence(result)
+  assert claim['reason'].startswith('positionVelocity') and claim['departureQualified']
+  assert claim['velocityMonoTime'] == claim['positionMonoTime'] == track['positionMonoTime']
 
 
 def test_radar_only_remains_authoritative_beyond_former_visual_gap_timeout():
