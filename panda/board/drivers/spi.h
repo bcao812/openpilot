@@ -38,6 +38,7 @@ void llspi_miso_dma(const uint8_t *addr, int len);
 
 static uint8_t spi_state = SPI_STATE_HEADER;
 static uint16_t spi_data_len_mosi;
+static bool spi_can_tx_ready = false;
 static const unsigned char version_text[] = "VERSION";
 
 static uint16_t spi_version_packet(uint8_t *out) {
@@ -159,8 +160,12 @@ void spi_rx_done(void) {
         response_ack = true;
       } else if (spi_endpoint == 3U) {
         if (spi_data_len_mosi > 0U) {
-          response_ack = comms_can_write_spi(&spi_buf_rx[SPI_HEADER_SIZE], spi_data_len_mosi);
-          if (!response_ack) {
+          if (spi_can_tx_ready) {
+            spi_can_tx_ready = false;
+            comms_can_write(&spi_buf_rx[SPI_HEADER_SIZE], spi_data_len_mosi);
+            response_ack = true;
+          } else {
+            response_ack = false;
             print("SPI: CAN NACK\n");
           }
         } else {
@@ -246,4 +251,8 @@ void spi_tx_done(bool reset) {
     llspi_mosi_dma(spi_buf_rx, SPI_HEADER_SIZE);
     print("SPI: TX unexpected state: "); puth(spi_state); print("\n");
   }
+}
+
+void can_tx_comms_resume_spi(void) {
+  spi_can_tx_ready = true;
 }

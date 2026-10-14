@@ -265,12 +265,8 @@ class PandaSpiHandle(BaseHandle):
 
   def bulkWrite(self, endpoint: int, data: bytes, timeout: int = TIMEOUT) -> int:
     mv = memoryview(data)
-    # CAN writes are admitted atomically per destination queue. Bound each
-    # chunk like pandad's CAN packer, including batches of zero-length frames.
-    # The firmware retains partial CAN frames across chunk boundaries.
-    xfer_size = min(XFER_SIZE, 256) if endpoint == 3 else XFER_SIZE
-    for x in range(math.ceil(len(data) / xfer_size)):
-      self._transfer(endpoint, mv[xfer_size*x:xfer_size*(x+1)], timeout)
+    for x in range(math.ceil(len(data) / XFER_SIZE)):
+      self._transfer(endpoint, mv[XFER_SIZE*x:XFER_SIZE*(x+1)], timeout)
     return len(data)
 
   def bulkRead(self, endpoint: int, length: int, timeout: int = TIMEOUT) -> bytes:

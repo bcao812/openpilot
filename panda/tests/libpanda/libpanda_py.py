@@ -9,8 +9,6 @@ libpanda_fn = os.path.join(libpanda_dir, "libpanda.so")
 
 ffi = FFI()
 
-# CANPacket_t is packed but aligned(4) in C: include its two tail-padding
-# bytes so can_push/can_pop's sizeof(CANPacket_t) copies stay inside the object.
 ffi.cdef("""
 typedef struct {
   unsigned char fd : 1;
@@ -22,7 +20,6 @@ typedef struct {
   unsigned int addr : 29;
   unsigned char checksum;
   unsigned char data[64];
-  unsigned char alignment_padding[2];
 } CANPacket_t;
 """, packed=True)
 
@@ -48,14 +45,8 @@ bool can_push(can_ring *q, CANPacket_t *elem);
 void can_set_checksum(CANPacket_t *packet);
 int comms_can_read(uint8_t *data, uint32_t max_len);
 void comms_can_write(uint8_t *data, uint32_t len);
-bool comms_can_write_spi(const uint8_t *data, uint32_t len);
 void comms_can_reset(void);
 uint32_t can_slots_empty(can_ring *q);
-bool can_tx_check_min_slots_free(uint32_t min);
-uint32_t get_can_packet_size(void);
-extern uint32_t safety_tx_blocked;
-extern uint32_t tx_buffer_overflow;
-extern bool controls_allowed;
 """)
 
 class CANPacket:

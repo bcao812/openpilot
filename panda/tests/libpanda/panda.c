@@ -9,6 +9,7 @@ void process_can(uint8_t can_number) { }
 typedef struct harness_configuration harness_configuration;
 void refresh_can_tx_slots_available(void);
 void can_tx_comms_resume_usb(void) { };
+void can_tx_comms_resume_spi(void) { };
 
 #include "health.h"
 #include "sys/faults.h"
@@ -25,7 +26,3 @@ can_ring *tx3_q = &can_tx3_q;
 
 #include "comms_definitions.h"
 #include "can_comms.h"
-
-uint32_t get_can_packet_size(void) {
-  return sizeof(CANPacket_t);
-}
