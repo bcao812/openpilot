@@ -43,7 +43,7 @@ def test_platform_scope():
   assert HondaStartupGate.applies(cp)
   for field, value in [('openpilotLongitudinalControl', False), ('passive', True),
                        ('flags', int(HondaFlags.BOSCH)), ('carFingerprint', CAR.HONDA_CIVIC)]:
-    other = cp.as_builder()
+    other = cp.as_reader().as_builder()
     setattr(other, field, value)
     assert not HondaStartupGate.applies(other)
 
@@ -169,9 +169,11 @@ class StartupHarness(CardHarness):
   def __init__(self):
     super().__init__(enabled=False, native=True)
     self.card.CP.flags |= int(HondaFlags.HYBRID)
+    self.card.CP.safetyConfigs = [{'safetyModel': 'hondaBosch', 'safetyParam': 2}]
+    self.card.CP.alternativeExperience = 1024
     self.card.honda_startup_gate = HondaStartupGate(self.card.CP)
     self.card.initialized_prev = False
-    self.events['pandaStates'] = messaging.new_message('pandaStates', 1)
+    self.events['pandaStates'] = messaging.new_message('pandaStates', 1, valid=True)
     self.panda = self.events['pandaStates'].pandaStates[0]
     self.panda.harnessStatus = 'normal'
     self.panda.safetyModel = 'elm327'
