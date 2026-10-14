@@ -293,13 +293,16 @@ def stationary_lead_departure_compatible(evidence, *, actual_standstill, measure
   reverse_distance += 0.5 * -prefix[-1] * crossing_duration
   if reverse_distance > 0.02:
     return False
-  # Retain the ordinary forward-evidence horizon and speed scale, but do not
-  # translate away the prefix or change the original UNKNOWN evidence.
+  # A current, independently qualified lead supplies departure evidence. The
+  # model only has to remain compatible: requiring its own STOP_SPEED crossing
+  # here would serialize two independent departure qualifications. Retain the
+  # same short-horizon net progress and all reverse/rest bounds above, without
+  # translating the prefix or changing the original UNKNOWN evidence.
   end_s = elapsed_s + FORWARD_HORIZON_S
   support = np.concatenate(([elapsed_s], times[(times > elapsed_s) & (times < end_s)], [end_s]))
   progress = np.interp(support, times, raw)
   distance = float(np.sum(0.5 * (progress[:-1] + progress[1:]) * np.diff(support)))
-  return bool(np.isfinite(distance) and distance > 0.0 and np.max(progress) > max(float(progress[0]), STOP_SPEED))
+  return bool(np.isfinite(distance) and distance > 0.0)
 
 
 def lead_launch_model_compatible(evidence):

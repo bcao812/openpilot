@@ -954,9 +954,15 @@ class UnifiedLongitudinalPlanner:
       self.reference_overridden = output != self.reference_accel
       if self.reference_overridden:
         planner.mpc.source = self.constraint_source
+    # A weak ego-speed prediction is not itself a stop request when the
+    # current leads independently qualify to depart. Explicit model braking
+    # still vetoes this stationary exception, including during confirmation.
+    stationary_model_compatible = (
+      not model.meta.hardBrakePredicted and model.action.desiredAcceleration >= 0.0
+      and stationary_lead_departure_compatible(
+        evidence, actual_standstill=bool(car_state.standstill), measured_speed=float(car_state.vEgo)))
     model_allows_external_departure = (self.lead_launch_active or evidence is None or evidence.allows_external_departure
-                                      or stationary_lead_departure_compatible(
-                                        evidence, actual_standstill=bool(car_state.standstill), measured_speed=float(car_state.vEgo)))
+                                      or stationary_model_compatible)
     # P's ordinary action can request departure without raw speed growth.
     # Certify that request only after every current target cap and raw veto;
     # the owner still controls HOLD, freshness and the actual brake release.

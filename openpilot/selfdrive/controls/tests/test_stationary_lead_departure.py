@@ -95,8 +95,9 @@ def test_measured_movement_or_invalid_standstill_cannot_use_stationary_compatibi
   pytest.param(changed_sample(20, 0.0), id='later-zero'),
   pytest.param(changed_sample(32, -0.001), id='terminal-negative'),
   pytest.param(changed_sample(5, 0.0), id='zero-inside-prefix'),
+  pytest.param(np.where(MODEL_TIMES >= 3.0, 0.0, LOGGED_DEPARTURE_VELOCITY), id='forward-then-rest'),
   pytest.param(np.where(MODEL_TIMES > 2.5, LOGGED_DEPARTURE_VELOCITY,
-                        np.minimum(LOGGED_DEPARTURE_VELOCITY, 0.01)), id='no-near-term-progress'),
+                        np.minimum(LOGGED_DEPARTURE_VELOCITY, 0.001)), id='no-net-forward-progress'),
   pytest.param(LOGGED_LATER_NEGATIVE_VELOCITY, id='recorded-later-negative'),
   pytest.param(changed_sample(16, np.nan), id='nonfinite'),
   pytest.param(LOGGED_DEPARTURE_VELOCITY[:-1], id='incomplete-grid'),
@@ -108,6 +109,17 @@ def test_prefix_compatibility_keeps_raw_risk_and_incomplete_inputs_blocked(raw, 
   reference = evidence(raw, 0.0, model_ns=SOURCE_NS + int(later_publication) * 5_000_000,
                        anchor_ns=SOURCE_NS, now_ns=SOURCE_NS + 10_000_000)
   assert not compatible(reference, speed=measured_speed)
+  assert not reference.allows_departure and not reference.allows_external_departure
+
+
+def test_small_net_progress_is_compatible_but_cannot_authorize_departure_by_itself():
+  # This formerly failed the independent STOP_SPEED crossing requirement.
+  # A positive integral is compatibility only; the raw model stays UNKNOWN.
+  raw = np.where(MODEL_TIMES > 2.5, LOGGED_DEPARTURE_VELOCITY,
+                 np.minimum(LOGGED_DEPARTURE_VELOCITY, 0.01))
+  reference = evidence(raw, 0.0)
+  assert compatible(reference)
+  assert reference.unknown is not None and reference.raw_motion.kind == 'unknown'
   assert not reference.allows_departure and not reference.allows_external_departure
 
 
