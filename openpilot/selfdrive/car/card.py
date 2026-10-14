@@ -25,6 +25,7 @@ from openpilot.selfdrive.car.cruise import VCruiseHelper
 from openpilot.selfdrive.car.actuation_observation import ActuationObservation
 from openpilot.selfdrive.car.helpers import convert_carControlSP, convert_to_capnp
 from openpilot.selfdrive.car.longitudinal_authority import restrict_longitudinal_authority
+from openpilot.selfdrive.car.honda_startup import HondaStartupGate, inactive_startup_control
 
 from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_car_specific_params
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
@@ -152,6 +153,8 @@ class Car:
       safety_config.safetyModel = structs.CarParams.SafetyModel.noOutput
       self.CP.safetyConfigs = [safety_config]
 
+    self.honda_startup_gate = HondaStartupGate(self.CP) if HondaStartupGate.applies(self.CP) else None
+
     if self.CP.secOcRequired:
       # Copy user key if available
       try:
@@ -236,6 +239,17 @@ class Car:
       self.prof.mark("radar_update")
 
     self.sm.update(0)
+    if self.honda_startup_gate is not None:
+      self.honda_startup_gate.update(
+        self.sm['pandaStates'], self.sm.logMonoTime['pandaStates'], time.monotonic_ns(),
+        valid=self.sm.valid['pandaStates'], alive=self.sm.alive['pandaStates'],
+        control_ns=self.sm.logMonoTime['carControl'], control_alive=self.sm.alive['carControl'],
+        control_enabled=self.sm['carControl'].enabled,
+      )
+      if not self.honda_startup_gate.ready:
+        # Availability already includes startup qualification in Honda CarState.
+        # Keep SET/RES from enabling the host before the hardware handoff finishes.
+        CS.cruiseState.available = False
     if self.prof:
       self.prof.mark("sm_update")
 
@@ -310,15 +324,24 @@ class Car:
     """control update loop, driven by carControl"""
     longitudinal_observation = getattr(self, "longitudinal_observation", None)
 
-    if not self.initialized_prev:
+    gate = self.honda_startup_gate
+    if not self.initialized_prev and (gate is None or gate.handoff_ns is None):
       # Initialize CarInterface, once controls are ready
       # TODO: this can make us miss at least a few cycles when doing an ECU knockout
-      self.CI.init(self.CP, self.CP_SP, *self.can_callbacks)
+      if gate is not None and not gate.can_initialize:
+        observe(longitudinal_observation, "disposition", gate.reason, self.sm.frame, initialized=False, passive=self.CP.passive)
+        return False
+      if gate is None or not gate.resuming:
+        self.CI.init(self.CP, self.CP_SP, *self.can_callbacks)
       # signal pandad to switch to car safety mode
       self.params.put_bool("ControlsReady", True)
+      if gate is not None:
+        gate.begin_handoff(time.monotonic_ns())
 
     if self.sm.all_alive(['carControl']):
       requested_control = CC
+      if self.honda_startup_gate is not None and not self.honda_startup_gate.ready:
+        CC = inactive_startup_control(CC)
       CC = restrict_longitudinal_authority(self.CP, self.CP_SP, CS, CC)
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
@@ -336,6 +359,7 @@ class Car:
       self.CC_prev = CC
     else:
       observe(longitudinal_observation, "disposition", "staleCarControl", self.sm.frame, initialized=True, passive=self.CP.passive)
+    return True
 
   def step(self):
     if self.prof:
@@ -349,7 +373,7 @@ class Car:
     initialized = (not any(e.name == EventName.selfdriveInitializing for e in self.sm['onroadEvents']) and
                    self.sm.seen['onroadEvents'])
     if not self.CP.passive and initialized:
-      self.controls_update(CS, self.sm['carControl'], self.sm['carControlSP'])
+      initialized = self.controls_update(CS, self.sm['carControl'], self.sm['carControlSP'])
     else:
       observe(getattr(self, "longitudinal_observation", None), "disposition", "passive" if self.CP.passive else "uninitialized",
               self.sm.frame, initialized=initialized, passive=self.CP.passive)
