@@ -9,8 +9,9 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
+from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
-  LongitudinalMpc, MpcReference, N, T_IDXS,
+  CRASH_DISTANCE, LongitudinalMpc, MpcReference, N, T_IDXS,
 )
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_mpc_problem_contract import NativeProblemRecorder
@@ -98,6 +99,64 @@ def test_rebased_reference_keeps_new_emergency_lead_and_its_braking():
   # bounds avoid every collision in this close stationary-lead fixture.
 
 
+@pytest.mark.parametrize('distance,lead_speed', [(90.0, 0.0), (50.0, 8.0)], ids=['stationary', 'closing'])
+def test_feasible_current_lead_rebase_matches_unpenalized_braking_and_continuous_clearance(distance, lead_speed):
+  speed, measured_accel, ramp_time = 20.0, 0.398, 1.0
+  # Independent feasible motion: ramp to ACCEL_MIN for one second, brake,
+  # then ramp back to zero acceleration in one second, matching lead speed.
+  # Relative speed stays nonnegative until matching, so the final closure is
+  # this witness's maximum. These fixtures have room to brake without relying
+  # on process_lead's numerical distance floor or on a collision being allowed.
+  after_ramp = speed + (measured_accel + ACCEL_MIN) * ramp_time / 2.0
+  before_release = lead_speed - ACCEL_MIN * ramp_time / 2.0
+  braking_time = (after_ramp - before_release) / -ACCEL_MIN
+  witness_distance = (
+    speed * ramp_time + (2.0 * measured_accel + ACCEL_MIN) * ramp_time**2 / 6.0
+    + (after_ramp + before_release) * braking_time / 2.0
+    + before_release * ramp_time + ACCEL_MIN * ramp_time**2 / 3.0
+  )
+  assert braking_time > 0.0
+  witness_closure = witness_distance - lead_speed * (2.0 * ramp_time + braking_time)
+  assert distance - witness_closure > CRASH_DISTANCE
+
+  rebased, unpenalized = history_mpc(), history_mpc()
+  for mpc in (rebased, unpenalized):
+    seed_reference(mpc)
+  stamp = EPOCH_NS + STEP_NS
+  lead = object_lead(1872, distance=distance, speed=lead_speed, ego_speed=speed, epoch=stamp)
+  radar = fused_state(display=(lead,))
+  assert history_tick(rebased, radar, stamp, speed=speed, acceleration=measured_accel)[1]
+  assert rebased.reference_support_changed
+
+  # Independent current-input control using the existing no-history API.
+  # Both branches have the same preceding native iterate; only this branch
+  # explicitly requests zero history weight instead of relying on revocation.
+  assert unpenalized.prepare_reference_history(stamp, valid=True)
+  unpenalized.set_weights(prev_accel_constraint=False)
+  unpenalized.set_cur_state(speed, measured_accel)
+  unpenalized.update(radar, reference=MpcReference(25.0), now_ns=stamp, reference_ns=stamp)
+  assert unpenalized.mark_reference_history(valid=True)
+  assert not unpenalized.reference_support_changed
+
+  clearances = []
+  for mpc in (rebased, unpenalized):
+    assert mpc.solution_status == 0
+    np.testing.assert_array_equal(installed_history_weights(mpc), 0.0)
+    assert mpc.source_object_identity == ('radar-test', 1872)
+    assert ('radar-test', 1872) in mpc.object_influence_identities
+    assert action(mpc) < 0.0
+    clearance = mpc.lead_clearance_minimum(mpc._lead_trajectories[0], mpc.x_sol, mpc.j_solution)
+    assert clearance > CRASH_DISTANCE
+    clearances.append(clearance)
+  np.testing.assert_allclose(rebased.x_sol, unpenalized.x_sol, atol=1e-10, rtol=0.0)
+  np.testing.assert_allclose(rebased.j_solution, unpenalized.j_solution, atol=1e-10, rtol=0.0)
+  assert action(rebased) == pytest.approx(action(unpenalized), abs=1e-10, rel=0.0)
+  assert clearances[0] == pytest.approx(clearances[1], abs=1e-10, rel=0.0)
+  # Clearance is screened continuously within every native interval, rather
+  # than only at its nodes. This remains predicted-model evidence, without
+  # an actuator-delay, delivered-braking or closed-loop safety claim.
+
+
 @pytest.mark.parametrize('change', ['swap_slots', 'generation', 'radar_to_fused'])
 def test_current_physical_support_keeps_history_through_nonphysical_changes(change):
   mpc = history_mpc()
@@ -170,19 +229,43 @@ def test_anonymous_same_purposes_do_not_claim_a_physical_identity_or_reset_every
 
 
 @pytest.mark.parametrize('fault', ['services', 'fusion_degraded', 'fusion_unhealthy'])
-def test_bad_input_is_not_a_healthy_empty_support_observation(fault):
+@pytest.mark.parametrize('fallback', ['empty', 'vision'])
+def test_bad_input_is_not_a_healthy_empty_support_observation(fault, fallback):
   mpc = history_mpc()
   seed_reference(mpc)
-  radar = fused_state()
+  stamp = EPOCH_NS + STEP_NS
+  leads = () if fallback == 'empty' else (object_lead(source='vision', distance=45.0, speed=8.0, ego_speed=20.0, epoch=stamp),)
+  radar = fused_state(display=leads)
   radar.fusionDegraded = fault == 'fusion_degraded'
   radar.fusionHealthy = fault != 'fusion_unhealthy'
-  _, accepted = history_tick(mpc, radar, EPOCH_NS + STEP_NS, healthy=fault != 'services')
+  _, accepted = history_tick(mpc, radar, stamp, healthy=fault != 'services')
   assert not accepted and not mpc.reference_support_changed
   assert mpc.diagnostic_reference_history['reason'] == 'input_health_unqualified'
   assert mpc._reference_epoch_ns is None and mpc._reference_support is None
   np.testing.assert_array_equal(installed_history_weights(mpc), 0.0)
   # This history check grants neither valid motion intent nor a healthy
   # sensor status; the caller retains its existing input-failure handling.
+
+
+@pytest.mark.parametrize('fault', ['fusion_degraded', 'fusion_unhealthy'])
+def test_unrelated_radar_health_cannot_change_current_vision_history(fault):
+  solutions, weights = [], []
+  for radar_fault in (False, True):
+    mpc = history_mpc()
+    lead = seed_reference(mpc, source='vision')
+    stamp = EPOCH_NS + STEP_NS
+    advance(lead, stamp)
+    radar = fused_state(display=(lead,))
+    radar.fusionDegraded = radar_fault and fault == 'fusion_degraded'
+    radar.fusionHealthy = not (radar_fault and fault == 'fusion_unhealthy')
+    history, accepted = history_tick(mpc, radar, stamp)
+    assert history and accepted and not mpc.reference_support_changed
+    assert mpc.diagnostic_reference_history['reason'] == 'inherited'
+    assert np.any(installed_history_weights(mpc) > 0.0)
+    solutions.append(mpc.x_sol.copy())
+    weights.append(installed_history_weights(mpc))
+  np.testing.assert_array_equal(weights[0], weights[1])
+  np.testing.assert_allclose(solutions[0], solutions[1], atol=1e-10, rtol=0.0)
 
 
 @pytest.mark.parametrize('failure', ['solver_status', 'nonfinite', 'producer_rejection'])

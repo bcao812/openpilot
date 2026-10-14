@@ -576,6 +576,14 @@ def test_hold_outer_qualification_withdrawal_uses_only_current_stop_and_departur
     assert not motion.degraded and not motion.waitingForFreshInput
     assert former_identity[1] not in pipeline.radard.fusion_control._tracks
     if current_risk:
+      for row in later:
+        # Check the complete handoff, not only its final HOLD: the old inner
+        # target supplies current stop evidence until the successor qualifies.
+        assert any(lead['evidence']['stopQualified'] and lead['evidence']['brakeQualified']
+                   and lead['evidence']['positionMonoTime'] == row['source_ns'] and lead['dRel'] < 3.1
+                   for lead in objects(row))
+        assert not row['release']
+        assert all(sample['brake'] and not sample['release'] and sample['accel'] <= 0.0 for sample in row['can'])
       for row in tail:
         current, = objects(row)
         claim = current['evidence']

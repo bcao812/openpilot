@@ -613,8 +613,16 @@ class LongitudinalMpc:
       return
     # Invalid or degraded input is not an observation of an empty road. Drop
     # history eligibility independently of the existing producer fault path.
-    if (not valid or getattr(radarstate, 'fusionDegraded', False)
-        or getattr(radarstate, 'fusionActive', False) and not getattr(radarstate, 'fusionHealthy', False)):
+    # Fusion health describes the optional radar source. Its failure must not
+    # alter a reference supported only by independently valid current vision;
+    # otherwise even an unselected radar object can change that reference by
+    # changing the global fusion status. A preceding physical radar support
+    # still crosses this fault boundary when the producer falls back to vision.
+    radar_support = (any(item.identity is not None for item in previous or ())
+                     or any(lead_identity(lead) is not None for lead in self._source_leads))
+    radar_unhealthy = (getattr(radarstate, 'fusionDegraded', False)
+                       or getattr(radarstate, 'fusionActive', False) and not getattr(radarstate, 'fusionHealthy', False))
+    if not valid or radar_support and radar_unhealthy:
       self.discard_prepared_reference_cost(reason='input_health_unqualified')
       self.invalidate_reference_history()
       diagnostic['reason'] = 'input_health_unqualified'
