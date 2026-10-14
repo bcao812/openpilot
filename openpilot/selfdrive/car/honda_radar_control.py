@@ -44,6 +44,7 @@ POSITION_SPEED_MAX_VARIANCE = 4.0
 LATERAL_POSITION_MAX_VARIANCE = 4.0
 LATERAL_VELOCITY_MAX_VARIANCE = 4.0
 # Initial engineering admission bounds, pending route/vehicle validation.
+CUT_IN_HALF_WIDTH = 1.0  # Body intrusion only; ordinary point admission keeps SWEPT_HALF_WIDTH.
 CUT_IN_MIN_WIDTH = .4
 CUT_IN_MAX_WIDTH = 3.2
 CUT_IN_MAX_DISTANCE = 45.0
@@ -408,7 +409,8 @@ class HondaRadarControl:
     elapsed = (eof - source_eof) / 1e9
     endpoints = [_project(x, y, track['groundSpeed'], track['lateralSpeed'], elapsed, speed, yaw)
                  for x, y in ((lx, ly), (rx, ry))]
-    paths = [_qualified_path(corridors, x, y, vx, vy, position_variance, velocity_variance, True)
+    paths = [_qualified_path(corridors, x, y, vx, vy, position_variance, velocity_variance, True,
+                             half_width=CUT_IN_HALF_WIDTH)
              for x, y, _, _ in endpoints]
     left, right = paths
     if left.state == 'unknown' or right.state == 'unknown' or left.source != right.source:
@@ -438,7 +440,7 @@ class HondaRadarControl:
       return None
     low, high = sorted((left.offset, right.offset))
     # Actual current span overlap, not a prediction that a point may enter.
-    if low > SWEPT_HALF_WIDTH or high < -SWEPT_HALF_WIDTH:
+    if low > CUT_IN_HALF_WIDTH or high < -CUT_IN_HALF_WIDTH:
       return None
     distance = min(point[0] for point in endpoints)
     closing = speed - vx
