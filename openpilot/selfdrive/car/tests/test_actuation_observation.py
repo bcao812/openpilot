@@ -48,7 +48,6 @@ class CardHarness:
     card.CS_prev = car.CarState.new_message()
     card.CS_SP_prev = custom.CarStateSP.new_message()
     card.initialized_prev = True
-    card.honda_startup_gate = None
     card.prof = None
     card.can_sock = object()
     card.can_callbacks = ()
