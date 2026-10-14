@@ -634,6 +634,7 @@ def test_card_can_send_the_last_positive_command_for_its_alive_tail_after_contro
   card.sm = bounded_submaster(['carControl'])
   card.sm.update_msgs(harness.now_ns / 1e9, [last_command])
   card.initialized_prev = True
+  card.honda_startup_gate = None
   card.CI = SimpleNamespace(apply=Mock(return_value=(car.CarControl.Actuators.new_message(), [])))
   card.pm = CapturingPublisher()
   command_sp = custom.CarControlSP.new_message()
@@ -764,6 +765,7 @@ def test_card_pedal_edge_restriction_is_scoped_and_keeps_cached_control_immutabl
   card.sm = bounded_submaster(['carControl'])
   card.sm.update_msgs(harness.now_ns / 1e9, [last_command])
   card.initialized_prev = True
+  card.honda_startup_gate = None
   card.CI = SimpleNamespace(apply=Mock(return_value=(car.CarControl.Actuators.new_message(), [])))
   card.pm = CapturingPublisher()
   setattr(harness.car_state, pedal, True)

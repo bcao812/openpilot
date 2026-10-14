@@ -5,7 +5,7 @@ import pytest
 
 from opendbc.car.honda.values import CAR, HondaFlags
 from opendbc.car.structs import car
-from openpilot.cereal import messaging
+from openpilot.cereal import log, messaging
 from openpilot.selfdrive.car.honda_startup import HondaStartupGate, inactive_startup_control
 from openpilot.selfdrive.car.tests.test_actuation_observation import CardHarness
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import bounded_submaster, serialized
@@ -110,6 +110,22 @@ def test_normal_fw_query_radar_tx_latch_does_not_block_camera_readiness():
   assert gate.can_initialize
 
 
+@pytest.mark.parametrize('bus', [1, 2])
+@pytest.mark.parametrize('stalled_rx', [101, 99])
+def test_one_rx_increment_then_stall_or_rollback_cannot_qualify_when_control_disables(bus, stalled_rx):
+  gate = HondaStartupGate(params())
+  update(gate, 0, control_enabled=True)
+  update(gate, 1, control_enabled=True)
+  for index in range(2, 31):
+    panda = health(rx=100+index)
+    getattr(panda, f'canState{bus}').totalRxCnt = stalled_rx
+    update(gate, index, panda, control_enabled=index < 30)
+    assert not gate.can_initialize
+  for index in range(31, 35):
+    update(gate, index)
+  assert gate.can_initialize  # Recovery needs a full window with fresh reception.
+
+
 def test_flipped_harness_uses_physical_can_zero_for_camera():
   gate = HondaStartupGate(params())
   for index in range(4):
@@ -133,11 +149,13 @@ def test_started_handoff_requires_matching_safety_and_fresh_disabled_control():
   update(gate, 5, panda)
   assert not gate.ready
   panda.safetyParam = 2
+  panda.canState1.totalRxCnt = panda.canState2.totalRxCnt = 106
   update(gate, 6, panda, control_ns=9_000_000_000)
   assert not gate.ready
   update(gate, 7, health(mode='hondaBosch', rx=107))
   assert gate.ready
-  gate.update([], 0, 20_000_000_000, valid=False, alive=False, control_ns=0, control_alive=False, control_enabled=True)
+  gate.update([], 0, 20_000_000_000, valid=False, alive=False,
+              control_ns=20_000_000_000, control_alive=True, control_enabled=True)
   assert gate.ready  # Runtime faults retain their existing handling.
 
 
@@ -183,6 +201,16 @@ class StartupHarness(CardHarness):
     self.frames = 0
     self.command.enabled = self.command.latActive = self.command.longActive = False
 
+  def configure_panda(self):
+    self.panda.safetyModel = self.card.CP.safetyConfigs[0].safetyModel
+    self.panda.safetyParam = self.card.CP.safetyConfigs[0].safetyParam
+    self.panda.alternativeExperience = self.card.CP.alternativeExperience
+
+  def initializing(self, enabled):
+    self.events['onroadEvents'] = messaging.new_message('onroadEvents', int(enabled), valid=True)
+    if enabled:
+      self.events['onroadEvents'].onroadEvents[0].name = log.OnroadEvent.EventName.selfdriveInitializing
+
   def feed(self, *, fresh_control=True, timestamp=None):
     self.now_ns += 10_000_000
     self.state.cruiseState.available = True  # A newly decoded CAN state on each step.
@@ -205,6 +233,7 @@ def test_real_card_waits_then_hands_off_once_and_keeps_inactive_can_flowing():
   h = StartupHarness()
   h.panda.canState2.errorPassive = True
   h.command.enabled = h.command.latActive = h.command.longActive = True
+  h.events['carControlSP'].carControlSP.intelligentCruiseButtonManagement.sendButton = 'increase'
   for _ in range(1100):
     h.step()
   assert not h.card.initialized_prev
@@ -241,9 +270,7 @@ def test_real_card_waits_then_hands_off_once_and_keeps_inactive_can_flowing():
 
 def test_real_card_restart_preserves_keepalive_and_skips_ecu_knockout():
   h = StartupHarness()
-  h.panda.safetyModel = h.card.CP.safetyConfigs[0].safetyModel
-  h.panda.safetyParam = h.card.CP.safetyConfigs[0].safetyParam
-  h.panda.alternativeExperience = h.card.CP.alternativeExperience
+  h.configure_panda()
   h.panda.canState2.errorPassive = True
   for _ in range(21):
     h.step()
@@ -251,3 +278,73 @@ def test_real_card_restart_preserves_keepalive_and_skips_ecu_knockout():
   assert len(h.sent_frames) == 21
   assert sum(frame[0] == 0x18DAB0F1 for batch in h.sent_frames for frame in batch) == 3
   assert all(not r[0]['enabled'] and not r[0]['longActive'] for r in h.requests)
+
+
+@pytest.mark.parametrize('phase', ['handoff', 'ready', 'card_restart'])
+@pytest.mark.parametrize('interruption', ['initializing', 'stale_control', 'invalid_control'])
+def test_real_card_control_restart_keeps_inactive_can_and_requires_fresh_disabled_request(phase, interruption):
+  h = StartupHarness()
+  if phase == 'card_restart':
+    h.configure_panda()
+  else:
+    for _ in range(41):
+      h.step()
+    assert h.card.honda_startup_gate.handoff_ns is not None
+    h.card.CI.init.assert_called_once()
+    if phase == 'ready':
+      h.configure_panda()
+      for _ in range(20):
+        h.step()
+      assert h.card.honda_startup_gate.ready
+
+  h.command.enabled = h.command.latActive = h.command.longActive = True
+  if interruption == 'initializing':
+    h.initializing(True)
+  elif interruption == 'invalid_control':
+    h.events['carControl'].valid = False
+  first_request = len(h.requests)
+  for _ in range(120):
+    h.step(stale=interruption == 'stale_control')
+  assert len(h.requests) == first_request+120
+  for command, _, _ in h.requests[first_request:]:
+    assert not command['enabled'] and not command['latActive'] and not command['longActive']
+    assert command['actuators']['accel'] == command['actuators']['torque'] == 0.0
+  assert all(extension['intelligentCruiseButtonManagement']['sendButton'] == 'none'
+             for _, extension, _ in h.requests[first_request:])
+  batches = h.sent_frames[first_request:]
+  assert sum(frame[0] == 0x18DAB0F1 for batch in batches for frame in batch) == 12
+  assert sum(frame[0] == 0x1DF for batch in batches for frame in batch) == 60
+  assert sum(frame[0] == 0x1EF for batch in batches for frame in batch) == 60
+  assert all(any(frame[0] == 0xE4 for frame in batch) for batch in batches)
+  assert not h.card.honda_startup_gate.ready
+
+  h.initializing(False)
+  h.events['carControl'].valid = True
+  h.configure_panda()
+  for _ in range(50):
+    h.step()
+  assert not h.card.honda_startup_gate.ready
+  assert all(not command[0]['enabled'] for command in h.requests[first_request:])
+  h.command.enabled = h.command.latActive = h.command.longActive = False
+  for _ in range(50):
+    h.step()
+  assert h.card.honda_startup_gate.ready
+  h.command.enabled = h.command.latActive = h.command.longActive = True
+  h.step()
+  assert h.requests[-1][0]['longActive']
+  assert h.card.CI.init.call_count == int(phase != 'card_restart')
+  h.card.params.put_bool.assert_called_once_with('ControlsReady', True)
+
+
+@pytest.mark.parametrize('axis', ['latActive', 'longActive'])
+def test_real_card_requires_both_axes_disabled_before_ecu_handoff(axis):
+  h = StartupHarness()
+  setattr(h.command, axis, True)
+  for _ in range(50):
+    h.step()
+  h.card.CI.init.assert_not_called()
+  assert not h.requests
+  setattr(h.command, axis, False)
+  for _ in range(20):
+    h.step()
+  h.card.CI.init.assert_called_once()

@@ -125,6 +125,7 @@ class StartupHarness:
     self.card.can_sock = object()
     self.card.can_rcv_cum_timeout_counter = 0
     self.card.initialized_prev = True
+    self.card.honda_startup_gate = None
     self.card.is_metric = True
     self.card.experimental_mode = False
     self.card.dynamic_experimental_control = False
