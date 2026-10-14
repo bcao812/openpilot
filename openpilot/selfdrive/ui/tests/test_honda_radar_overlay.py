@@ -26,7 +26,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     event = next(event for event in data['observations'] if event['positionValid'])
     track = {field: event[field] for field in ('slot', 'generation', 'positionSeq', 'positionMonoTime')}
     track['trackId'] = 2 ** 64 - 1
-    data['fusion'] = dict(version=1, active=True, tracks=[track])
+    data['fusion'] = {'version': 1, 'active': True, 'tracks': [track]}
     expected = RadarOverlayState()
     expected.ingest(data, START + 1, START + 1)
     self.assertEqual(expected.points(START, START + 1)[0].track_id, track['trackId'])

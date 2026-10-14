@@ -267,7 +267,7 @@ class TestHondaRadarBoundaries(unittest.TestCase):
         track = {field: integer(event[field]) for field in ('slot', 'generation', 'positionSeq', 'positionMonoTime')}
         track['trackId'] = integer(identifier)
         overlay = RadarOverlayState()
-        overlay.ingest(publication([event], fusion=dict(version=1, active=True, tracks=[track])), START + 1, START + 1)
+        overlay.ingest(publication([event], fusion={'version': 1, 'active': True, 'tracks': [track]}), START + 1, START + 1)
         point, = overlay.points(START, START + 1)
         self.assertEqual(point.track_id, identifier)
         self.assertEqual(point.sample_key, (15, 0, 2 ** 32, START))
@@ -283,7 +283,7 @@ class TestHondaRadarBoundaries(unittest.TestCase):
       for value in (*bounds[field], True, np.bool_(True), float(track[field]), str(track[field]), None):
         with self.subTest(field=field, value=value):
           overlay = RadarOverlayState()
-          fusion = dict(version=1, active=True, tracks=[dict(track, **{field: value})])
+          fusion = {'version': 1, 'active': True, 'tracks': [dict(track, **{field: value})]}
           overlay.ingest(publication([event], fusion=fusion), START + 1, START + 1)
           point, = overlay.points(START, START + 1)
           self.assertEqual(point.track_id, 0)
