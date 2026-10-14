@@ -164,6 +164,21 @@ def test_exact_weak_model_grants_current_lead_permission_before_the_broader_laun
     assert_held(owner, outputs)
 
 
+def test_stationary_compatibility_preserves_a_binding_model_action_cap(held_case):
+  planner, owner, state = held_case
+  cap_bound = False
+  for frame in range(20, 25):
+    load_snapshot(state, FIRST, frame)
+    state['modelV2'].action.desiredAcceleration = 0.0
+    plan, outputs = step(held_case, frame)
+    assert plan.solverStatus == 0 and plan.motionIntent.valid
+    assert not planner.reference_planner.lead_launch_active
+    cap_bound |= planner.reference_planner.reference_accel > 0.0
+    assert plan.aTarget <= 0.0
+    assert_held(owner, outputs)
+  assert cap_bound
+
+
 @pytest.mark.parametrize('condition', ['no_lead', 'negative_action', 'hard_brake', 'model_stop',
                                       'unqualified_second', 'slow_second', 'mixed_second_departure'])
 def test_weak_model_compatibility_does_not_replace_current_departure_guards(held_case, condition):
