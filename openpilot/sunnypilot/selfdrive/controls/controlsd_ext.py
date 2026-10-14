@@ -72,13 +72,14 @@ class ControlsExt(ModelStateBase):
     _lead.dRel = src.dRel
     _lead.yRel = src.yRel
     _lead.vRel = src.vRel
-    _lead.aRel = src.deprecated.aRel
+    deprecated = src.deprecated
+    _lead.aRel = deprecated.aRel
     _lead.vLead = src.vLead
-    _lead.dPath = src.deprecated.dPath
-    _lead.vLat = src.deprecated.vLat
+    _lead.dPath = deprecated.dPath
+    _lead.vLat = deprecated.vLat
     _lead.vLeadK = src.vLeadK
     _lead.aLeadK = src.aLeadK
-    _lead.fcw = src.deprecated.fcw
+    _lead.fcw = deprecated.fcw
     _lead.status = src.present
     _lead.aLeadTau = src.aLeadTau
     _lead.modelProb = src.modelProb
@@ -94,16 +95,18 @@ class ControlsExt(ModelStateBase):
 
     # MADS state
     mads_src = sm['selfdriveStateSP'].mads
-    CC_SP.mads.state = mads_src.state
-    CC_SP.mads.enabled = mads_src.enabled
-    CC_SP.mads.active = mads_src.active
-    CC_SP.mads.available = mads_src.available
+    mads = CC_SP.mads
+    mads.state = mads_src.state
+    mads.enabled = mads_src.enabled
+    mads.active = mads_src.active
+    mads.available = mads_src.available
 
     # ICBM state
     icbm_src = sm['selfdriveStateSP'].intelligentCruiseButtonManagement
-    CC_SP.intelligentCruiseButtonManagement.state = icbm_src.state
-    CC_SP.intelligentCruiseButtonManagement.sendButton = icbm_src.sendButton
-    CC_SP.intelligentCruiseButtonManagement.vTarget = icbm_src.vTarget
+    icbm = CC_SP.intelligentCruiseButtonManagement
+    icbm.state = icbm_src.state
+    icbm.sendButton = icbm_src.sendButton
+    icbm.vTarget = icbm_src.vTarget
 
     return CC_SP
 

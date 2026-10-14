@@ -4,6 +4,8 @@ import math
 from types import SimpleNamespace
 import unittest
 
+import numpy as np
+
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import POSITION_MAX_AGE_NS, RadarLabelPoint, RadarOverlayState
 
 START = 10_000_000_000
@@ -112,8 +114,11 @@ class TestHondaRadarBoundaries(unittest.TestCase):
           self.assertIsNotNone(points[1].boundary_laterals)
 
   def test_malformed_position_target_does_not_hide_a_valid_target(self):
-    for field, value in (('slot', None), ('slot', True), ('slot', '0'), ('generation', None), ('generation', -1),
-                         ('positionSeq', None), ('positionSeq', True), ('positionMonoTime', None), ('positionMonoTime', True),
+    for field, value in (('slot', None), ('slot', True), ('slot', '0'), ('slot', -1), ('slot', 16), ('slot', 0.0),
+                         ('generation', None), ('generation', -1), ('generation', True), ('generation', 1.0),
+                         ('positionSeq', None), ('positionSeq', True), ('positionSeq', 0), ('positionSeq', -1),
+                         ('positionMonoTime', None), ('positionMonoTime', True), ('positionMonoTime', 0),
+                         ('positionMonoTime', START + 2),
                          ('dRel', None), ('dRel', math.nan), ('yRel', '0'), ('yRel', math.inf)):
       with self.subTest(field=field, value=value):
         bad = observation()
@@ -250,6 +255,40 @@ class TestHondaRadarBoundaries(unittest.TestCase):
     self.assertEqual(point.sample_key, original.sample_key)
     self.assertEqual(point.boundary_laterals, original.boundary_laterals)
     self.assertEqual(point.boundary_time_ns, original.boundary_time_ns)
+
+  def test_integral_track_fields_preserve_exact_sample_identity(self):
+    class IntSubclass(int):
+      pass
+
+    event = observation(slot=15, generation=0, sequence=2 ** 32)
+    identifier = 2 ** 63 - 1
+    for integer in (int, IntSubclass, np.int64, np.uint64):
+      with self.subTest(integer=integer.__name__):
+        track = {field: integer(event[field]) for field in ('slot', 'generation', 'positionSeq', 'positionMonoTime')}
+        track['trackId'] = integer(identifier)
+        overlay = RadarOverlayState()
+        overlay.ingest(publication([event], fusion=dict(version=1, active=True, tracks=[track])), START + 1, START + 1)
+        point, = overlay.points(START, START + 1)
+        self.assertEqual(point.track_id, identifier)
+        self.assertEqual(point.sample_key, (15, 0, 2 ** 32, START))
+        self.assertIsNotNone(point.boundary_laterals)
+
+  def test_invalid_track_fields_leave_the_current_reflection_unassociated(self):
+    event = observation()
+    track = {field: event[field] for field in ('slot', 'generation', 'positionSeq', 'positionMonoTime')}
+    track['trackId'] = 7
+    bounds = {'slot': (-1, 16), 'generation': (-1,), 'positionSeq': (-1, 0),
+              'positionMonoTime': (-1, 0), 'trackId': (-1, 0)}
+    for field in track:
+      for value in (*bounds[field], True, np.bool_(True), float(track[field]), str(track[field]), None):
+        with self.subTest(field=field, value=value):
+          overlay = RadarOverlayState()
+          fusion = dict(version=1, active=True, tracks=[dict(track, **{field: value})])
+          overlay.ingest(publication([event], fusion=fusion), START + 1, START + 1)
+          point, = overlay.points(START, START + 1)
+          self.assertEqual(point.track_id, 0)
+          self.assertEqual(point.sample_key, (0, 1, 1, START))
+          self.assertIsNotNone(point.boundary_laterals)
 
   def test_dictionary_and_attribute_readers_use_the_same_boundary_contract(self):
     def reader(value):

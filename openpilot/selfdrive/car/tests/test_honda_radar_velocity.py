@@ -59,6 +59,45 @@ def test_turning_frame_preserves_a_stationary_world_target(yaw):
   assert result['longSpeed'] == pytest.approx(0.0, abs=1e-9)
 
 
+@pytest.mark.parametrize('direction', [-1, 1])
+def test_quarter_turn_rotates_position_vectors_and_covariances(direction):
+  quality = PositionVelocityQuality()
+  observe(quality, 0, distance=37.0, y=2.3, position_variance=2.25, lateral_position_variance=.81,
+          innovation=(.3, -.8), innovation_covariance=(.9, .17, 1.7), correction=(.7, -.4),
+          velocity_covariance=(.6, -.13, 1.4))
+  previous = quality.samples[0]
+  dt, ego = STEP / 1e9, 7.0
+  observe(quality, 1, ego=ego, ego_yaw=direction * math.pi / (2 * dt))
+  transformed = quality.samples[0]
+
+  # A quarter turn swaps axes, negates cross covariance and rotates both vectors.
+  assert (transformed.x, transformed.y) == pytest.approx(
+    (direction * previous.y, -direction * (previous.x - ego * dt)), rel=1e-12, abs=1e-12)
+  assert (transformed.innovation_x, transformed.innovation_y) == pytest.approx(
+    (direction * previous.innovation_y, -direction * previous.innovation_x), rel=1e-12, abs=1e-12)
+  assert (transformed.correction_x, transformed.correction_y) == pytest.approx(
+    (direction * previous.correction_y, -direction * previous.correction_x), rel=1e-12, abs=1e-12)
+  for rotated, expected in (
+    ((transformed.rxx, transformed.rxy, transformed.ryy), (previous.ryy, -previous.rxy, previous.rxx)),
+    ((transformed.sxx, transformed.sxy, transformed.syy), (previous.syy, -previous.sxy, previous.sxx)),
+    ((transformed.vxx, transformed.vxy, transformed.vyy), (previous.vyy, -previous.vxy, previous.vxx)),
+  ):
+    assert rotated == pytest.approx(expected, rel=1e-12, abs=1e-12)
+  assert (transformed.stamp, transformed.sequence, transformed.innovation_known) == (
+    previous.stamp, previous.sequence, previous.innovation_known)
+
+
+def test_history_sample_stays_immutable_across_observations():
+  quality = PositionVelocityQuality()
+  observe(quality, 0, distance=37.0, y=2.3)
+  historical = quality.samples[0]
+  with pytest.raises(AttributeError):
+    historical.x = 0.0
+  observe(quality, 1, ego_yaw=.2)
+  assert (historical.x, historical.y) == (37.0, 2.3)
+  assert quality.samples[0] is not historical
+
+
 def test_repeated_publication_cannot_mature_a_position():
   quality = PositionVelocityQuality()
   first = observe(quality, 0)
@@ -99,7 +138,17 @@ def test_tentative_recovery_copy_has_independent_quality_state():
   for frame in range(9):
     observe(quality, frame)
   original = quality.snapshot(active=True)
+  original_samples = tuple(quality.samples)
+  last_position = quality.samples[-1].x, quality.samples[-1].y
   tentative = quality.copy()
-  observe(tentative, 9, correction=(3.0, 0.0))
+  observe(tentative, 9, ego_yaw=.2, correction=(3.0, 0.0))
   assert quality.snapshot(active=True) == original
+  assert tuple(quality.samples) == original_samples
+  assert (quality.samples[-1].x, quality.samples[-1].y) == last_position
+  assert tentative.samples[-2].sequence == original_samples[-1].sequence
+  assert tentative.samples[-2] is not original_samples[-1]
   assert not tentative.evidence['qualified']
+  assert observe(tentative, 10, distance=math.nan)['reason'] == 'invalidComponents'
+  assert not tentative.samples
+  assert tuple(quality.samples) == original_samples
+  assert quality.snapshot(active=True) == original

@@ -15,6 +15,8 @@ def _read(value, name, default=None):
 
 
 def _integer(value):
+  if type(value) is int:
+    return True
   return isinstance(value, Integral) and not isinstance(value, bool)
 
 
@@ -108,7 +110,7 @@ def _track_samples(body):
   for track in tracks:
     key = tuple(_read(track, field) for field in ('slot', 'generation', 'positionSeq', 'positionMonoTime'))
     identifier = _read(track, 'trackId')
-    if (not all(isinstance(value, Integral) and not isinstance(value, bool) for value in (*key, identifier))
+    if (not all(_integer(value) for value in (*key, identifier))
         or not 0 <= key[0] < 16 or key[1] < 0 or min(*key[2:], identifier) <= 0):
       continue
     # Conflicting identities never borrow the stronger target's red color.

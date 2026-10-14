@@ -159,7 +159,7 @@ FRAME_PHASES = ("mouse_drain", "begin_drawing", "nav_ticks",
                 "model_pre", "model_raw", "model_project", "model_leads",
                 "model_lanes", "model_path", "model_chevron", "model_rest", "honda_radar",
                 "hud_base", "hud_torque", "hud_devui", "hud_speedlimit",
-                "hud_scc", "hud_turnsig", "hud_alerts", "hud_rocketfuel", "hud_rest",
+                "hud_scc", "hud_braking_target", "hud_turnsig", "hud_alerts", "hud_rocketfuel", "hud_rest",
                 "alert", "driver_state", "widget_rest",
                 "yielded_work", "overlays", "end_drawing", "monitor_fps")
 

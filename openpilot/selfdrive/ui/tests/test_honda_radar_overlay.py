@@ -19,6 +19,25 @@ def sample():
 
 
 class TestHondaRadarOverlay(HeadlessUITestCase):
+  def test_wire_reader_and_builder_preserve_exact_track_identity(self):
+    from openpilot.cereal import log
+
+    data = sample()
+    event = next(event for event in data['observations'] if event['positionValid'])
+    track = {field: event[field] for field in ('slot', 'generation', 'positionSeq', 'positionMonoTime')}
+    track['trackId'] = 2 ** 64 - 1
+    data['fusion'] = dict(version=1, active=True, tracks=[track])
+    expected = RadarOverlayState()
+    expected.ingest(data, START + 1, START + 1)
+    self.assertEqual(expected.points(START, START + 1)[0].track_id, track['trackId'])
+    wire = log.Event.new_message(hondaRadarObservations=data)
+    for kind, body in (('builder', wire.hondaRadarObservations), ('reader', wire.hondaRadarObservations.as_reader())):
+      with self.subTest(kind=kind):
+        overlay = RadarOverlayState()
+        overlay.ingest(body, START + 1, START + 1)
+        self.assertEqual(overlay.points(START, START + 1), expected.points(START, START + 1))
+        self.assertFalse(overlay.points(START, START + 200_000_001))
+
   def test_late_aux_cannot_restore_a_slot_after_invalid_geometry(self):
     observer = HondaRadarObserver(*configuration(), session_id='fixture')
     overlay = RadarOverlayState()

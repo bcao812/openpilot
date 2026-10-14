@@ -6,8 +6,8 @@ current ego frame before fitting; no missing target is predicted or published.
 The native velocity estimator and its measurement-noise model are unchanged.
 """
 from collections import deque
-from dataclasses import dataclass, replace
 import math
+from typing import NamedTuple
 
 
 VERSION = 1
@@ -27,8 +27,7 @@ MAX_INNOVATION_BIAS = 1.75
 MAX_CORRECTION_RATIO = 1.5
 
 
-@dataclass(frozen=True)
-class _Sample:
+class _Sample(NamedTuple):
   stamp: int
   sequence: int
   x: float
@@ -49,10 +48,10 @@ class _Sample:
   innovation_known: bool
 
 
-def _rotate_covariance(xx, xy, yy, c, s):
-  return (c * c * xx - 2 * c * s * xy + s * s * yy,
-          c * s * (xx - yy) + (c * c - s * s) * xy,
-          s * s * xx + 2 * c * s * xy + c * c * yy)
+def _rotate_covariance(xx, xy, yy, cc, ss, cs, twice_cs, cc_minus_ss):
+  return (cc * xx - twice_cs * xy + ss * yy,
+          cs * (xx - yy) + cc_minus_ss * xy,
+          ss * xx + twice_cs * xy + cc * yy)
 
 
 def _fit(samples, epoch):
@@ -135,21 +134,26 @@ class PositionVelocityQuality:
     if self.epoch_ns:
       dt = (stamp - self.epoch_ns) / 1e9
       c, s = math.cos(-ego_yaw * dt), math.sin(-ego_yaw * dt)
+      cc, ss, cs = c * c, s * s, c * s
+      # Preserve the original multiplication order: (2 * c) * s.
+      twice_cs, cc_minus_ss = 2 * c * s, cc - ss
+      ego_distance = ego_speed * dt
       transformed = deque(maxlen=MAX_SAMPLES)
       for sample in self.samples:
         if stamp - sample.stamp > LONG_WINDOW_NS:
           continue
-        rxx, rxy, ryy = _rotate_covariance(sample.rxx, sample.rxy, sample.ryy, c, s)
-        sxx, sxy, syy = _rotate_covariance(sample.sxx, sample.sxy, sample.syy, c, s)
-        vxx, vxy, vyy = _rotate_covariance(sample.vxx, sample.vxy, sample.vyy, c, s)
+        rxx, rxy, ryy = _rotate_covariance(sample.rxx, sample.rxy, sample.ryy, cc, ss, cs, twice_cs, cc_minus_ss)
+        sxx, sxy, syy = _rotate_covariance(sample.sxx, sample.sxy, sample.syy, cc, ss, cs, twice_cs, cc_minus_ss)
+        vxx, vxy, vyy = _rotate_covariance(sample.vxx, sample.vxy, sample.vyy, cc, ss, cs, twice_cs, cc_minus_ss)
         # Same short-step ego translation/rotation as the existing producer.
-        px = sample.x - ego_speed * dt
-        transformed.append(replace(sample, x=c * px - s * sample.y, y=s * px + c * sample.y,
-          rxx=rxx, rxy=rxy, ryy=ryy, sxx=sxx, sxy=sxy, syy=syy, vxx=vxx, vxy=vxy, vyy=vyy,
-          innovation_x=c * sample.innovation_x - s * sample.innovation_y,
-          innovation_y=s * sample.innovation_x + c * sample.innovation_y,
-          correction_x=c * sample.correction_x - s * sample.correction_y,
-          correction_y=s * sample.correction_x + c * sample.correction_y))
+        px = sample.x - ego_distance
+        # Fresh immutable samples keep tentative recovery copies independent.
+        transformed.append(_Sample(sample.stamp, sample.sequence, c * px - s * sample.y, s * px + c * sample.y,
+          rxx, rxy, ryy,
+          c * sample.innovation_x - s * sample.innovation_y, s * sample.innovation_x + c * sample.innovation_y,
+          sxx, sxy, syy,
+          c * sample.correction_x - s * sample.correction_y, s * sample.correction_x + c * sample.correction_y,
+          vxx, vxy, vyy, sample.innovation_known))
       self.samples = transformed
     self.epoch_ns = stamp
     ix, iy = innovation if known else (0.0, 0.0)
