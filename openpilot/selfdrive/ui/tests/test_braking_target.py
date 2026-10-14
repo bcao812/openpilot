@@ -128,8 +128,7 @@ class TestBrakingTargetRendering(HeadlessUITestCase):
     self.assertEqual(self.drawn_text(), ['Target constraint', 'RADAR #75 + V1', 'Hold', '100%'])
     color = self.bars.call_args.args[-1]
     self.assertEqual((color.r, color.g, color.b), (195, 20, 35))
-    self.assertTrue(all((item.args[-1].r, item.args[-1].g, item.args[-1].b) == (255, 255, 255)
-                        for item in self.text.call_args_list))
+    self.assertTrue(all(item.args[-1] == (255, 255, 255, 255) for item in self.text.call_args_list))
 
   def test_full_identity_deduplication_and_overflow_are_explicit(self):
     sm = executing_state()
