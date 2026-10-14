@@ -17,7 +17,7 @@ def drain(queue):
   packet = ffi.new('CANPacket_t *')
   while lpp.can_pop(queue, packet):
     length = DLC_TO_LEN[packet[0].data_len_code]
-    messages.append((packet[0].addr, bytes(packet[0].data[:length]), packet[0].bus))
+    messages.append((packet[0].addr, bytes(packet[0].data[0:length]), packet[0].bus))
   return messages
 
 
