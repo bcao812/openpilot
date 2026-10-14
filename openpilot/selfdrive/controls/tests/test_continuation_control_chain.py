@@ -260,7 +260,13 @@ def test_first_missing_radar_object_and_native_failure_cannot_spend_its_old_dono
     failed = chain.produce(missing_ns, 4)
     assert failed.longitudinalPlan.solverStatus == 4 and not failed.valid
     assert not failed.longitudinalPlan.continuation.valid
-    assert chain.planner.reference_planner.continuation.reason == 'object_identity_changed'
+    # The current formal support withdrew before the failed solve could offer
+    # its old trajectory. Verify that early revocation independently of the
+    # continuation identity guard used when MPC history is already absent.
+    assert chain.planner.mpc.reference_support_changed
+    assert chain.planner.mpc.diagnostic_reference_history['reason'] == 'formal_support_removed'
+    assert chain.planner.reference_planner.continuation.donor is None
+    assert chain.planner.reference_planner.continuation.reason == 'no_native_donor'
     command, motion, can = chain.consume(missing_ns)
   assert not motion.continuationActive and motion.degraded
   assert command.longActive and not command.cruiseControl.resume
