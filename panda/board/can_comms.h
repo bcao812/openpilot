@@ -126,6 +126,52 @@ void comms_can_write(const uint8_t *data, uint32_t len) {
   refresh_can_tx_slots_available();
 }
 
+// SPI can NACK this whole chunk without consuming it. Reserve only the queues
+// its complete packets actually use: an unrelated stalled forwarding bus must
+// not stop commands to a healthy bus. Do not run safety hooks during preflight.
+bool comms_can_write_spi(const uint8_t *data, uint32_t len) {
+  uint32_t slots[PANDA_CAN_CNT] = {0U};
+  uint32_t pos = 0U;
+  bool ready = true;
+
+  // Forwarding RX interrupts also append to the TX queues. Keep the capacity
+  // check and the existing writer in one critical section, including its
+  // shared partial-packet buffer. Nested queue critical sections are supported.
+  ENTER_CRITICAL();
+  if (can_write_buffer.ptr != 0U) {
+    if (can_write_buffer.tail_size <= len) {
+      uint8_t bus = (can_write_buffer.data[0] >> 1U) & 0x7U;
+      if (bus < PANDA_CAN_CNT) {
+        slots[bus] += 1U;
+      }
+    }
+    pos = MIN(can_write_buffer.tail_size, len);
+  }
+
+  while (pos < len) {
+    uint32_t packet_len = CANPACKET_HEAD_SIZE + dlc_to_len[data[pos] >> 4U];
+    if (packet_len <= (len - pos)) {
+      uint8_t bus = (data[pos] >> 1U) & 0x7U;
+      if (bus < PANDA_CAN_CNT) {
+        slots[bus] += 1U;
+      }
+      pos += packet_len;
+    } else {
+      // The original writer retains this trailing partial packet on success.
+      pos = len;
+    }
+  }
+
+  for (uint8_t bus = 0U; bus < PANDA_CAN_CNT; bus++) {
+    ready = ready && (can_slots_empty(can_queues[bus]) >= slots[bus]);
+  }
+  if (ready) {
+    comms_can_write(data, len);
+  }
+  EXIT_CRITICAL();
+  return ready;
+}
+
 void comms_can_reset(void) {
   can_write_buffer.ptr = 0U;
   can_write_buffer.tail_size = 0U;
@@ -137,8 +183,5 @@ void comms_can_reset(void) {
 void refresh_can_tx_slots_available(void) {
   if (can_tx_check_min_slots_free(MAX_CAN_MSGS_PER_USB_BULK_TRANSFER)) {
     can_tx_comms_resume_usb();
-  }
-  if (can_tx_check_min_slots_free(MAX_CAN_MSGS_PER_SPI_BULK_TRANSFER)) {
-    can_tx_comms_resume_spi();
   }
 }

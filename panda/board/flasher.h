@@ -97,6 +97,12 @@ void comms_can_write(const uint8_t *data, uint32_t len) {
   UNUSED(len);
 }
 
+bool comms_can_write_spi(const uint8_t *data, uint32_t len) {
+  UNUSED(data);
+  UNUSED(len);
+  return false;  // CAN output stays unavailable in the bootstub.
+}
+
 int comms_can_read(uint8_t *data, uint32_t max_len) {
   UNUSED(data);
   UNUSED(max_len);
