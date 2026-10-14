@@ -177,7 +177,7 @@ class TestBrakingTargetRendering(HeadlessUITestCase):
       with self.subTest(language=language):
         translations, _ = load_translations(TRANSLATIONS_DIR / f'app_{language}.po')
         self.reset_draws()
-        with patch.object(braking_target, 'tr', side_effect=lambda text: translations.get(text, text) or text):
+        with patch.object(braking_target, 'tr', side_effect=lambda text, translations=translations: translations.get(text, text) or text):
           self.renderer.render(self.rect, sm)
         source, action = (item.args for item in self.text.call_args_list[1:3])
         self.assertIn('4294967295', source[1])
