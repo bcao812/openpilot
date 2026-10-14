@@ -233,7 +233,6 @@ def test_real_card_waits_then_hands_off_once_and_keeps_inactive_can_flowing():
   h = StartupHarness()
   h.panda.canState2.errorPassive = True
   h.command.enabled = h.command.latActive = h.command.longActive = True
-  h.events['carControlSP'].carControlSP.intelligentCruiseButtonManagement.sendButton = 'increase'
   for _ in range(1100):
     h.step()
   assert not h.card.initialized_prev
@@ -298,6 +297,7 @@ def test_real_card_control_restart_keeps_inactive_can_and_requires_fresh_disable
       assert h.card.honda_startup_gate.ready
 
   h.command.enabled = h.command.latActive = h.command.longActive = True
+  h.events['carControlSP'].carControlSP.intelligentCruiseButtonManagement.sendButton = 'increase'
   if interruption == 'initializing':
     h.initializing(True)
   elif interruption == 'invalid_control':
