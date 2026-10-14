@@ -200,7 +200,7 @@ def _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_varianc
   return _Path()
 
 
-def _object_path(corridors, x, y, vx, vy, position_variance, velocity_variance, velocity_valid, *, confirmed=False, vision=False):
+def _object_path(corridors, x, y, vx, vy, position_variance, velocity_variance, velocity_valid, *, vision=False):
   inner = _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_variance, velocity_valid)
   if inner.state == 'inPath':
     return replace(inner, confirmed=True)
@@ -211,12 +211,11 @@ def _object_path(corridors, x, y, vx, vy, position_variance, velocity_variance, 
                  authority_reason='confirmedVisionPath')
   outer = _qualified_path(corridors, x, y, vx, vy, position_variance, velocity_variance, velocity_valid,
                            half_width=OVERLAP_HALF_WIDTH)
-  if confirmed:
-    if outer.state == 'inPath':
-      return replace(outer, confirmed=True, authority_reason='confirmedOccupancyHysteresis')
-    return outer
-  # An unconfirmed outer-band reflection has no lead authority. It also does
-  # not prove that a previously held vehicle body has left the whole band.
+  # Current radar measurements renew object identity, not a past conclusion
+  # that its body occupies the path. A former inner/visual confirmation cannot
+  # supply today's missing occupancy evidence. Keep the wider band solely for
+  # measured-OUT reporting: an outer-band reflection is neither a qualified
+  # ordinary lead nor proof that the whole vehicle body has cleared the path.
   return replace(inner, observed_out=outer.state == 'outOfPath')
 
 
@@ -817,14 +816,13 @@ class HondaRadarControl:
             failed_leads.add(identifier)
           continue
       path = _object_path(corridors, px, py, pvx, pvy, lateral_position_variance, lateral_velocity_variance,
-                          lateral_velocity_valid, confirmed=previous is not None and previous.path.confirmed,
-                          vision=vision is not None)
+                          lateral_velocity_valid, vision=vision is not None)
       body_path = self._cut_in_path(track, corridors, source_eof=source_eof, eof=eof, now_ns=now_ns,
                                    observation_ns=observation_ns, speed=speed, yaw=yaw, vx=pvx, vy=pvy,
                                    position_variance=lateral_position_variance, velocity_variance=lateral_velocity_variance,
                                    direct_velocity=direct_velocity, previous=previous_body_approaches.get(identifier))
       # Keep ordinary point/visual following independent. A body-only cut-in
-      # does not confirm the outer-band ordinary-following hysteresis.
+      # does not acquire ordinary authority from an earlier point/visual lead.
       if body_path is not None and (path.state != 'inPath'
                                     or path.lateral_motion_valid and abs(path.rate) >= .5 and path.source != 'visionLead'):
         path = body_path
@@ -857,11 +855,14 @@ class HondaRadarControl:
           self._cleared[identifier] = p_ns
           cleared.add(identifier)
           self._tracks.pop(identifier, None)
-        elif known:
+        elif known and path.observed_out:
           # A changed plan geometry may withdraw a candidate immediately, but
           # a fresh independent radar position must corroborate a HOLD release.
           if previous is not None and previous.selected_follow and previous.relevant:
             failed_leads.add(identifier)
+        # Healthy current outer-band geometry simply withdraws the ordinary
+        # role. It is not a measurement failure and cannot create degraded
+        # braking or a clearance receipt for the old target.
         continue
       acceleration = track['acceleration']
       acceleration_good = direct_velocity and track['accelerationGood'] is True and _finite(acceleration) and -10 <= acceleration <= 5

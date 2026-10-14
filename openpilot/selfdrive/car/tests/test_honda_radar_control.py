@@ -709,33 +709,63 @@ def test_near_independent_visual_lead_retains_authority_beside_a_side_reflection
   assert evidence(result)['source'] == 'vision' and evidence(result)['brakeQualified']
 
 
-def test_confirmed_visual_body_occupancy_keeps_radar_motion_through_long_visual_gap():
+def test_visual_confirmation_does_not_give_later_outer_measurements_control_authority():
   controller = HondaRadarControl()
   initial = controller.update(**scene(tracks=[radar(distance=20.0, speed=8.0, lateral=1.6)],
                                      leads=[vision(distance=23.0, speed=11.0)],
                                      bindings=[binding(bias_x=-3.0, bias_y=1.6)]))
   assert evidence(initial)['source'] == 'fused' and evidence(initial)['pathSource'] == 'visionLead'
   assert initial.leads[0]['dRel'] == 20.0 and initial.leads[0]['vLeadK'] == 8.0
-  for frame in range(1, 22):
+  for frame in range(1, 126):
     current = controller.update(**scene(frame, tracks=[radar(frame, distance=20.0, speed=8.0, lateral=1.6)]))
-    claim = evidence(current)
-    assert claim['source'] == 'radar' and not claim['coasting'] and not claim['cautionQualified']
-    assert all(claim[purpose + 'Qualified'] for purpose in ('brake', 'follow', 'stop', 'departure', 'fcw'))
-    assert current.leads[0]['modelProb'] == 0.0 and current.leads[0]['vLeadK'] == 8.0
-    assert 'confirmedOccupancyHysteresis' in claim['reason'] and not current.degraded
-  assert frame * STEP > 883_000_000
+    assert current.healthy and not current.degraded and not current.cleared
+    assert not present_leads(current) and not controller._tracks
+  assert frame * STEP > 6_000_000_000
 
 
-def test_inner_confirmation_uses_two_metre_exit_hysteresis_then_resets():
+@pytest.mark.parametrize('generation', [1, 9], ids=['same-slot-generation', 'same-physical-new-generation'])
+def test_inner_confirmation_cannot_extend_authority_to_the_outer_band(generation):
   controller = HondaRadarControl()
-  controller.update(**scene(tracks=[radar(lateral=1.0, speed=0.0)]))
-  edge = controller.update(**scene(1, tracks=[radar(1, lateral=1.7, speed=0.0)]))
-  assert evidence(edge)['brakeQualified'] and evidence(edge)['stopQualified']
-  assert not evidence(edge)['cautionQualified'] and not edge.cleared
+  initial = controller.update(**scene(tracks=[radar(lateral=1.0, speed=0.0)]))
+  assert evidence(initial)['brakeQualified'] and evidence(initial)['stopQualified']
+  edge = controller.update(**scene(1, tracks=[radar(1, lateral=1.7, speed=0.0, generation=generation)]))
+  assert edge.healthy and not edge.degraded and not edge.cleared
+  assert not present_leads(edge) and not controller._tracks
   outside = controller.update(**scene(2, tracks=[radar(2, lateral=2.5, speed=0.0)]))
   assert not present_leads(outside) and outside.cleared == (1,)
   returned = controller.update(**scene(3, tracks=[radar(3, lateral=1.7, speed=0.0)]))
   assert not present_leads(returned) and not controller._tracks
+  direct = controller.update(**scene(4, tracks=[radar(4, lateral=1.0, speed=0.0)]))
+  assert evidence(direct)['brakeQualified'] and evidence(direct)['stopQualified']
+  assert direct.healthy and not direct.degraded
+
+
+def test_current_same_car_vision_requalifies_offset_body_each_frame_despite_generation_changes():
+  controller = HondaRadarControl()
+  for frame in range(20):
+    current = controller.update(**scene(frame,
+      tracks=[radar(frame, distance=20.0, speed=8.0, lateral=1.6, generation=1 + frame // 3, slot=frame % 2)],
+      leads=[vision(distance=23.0, speed=11.0)], bindings=[binding(bias_x=-3.0, bias_y=1.6)]))
+    claim = evidence(current)
+    assert current.healthy and not current.degraded and not current.cleared
+    assert claim['source'] == 'fused' and claim['pathSource'] == 'visionLead'
+    assert claim['trackId'] == 1 and claim['generation'] == 1 + frame // 3
+    assert claim['positionMonoTime'] == claim['followGeometryMonoTime'] == START + frame * STEP
+    assert all(claim[purpose + 'Qualified'] for purpose in ('follow', 'brake', 'stop', 'departure', 'fcw'))
+    assert current.leads[0]['dRel'] == 20.0 and current.leads[0]['vLeadK'] == 8.0
+
+
+@pytest.mark.parametrize('new_position', [False, True], ids=['intersample', 'independent-position'])
+def test_current_path_change_revokes_inner_confirmation_without_declaring_body_clear(new_position):
+  controller = HondaRadarControl()
+  assert evidence(controller.update(**scene(tracks=[radar(lateral=1.0)])))['brakeQualified']
+  changed = scene(1, tracks=[radar(int(new_position), lateral=1.0)])
+  changed['model']['position']['y'] = [.6] * 33  # Current path puts the same reflection 1.6 m off center.
+  withdrawn = controller.update(**changed)
+  assert withdrawn.healthy and not withdrawn.degraded and not withdrawn.cleared
+  assert not present_leads(withdrawn) and not controller._tracks
+  current = controller.update(**scene(2, tracks=[radar(2, lateral=1.0)]))
+  assert evidence(current)['followQualified'] and evidence(current)['positionMonoTime'] == START + 2 * STEP
 
 
 def test_short_stop_trajectory_uses_quality_lanes_only_inside_spatial_support():

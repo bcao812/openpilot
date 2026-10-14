@@ -282,11 +282,8 @@ def test_current_visual_body_binding_does_not_admit_an_unbound_side_reflection(s
   assert claim['pathState'] == 'inPath' and claim['followQualified']
   assert not claim['cautionQualified'] and not claim['physicalConflictValid']
   current = controller.update(**scene(1, tracks=[radar(1, lateral=1.6)]))
-  if same_car:
-    claim = present_leads(current)[0]['evidence']
-    assert claim['source'] == 'radar' and claim['followQualified']
-    assert claim['positionMonoTime'] == START + STEP and not claim['coasting']
-  else:
-    assert not present_leads(current) and not controller._tracks
+  # Past visual identity does not replace current visual/point occupancy.
+  assert not present_leads(current) and not controller._tracks
+  assert current.healthy and not current.degraded and not current.cleared
   outside = controller.update(**scene(2, tracks=[radar(2, lateral=2.5, lateral_speed=-.8)]))
   assert not present_leads(outside) and outside.cleared == (1,)

@@ -3,6 +3,7 @@ import os
 import time
 from dataclasses import dataclass
 from enum import Enum
+from itertools import permutations
 from numbers import Integral, Real
 import numpy as np
 from openpilot.cereal import log
@@ -100,6 +101,19 @@ class MpcOutcome(Enum):
   REST_REJECTED = 'rejected_rest'
   INPUT_REJECTED = 'rejected_input'
   SOLVER_FAULT = 'solver_fault'
+
+
+@dataclass(frozen=True)
+class ReferenceLeadSupport:
+  """Current formal authority that may have contributed to a mixed reference.
+
+  A visual/legacy slot has no physical identity. Its presence and purposes
+  can be compared, but a new object in the same anonymous slot is not thereby
+  proven to be the preceding object. No old geometry is retained here.
+  """
+  identity: tuple[str, int] | None
+  source: str
+  purposes: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -379,6 +393,10 @@ class LongitudinalMpc:
     self.diagnostic_last_parameters = None
     self.diagnostic_last_yref = None
     self.diagnostic_last_a_prev = None
+    self.diagnostic_reference_history = None
+    # These describe the current attempt and survive a failed solve's reset,
+    # so the producer cannot offer a donor with the just-revoked support.
+    self.reference_support_changed = False
     self.diagnostic_obstacles_enabled = False
     self.diagnostic_last_obstacle_summary = None
     self.diagnostic_obstacle_failures = 0
@@ -508,6 +526,10 @@ class LongitudinalMpc:
     self._reference_epoch_ns = None
     self._reference_acceleration = None
     self._reference_interval_rest = None
+    self._reference_support = None
+    self._reference_prepared_support = None
+    self._reference_pending_support = None
+    self._reference_discard_reason = ''
     self._reference_pending_ns = None
     self._reference_pending_solved = False
 
@@ -521,7 +543,10 @@ class LongitudinalMpc:
     epoch_ns = self._reference_epoch_ns
     acceleration = self._reference_acceleration
     interval_rest = self._reference_interval_rest
+    support = self._reference_support
     self.invalidate_reference_history()
+    self.diagnostic_reference_history = None
+    self.reference_support_changed = False
     self.a_prev = np.zeros_like(self.a_solution)
     if (not isinstance(now_ns, Integral) or isinstance(now_ns, bool)
         or not 0 < now_ns < (1 << 64) or now_ns <= self._reference_clock_ns):
@@ -540,14 +565,16 @@ class LongitudinalMpc:
       return False
     self.a_prev = (interval_rest.sample(T_IDXS + elapsed)[0][:, 2] if interval_rest is not None else
                    np.interp(T_IDXS + elapsed, T_IDXS, acceleration))
+    self._reference_prepared_support = support
     return True
 
   def mark_reference_history(self, *, valid):
     """Commit the native reference only after a qualified UNIFIED output."""
     epoch_ns = self._reference_pending_ns
     solved = self._reference_pending_solved
+    support = self._reference_pending_support
     self.invalidate_reference_history()
-    if (not valid or epoch_ns is None or not solved or not self.previous_solution_valid or self.solution_status != 0
+    if (not valid or epoch_ns is None or support is None or not solved or not self.previous_solution_valid or self.solution_status != 0
         or self.a_solution.shape != T_IDXS.shape or not np.all(np.isfinite(self.a_solution))):
       return False
     self._reference_epoch_ns = epoch_ns
@@ -555,7 +582,86 @@ class LongitudinalMpc:
     # this accepted reference rather than dating a later/failed solve as it.
     self._reference_acceleration = self.a_solution.copy()
     self._reference_interval_rest = self.interval_rest
+    self._reference_support = support
     return True
+
+  @staticmethod
+  def _reference_support_summary(support):
+    return tuple({'identity': item.identity, 'source': item.source, 'purposes': tuple(sorted(item.purposes))}
+                 for item in support or ())
+
+  def qualify_reference_support(self, radarstate, *, now_ns, valid):
+    """Rebuild comfort history when its current formal authority is gone.
+
+    Call only after validating this update's formal leads. Losing a formal
+    slot may be ranking rather than physical clearance; neither permits an
+    unselected object to keep control influence through this comfort cost.
+    The new optimization retains all current leads, measured x0, jerk costs
+    and other constraints. This changes no solver initialization or PID.
+    """
+    previous = self._reference_prepared_support
+    diagnostic = {
+      'referenceMonoTime': self._reference_pending_ns,
+      'previousSupport': self._reference_support_summary(previous),
+      'currentSupport': (), 'reason': 'no_prepared_history', 'supportChanged': False,
+      'anonymousIdentityKnown': False,
+    }
+    self.diagnostic_reference_history = diagnostic
+    if self._reference_pending_ns is None:
+      if not valid:
+        diagnostic['reason'] = 'input_health_unqualified'
+      return
+    # Invalid or degraded input is not an observation of an empty road. Drop
+    # history eligibility independently of the existing producer fault path.
+    if (not valid or getattr(radarstate, 'fusionDegraded', False)
+        or getattr(radarstate, 'fusionActive', False) and not getattr(radarstate, 'fusionHealthy', False)):
+      self.discard_prepared_reference_cost(reason='input_health_unqualified')
+      self.invalidate_reference_history()
+      diagnostic['reason'] = 'input_health_unqualified'
+      return
+    current = []
+    for lead in self._source_leads:
+      evidence = getattr(lead, 'evidence', None)
+      source = str(evidence.source) if evidence is not None and evidence.version == 1 else 'legacy'
+      support = ReferenceLeadSupport(lead_identity(lead), source,
+                                     frozenset(purpose for purpose in ('brake', 'follow', 'stop')
+                                               if qualified_lead(lead, purpose, 0.0, now_ns=now_ns)))
+      # Equal identified views were already validated above. Do not count a
+      # physical object twice just because it occupies both formal slots.
+      if support.identity is None or support not in current:
+        current.append(support)
+    current = tuple(sorted(current, key=lambda item: repr((item.identity, item.source, sorted(item.purposes)))))
+    self._reference_pending_support = current
+    diagnostic['currentSupport'] = self._reference_support_summary(current)
+    diagnostic['reason'] = self._reference_discard_reason or 'new_reference'
+    if previous is None or self._cost_weights[4] <= 0.0:
+      return
+    identified = {item.identity: item for item in current if item.identity is not None}
+    lost = tuple(item for item in previous if item.identity is not None and item.identity not in identified)
+    reduced = tuple(item for item in previous if item.identity in identified
+                    and not item.purposes <= identified[item.identity].purposes)
+    anonymous = tuple(item for item in current if item.identity is None)
+    previous_anonymous = tuple(item for item in previous if item.identity is None)
+    # With at most two formal slots this is bounded to two assignments. A
+    # visual index is deliberately absent: it cannot prove physical identity.
+    anonymous_supported = any(
+      all(old.source == new.source and old.purposes <= new.purposes
+          for old, new in zip(previous_anonymous, assignment, strict=True))
+      for assignment in permutations(anonymous, len(previous_anonymous))
+    )
+    reason = ('formal_support_removed' if lost else 'formal_qualification_reduced' if reduced else
+              'anonymous_support_removed' if not anonymous_supported else '')
+    if reason:
+      self.reference_support_changed = True
+      self.discard_prepared_reference_cost(reason=reason)
+      diagnostic.update(reason=reason, supportChanged=True,
+                        removedSupport=self._reference_support_summary(lost),
+                        reducedSupport=self._reference_support_summary(reduced))
+    else:
+      diagnostic['reason'] = 'inherited'
+    # Replacing the provenance is safe only after the subset check above or
+    # a solve with zero history cost. Otherwise an ordinary new epoch could
+    # launder a removed ancestor's mixed acceleration trajectory as current.
 
   def _capture_continuation_problem(self, *, reference_ns, now_ns, fusion_active):
     """Keep this tick's installed problem before fail/reset can erase it."""
@@ -715,7 +821,7 @@ class LongitudinalMpc:
     return build_candidate(donor, self.continuation_problem, now_ns=now_ns, times=T_IDXS,
                             integrate=self.integrate_jerk, validate=self._continuation_trajectory_error)
 
-  def discard_prepared_reference_cost(self):
+  def discard_prepared_reference_cost(self, *, reason='reference_semantics_changed'):
     """Reject the preceding semantics, retaining this qualified pending epoch.
 
     prepare_reference_history already removed the preceding stored reference.
@@ -723,6 +829,12 @@ class LongitudinalMpc:
     trajectory that the next frame will be allowed to smooth against.
     """
     self.a_prev[:] = 0.0
+    self._cost_weights[4] = 0.0
+    self._costs_pending = True
+    self._reference_prepared_support = None
+    self._reference_discard_reason = reason
+    if self.diagnostic_reference_history is not None:
+      self.diagnostic_reference_history['reason'] = reason
 
   def reject_reference_cost_for_current_collision(self):
     """Do not penalize leaving an old accelerating path that hits a current lead.
@@ -751,9 +863,7 @@ class LongitudinalMpc:
     if not any(self.lead_clearance_minimum(trajectory[:count], states, jerks, times=times) < CRASH_DISTANCE
                for trajectory in self._lead_trajectories):
       return False
-    self.discard_prepared_reference_cost()
-    self._cost_weights[4] = 0.0
-    self._costs_pending = True
+    self.discard_prepared_reference_cost(reason='current_lead_collision')
     return True
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
@@ -1968,7 +2078,8 @@ class LongitudinalMpc:
       self.rest_goal_braking_accel = None
       self.failure_reason = ''
 
-  def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None, now_ns=None, reference_ns=None):
+  def update(self, radarstate, personality=log.LongitudinalPersonality.standard, *, reference=None, now_ns=None, reference_ns=None,
+             reference_inputs_valid=True):
     if self.solution_status == 0:
       self._failure_log_key = None
     self._failure_diagnosed = False
@@ -1977,6 +2088,7 @@ class LongitudinalMpc:
     self._diagnostic_rejected_lead = None
     self._diagnostic_now_ns = now_ns
     self._diagnostic_reference_ns = reference_ns
+    self.reference_support_changed = False
     self.continuation_problem = None
     # Retain the native fourteen-parameter ABI; zero selects the original
     # v_ego + 10 normalization in both generated distance expressions.
@@ -2061,9 +2173,10 @@ class LongitudinalMpc:
       np.column_stack((trajectory[:, 0] + (self.lead_initial_state(lead, reference_ns=reference_ns)[0] - trajectory[0, 0]), trajectory[:, 1]))
       for lead, trajectory in zip(leads, lead_trajectories, strict=True) if lead.present
     )
-    if (reference is not None and self._reference_pending_ns is not None
-        and self._reference_pending_ns == reference_ns):
-      self.reject_reference_cost_for_current_collision()
+    if reference is not None:
+      self.qualify_reference_support(radarstate, now_ns=now_ns, valid=reference_inputs_valid)
+      if self._reference_pending_ns is not None and self._reference_pending_ns == reference_ns:
+        self.reject_reference_cost_for_current_collision()
     recovery_leads = tuple(zip(self._source_leads, self._lead_trajectories, strict=True))
     if recovery_leads and all(lead.vLead >= 0.0 for lead, _ in recovery_leads):
       limit = self.x0[0] + min(trajectory[0, 0] for _, trajectory in recovery_leads) - CRASH_DISTANCE
@@ -2154,6 +2267,7 @@ class LongitudinalMpc:
       'sources': tuple(source_names[sources[index]] for index in selected),
       'distances': tuple(float(value) for value in self.params[:,2]),
       'sourceRule': source_rule,
+      'referenceHistory': self.diagnostic_reference_history,
     }
     if self._obstacle_identities:
       self.diagnostic_last_obstacle_summary.update(
@@ -2316,6 +2430,7 @@ class LongitudinalMpc:
       payload = dict(self._diagnostic_input_times, status=int(status), stage=stage, reason=reason, exception=exception,
                      mpcConsumerMonoTime=self._failure_scalar(self._diagnostic_now_ns),
                      referenceMonoTime=self._failure_scalar(self._diagnostic_reference_ns),
+                     referenceHistory=self.diagnostic_reference_history,
                      nativeReturn=self._diagnostic_native_return, x0=[self._failure_scalar(value) for value in self.x0],
                      solveTime=self._failure_scalar(self.solve_time), suppressedCount=suppressed)
       for field, collect in (('radar', self._failure_radar_summary), ('constraints', self._failure_constraint_summary),

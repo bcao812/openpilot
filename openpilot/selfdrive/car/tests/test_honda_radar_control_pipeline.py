@@ -112,40 +112,44 @@ def test_raw_measured_body_cut_in_brakes_through_fusion_mpc_and_honda_can(side, 
              for row in admitted for sample in row['can'])
 
 
-def confirmed_offset_target(pipeline):
-  """M4-inspired body offset with matched synthetic visual input."""
+def confirmed_offset_target(pipeline, *, visual_gap=True):
+  """Establish current visual body support independently of its radar point."""
   target = Target(20.0, 8.0, lateral=1.3, slot=2, oem_id=16)
   rows = [pipeline.step(speed=8.0, radar=[target], visual=[target]) for _ in range(24)]
   matched = next(lead for lead in objects(rows[-1]) if lead['evidence']['source'] == 'fused')
   identity = matched['evidence']['sessionId'], matched['evidence']['trackId']
-  # Let the fixture's visual probability/association disappear while fresh CAN
-  # keeps this physical identity and its independently confirmed body history.
-  rows.extend(pipeline.step(speed=8.0, radar=[target]) for _ in range(24))
   memory = pipeline.radard.fusion_control._tracks[identity[1]]
   assert memory.path.confirmed and SWEPT_HALF_WIDTH < abs(memory.path.offset) < 2.0
-  current = next(lead for lead in objects(rows[-1]) if lead['evidence']['trackId'] == identity[1])
-  assert current['evidence']['source'] == 'radar' and current['modelProb'] == 0.0
-  assert current['evidence']['brakeQualified'] and current['evidence']['pathState'] == 'inPath'
+  if visual_gap:
+    # Fresh CAN preserves the physical track, while absence of current vision
+    # withdraws this outer point's ordinary authority on the first new frame.
+    gap = [pipeline.step(speed=8.0, radar=[target]) for _ in range(24)]
+    rows.extend(gap)
+    for row in gap:
+      assert not objects(row)
+      assert row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
+      assert not row['radar']['fusionClearedTracks'] and not row['radar']['fusionRiskUnresolved']
+    assert identity[1] not in pipeline.radard.fusion_control._tracks
   return target, identity, memory.generation, rows
 
 
 @pytest.mark.parametrize('intervention', ['gas', 'brake', 'disabled'])
-def test_driver_edges_preserve_fresh_confirmed_body_during_long_visual_gap(intervention, record_property):
+def test_driver_edges_do_not_revive_past_outer_band_qualification(intervention, record_property):
   with control_pipeline(speed=8.0) as pipeline:
     target, identity, generation, rows = confirmed_offset_target(pipeline)
     adapter = pipeline.radard.fusion_control
-    last_position_ns = adapter._tracks[identity[1]].position_ns
+    last_position_ns = rows[-1]['source_ns']
     for _ in range(4):
       row = pipeline.step(speed=8.0, radar=[target], engaged=intervention != 'disabled',
                           pedal=intervention if intervention != 'disabled' else None)
       rows.append(row)
-      memory = adapter._tracks[identity[1]]
       assert pipeline.radard.fusion_control is adapter
-      assert memory.generation == generation and memory.path.confirmed
-      assert memory.position_ns > last_position_ns
-      last_position_ns = memory.position_ns
-      lead = next(lead for lead in objects(row) if lead['evidence']['trackId'] == identity[1])
-      assert lead['evidence']['sessionId'] == identity[0] and lead['evidence']['brakeQualified']
+      current, = [track for track in pipeline.state[SERVICE].fusion.tracks if track.trackId == identity[1]]
+      assert current.active and current.generation == generation and current.positionMonoTime > last_position_ns
+      last_position_ns = current.positionMonoTime
+      assert not objects(row) and identity[1] not in adapter._tracks
+      assert row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
+      assert not row['radar']['fusionClearedTracks']
       assert not row['long_active'] and not pipeline.state['carControl'].longActive
       assert all(not owner['active'] and owner['phase'] == 'off' and owner['accel'] == 0.0 for owner in row['owner'])
       assert all(not command['active'] and not command['brake'] and command['accel'] == 0.0
@@ -154,24 +158,61 @@ def test_driver_edges_preserve_fresh_confirmed_body_during_long_visual_gap(inter
     for _ in range(12):
       row = pipeline.step(speed=8.0, radar=[target])
       rows.append(row)
-      memory = adapter._tracks[identity[1]]
-      assert memory.generation == generation and memory.path.confirmed
-      assert memory.position_ns > last_position_ns
-      last_position_ns = memory.position_ns
+      current, = [track for track in pipeline.state[SERVICE].fusion.tracks if track.trackId == identity[1]]
+      assert current.active and current.generation == generation and current.positionMonoTime > last_position_ns
+      last_position_ns = current.positionMonoTime
+      assert not objects(row) and identity[1] not in adapter._tracks
+      assert row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
+      assert not row['radar']['fusionClearedTracks']
       assert row['long_active'] and pipeline.state['carControl'].longActive
       motion = pipeline.state['controlsState'].motionState
       assert motion.referenceTimingValid and motion.referenceSourceMonoTime == row['source_ns'] > last_manual_ns
-      # Recovery consumes the new owner publication and current body target.
+      assert not motion.waitingForFreshInput and not motion.degraded
+      # Recovery consumes current plans without reviving the former target.
       assert all(owner['active'] and owner['phase'] != 'hold' for owner in row['owner'])
       assert all(command['active'] for command in row['can'])
-    record(record_property, f'confirmed_body_driver_edge_{intervention}', rows)
+    record(record_property, f'outer_qualification_driver_edge_{intervention}', rows)
+
+
+def test_scope_recovery_cannot_reuse_outer_confirmation_as_current_occupancy(record_property):
+  with control_pipeline(speed=8.0) as pipeline:
+    target, identity, _, rows = confirmed_offset_target(pipeline, visual_gap=False)
+    adapter = pipeline.radard.fusion_control
+    for _ in range(6):
+      # The observer continues current sensing while RadarD cannot establish
+      # control scope. This gap must not renew the former path qualification.
+      state = pipeline.state
+      state.valid['longitudinalPlanSP'] = False
+      feedback = state['longitudinalPlanSP'].as_builder()
+      feedback.dec.scopeValid = False
+      state['longitudinalPlanSP'] = feedback.as_reader()
+      row = pipeline.step(speed=8.0, radar=[target])
+      rows.append(row)
+      assert pipeline.radard.fusion_control is adapter
+      assert not row['radar']['fusionActive'] and row['radar']['fusionReason'] == 'controlScopeUnavailable'
+      assert row['radar']['fusionDegraded'] and not objects(row)
+    for _ in range(12):
+      row = pipeline.step(speed=8.0, radar=[target])
+      rows.append(row)
+      assert row['radar']['fusionActive'] and row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
+      assert not objects(row) and identity[1] not in adapter._tracks
+      assert not row['radar']['fusionClearedTracks'] and not row['radar']['fusionRiskUnresolved']
+      motion = pipeline.state['controlsState'].motionState
+      assert not motion.degraded and not motion.waitingForFreshInput
+    # Current same-car visual support can requalify the measured target; a
+    # scope gap must not turn withdrawal into a persistent denial of sensing.
+    rows.extend(pipeline.step(speed=8.0, radar=[target], visual=[target]) for _ in range(24))
+    lead = next(lead for lead in objects(rows[-1]) if lead['evidence']['source'] == 'fused')
+    assert (lead['evidence']['sessionId'], lead['evidence']['trackId']) == identity
+    assert lead['evidence']['followQualified'] and lead['evidence']['stopQualified']
+    record(record_property, 'outer_qualification_scope_recovery', rows)
 
 
 @pytest.mark.parametrize('change', ['observed_out', 'new_identity'])
-def test_confirmed_body_history_still_yields_to_current_out_or_identity_change(change, record_property):
+def test_withdrawn_outer_target_keeps_current_out_and_identity_change_distinct(change, record_property):
   with control_pipeline(speed=8.0) as pipeline:
     target, identity, _, rows = confirmed_offset_target(pipeline)
-    confirmed_position_ns = pipeline.radard.fusion_control._tracks[identity[1]].position_ns
+    last_outer_position_ns = rows[-1]['source_ns']
     if change == 'observed_out':
       # A bounded lateral transition keeps the same raw identity while valid
       # current model/lane geometry observes it leaving the existing 2 m band.
@@ -182,7 +223,7 @@ def test_confirmed_body_history_still_yields_to_current_out_or_identity_change(c
       adapter = pipeline.radard.fusion_control
       same_track, = [track for track in pipeline.state[SERVICE].fusion.tracks if track.trackId == identity[1]]
       assert same_track.active and same_track.oemTrackId == target.oem_id
-      assert same_track.positionMonoTime > confirmed_position_ns
+      assert same_track.positionMonoTime > last_outer_position_ns
       assert rows[-1]['radar']['fusionSessionId'] == identity[0]
       assert identity[1] in rows[-1]['radar']['fusionClearedTracks']
       assert identity[1] in adapter._cleared and identity[1] not in adapter._tracks
@@ -495,6 +536,61 @@ def test_current_radar_and_model_determine_hold_or_release_without_old_identity(
     assert any(row['release'] and not row['stop'] for row in rows[28:])
     assert any(sample['release'] and not sample['stop'] and sample['accel'] > 0.0
                for row in rows[28:] for sample in row['can'])
+
+
+@pytest.mark.parametrize('current_risk', [False, True], ids=['current-forward-model', 'new-current-stationary-target'])
+def test_hold_outer_qualification_withdrawal_uses_only_current_stop_and_departure_inputs(current_risk, record_property):
+  """Real CAN qualifications enter HOLD; later raw sensing decides its exit."""
+  with control_pipeline(speed=0.0) as pipeline:
+    rows = [pipeline.step(speed=0.0, radar=[Target(3.0, 0.0, lateral=1.0)]) for _ in range(28)]
+    former_identity = assert_current_radar_hold(pipeline)
+    held_position_ns = rows[-1]['radar']['leadOne']['evidence']['positionMonoTime']
+    later = []
+    for frame in range(1, 61):
+      # The same measured object moves from the inner band to a stable outer
+      # point. No width/vision observation supplies current body occupancy.
+      targets = [Target(3.0, 0.0, lateral=min(1.6, 1.0 + .02 * frame))]
+      if current_risk and frame >= 5:
+        # Give this independent current obstacle time to qualify before the
+        # first target leaves the inner band; no historical stop is needed.
+        targets.append(Target(2.0, 0.0, slot=1, oem_id=2))
+      row = pipeline.step(speed=0.0, radar=targets, model_stop=False, model_accel=.6)
+      track, = [track for track in pipeline.state[SERVICE].fusion.tracks if track.trackId == former_identity[1]]
+      row['former_track'] = {'track_id': int(track.trackId), 'position_ns': int(track.positionMonoTime),
+                             'lateral': float(track.yRel), 'active': bool(track.active),
+                             'coasting': bool(track.coasting), 'body_valid': bool(track.bodyValid)}
+      later.append(row)
+    rows.extend(later)
+    tail = later[-12:]
+    for row in tail:
+      track = row['former_track']
+      assert track['active'] and not track['coasting'] and not track['body_valid']
+      assert track['position_ns'] == row['source_ns'] > held_position_ns
+      assert SWEPT_HALF_WIDTH < abs(track['lateral']) < 2.0
+      assert row['radar']['fusionSessionId'] == former_identity[0]
+      assert row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
+      assert not row['radar']['fusionClearedTracks'] and not row['radar']['fusionRiskUnresolved']
+      assert all((lead['evidence']['sessionId'], lead['evidence']['trackId']) != former_identity for lead in objects(row))
+      assert not row['reasons'] & int(StopReason.E2E)
+    motion = pipeline.state['controlsState'].motionState
+    assert not motion.degraded and not motion.waitingForFreshInput
+    assert former_identity[1] not in pipeline.radard.fusion_control._tracks
+    if current_risk:
+      for row in tail:
+        current, = objects(row)
+        claim = current['evidence']
+        assert claim['brakeQualified'] and claim['stopQualified'] and not claim['departureQualified']
+        assert claim['positionMonoTime'] == row['source_ns'] and current['dRel'] < 2.1
+        assert not row['release']
+        assert all(owner['phase'] == 'hold' and owner['stop'] for owner in row['owner'])
+        assert all(sample['brake'] and not sample['release'] and sample['accel'] <= 0.0 for sample in row['can'])
+    else:
+      assert all(not objects(row) and not row['reasons'] & int(StopReason.CLOSE_LEAD) for row in tail)
+      assert any(row['release'] and not row['stop'] for row in later)
+      assert any(sample['active'] and sample['release'] and sample['accel'] > 0.0
+                 for row in later for sample in row['can'])
+      assert all(owner['phase'] != 'hold' and not owner['stop'] for owner in tail[-1]['owner'])
+    record(record_property, f'hold_outer_qualification_current_risk_{current_risk}', rows)
 
 
 @pytest.mark.parametrize('scope_exit', ['experimental_disabled', 'dec_disabled', 'scope_stale'])

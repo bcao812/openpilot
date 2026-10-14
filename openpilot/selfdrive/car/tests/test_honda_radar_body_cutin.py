@@ -143,6 +143,20 @@ def test_repeated_sample_does_not_establish_persistent_approach():
   assert control._body_approaches[572].samples == 1
 
 
+def test_former_point_confirmation_does_not_upgrade_a_current_body_only_conflict():
+  control = HondaRadarControl()
+  initial = update(control, 0, body_track(0, lateral=.8))
+  assert qualified_lead(initial.leads[0], 'follow') and qualified_lead(initial.leads[0], 'stop')
+  for frame in range(1, 4):
+    current = update(control, frame, body_track(frame))
+    assert current.healthy and not current.degraded and not current.cleared
+    if frame < 3:
+      assert not present_leads(current)
+  lead, = present_leads(current)
+  assert CUT_IN_REASON in lead['evidence']['reason'] and qualified_lead(lead, 'brake')
+  assert not any(qualified_lead(lead, purpose) for purpose in ('follow', 'stop', 'departure', 'fcw'))
+
+
 @pytest.mark.parametrize('lateral', [-1.24, -1.1, .2, 1.1, 1.24])
 def test_missing_width_preserves_existing_point_following(lateral):
   target = radar(0, distance=16.0, lateral=lateral)

@@ -674,7 +674,7 @@ class UnifiedLongitudinalPlanner:
           # Losing this source also changes the admitted objective. Do not
           # smooth independent current lead braking against a preceding
           # acceleration trajectory whose model contract is now invalid.
-          planner.mpc.discard_prepared_reference_cost()
+          planner.mpc.discard_prepared_reference_cost(reason='model_reference_unqualified')
           previous_reference_valid = False
       if self.model_reference_mode != 'invalid' and model.action.shouldStop:
         cruise_speed = 0.0
@@ -744,7 +744,7 @@ class UnifiedLongitudinalPlanner:
       # A newly admitted rest goal replaces the preceding moving semantics.
       # Keep this new epoch pending so the next same-goal frame can use its
       # accepted trajectory; do not clear history on each new model identity.
-      planner.mpc.discard_prepared_reference_cost()
+      planner.mpc.discard_prepared_reference_cost(reason='new_rest_goal')
       previous_reference_valid = False
     # Ordinary speed response already belongs to CruiseResponse, including
     # admitted MOVING/FORWARD with an independent action cap. Keep native lead
@@ -836,7 +836,13 @@ class UnifiedLongitudinalPlanner:
                              cruise_speed=cruise_speed, active=active, healthy=healthy, reset=reset,
                              forced_decel=forced_decel)
     planner.mpc.update(state['radarState'], personality=state['selfdriveState'].personality, reference=reference,
-                       now_ns=now_ns, reference_ns=source_epoch_ns)
+                       now_ns=now_ns, reference_ns=source_epoch_ns, reference_inputs_valid=healthy)
+    if planner.mpc.reference_support_changed:
+      # A donor keeps the old mixed trajectory even when its identity set is
+      # unchanged but its follow/stop purposes were revoked. Rebuilding that
+      # comfort reference cannot fall back to the just-invalidated basis.
+      self.continuation.invalidate('reference_support_changed', now_ns=now_ns,
+                                   failure=planner.mpc.solution_status != 0)
     if planner.mpc.solution_status != 0:
       self.lead_launch.clear('solver_failure')
       self.lead_launch_active = False
