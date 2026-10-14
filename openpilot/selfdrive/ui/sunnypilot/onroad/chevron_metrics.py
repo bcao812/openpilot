@@ -149,12 +149,19 @@ class ChevronMetrics:
       influences = ()
     model_ns = getattr(radar_state, 'mdMonoTime', 0)
 
-    if has_lead_one and lead_vehicles[0].chevron:
+    braking = tuple(item for item in influences if item.kind in ('braking', 'hold'))
+    braking_one = lead_influence_strength(lead_one, braking, legacy_model_ns=model_ns, legacy_slot=0)
+    braking_two = lead_influence_strength(lead_two, braking, legacy_model_ns=model_ns, legacy_slot=1)
+    close_labels = has_lead_one and has_lead_two and abs(lead_one.dRel - lead_two.dRel) <= 3.0
+    second_visible = has_lead_two and len(lead_vehicles[1].chevron) >= 2
+    # This is label priority, not a claim that nearby detections are one object.
+    # Prefer the adopted braking target; two adopted targets remain separate.
+    prefer_second = close_labels and second_visible and braking_two > 0.0 and braking_one == 0.0
+
+    if has_lead_one and lead_vehicles[0].chevron and not prefer_second:
       strength = lead_influence_strength(lead_one, influences, legacy_model_ns=model_ns, legacy_slot=0)
       self._draw_lead(lead_one, lead_vehicles[0], v_ego, rect, strength)
 
-    if has_lead_two and lead_vehicles[1].chevron:
-      d_rel_diff = abs(lead_one.dRel - lead_two.dRel) if has_lead_one else float('inf')
-      if d_rel_diff > 3.0:
-        strength = lead_influence_strength(lead_two, influences, legacy_model_ns=model_ns, legacy_slot=1)
-        self._draw_lead(lead_two, lead_vehicles[1], v_ego, rect, strength)
+    if second_visible and (not close_labels or braking_two > 0.0):
+      strength = lead_influence_strength(lead_two, influences, legacy_model_ns=model_ns, legacy_slot=1)
+      self._draw_lead(lead_two, lead_vehicles[1], v_ego, rect, strength)

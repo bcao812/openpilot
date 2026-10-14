@@ -30,6 +30,65 @@ def executing_state():
 
 
 class TestControlInfluenceRendering(HeadlessUITestCase):
+  def test_nearby_lead_labels_prioritize_the_adopted_visual_braking_identity(self):
+    from openpilot.selfdrive.ui.sunnypilot.onroad import chevron_metrics as renderer
+
+    cases = (
+      ('braking', ['20 m']), ('hold', ['20 m']), ('both_adopted', ['19 m', '20 m']),
+      ('follow', ['19 m']), ('different_vision_index', ['19 m']), ('different_model_frame', ['19 m']),
+      ('expired', ['19 m']), ('stale_radar', ['19 m']), ('gas_override', ['19 m']),
+      ('brake_override', ['19 m']), ('no_second_projection', ['19 m']),
+    )
+    ui = SimpleNamespace(chevron_metrics=renderer.ChevronOptions.DISTANCE_ONLY, is_metric=True)
+    with patch.object(renderer, 'ui_state', ui), patch.object(renderer.gui_app, 'font', return_value=object()), \
+         patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
+         patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(90, 40)), \
+         patch.object(rl, 'draw_text_ex') as text:
+      metrics = renderer.ChevronMetrics()
+      metrics._lead_status_alpha = 1.0
+      for case, expected in cases:
+        with self.subTest(case=case):
+          sm = executing_state()
+          radar = sm['radarState']
+          radar.leadOne = {'present': True, 'radar': True, 'dRel': 18.92, 'vRel': -1.07,
+                           'evidence': {'version': 1, 'source': 'radar', 'sessionId': 'fixture', 'trackId': 42}}
+          # The second formal lead contains model hypothesis zero, not one.
+          radar.leadTwo = {'present': True, 'radar': False, 'dRel': 20.31, 'vRel': -2.25,
+                           'evidence': {'version': 1, 'source': 'vision', 'modelMonoTime': START, 'visionIndex': 0}}
+          record = sm['controlsState'].motionState.objectInfluences[0]
+          record.sessionId, record.trackId, record.visionIndex = '', 0, 0
+          vehicles = [SimpleNamespace(chevron=[(250.0, 150.0), (260.0, 170.0)]),
+                      SimpleNamespace(chevron=[(550.0, 150.0), (560.0, 170.0)])]
+          if case in ('follow', 'hold'):
+            record.kind = case
+            if case == 'hold':
+              record.strength = 1.0
+              sm['controlsState'].motionState.phase = 'hold'
+          elif case == 'both_adopted':
+            sm['controlsState'].motionState.objectInfluences = [
+              record.to_dict(), {'version': 1, 'sessionId': 'fixture', 'trackId': 42,
+                                 'kind': 'braking', 'strength': 0.25},
+            ]
+          elif case == 'different_vision_index':
+            record.visionIndex = 1
+          elif case == 'different_model_frame':
+            record.modelMonoTime = START - 50_000_000
+          elif case in ('expired', 'stale_radar'):
+            sm.logMonoTime['controlsState' if case == 'expired' else 'radarState'] = START - 200_000_001
+          elif case == 'gas_override':
+            sm['carState'].gasPressed = True
+          elif case == 'brake_override':
+            sm['carState'].brakePressed = True
+          elif case == 'no_second_projection':
+            vehicles[1].chevron = []
+          text.reset_mock()
+          metrics.draw_lead_status(sm, radar, rl.Rectangle(0, 0, 1280, 720), vehicles)
+          foreground = [call.args for call in text.call_args_list if call.args[-1].r != 0]
+          self.assertEqual([call[1] for call in foreground], expected)
+          for call in foreground:
+            expected_rgb = influence_rgb(1.0 if case == 'hold' else 0.25) if case in ('braking', 'hold', 'both_adopted') else (255, 255, 255)
+            self.assertEqual((call[-1].r, call[-1].g, call[-1].b), expected_rgb)
+
   def test_native_control_receipt_roundtrip_is_the_ui_input(self):
     sm = executing_state()
     event = messaging.new_message('controlsState')

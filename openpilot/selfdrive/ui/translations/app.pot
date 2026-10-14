@@ -2304,3 +2304,31 @@ msgstr ""
 #: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Save high-resolution front and wide-road video while longitudinal control is active and for 10 seconds afterwards. Low-resolution video and driving logs continue. Changes take effect on the next drive."
 msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
+msgid "Target constraint"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
+msgid "+{count} more"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
+msgid "RADAR #{track}"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
+msgid "RADAR #{track} + V{index}"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
+msgid "VISION {index}"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
+msgid "Hold"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
+msgid "Braking"
+msgstr ""
