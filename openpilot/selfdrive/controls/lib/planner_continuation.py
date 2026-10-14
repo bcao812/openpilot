@@ -11,7 +11,7 @@ import time
 import numpy as np
 
 from openpilot.selfdrive.controls.lib.drive_helpers import CLOSE_LEAD_STOP_SPEED
-from openpilot.selfdrive.controls.lib.lead_qualification import control_leads, lead_identity
+from openpilot.selfdrive.controls.lib.lead_qualification import control_leads, lead_identity, qualified_lead
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
   CONTINUATION_STATUSES, CONTINUATION_VERSION,
   ContinuationBudget, ContinuationCandidate, ContinuationDonor as NativeIdentity, ContinuationOffer, inactive_native_recovery,
@@ -29,6 +29,7 @@ class _Donor:
   instance_ns: int
   scope: tuple
   objects: frozenset | None
+  object_purposes: frozenset
 
 
 class PlannerContinuation:
@@ -61,20 +62,24 @@ class PlannerContinuation:
       self.reason = reason
 
   @staticmethod
-  def object_identities(radar, now_ns):
-    """Do not inherit across an unknown identity, disappearance or a new object.
+  def object_support(radar, now_ns):
+    """Snapshot the physical objects and purposes supporting a native donor.
 
     Current numerical validation still includes every admitted object.  This
     deliberately restrictive first version also requires stable identities;
-    a visual slot number alone cannot establish physical continuity.
+    a visual slot number alone cannot establish physical continuity. The
+    donor retains its own immutable follow/brake/stop support even after a
+    failed solve has cleared the MPC's reference-history bookkeeping.
     """
-    identities = []
+    identities, purposes = set(), set()
     for lead in control_leads(radar, 'brake', 0.0, now_ns=now_ns):
       identity = lead_identity(lead)
       if identity is None:
         return None
-      identities.append(identity)
-    return frozenset(identities)
+      identities.add(identity)
+      purposes.update((identity, purpose) for purpose in ('brake', 'follow', 'stop')
+                      if qualified_lead(lead, purpose, 0.0, now_ns=now_ns))
+    return frozenset(identities), frozenset(purposes)
 
   @staticmethod
   def receipt_available(state, now_ns, *, allow_inactive=False):
@@ -143,8 +148,8 @@ class PlannerContinuation:
     if not permitted or timing is None or not self.owner_available(state, now_ns):
       self.donor = None
       return
-    objects = self.object_identities(state['radarState'], now_ns)
-    if (objects is None or not valid_timestamp(model_ns) or model_ns > now_ns
+    support = self.object_support(state['radarState'], now_ns)
+    if (support is None or not valid_timestamp(model_ns) or model_ns > now_ns
         or timing.producer_ns != now_ns or timing.instance_ns <= 0):
       self.donor = None
       return
@@ -153,7 +158,9 @@ class PlannerContinuation:
     if trajectory is None:
       self.donor = None
       return
-    self.donor = _Donor(trajectory, timing.producer_ns, timing.epoch_ns, int(model_ns), timing.instance_ns, scope, objects)
+    objects, purposes = support
+    self.donor = _Donor(trajectory, timing.producer_ns, timing.epoch_ns, int(model_ns), timing.instance_ns,
+                        scope, objects, purposes)
 
   def attempt(self, mpc, state, timing, *, now_ns, permitted, scope, action_t, independent_ceiling):
     self.budget.note_failure(now_ns)
@@ -173,9 +180,13 @@ class PlannerContinuation:
     if (donor.scope != scope or donor.instance_ns != timing.instance_ns
         or not self._owner_matches(state, now_ns)):
       return reject('donor_not_currently_owned')
-    objects = self.object_identities(state['radarState'], now_ns)
-    if objects is None or objects != donor.objects:
+    support = self.object_support(state['radarState'], now_ns)
+    if support is None or support[0] != donor.objects:
       return reject('object_identity_changed')
+    if not donor.object_purposes <= support[1]:
+      # Recheck on every attempt: an earlier accepted continuation can outlive
+      # the MPC history that detected qualification changes on native ticks.
+      return reject('object_qualification_reduced')
     donor_times = dict(donor_producer_ns=donor.producer_ns, donor_source_ns=donor.source_ns, donor_model_ns=donor.model_ns)
     if not self.budget.allows(now_ns, **donor_times):
       return reject('continuation_budget_exhausted')

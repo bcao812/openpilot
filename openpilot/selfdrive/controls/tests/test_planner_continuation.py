@@ -4,10 +4,16 @@ import numpy as np
 import pytest
 
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_VERSION
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  get_T_FOLLOW, get_safe_obstacle_distance, get_stopped_equivalence_factor,
+)
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state, advance, Publisher
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
+from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+from openpilot.selfdrive.controls.tests.test_radar_consumption import native_frame, radar_frame
+from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner
 
 
 def acknowledge_native(state, planner, now_ns):
@@ -207,6 +213,79 @@ def test_a_continuation_cannot_become_the_next_native_donor():
   assert carry.donor is original
   assert carry.offer.episode_start_ns == 1_100_000_000
   assert carry.offer.valid_until_ns <= 1_200_000_000
+
+
+@pytest.mark.parametrize('change', ['unchanged', 'slot_generation_source', 'follow', 'stop', 'body_only'])
+def test_consecutive_failures_recheck_native_donor_purposes_after_mpc_history_is_cleared(change):
+  planner = enabled_planner(20.0)
+  state = make_state(speed=20.0, target=20.0, experimental=True)
+  following_time = get_T_FOLLOW(state['selfdriveState'].personality,
+                                v_ego=20.0 if planner.mpc.speed_based_following else None)
+  # A balanced following state admits a numerical continuation witness. A
+  # different distance can fail that certificate before this guard is tested.
+  distance = float(get_safe_obstacle_distance(20.0, following_time) - get_stopped_equivalence_factor(20.0))
+
+  def install(frame, update='unchanged'):
+    now = advance(state, frame)
+    state['modelV2'].timestampEof = now
+    lead = formal_lead(now_ns=now, dRel=distance, vLead=20.0, vLeadK=20.0, vRel=0.0)
+    if update in ('follow', 'stop'):
+      setattr(lead.evidence, update + 'Qualified', False)
+    elif update == 'body_only':
+      for purpose in ('follow', 'stop', 'departure', 'fcw'):
+        setattr(lead.evidence, purpose + 'Qualified', False)
+      lead.evidence.followGeometryMonoTime = 0
+    if update == 'slot_generation_source':
+      lead.evidence.generation += 1
+      lead.evidence.source = 'fused'
+      lead.evidence.visionIndex = 0
+      display = (formal_lead(present=False), lead)
+    else:
+      display = (lead,)
+    state['radarState'] = native_frame(radar_frame(lead, publication=now, display=display))
+    return now
+
+  with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
+    for frame in (0, 1):
+      now = install(frame)
+      planner.update(state, now_ns=now)
+      assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
+      acknowledge_native(state, planner, now)
+    carry = planner.reference_planner.continuation
+    donor = carry.donor
+    assert donor is not None
+    assert donor.object_purposes == frozenset((('radar-session-a', 7), purpose) for purpose in ('brake', 'follow', 'stop'))
+    install(2)
+    now = fail_next(planner, state, frame=2)
+    first = carry.offer
+    assert first is not None, carry.reason
+    assert carry.donor is donor and planner.mpc._reference_support is None
+    assert not planner.reference_planner.reference_initialized
+
+    motion = state['controlsState'].motionState
+    motion.continuationActive = True
+    motion.continuationDonorProducerMonoTime = donor.producer_ns
+    motion.continuationEpisodeMonoTime = first.episode_start_ns
+    motion.continuationValidUntilMonoTime = first.valid_until_ns
+    motion.referenceProducerMonoTime = now
+    motion.referenceConsumerMonoTime = now + 1_000_000
+    install(3, change)
+    with patch.object(planner.mpc, 'continuation_candidate', wraps=planner.mpc.continuation_candidate) as certificate:
+      fail_next(planner, state, frame=3)
+    assert planner.mpc.solution_status == 4 and not planner.motion_intent.valid
+    assert not planner.mpc.reference_support_changed  # The prior failure removed this independent MPC guard.
+    assert carry.budget.episode_start_ns == first.episode_start_ns
+    assert carry.budget.deadline(donor_producer_ns=donor.producer_ns, donor_source_ns=donor.source_ns,
+                                donor_model_ns=donor.model_ns) == first.valid_until_ns
+    if change in ('follow', 'stop', 'body_only'):
+      assert carry.offer is None and carry.donor is None
+      assert carry.reason == 'object_qualification_reduced'
+      certificate.assert_not_called()
+    else:
+      assert carry.offer is not None, carry.reason
+      assert carry.donor is donor and carry.offer.donor_source_ns == donor.source_ns
+      assert carry.offer.valid_until_ns == first.valid_until_ns
+      certificate.assert_called_once()
 
 
 def test_healthy_native_stop_clears_episode_without_becoming_a_moving_donor():
