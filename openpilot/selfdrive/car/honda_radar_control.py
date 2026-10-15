@@ -16,13 +16,14 @@ from dataclasses import dataclass, field, replace
 import math
 from numbers import Real
 from openpilot.selfdrive.car.honda_radar_relevance import loss_relevant
-from openpilot.selfdrive.car.honda_radar_velocity import (
-  LONG_WINDOW_NS, MAX_SAMPLES, MIN_CONSISTENT_SAMPLES, MIN_SAMPLES, MIN_SPAN, VERSION as POSITION_VELOCITY_VERSION,
+from openpilot.selfdrive.car.honda_radar_native import (
+  MAX_PAIR_NS as NATIVE_MAX_PAIR_NS, MIN_PAIRS as NATIVE_MIN_PAIRS,
+  MIN_SPAN_NS as NATIVE_MIN_SPAN_NS, VERSION as NATIVE_VERSION,
 )
 
 
 VERSION = 1
-FUSION_VERSION = 'bosch-a-shadow-3'
+FUSION_VERSION = 'bosch-a-native-4'
 MAX_TRACKS = 32
 MAX_AGE_NS = 200_000_000
 MIN_OBSERVATIONS = 3
@@ -308,24 +309,22 @@ _TRACK_FIELDS = ('trackId', 'oemTrackId', 'generation', 'slot', 'positionSeq', '
                  'previousPositionSeq', 'previousPositionMonoTime', 'acceleration', 'accelerationGood',
                  'lateralPositionVariance', 'lateralVelocityVariance', 'lateralVelocityValid',
                  'bodyValid', 'bodyMonoTime', 'bodyAvailableMonoTime', 'bodyWidth',
-                 'bodyLeftX', 'bodyLeftY', 'bodyRightX', 'bodyRightY', 'positionVelocity')
+                 'bodyLeftX', 'bodyLeftY', 'bodyRightX', 'bodyRightY', 'nativeMotion')
 _BINDING_FIELDS = ('modelIndex', 'present', 'probability', 'trackId', 'candidateTrackId', 'identityState', 'rejectionMonoTime',
                    'bindingStartMonoTime', 'bindingSamples', 'bindingAnchorX', 'bindingAnchorY', 'identityReason', 'reason')
-_POSITION_VELOCITY_FIELDS = ('version', 'positionSeq', 'positionMonoTime', 'sampleCount', 'span', 'shortSpeed', 'longSpeed',
-                             'speedStd', 'windowDifference', 'windowDifferenceStd', 'innovationBias', 'posteriorCorrection',
-                             'posteriorCorrectionRatio', 'posteriorSpeedDifference', 'consistentSamples', 'qualified', 'reason')
-_POSITION_VELOCITY_METRICS = ('span', 'shortSpeed', 'longSpeed', 'speedStd', 'windowDifference', 'windowDifferenceStd',
-                              'innovationBias', 'posteriorCorrection', 'posteriorCorrectionRatio', 'posteriorSpeedDifference')
-_POSITION_VELOCITY_NONNEGATIVE = ('speedStd', 'windowDifference', 'windowDifferenceStd', 'posteriorCorrection',
-                                  'posteriorCorrectionRatio', 'posteriorSpeedDifference')
+_NATIVE_MOTION_FIELDS = ('version', 'qualified', 'reason', 'positionSeq', 'positionMonoTime', 'velocitySeq',
+                       'velocityMonoTime', 'sampleCount', 'firstPositionMonoTime', 'validUntilMonoTime',
+                       'rawRelativeSpeed', 'groundSpeed', 'velocityVariance', 'acceleration', 'accelerationValid',
+                       'u10Raw', 'rangeSigmaRaw', 'existenceRaw', 'pairCompleteMonoTime', 'distanceResidual',
+                       'distanceResidualValid', 'frameIndex')
 
 
-def _position_velocity_snapshot(evidence):
+def _native_motion_snapshot(evidence):
   if evidence is None:
     return None
   # The publication identity must own its values. A capnp reader or nested
   # mutable fixture must not rewrite the previously accepted signature.
-  values = (_read(evidence, key) for key in _POSITION_VELOCITY_FIELDS)
+  values = (_read(evidence, key) for key in _NATIVE_MOTION_FIELDS)
   snapshot = []
   for value in values:
     if isinstance(value, Real) and not math.isfinite(value):
@@ -339,32 +338,49 @@ def _position_velocity_snapshot(evidence):
   return tuple(snapshot)
 
 
-def _position_velocity_state(evidence, position_seq, position_ns, observations):
+def _native_motion_state(evidence, track, *, now_ns, observation_ns):
+  """Validate the producer's complete-pair contract independently of its flag.
+
+  Missing/explicitly unqualified native evidence is an ordinary absent radar
+  candidate. A contradictory qualified claim remains an input integrity error.
+  Neither path may borrow visual or position-derived velocity to authorize it.
+  """
   if evidence is None:
     return 'pending'
-  quality = dict(zip(_POSITION_VELOCITY_FIELDS, evidence, strict=True))
+  quality = dict(zip(_NATIVE_MOTION_FIELDS, evidence, strict=True))
   version = quality['version']
   if version is None or _integer(version) and version == 0:
     return 'pending'
-  if (not _integer(version) or version != POSITION_VELOCITY_VERSION
-      or not _integer(quality['positionSeq']) or quality['positionSeq'] != position_seq
-      or not _integer(quality['positionMonoTime']) or quality['positionMonoTime'] != position_ns
-      or not _integer(quality['sampleCount']) or not 0 <= quality['sampleCount'] <= min(MAX_SAMPLES, observations)
-      or not _integer(quality['consistentSamples']) or not 0 <= quality['consistentSamples'] <= min(MAX_SAMPLES, observations)
-      or not _finite(*(quality[key] for key in _POSITION_VELOCITY_METRICS))
-      or not 0 <= quality['span'] <= LONG_WINDOW_NS / 1e9
-      or any(quality[key] < 0 for key in _POSITION_VELOCITY_NONNEGATIVE)
-      or not isinstance(quality['qualified'], bool)):
-    return 'invalid'
-  count, span = quality['sampleCount'], quality['span']
-  if count < 2 and span != 0 or count >= 2 and span <= 0:
+  if not _integer(version) or version != NATIVE_VERSION or not isinstance(quality['qualified'], bool):
     return 'invalid'
   if not quality['qualified']:
     return 'pending'
-  # These support checks validate the producer's flag; the producer owns the
-  # consistency thresholds and computes them from independent current scans.
-  if count < MIN_SAMPLES or span < MIN_SPAN or quality['consistentSamples'] < MIN_CONSISTENT_SAMPLES:
+  p_ns, v_ns = track['positionMonoTime'], track['velocityMonoTime']
+  integers = ('positionSeq', 'positionMonoTime', 'velocitySeq', 'velocityMonoTime', 'sampleCount',
+              'firstPositionMonoTime', 'validUntilMonoTime', 'pairCompleteMonoTime', 'u10Raw',
+              'rangeSigmaRaw', 'existenceRaw', 'frameIndex')
+  if (not all(_integer(quality[key]) for key in integers)
+      or quality['positionSeq'] != track['positionSeq'] or quality['positionMonoTime'] != p_ns
+      or quality['velocityMonoTime'] != v_ns or quality['velocitySeq'] <= 0
+      or not _integer(v_ns) or not _integer(track['observations'])
+      or not NATIVE_MIN_PAIRS <= quality['sampleCount'] <= track['observations']
+      or not 0 < quality['firstPositionMonoTime'] <= p_ns - NATIVE_MIN_SPAN_NS
+      or abs(v_ns - p_ns) > NATIVE_MAX_PAIR_NS
+      or not max(p_ns, v_ns) <= quality['pairCompleteMonoTime'] <= observation_ns
+      or quality['validUntilMonoTime'] != min(p_ns, v_ns) + MAX_AGE_NS
+      or not 0 <= quality['u10Raw'] < 256 or not 0 <= quality['frameIndex'] < 16
+      or not 0 <= quality['rangeSigmaRaw'] <= 127 or not 0 <= quality['existenceRaw'] <= 127
+      or not _finite(quality['rawRelativeSpeed'], quality['groundSpeed'], quality['velocityVariance'])
+      or not -13.5 < quality['rawRelativeSpeed'] < 13.5
+      or quality['groundSpeed'] != track['groundSpeed'] or quality['velocityVariance'] != track['velocityVariance']
+      or track['velocityGood'] is not True
+      or not isinstance(quality['accelerationValid'], bool)
+      or quality['accelerationValid'] != track['accelerationGood']
+      or quality['accelerationValid'] and (not _finite(quality['acceleration'])
+          or not -10 <= quality['acceleration'] <= 5 or quality['acceleration'] != track['acceleration'])):
     return 'invalid'
+  if not _fresh(p_ns, now_ns) or not _fresh(v_ns, now_ns) or now_ns > quality['validUntilMonoTime']:
+    return 'pending'
   return 'qualified'
 
 
@@ -650,7 +666,7 @@ class HondaRadarControl:
     visions = self._vision(raw_visions, model, model_ns, eof)
     identity_visions = self._identity_visions(visions, model)
     previous_tracks = dict(self._tracks)
-    previous_positions = ({row[0]: (row[4], row[5]) for row in self._publication[-1][0]
+    previous_positions = ({row[0]: (row[4], row[5], row[6]) for row in self._publication[-1][0]
                            if all(_integer(row[index]) for index in (0, 4, 5))}
                           if self._publication is not None else {})
     corridors = _corridors(model)
@@ -675,7 +691,7 @@ class HondaRadarControl:
       else:
         tracks = [{key: _read(t, key) for key in _TRACK_FIELDS} for t in source_tracks]
         for track in tracks:
-          track['positionVelocity'] = _position_velocity_snapshot(track['positionVelocity'])
+          track['nativeMotion'] = _native_motion_snapshot(track['nativeMotion'])
         bindings = [{key: _read(b, key) for key in _BINDING_FIELDS} for b in source_bindings]
         session, sequence = _read(observation, 'sessionId'), _read(observation, 'sequence')
         counters = (_read(_read(observation, 'counters'), 'dropped', 0), _read(_read(fusion, 'counters'), 'resets', 0))
@@ -748,60 +764,41 @@ class HondaRadarControl:
         continue
       if track['mature'] is not True or not _integer(track['observations']) or track['observations'] < MIN_OBSERVATIONS:
         continue
-      velocity_components = _finite(vx, vy, v_var) and -35 <= vx <= 80 and abs(vy) <= 30 and v_var >= 0
-      velocity_values = velocity_components and v_var <= VELOCITY_MAX_VARIANCE
-      # Determine association in the current frame before borrowing any visual
-      # component. The unresolved/different hypothesis is never a fallback.
-      if not _finite(vy) or abs(vy) > 30:
+      if (not _finite(vx, vy, v_var) or not -35 <= vx <= 80 or abs(vy) > 30 or v_var < 0):
         self._tracks.pop(identifier, None)
         if previous is not None and previous.selected_follow and previous.relevant:
           failed_leads.add(identifier)
         continue
-      if not _finite(vx) or not -35 <= vx <= 80:
-        # A simultaneous frame needs no velocity for position association.
-        # Otherwise current motion evidence is required for time alignment.
-        if source_eof != eof:
-          if previous is not None and previous.selected_follow and previous.relevant:
-            failed_leads.add(identifier)
-          continue
-        vx = 0.0
-      px, py, pvx, pvy = _project(x, y, vx, vy, (eof - source_eof) / 1e9, speed, yaw)
-      projected_vx, projected_vy = pvx, pvy
+      native_state = _native_motion_state(track['nativeMotion'], track, now_ns=now_ns, observation_ns=observation_ns)
+      if native_state != 'qualified':
+        self._tracks.pop(identifier, None)
+        if native_state == 'invalid' and previous is not None and previous.selected_follow and previous.relevant:
+          failed_leads.add(identifier)
+        # A split scan waiting for its own AUX must not erase the independent
+        # geometric approach history. It grants no radar authority meanwhile.
+        quality = dict(zip(_NATIVE_MOTION_FIELDS, track['nativeMotion'], strict=True)) if track['nativeMotion'] else {}
+        if (quality.get('reason') == 'awaitingAux' and identifier in previous_body_approaches
+            and _fresh(previous_body_approaches[identifier].position_ns, p_ns, 100_000_000)):
+          self._body_approaches[identifier] = previous_body_approaches[identifier]
+        continue
+      velocity_components = _finite(vx, vy, v_var) and -35 <= vx <= 80 and abs(vy) <= 30 and v_var >= 0
+      velocity_values = velocity_components and v_var <= VELOCITY_MAX_VARIANCE
+      direct_velocity = (velocity_values and track['velocityGood'] is True and _fresh(v_ns, now_ns)
+                         and v_ns <= observation_ns and abs(v_ns - p_ns) <= NATIVE_MAX_PAIR_NS
+                         and (previous is None or v_ns >= previous.raw_velocity_ns))
+      if not direct_velocity:
+        self._tracks.pop(identifier, None)
+        if (not velocity_values and previous is not None and previous.selected_follow and previous.relevant):
+          failed_leads.add(identifier)
+        continue
+      projection_dt = (eof - source_eof) / 1e9
+      px, py, _, pvy = _project(x, y, vx, vy, projection_dt, speed, yaw)
+      # Longitudinal speed has its own native source. Position-derived lateral
+      # speed may align geometry, but cannot rotate back into that scalar.
+      pvx = vx
       vision_index = self._binding(identifier, bindings, identity_visions, px, py, source_eof)
       vision = visions[vision_index] if vision_index >= 0 else None
-      direct_velocity = (velocity_values and track['velocityGood'] is True and _fresh(v_ns, now_ns)
-                         and v_ns <= observation_ns and abs(v_ns - p_ns) <= MAX_AGE_NS
-                         and (previous is None or v_ns >= previous.raw_velocity_ns))
       component_reason = 'radar'
-      if not direct_velocity:
-        if vision is not None:
-          pvx, v_ns, v_var = vision['vLeadK'], eof, vision['evidence']['velocityStd'] ** 2
-          component_reason = 'visionVelocity'
-        else:
-          quality = _position_velocity_state(track['positionVelocity'], p_seq, p_ns, track['observations'])
-          if quality == 'pending' and velocity_components:
-            # Current position evidence has not converged. Withdraw only this
-            # candidate; this is neither an input fault nor measured OUT. No
-            # old velocity/qualification survives the final current selection.
-            continue
-          if (quality == 'qualified' and velocity_values and v_var <= POSITION_SPEED_MAX_VARIANCE
-              and track['observations'] >= MIN_SAMPLES
-              and _integer(track['previousPositionSeq']) and track['previousPositionSeq'] < p_seq
-              and _fresh(track['previousPositionMonoTime'], p_ns)):
-            v_ns = p_ns
-            component_reason = 'positionVelocity'
-          else:
-            # Corrupt components or contradictory quality still report the
-            # existing selected-near-lead failure; a raw unselected candidate
-            # cannot create a new global measurement obligation.
-            if previous is not None and previous.selected_follow and previous.relevant:
-              failed_leads.add(identifier)
-            continue
-      # A borrowed component must also drive alignment of position over the
-      # same interval; otherwise d and v would describe different trajectories.
-      projection_dt = (eof - source_eof) / 1e9
-      px += (pvx - projected_vx) * projection_dt
-      py += (pvy - projected_vy) * projection_dt
       if not _finite(px, py, pvx, pvy, v_var) or px <= 0 or v_var < 0:
         if previous is not None and previous.selected_follow and previous.relevant:
           failed_leads.add(identifier)
@@ -827,7 +824,12 @@ class HondaRadarControl:
                                     or path.lateral_motion_valid and abs(path.rate) >= .5 and path.source != 'visionLead'):
         path = body_path
       old_position = previous_positions.get(identifier)
-      independent = ((old_position is None or p_seq > old_position[0] and p_ns > old_position[1])
+      # A position first seen while its AUX was pending becomes a newly
+      # complete native pair when that same scan's real velocity arrives.
+      # Merely changing a quality flag with an already present velocity does
+      # not establish new occupancy or count another source measurement.
+      completed_pair = old_position == (p_seq, p_ns, 0) and v_ns > 0
+      independent = ((old_position is None or p_seq > old_position[0] and p_ns > old_position[1] or completed_pair)
                      if previous is None else p_ns > previous.position_ns and p_seq > previous.position_seq)
       occupied_before = (previous is not None and previous.path.state == 'inPath' and previous.accepted is not None
                          and previous.accepted['evidence']['brakeQualified']

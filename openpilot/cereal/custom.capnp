@@ -711,6 +711,34 @@ struct HondaRadarObservations {
     bodyAvailableMonoTime @43 :UInt64;  # latest F0..F3 time
     bodyValid @44 :Bool = false;  # geometric estimate, not control permission
     positionVelocity @45 :PositionVelocityQuality;
+    nativeMotion @46 :NativeMotionQuality;
+  }
+
+  struct NativeMotionQuality {
+    # Only independent same-scan native distance/AUX pairs can qualify.
+    # Missing/old messages default to version 0 and cannot authorize a lead.
+    version @0 :UInt8;
+    qualified @1 :Bool = false;
+    reason @2 :Text;
+    positionSeq @3 :UInt64;
+    positionMonoTime @4 :UInt64;
+    velocitySeq @5 :UInt64;
+    velocityMonoTime @6 :UInt64;
+    sampleCount @7 :UInt16;
+    firstPositionMonoTime @8 :UInt64;
+    validUntilMonoTime @9 :UInt64;  # original min(position,AUX) + 200 ms; never renewed
+    rawRelativeSpeed @10 :Float64;
+    groundSpeed @11 :Float64;
+    velocityVariance @12 :Float64;  # engineering noise, not calibrated sigma
+    acceleration @13 :Float64;
+    accelerationValid @14 :Bool;
+    u10Raw @15 :UInt16;
+    rangeSigmaRaw @16 :UInt16;
+    existenceRaw @17 :UInt16;
+    pairCompleteMonoTime @18 :UInt64;  # first producer receipt of this complete pair
+    distanceResidual @19 :Float64;  # diagnostic only; not a calibrated hard gate
+    distanceResidualValid @20 :Bool;
+    frameIndex @21 :UInt8;
   }
 
   struct PositionVelocityQuality {

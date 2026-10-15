@@ -35,11 +35,15 @@ class Inputs(dict):
 def observation(frame, distance=20.0, lateral=0.0, relative=0.0, u10=20, slot=0, oem=7, velocity=True):
   t = START + frame * STEP
   seq = frame * 100 + 2 * slot + 1
+  u11 = round(relative * 64 + 864)
   return {'slot': slot, 'frameIndex': frame % 16, 'frameMask': 31 if velocity else 15, 'generation': 1,
               'positionSeq': seq, 'velocitySeq': seq + 1 if velocity else 0, 'positionMonoTime': t, 'velocityMonoTime': t if velocity else 0,
-              'dRel': distance, 'yRel': lateral, 'vRel': relative, 'positionValid': True, 'velocityValid': velocity,
+              'dRel': distance, 'yRel': lateral, 'vRel': (u11 - 864) / 64.0, 'positionValid': True, 'velocityValid': velocity,
               'reason': 'uncalibrated' if velocity else 'positionOnly',
-              'raw': {'oemTrackId': oem, 'lifecycleRaw': 1 + 2 * frame, 'u10Raw': u10, 'u11Raw': round(relative * 64 + 864)}}
+              'raw': {'oemTrackId': oem, 'lifecycleRaw': 1 + 2 * frame, 'u10Raw': u10, 'u11Raw': u11,
+                      'statusRaw': 7, 'rangeRaw': round((distance + 3) / .05712),
+                      'azimuthRaw': round(math.atan2(lateral, distance) * 2048 + 1024),
+                      'rangeSigmaRaw': 20, 'existenceRaw': 100}}
 
 
 def source_observation(timestamp, sequence, index, lifecycle, generation=1, **kwargs):
@@ -751,7 +755,7 @@ class TestHondaRadarFusion(unittest.TestCase):
         self.assertEqual(fusion.tracks[7].count, 1)
 
   def test_saturation_return_rejects_velocity_identity_and_position_failures(self):
-    failures = ('positionOnly', 'badQuality', 'badNative', 'invalidVelocity', 'velocityInnovation', 'velocityAge',
+    failures = ('positionOnly', 'badQuality', 'badNative', 'invalidVelocity', 'velocityAge',
                 'velocityFuture', 'velocityDuplicate', 'sourceExpired', 'positionDuplicate', 'sourceOld',
                 'positionJump', 'lateralJump', 'changedAuxPosition', 'replacement', 'slotConflict', 'frameConflict')
     for failure in failures:
@@ -770,8 +774,6 @@ class TestHondaRadarFusion(unittest.TestCase):
           returned['raw']['u11Raw'] = 1728
         elif failure == 'invalidVelocity':
           returned['velocityValid'] = False
-        elif failure == 'velocityInnovation':
-          returned['vRel'], returned['raw']['u11Raw'] = 12.0, 1632
         elif failure == 'velocityAge':
           returned['velocityMonoTime'] -= 50_000_001
         elif failure == 'velocityFuture':
@@ -1623,7 +1625,8 @@ class TestHondaRadarFusion(unittest.TestCase):
         self.assertEqual(snapshot['lateralPositionVariance'], expected[1, 1])
         self.assertEqual(snapshot['lateralVelocityVariance'], expected[3, 3])
         self.assertNotEqual(snapshot['lateralPositionVariance'], snapshot['positionVariance'])
-        self.assertNotEqual(snapshot['lateralVelocityVariance'], snapshot['velocityVariance'])
+        self.assertEqual(snapshot['velocityVariance'], snapshot['nativeMotion']['velocityVariance'])
+        self.assertFalse(snapshot['nativeMotion']['qualified'])
         self.assertFalse(snapshot['velocityGood'])
         self.assertTrue(snapshot['lateralVelocityValid'])
         self.assertFalse(out['calibrated'])
@@ -1790,7 +1793,7 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertLess(abs(lead['residualV']), lead['velocityGate'])
     self.assertEqual(lead['blend'], 1)
     self.assertEqual(lead['coastWeight'], 1)
-    self.assertEqual(out['algorithmVersion'], 'bosch-a-shadow-3')
+    self.assertEqual(out['algorithmVersion'], 'bosch-a-native-4')
     self.assertFalse(out['controlAllowed'])
     self.assertFalse(out['calibrated'])
 
@@ -1941,7 +1944,7 @@ class TestHondaRadarFusion(unittest.TestCase):
         self.assertFalse(out['controlAllowed'])
         self.assertFalse(out['calibrated'])
 
-  def test_acceleration_uses_velocity_updates_and_survives_ego_frame_rotation(self):
+  def test_acceleration_uses_only_native_velocity_updates(self):
     fusion = HondaRadarFusion()
     for frame in range(40):
       t = frame * STEP / 1e9
@@ -1952,16 +1955,14 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertGreater(track.acceleration, 1.4)
     self.assertLess(track.acceleration, 2.4)
     self.assertGreater(out['leads'][0]['aLead'], .8)
-    # No actual world acceleration: rotating coordinates must not manufacture it.
-    track.acceleration = 0
-    track.acceleration_ns = START
-    track.acceleration_velocity = (10, 5)
-    fusion.history.samples.clear()
-    fusion.history.add(Ego(START, 10, .5))
-    angle = -.05
-    track.mean[2:] = [np.cos(angle) * 10 - np.sin(angle) * 5, np.sin(angle) * 10 + np.cos(angle) * 5]
-    track.measure_acceleration(START + 100_000_000, fusion.history)
-    self.assertAlmostEqual(track.acceleration, 0)
+    # Geometry's lateral velocity and its yaw rotation cannot alter native
+    # longitudinal acceleration or velocity on a publication without new AUX.
+    native_speed, native_acceleration = track.native_motion.ground_speed, track.acceleration
+    track.mean[2:] = [-30.0, 25.0]
+    stamp = START + 39 * STEP + 20_000_000
+    out = fusion.update(body(40, []), Inputs(stamp, yaw=.5), stamp + 1)
+    self.assertEqual(out['tracks'][0]['groundSpeed'], native_speed)
+    self.assertEqual(out['tracks'][0]['acceleration'], native_acceleration)
 
   def test_capacity_bounds_and_future_position_are_fail_closed(self):
     fusion = HondaRadarFusion()

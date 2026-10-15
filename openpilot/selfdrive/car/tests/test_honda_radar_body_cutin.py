@@ -9,7 +9,7 @@ import math
 import pytest
 
 from openpilot.selfdrive.car.honda_radar_control import CUT_IN_HALF_WIDTH, CUT_IN_REASON, SWEPT_HALF_WIDTH, HondaRadarControl
-from openpilot.selfdrive.car.tests.test_honda_radar_control import START, STEP, present_leads, radar, scene, vision
+from openpilot.selfdrive.car.tests.test_honda_radar_control import START, STEP, native_motion_quality, present_leads, radar, scene, vision
 from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
 
 
@@ -22,6 +22,8 @@ def body_track(frame, *, side=1, lateral=None, **changes):
                 bodyWidth=1.4, bodyLeftX=target['dRel'], bodyLeftY=edges[1],
                 bodyRightX=target['dRel'], bodyRightY=edges[0])
   target.update(changes)
+  if 'nativeMotion' not in changes:
+    target['nativeMotion'] = native_motion_quality(target)
   return target
 
 
@@ -113,7 +115,7 @@ def test_parallel_target_on_a_curve_is_not_a_cut_in():
     assert not present_leads(control.update(**inputs))
 
 
-@pytest.mark.parametrize('fault', ['missing', 'stale', 'future', 'invalid-width', 'generation-change', 'width-spike'])
+@pytest.mark.parametrize('fault', ['missing', 'stale', 'future', 'invalid-width', 'generation-change', 'width-spike', 'native-quality'])
 def test_body_evidence_loss_or_identity_change_withdraws_the_brake_role(fault):
   control = HondaRadarControl()
   for frame in range(3):
@@ -130,9 +132,26 @@ def test_body_evidence_loss_or_identity_change_withdraws_the_brake_role(fault):
     target['bodyWidth'] = math.nan
   elif fault == 'generation-change':
     target['generation'] += 1
+  elif fault == 'native-quality':
+    target['velocityGood'] = False
+    target['nativeMotion'] = native_motion_quality(target, qualified=False, reason='invalidVelocity')
   else:
     target.update(bodyWidth=3.0, bodyLeftY=target['yRel'] + 1.5, bodyRightY=target['yRel'] - 1.5)
   assert not present_leads(update(control, 3, target))
+
+
+def test_mature_neighbor_does_not_restart_native_confirmation_when_body_enters():
+  control = HondaRadarControl()
+  for frame in range(5):
+    target = body_track(frame, lateral=2.0 - .06 * frame)
+    assert target['nativeMotion']['qualified'] and target['nativeMotion']['sampleCount'] >= 5
+    current = update(control, frame, target)
+    if frame < 4:
+      assert not present_leads(current)
+  lead, = present_leads(current)
+  assert CUT_IN_REASON in lead['evidence']['reason']
+  assert qualified_lead(lead, 'brake')
+  assert not any(qualified_lead(lead, purpose) for purpose in ('follow', 'stop', 'departure', 'fcw'))
 
 
 def test_repeated_sample_does_not_establish_persistent_approach():

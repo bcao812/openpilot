@@ -15,10 +15,11 @@ from capnp.lib.capnp import _DynamicListBuilder, _DynamicListReader, _DynamicStr
 
 from opendbc.car.honda.bosch_a_radar import radar_scan_continuous
 from openpilot.selfdrive.car.honda_radar_body import RadarBody, measured_radar_body
+from openpilot.selfdrive.car.honda_radar_native import NativeMotion
 from openpilot.selfdrive.car.honda_radar_observer_config import CONTROL
 from openpilot.selfdrive.car.honda_radar_velocity import PositionVelocityQuality
 
-VERSION = 'bosch-a-shadow-3'
+VERSION = 'bosch-a-native-4'
 MAX_TRACKS = 32
 MAX_EVENTS = 64
 MAX_AGE_NS = 200_000_000
@@ -298,8 +299,6 @@ class Track:
   active: bool = True
   acceleration: float = 0.0
   acceleration_good: bool = False
-  acceleration_ns: int = 0
-  acceleration_velocity: tuple[float, float] = (0.0, 0.0)
   path: str = 'unknown'
   innovation: float = 0.0
   last_invalid_reason: str = ''
@@ -320,6 +319,7 @@ class Track:
   positions: deque = field(default_factory=lambda: deque(maxlen=6))
   body: RadarBody | None = None
   position_velocity: PositionVelocityQuality = field(default_factory=PositionVelocityQuality)
+  native_motion: NativeMotion = field(default_factory=NativeMotion)
 
   @property
   def mature(self):
@@ -376,26 +376,6 @@ class Track:
     identity[:, index] -= gain
     # Joseph form keeps roundoff from producing a negative uncertainty.
     self.covariance = identity @ self.covariance @ identity.T + (gain[:, None] * gain[None, :]) * variance
-
-  def measure_acceleration(self, timestamp, history):
-    """Differentiate accepted velocity posteriors once per velocity sample.
-
-    Positions and AUX arrive separately. Differentiating only the position
-    correction would miss the velocity change already accepted from AUX.
-    Rotate the previous velocity into the current body frame first.
-    """
-    dt = (timestamp - self.acceleration_ns) / 1e9
-    ego = history.at(self.acceleration_ns)
-    self.acceleration_good = ego is not None and 0 < dt <= .2
-    if self.acceleration_good:
-      angle = -ego.yaw * dt
-      previous_x = math.cos(angle) * self.acceleration_velocity[0] - math.sin(angle) * self.acceleration_velocity[1]
-      value = max(-10.0, min(5.0, (float(self.mean[2]) - previous_x) / dt))
-      self.acceleration += dt / (.5 + dt) * (value - self.acceleration)
-    else:
-      self.acceleration = 0.0
-    self.acceleration_ns = timestamp
-    self.acceleration_velocity = float(self.mean[2]), float(self.mean[3])
 
 
 def _prepare_path(path_x, path_y):
@@ -511,6 +491,8 @@ class HondaRadarFusion:
 
   def _invalidate(self, track, reason, position_ns, now_ns):
     track.active = track.velocity_good = track.acceleration_good = False
+    track.native_motion.invalidate(reason)
+    self._sync_native_motion(track)
     track.body = None
     track.last_invalid_reason, track.last_invalid_ns = reason, now_ns
     track.invalid_position_ns = max(track.invalid_position_ns, position_ns)
@@ -591,33 +573,29 @@ class HondaRadarFusion:
     witness.return_position = signature
     return 'ready' if int(read(observation, 'frameMask', 0)) & 16 else 'waiting'
 
+  @staticmethod
+  def _sync_native_motion(track):
+    native = track.native_motion
+    track.velocity_seq, track.velocity_ns, track.u10 = native.velocity_seq, native.velocity_ns, native.u10
+    track.velocity_good = track.active and native.pair_good
+    track.acceleration, track.acceleration_good = native.acceleration, track.velocity_good and native.acceleration_valid
+
   def _velocity(self, track, observation, now_ns, projection_cache=None):
     if not track.active:
       return
-    raw = read(observation, 'raw', {})
-    seq = int(read(observation, 'velocitySeq', 0))
-    if not seq or seq <= track.velocity_seq:
+    native = track.native_motion
+    accepted = native.observe(observation, now_ns, self.history.at, read)
+    self._sync_native_motion(track)
+    if not accepted:
+      if int(read(observation, 'frameMask', 0)) & 16 and not native.pair_good:
+        self.counts['rejectedVelocity'] += 1
       return
-    track.velocity_seq = seq
-    track.velocity_good = False
-    stamp = int(read(observation, 'velocityMonoTime', 0))
-    u11, u10 = int(read(raw, 'u11Raw', 2047)), int(read(raw, 'u10Raw', 1023))
-    value = float(read(observation, 'vRel', math.nan))
-    ego = self.history.at(stamp)
-    if (not read(observation, 'velocityValid', False) or not 0 < u11 < 1728 or not 0 <= u10 < 256 or not finite(value)
-        or not fresh(stamp, now_ns, MAX_AGE_NS) or abs(stamp - track.position_ns) > 50_000_000 or ego is None
-        or stamp < track.epoch_ns or not track.advance(stamp, self.history, projection_cache)):
-      self.counts['rejectedVelocity'] += 1
-      return
-    variance = (.35 + u10 / 100.0)**2
-    residual = value + ego.speed - float(track.mean[2])
-    limit = min(6.0, max(2.0, 3 * math.sqrt(float(track.covariance[2, 2]) + variance)))
-    if track.count >= MIN_OBSERVATIONS and abs(residual) > limit:
-      self.counts['rejectedVelocity'] += 1
-      return
-    track.measure(2, value + ego.speed, variance)
-    track.measure_acceleration(stamp, self.history)
-    track.velocity_ns, track.u10, track.velocity_good = stamp, u10, True
+    # The joint posterior remains the position/lateral geometry estimator.
+    # Its velocity correction and coordinate rotations cannot feed back into
+    # the independently stored longitudinal native speed or acceleration.
+    if native.velocity_ns >= track.epoch_ns:
+      track.advance(native.velocity_ns, self.history, projection_cache)
+    track.measure(2, native.ground_speed, native.velocity_variance)
 
   def ingest(self, observations, now_ns, projection_cache=None):
     if len(observations) > MAX_EVENTS:
@@ -767,7 +745,8 @@ class HondaRadarFusion:
         if saturation_recovery:
           # Qualify the ordinary position AND velocity corrections on private
           # state. A rejected AUX must never publish the old identity active.
-          track = replace(track, positions=deque(track.positions, maxlen=6), position_velocity=track.position_velocity.copy())
+          track = replace(track, positions=deque(track.positions, maxlen=6), position_velocity=track.position_velocity.copy(),
+                          native_motion=track.native_motion.copy())
         prior_velocity = float(mean[2]), float(mean[3])
         position_innovation = dx, dy
         position_innovation_covariance = (float(covariance[0, 0]) + POSITION_NOISE**2,
@@ -815,6 +794,9 @@ class HondaRadarFusion:
     for key in expired:
       del self.tracks[key]
       self.counts['expired'] += 1
+    for track in self.tracks.values():
+      track.native_motion.expire(now_ns)
+      self._sync_native_motion(track)
     live_identifiers = {track.identifier for track in self.tracks.values()}
     self.bindings = {key: binding for key, binding in self.bindings.items() if key[1] in live_identifiers}
 
@@ -849,6 +831,12 @@ class HondaRadarFusion:
       mean, covariance = prediction
       if not np.isfinite(mean).all() or not np.isfinite(covariance).all():
         continue
+      native = track.native_motion.snapshot(now_ns, active=track.active)
+      self._sync_native_motion(track)
+      # Projection is for geometry only. In particular rotated lateral
+      # distance-derived velocity never becomes longitudinal native motion.
+      mean[2] = native['groundSpeed']
+      covariance[2, 2] = native['velocityVariance']
       if not path_ready:
         prepared_path = _prepare_path(path_x, path_y)
         path_ready = True
@@ -856,7 +844,7 @@ class HondaRadarFusion:
       track.path = relation
       vx, vy = float(mean[2]), float(mean[3])
       motion = 'unknown'
-      if track.mature and covariance[2, 2] < 4:
+      if native['qualified'] and covariance[2, 2] < 4:
         motion = 'oncoming' if vx < -2 else 'stationary' if abs(vx) < 1 else 'moving'
       coasting = not track.active or now_ns - track.position_ns > 100_000_000
       velocity_good = track.active and track.velocity_good and fresh(track.velocity_ns, now_ns, MAX_AGE_NS)
@@ -888,6 +876,7 @@ class HondaRadarFusion:
           'lateralPositionVariance': lateral_position_variance, 'lateralVelocityVariance': lateral_velocity_variance,
           'lateralVelocityValid': lateral_velocity_valid,
           'positionVelocity': track.position_velocity.snapshot(active=track.active),
+          'nativeMotion': native,
           **self._body_snapshot(track, mean, int(model.timestampEof), now_ns)})
       if track.active:
         candidates.append((track, mean, covariance, relation, motion, coasting, velocity_good))
