@@ -169,16 +169,26 @@ class TestHondaRadarFusion(unittest.TestCase):
 
   def test_native_ingest_reuses_sort_keys_without_reordering_events(self):
     from openpilot.cereal import custom
+    from openpilot.selfdrive.car.honda_radar_native import NativeMotion
     t = START + STEP
     keys = ('positionMonoTime', 'positionValid', 'positionSeq')
     events = [observation(1, slot=1, oem=8, velocity=False), observation(1, velocity=False), observation(1),
               observation(1, distance=21.0, velocity=False),
               {**observation(1, slot=1, oem=8, velocity=False), 'positionValid': False, 'reason': 'conflictingFrame'}]
-    accesses = Counter()
+    accesses, quality_accesses = Counter(), Counter()
+    quality_calls = []
+    original_observe = NativeMotion.observe
     def counted_read(obj, name, default=None):
       if name in keys:
         accesses[name] += 1
       return read(obj, name, default)
+    def audited_quality(state, event, now_ns, ego_at, get=read):
+      quality_calls.append(event)
+      def quality_read(obj, name, default=None):
+        if name in keys:
+          quality_accesses[name] += 1
+        return get(obj, name, default)
+      return original_observe(state, event, now_ns, ego_at, quality_read)
     for reader in (False, True):
       with self.subTest(reader=reader):
         packet = custom.HondaRadarObservations.new_message()
@@ -190,9 +200,19 @@ class TestHondaRadarFusion(unittest.TestCase):
           advance(engine, 0, [observation(0), observation(0, slot=1, oem=8)])
           engine.record_inputs(Inputs(t), t + 1)
         accesses.clear()
-        with patch('openpilot.selfdrive.car.honda_radar_fusion.read', side_effect=counted_read):
+        quality_accesses.clear()
+        quality_calls.clear()
+        with patch('openpilot.selfdrive.car.honda_radar_fusion.read', side_effect=counted_read), \
+             patch.object(NativeMotion, 'observe', new=audited_quality):
           fusion.ingest(native.observations, t + 1)
-        self.assertEqual(accesses, dict.fromkeys(keys, len(events)))
+        # Sorting/identity processing still reads each key once per event.
+        # Native qualification now independently validates the three accepted
+        # position/AUX updates: precisely nine extra getters, not a free pass
+        # for arbitrary repeated capnp access or a claim of unchanged timing.
+        self.assertEqual(len(quality_calls), 3)
+        self.assertEqual(quality_accesses, dict.fromkeys(keys, 3))
+        self.assertEqual(accesses, dict.fromkeys(keys, len(events) + 3))
+        self.assertEqual(accesses - quality_accesses, dict.fromkeys(keys, len(events)))
         reference.ingest(before['observations'], t + 1)
         self.assertEqual(packet.to_dict(), before)
         self.assertEqual(fusion.counts, reference.counts)
@@ -378,6 +398,14 @@ class TestHondaRadarFusion(unittest.TestCase):
     self.assertEqual(track.previous_position_ns, old_ns)
     self.assertTrue(track.active)
     self.assertTrue(track.velocity_good)
+    # The complete AUX is already in this received batch. Publication delay
+    # is 50.527448 ms, but that does not turn its zero-skew source pair into an
+    # incomplete scan. The preceding explicit slot withdrawal did reset native
+    # confirmation, so preserving geometric identity cannot restore authority.
+    self.assertEqual(publication - migrated['positionMonoTime'], 50_527_448)
+    self.assertEqual(migrated['velocityMonoTime'], migrated['positionMonoTime'])
+    self.assertEqual(track.native_motion.sample_count, 1)
+    self.assertFalse(track.native_motion.qualified)
     self.assertTrue(track.mature)
     self.assertEqual((track.slot_reassigned_ns, track.slot_reassigned_seq), (0, 0))
     self.assertEqual(out['counters']['positions'], 14)  # Two OEMs; AUX/duplicates add none.

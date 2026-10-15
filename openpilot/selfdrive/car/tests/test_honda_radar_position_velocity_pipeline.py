@@ -165,7 +165,9 @@ def assert_formal_native_quality(row):
       assert claim['positionMonoTime'] == quality['positionMonoTime']
       assert claim['velocityMonoTime'] == quality['velocityMonoTime']
       assert row['source_ns'] <= quality['validUntilMonoTime']
-      assert lead['vLeadK'] == quality['groundSpeed']
+      # RadarState.LeadData uses Float32 while native provenance is Float64.
+      # Compare the exact wire conversion, not an arbitrary motion tolerance.
+      assert lead['vLeadK'] == float(np.float32(quality['groundSpeed']))
 
 
 @pytest.mark.parametrize('case', CLOSING_CASES)
@@ -191,8 +193,13 @@ def test_position_only_cannot_authorize_radar_but_current_native_or_vision_posit
     assert not formal_objects(row)
     assert not row['radar']['fusionDegraded'] and not row['consumer_degraded']
     for track in row['fusion_tracks']:
-      assert not track['velocityGood'] and track['velocityMonoTime'] == 0
-      assert not current_quality(track)['qualified']
+      quality = current_quality(track)
+      rejected_aux = next(sample for sample in row['raw_observations']
+                          if sample['positionSeq'] == track['positionSeq'] and sample['frameMask'] & 16)
+      assert not track['velocityGood'] and not quality['qualified']
+      assert track['velocityMonoTime'] == rejected_aux['velocityMonoTime']
+      assert quality['velocitySeq'] == rejected_aux['velocitySeq'] == 0
+      assert quality['reason'] == 'invalidVelocity' and quality['validUntilMonoTime'] == 0
     assert all(not sample['velocityValid'] for sample in row['raw_observations'])
   for row in reference:
     assert row['solver'] == 0 and not row['radar']['fusionRiskUnresolved']

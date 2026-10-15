@@ -338,6 +338,23 @@ class RadarD:
       observation_valid = bool(getattr(sm, 'seen', {}).get(HONDA_RADAR_SERVICE, False)
                                and sm.valid.get(HONDA_RADAR_SERVICE, False))
       observation = sm[HONDA_RADAR_SERVICE] if observation_ns else None
+      if observation is not None:
+        # Record the actual invocation input before calling the optional
+        # adapter. A rejected/disabled/failed invocation is still traceable;
+        # this metadata grants no authority and does not replace its result.
+        self.radar_state.fusionInputAttempted = True
+        try:
+          input_session = getattr(observation, 'sessionId', '')
+          input_sequence = getattr(observation, 'sequence', 0)
+          self.radar_state.fusionInputSessionId = input_session
+          self.radar_state.fusionInputSequence = input_sequence
+          self.radar_state.fusionInputMonoTime = observation_ns
+        except Exception:
+          # Optional diagnostic reads cannot bypass the adapter's own input
+          # handling. Zero IDs mean this attempted input could not be recorded.
+          self.radar_state.fusionInputMonoTime = 0
+          self.radar_state.fusionInputSessionId = ''
+          self.radar_state.fusionInputSequence = 0
       try:
         result = self.fusion_control.update(
           now_ns=now_ns, enabled=enabled, observation=observation, observation_ns=observation_ns,

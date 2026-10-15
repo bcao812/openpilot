@@ -81,7 +81,7 @@ def test_generation_restart_does_not_inherit_the_previous_qualified_segment():
       assert target['nativeMotion']['firstPositionMonoTime'] == START + STEP
 
 
-@pytest.mark.parametrize('lateral_speed', [-.5, 0.0, .5])
+@pytest.mark.parametrize('lateral_speed', [-.25, 0.0, .25])
 @pytest.mark.parametrize('yaw', [-.2, .2])
 def test_camera_alignment_cannot_rotate_distance_derived_lateral_speed_into_native_longitudinal_motion(lateral_speed, yaw):
   target = radar(distance=20.0, speed=8.0, lateral_speed=lateral_speed, acceleration=-.7)
@@ -93,7 +93,10 @@ def test_camera_alignment_cannot_rotate_distance_derived_lateral_speed_into_nati
   values['model']['orientationRate']['z'] = [yaw]
   result = HondaRadarControl().update(**values)
   lead, = present_leads(result)
-  expected_x, expected_y, rotated_vx, _ = _project(20.0, 0.0, 8.0, lateral_speed, elapsed, 10.0, yaw)
+  expected_x, expected_y, rotated_vx, projected_vy = _project(20.0, 0.0, 8.0, lateral_speed, elapsed, 10.0, yaw)
+  # Retain ordinary following geometry after yaw alignment; crossing motion
+  # has its own exclusion and would not exercise published native speed.
+  assert abs(projected_vy) < .5
   assert lead['dRel'] == pytest.approx(expected_x) and lead['yRel'] == pytest.approx(expected_y)
   assert lead['vLeadK'] == 8.0 and lead['vRel'] == -2.0 and lead['aLeadK'] == -.7
   assert not math.isclose(rotated_vx, lead['vLeadK'], abs_tol=1e-8)

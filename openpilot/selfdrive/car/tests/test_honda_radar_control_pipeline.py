@@ -368,10 +368,22 @@ def test_saturation_reacquisition_requires_fresh_components_without_latched_loss
     assert restored['positionSeq'] == position['positionSeq']
     assert restored['positionMonoTime'] == position['positionMonoTime']
     assert restored['velocityMonoTime'] == rows[26]['source_ns']
+    assert restored['nativeMotion']['sampleCount'] == 1 and not restored['nativeMotion']['qualified']
     for row in rows[26:]:
       assert row['radar']['fusionHealthy'] and not row['radar']['fusionDegraded']
       assert not row['consumer_degraded']
+      quality = row['fusion_tracks'][0]['nativeMotion']
+      assert quality['sampleCount'] == row['frame'] - 25
+      assert quality['firstPositionMonoTime'] == position['positionMonoTime']
       lead = row['radar']['leadOne']
+      if row['frame'] < 30:
+        # The late AUX completes one real pair. It cannot reuse the support
+        # from before the invalid scan or bypass native reconfirmation.
+        assert not quality['qualified'] and not lead['present'] and not objects(row)
+        assert row['solver'] == 0
+        continue
+      assert quality['qualified'] and quality['sampleCount'] >= 5
+      assert quality['positionMonoTime'] - quality['firstPositionMonoTime'] >= 250_000_000
       assert lead['present'] and lead['evidence']['source'] == 'radar'
       assert (lead['evidence']['sessionId'], lead['evidence']['trackId']) == identity
       assert lead['evidence']['followQualified'] and lead['evidence']['brakeQualified']

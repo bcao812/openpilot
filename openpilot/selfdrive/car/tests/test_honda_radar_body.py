@@ -84,18 +84,28 @@ def test_old_schema_cannot_create_body_cut_in_braking(legacy_schema):
   from openpilot.selfdrive.car.tests.test_honda_radar_control import present_leads, scene
   from openpilot.selfdrive.controls.lib.lead_qualification import qualified_lead
 
-  old_control, body_control = HondaRadarControl(), HondaRadarControl()
+  old_control, body_control, missing_body_control = HondaRadarControl(), HondaRadarControl(), HondaRadarControl()
   for frame in range(3):
     target = body_track(frame)
     inputs = scene(frame, tracks=[target], ego=20.92)
     # Positive control proves that this geometry would actually use body
     # braking when the newly added evidence is present.
     body_result = body_control.update(**inputs)
+    # Isolate body geometry from native admission as well: current-schema
+    # native motion remains qualified, but absent extent cannot grant braking.
+    missing_body = copy.deepcopy(inputs['observation'])
+    missing_body['fusion']['tracks'] = [{name: value for name, value in target.items() if name not in BODY_DEFAULTS}]
+    current_message = custom.HondaRadarObservations.new_message(**missing_body)
+    with custom.HondaRadarObservations.from_bytes(current_message.to_bytes()) as reader:
+      assert reader.fusion.tracks[0].nativeMotion.qualified and not reader.fusion.tracks[0].bodyValid
+      missing_result = missing_body_control.update(**{**inputs, 'observation': reader})
+      assert missing_result.healthy and not missing_result.degraded and not present_leads(missing_result)
     old_observation = copy.deepcopy(inputs['observation'])
-    old_observation['fusion']['tracks'] = [{name: value for name, value in target.items() if name not in BODY_DEFAULTS}]
+    old_fields = legacy_schema.FusionTrack.schema.fields
+    old_observation['fusion']['tracks'] = [{name: value for name, value in target.items() if name in old_fields}]
     message = legacy_schema.new_message(**old_observation)
     with custom.HondaRadarObservations.from_bytes(message.to_bytes()) as reader:
-      assert not reader.fusion.tracks[0].bodyValid
+      assert not reader.fusion.tracks[0].bodyValid and reader.fusion.tracks[0].nativeMotion.version == 0
       old_result = old_control.update(**{**inputs, 'observation': reader})
       assert old_result.healthy and not old_result.degraded
       assert not present_leads(old_result)

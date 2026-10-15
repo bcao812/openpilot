@@ -745,6 +745,12 @@ struct RadarState @0x9a185389d6fdd05f {
   fusionClearedTracks @21 :List(UInt64);  # fresh geometry proved exit, never expiry
   fusionSessionId @22 :Text;
   fusionRiskUnresolved @23 :Bool;  # retired persistent-loss diagnostic; new publications leave false
+  # Exact optional observation supplied to HondaRadarControl.update. These are
+  # publication identities, not measurement clocks or proof of lead acceptance.
+  fusionInputMonoTime @24 :UInt64;
+  fusionInputSessionId @25 :Text;
+  fusionInputSequence @26 :UInt64;
+  fusionInputAttempted @27 :Bool;  # non-null input passed; scope/health/result remain independently authoritative
 
   struct LeadData {
     dRel @0 :Float32;  # m from the front bumper of the car
@@ -1501,6 +1507,7 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   objectInfluences @44 :List(Custom.LongitudinalObjectInfluence);
   radarRiskUnresolved @45 :Bool;  # retired persistent-loss diagnostic; new publications leave false
   continuation @46 :LongitudinalContinuation;  # separate bounded candidate; native validity/status remain unchanged
+  radarStateInputMonoTime @47 :UInt64;  # exact Event supplied to update, never the newer publish-time input; not object authority
 
 
   solverExecutionTime @35 :Float32;

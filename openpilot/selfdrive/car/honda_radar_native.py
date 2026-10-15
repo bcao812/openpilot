@@ -155,8 +155,9 @@ class NativeMotion:
 
     if not mask & 16:
       # Repeated position-only publications cannot overwrite a complete pair.
-      if self.pending:
-        self.expire(now_ns)
+      # A complete AUX may follow this position in the same drained batch.
+      # Apply pending timeout after the whole batch (or at snapshot), never
+      # between its position and AUX events. Source skew/age still bound AUX.
       return False
     u11, u10 = get(raw, 'u11Raw'), get(raw, 'u10Raw')
     vseq, vstamp = get(observation, 'velocitySeq', 0), get(observation, 'velocityMonoTime', 0)
