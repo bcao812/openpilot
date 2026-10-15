@@ -172,8 +172,10 @@ class RadarConsumption:
     radar = _as_reader(radar)
     if (getattr(radar, 'fusionActive', False) is not True or not _integer(qualified_ns, 1)
         or not _integer(publication_ns, 1) or not _integer(now_ns, 1)
-        or not qualified_ns <= publication_ns <= now_ns or not _finite(speed) or speed < 0.0):
+        or not qualified_ns <= publication_ns <= now_ns or not _finite(speed)):
       return radar
+    # Expiry only removes old sensor evidence, irrespective of ego direction.
+    # Keep measured speed intact for the independent health/departure checks.
     publication = radar
     if type(radar).__module__ == 'capnp.lib.capnp':
       # Copy the two formal slots separately. Equal identities must not

@@ -65,6 +65,30 @@ def test_measurement_deadline_is_inclusive_and_removal_does_not_refresh_a_stamp(
   assert raw.fusionClearedTracks == view.fusionClearedTracks == ()
 
 
+@pytest.mark.parametrize('speed', [0.0, -4.236371e-8, -0.5])
+@pytest.mark.parametrize('age_ns', [199_999_999, 200_000_000, 200_000_001, 201_946_000])
+@pytest.mark.parametrize('boundary', ['publisher', 'consumer'])
+def test_ego_direction_does_not_keep_expired_primary_or_remove_current_vision(speed, age_ns, boundary):
+  old = expiring_lead(track=1277)
+  old.evidence.positionMonoTime = old.evidence.velocityMonoTime = CONSUMPTION - age_ns
+  vision = formal_lead(now_ns=PUBLICATION, source='vision', dRel=10.0, vLead=0.0, vLeadK=0.0, vRel=0.0,
+                       evidence={'trackId': 9, 'visionIndex': 1})
+  raw = native_frame(radar_frame(old, vision, display=(old, vision)))
+  before = raw.to_dict()
+  consumer = RadarConsumption()
+  if boundary == 'publisher':
+    view = consumer.finalize_publication(raw, qualified_ns=PUBLICATION, publication_ns=CONSUMPTION, speed=speed)
+  else:
+    view = consume_frame(consumer, raw, speed=speed)
+  present = age_ns <= MAX_MEASUREMENT_AGE_NS
+  assert view.leadOne.present is present
+  assert qualified_lead(view.leadOne, 'brake', 0.0, now_ns=CONSUMPTION) is present
+  assert view.leadTwo.present and qualified_lead(view.leadTwo, 'brake', 0.0, now_ns=CONSUMPTION)
+  assert consumer.expired_identities == (() if present else ((SESSION, 1277),))
+  assert not consumer.degraded and not view.fusionRiskUnresolved
+  assert raw.to_dict() == before
+
+
 @pytest.mark.parametrize('source', ['radar', 'fused'])
 @pytest.mark.parametrize('field', ['positionMonoTime', 'velocityMonoTime'])
 @pytest.mark.parametrize('boundary', ['before_publication', 'after_publication'])
@@ -126,11 +150,12 @@ def test_measured_deadline_retires_every_view_and_preserves_other_objects(source
 
 @pytest.mark.parametrize('source,caution', [('radar', False), ('fused', False)])
 @pytest.mark.parametrize('future_entry_input', [False, True])
+@pytest.mark.parametrize('speed', [10.0, -4.236371e-8])
 @pytest.mark.parametrize('defect', [
   'already_expired', 'future_measurement', 'future_model', 'expired_model', 'expired_estimate',
   'invalid_position', 'identity_missing', 'duplicate_geometry', 'duplicate_identity',
 ])
-def test_measured_expiry_does_not_hide_other_invalid_evidence(source, caution, defect, future_entry_input):
+def test_measured_expiry_does_not_hide_other_invalid_evidence(source, caution, defect, future_entry_input, speed):
   old = measured(source=source, caution=caution)
   if future_entry_input:
     old.evidence.conflictStart = .05
@@ -158,7 +183,7 @@ def test_measured_expiry_does_not_hide_other_invalid_evidence(source, caution, d
     else:
       frame.leadTwo.evidence.generation += 1
   consumer = RadarConsumption()
-  view = consume_frame(consumer, frame)
+  view = consume_frame(consumer, frame, speed=speed)
   if defect == 'already_expired' and not future_entry_input:
     assert not view.leadOne.present and consumer.expired_identities == ((SESSION, 7),)
   else:

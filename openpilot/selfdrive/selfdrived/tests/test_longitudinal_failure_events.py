@@ -12,7 +12,9 @@ from openpilot.selfdrive.controls.lib.motion_supervisor import MODEL_LEASE_NS, M
 from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import (
   ControlsHarness, new_event, selfdrive_event_harness, serialized,
 )
-from openpilot.selfdrive.selfdrived.events import ET, EVENTS
+from openpilot.selfdrive.selfdrived.alertmanager import AlertManager
+from openpilot.selfdrive.selfdrived.engagement_policy import EngagementPolicy
+from openpilot.selfdrive.selfdrived.events import ET, EVENTS, EVENT_NAME
 from openpilot.selfdrive.selfdrived.state import SOFT_DISABLE_TIME, StateMachine
 
 
@@ -46,6 +48,15 @@ def update(daemon, car_state, now_ns):
   with patch('openpilot.selfdrive.selfdrived.selfdrived.time.monotonic_ns', return_value=now_ns), \
        patch('openpilot.selfdrive.selfdrived.selfdrived.time.monotonic', return_value=now_ns / 1e9):
     daemon.update_events(car_state)
+
+
+def configure_alert_output(daemon, event_type=ET.SOFT_DISABLE):
+  daemon.AM = AlertManager()
+  daemon.personality = log.LongitudinalPersonality.standard
+  daemon.state_machine = StateMachine()
+  daemon.state_machine.current_alert_types = [ET.PERMANENT, event_type]
+  daemon.enabled = event_type != ET.NO_ENTRY
+  daemon.state_machine.state = State.softDisabling if daemon.enabled else State.disabled
 
 
 def mark_frequency_unhealthy(sm, service):
@@ -220,3 +231,114 @@ def test_specific_failure_does_not_override_driver_or_immediate_disable(driver_o
   machine.state = State.enabled
   assert machine.update(daemon.events) == (False, False)
   assert machine.state == State.disabled and machine.soft_disable_timer == 0
+
+
+@pytest.mark.parametrize('event_type', [ET.NO_ENTRY, ET.SOFT_DISABLE])
+def test_driver_braking_silences_failed_plan_without_removing_diagnostics_or_entry_gate(event_type):
+  daemon, car_state, _, now_ns = failure_harness(-4)
+  car_state.brakePressed = True
+  with patch('openpilot.selfdrive.selfdrived.selfdrived.cloudlog.event') as emit:
+    update(daemon, car_state, now_ns)
+  configure_alert_output(daemon, event_type)
+  daemon.update_alerts(car_state)
+
+  assert EventName.longitudinalControlUnavailable in daemon.events.names
+  assert daemon.events.contains(ET.NO_ENTRY) and daemon.events.contains(ET.SOFT_DISABLE)
+  assert not daemon.sm.valid['longitudinalPlan']
+  assert daemon.sm['longitudinalPlan'].solverStatus == -4
+  assert not daemon.AM.current_alert.alert_type.startswith('longitudinalControlUnavailable/')
+  assert not any(name.startswith('longitudinalControlUnavailable/') for name in daemon.AM.alerts)
+  failures = [call.kwargs for call in emit.call_args_list if call.args[0] == 'longitudinalSolverFailure']
+  assert len(failures) == 1 and failures[0]['solverStatus'] == -4
+
+  daemon.events.add(EventName.buttonEnable)
+  machine = StateMachine()
+  assert machine.update(daemon.events) == (False, False)
+  assert machine.state == State.disabled
+  machine.state = State.enabled
+  assert machine.update(daemon.events) == (False, False)  # The driver's brake still disengages.
+
+
+@pytest.mark.parametrize('event_type', [ET.NO_ENTRY, ET.SOFT_DISABLE])
+@pytest.mark.parametrize('recovered', [False, True])
+def test_brake_clears_cached_failure_and_release_uses_current_fault_state(event_type, recovered):
+  daemon, car_state, event, now_ns = failure_harness(-4)
+  update(daemon, car_state, now_ns)
+  configure_alert_output(daemon, event_type)
+  daemon.update_alerts(car_state)
+  alert_type = f'longitudinalControlUnavailable/{event_type}'
+  assert daemon.AM.current_alert.alert_type == alert_type
+  assert daemon.AM.alerts[alert_type].end_frame > daemon.sm.frame + 1
+
+  car_state.brakePressed = True
+  daemon.sm.frame += 1
+  daemon.update_alerts(car_state)
+  assert daemon.AM.current_alert.alert_type == ''
+  assert daemon.AM.current_alert.audible_alert == log.SelfdriveState.AudibleAlert.none
+  assert alert_type not in daemon.AM.alerts
+
+  if recovered:
+    now_ns += 20_000_000
+    event.logMonoTime = now_ns
+    event.valid = event.longitudinalPlan.motionIntent.valid = True
+    event.longitudinalPlan.solverStatus = 0
+    daemon.sm.update_msgs(now_ns / 1e9, [serialized(event)])
+    # Keep the driver override event out of this alert-lifecycle check.
+    car_state.standstill = daemon.CS_prev.brakePressed = True
+    update(daemon, car_state, now_ns)
+    assert EventName.longitudinalControlUnavailable not in daemon.events.names
+    daemon.update_alerts(car_state)
+
+  car_state.brakePressed = False
+  daemon.sm.frame += 1
+  daemon.update_alerts(car_state)
+  assert daemon.AM.current_alert.alert_type == ('' if recovered else alert_type)
+
+
+@pytest.mark.parametrize('takeover', ['longitudinal', 'hold', 'holdEnded'])
+def test_brake_withdraws_current_and_cached_longitudinal_takeover_prompt(takeover):
+  daemon, car_state, _, now_ns = failure_harness(-4)
+  update(daemon, car_state, now_ns)
+  configure_alert_output(daemon)
+  policy = daemon.engagement_policy = EngagementPolicy()
+  policy.last_now_ns = now_ns
+  policy.speed_takeover = takeover == 'longitudinal'
+  policy.handoff.active = takeover == 'hold'
+  policy.hold_ended_until_ns = now_ns + 1 if takeover == 'holdEnded' else 0
+  daemon.enabled = takeover != 'holdEnded'
+  daemon.mads.active = True
+  daemon.update_alerts(car_state)
+  alert_type = f'controlTakeover/{takeover}'
+  assert daemon.AM.current_alert.alert_type == alert_type
+
+  car_state.brakePressed = True
+  daemon.sm.frame += 1
+  daemon.update_alerts(car_state)
+  assert daemon.AM.current_alert.alert_type == ''
+  assert daemon.AM.current_alert.audible_alert == log.SelfdriveState.AudibleAlert.none
+  assert alert_type not in daemon.AM.alerts
+
+
+@pytest.mark.parametrize('other_event,event_type', [
+  (EventName.commIssue, ET.SOFT_DISABLE), (EventName.steerUnavailable, ET.IMMEDIATE_DISABLE),
+  (EventName.fcw, ET.PERMANENT), (EventName.aeb, ET.PERMANENT), (EventName.stockAeb, ET.PERMANENT),
+])
+def test_brake_suppression_keeps_independent_fault_and_collision_alerts(other_event, event_type):
+  daemon, car_state, _, now_ns = failure_harness(-4)
+  update(daemon, car_state, now_ns)
+  configure_alert_output(daemon, event_type)
+  daemon.events.add(other_event)
+  car_state.brakePressed = True
+  daemon.update_alerts(car_state)
+  assert daemon.AM.current_alert.alert_type == f'{EVENT_NAME[other_event]}/{event_type}'
+
+
+def test_driver_braking_does_not_silence_steering_takeover():
+  daemon, car_state, _, _ = failure_harness(-4)
+  configure_alert_output(daemon)
+  daemon.events.add(EventName.steerUnavailable)
+  daemon.engagement_policy = EngagementPolicy()
+  daemon.engagement_policy.steering_takeover = True
+  car_state.brakePressed = True
+  daemon.update_alerts(car_state)
+  assert daemon.AM.current_alert.alert_type == 'controlTakeover/lateral'

@@ -932,7 +932,19 @@ class SelfdriveD(CruiseHelper):
       self.AM.alerts.pop(generic, None)
       alerts.append(takeover_alert)
 
-    self.AM.add_many(self.sm.frame, alerts + alerts_sp)
+    alerts += alerts_sp
+    if CS.brakePressed:
+      # The driver already owns braking. Keep the fault events and engagement
+      # gates, but withdraw their prompts, including any minimum-duration cache.
+      suppressed = {
+        'longitudinalControlUnavailable/noEntry', 'longitudinalControlUnavailable/softDisable',
+        'controlTakeover/longitudinal', 'controlTakeover/hold', 'controlTakeover/holdEnded',
+      }
+      alerts = [alert for alert in alerts if alert.alert_type not in suppressed]
+      for alert_type in suppressed:
+        self.AM.alerts.pop(alert_type, None)
+
+    self.AM.add_many(self.sm.frame, alerts)
     self.AM.process_alerts(self.sm.frame, clear_event_types)
 
   def publish_selfdriveState(self, CS):

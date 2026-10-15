@@ -479,12 +479,13 @@ def test_current_physical_departure_uses_only_current_formal_leads(other):
   assert has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION) is (other in ('none', 'departing', 'caution'))
 
 
-@pytest.mark.parametrize('speed,standstill,consumed', [
+@pytest.mark.parametrize('speed,standstill,departure_allowed', [
   (0.0, True, True), (-1.9180846832417676e-23, True, True),
   (-np.finfo(float).eps, True, True), (-2.0 * np.finfo(float).eps, True, False),
-  (-0.001, True, False), (-1.9180846832417676e-23, False, False),
+  (-4.236371e-8, True, False), (-0.001, True, False), (-0.5, False, False),
+  (-1.9180846832417676e-23, False, False),
 ])
-def test_radar_consumption_uses_only_stopped_arithmetic_roundoff_without_mutating_car_state(speed, standstill, consumed):
+def test_radar_consumption_preserves_measured_speed_and_independent_departure_guards(speed, standstill, departure_allowed):
   from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
   from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, radar_frame
   from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
@@ -497,9 +498,61 @@ def test_radar_consumption_uses_only_stopped_arithmetic_roundoff_without_mutatin
   with patch.object(planner.dec, 'enabled', return_value=True):
     view = planner.reference_planner.radar_input_state(state, CONSUMPTION)
   reference = planner.reference_planner
-  assert (reference._radar_consumed_view is view['radarState']) is consumed
-  assert (reference._radar_consumed_ns == CONSUMPTION) is consumed
+  assert reference._radar_consumed_view is view['radarState']
+  assert reference._radar_consumed_ns == CONSUMPTION
+  assert reference.unbound_radar_departure_rejection(view, now_ns=CONSUMPTION) == (None if departure_allowed else 'ego_not_stationary')
   assert state['carState'].vEgo == wire_speed
+
+
+def test_negative_standstill_residual_with_expired_primary_matches_current_vision_only():
+  from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, SESSION, expiring_lead, radar_frame
+  from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
+
+  vision = formal_lead(now_ns=PUBLICATION, source='vision', dRel=10.0, vLead=0.0, vLeadK=0.0, vRel=0.0,
+                       evidence={'trackId': 9, 'visionIndex': 1})
+  outputs = []
+  for include_expired in (False, True):
+    old = expiring_lead(track=1277)
+    old.evidence.positionMonoTime = old.evidence.velocityMonoTime = CONSUMPTION - 201_946_000
+    if not include_expired:
+      old.present = False
+    state = state_at(radar_frame(old, vision, display=(old, vision)), speed=0.0)
+    state['carState'].vEgo = -4.236371e-8
+    state['controlsState'].motionState.phase = 'hold'
+    wire_speed = state['carState'].vEgo
+    source = state['radarState'].to_dict()
+    planner = enabled_planner(0.0)
+    with patch.object(planner.dec, 'enabled', return_value=True), patch.object(planner.dec, 'mode', return_value='acc'):
+      planner.update(state, now_ns=CONSUMPTION)
+    assert planner.mpc.solution_status == 0 and planner.motion_intent.valid
+    assert planner.reference_planner.radar_consumption.expired_identities == (((SESSION, 1277),) if include_expired else ())
+    assert state['carState'].vEgo == wire_speed and state['radarState'].to_dict() == source
+    outputs.append((planner.output_a_target, planner.output_should_stop, planner.mpc.params.copy()))
+  assert outputs[0][:2] == outputs[1][:2]
+  np.testing.assert_array_equal(outputs[0][2], outputs[1][2])
+
+
+@pytest.mark.parametrize('defect', ['invalid_message', 'failed_checks'])
+def test_negative_speed_expiry_does_not_bypass_whole_radar_input_failure(defect):
+  from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, expiring_lead, radar_frame
+  from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
+
+  old = expiring_lead()
+  state = state_at(radar_frame(old, display=(old,)), speed=0.0)
+  state['carState'].vEgo = -4.236371e-8
+  if defect == 'invalid_message':
+    state.valid['radarState'] = False
+  else:
+    state.all_checks = lambda service_list=None: False
+  planner = enabled_planner(0.0)
+  reference = planner.reference_planner
+  with patch.object(planner.dec, 'enabled', return_value=True):
+    view = reference.radar_input_state(state, CONSUMPTION)
+  assert view['radarState'].leadOne.present
+  assert not reference.radar_consumption.expired_identities
+  assert reference._radar_consumed_ns is None and reference.radar_consumption.publication_view is None
+  assert reference.unbound_radar_departure_rejection(view, now_ns=CONSUMPTION) == 'radar_consumption_unconfirmed'
 
 
 @pytest.mark.parametrize('defect', [
