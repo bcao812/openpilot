@@ -313,6 +313,163 @@ def test_fusion_qualified_migration_retains_only_unbroken_native_pairs():
   assert out['tracks'][0]['nativeMotion']['sampleCount'] == 1
 
 
+def _decoded_migration_fixture():
+  from opendbc.car.honda.bosch_a_radar import BoschARadarObserver
+  from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
+  from openpilot.selfdrive.car.honda_radar_fusion import HondaRadarFusion
+  from openpilot.selfdrive.car.tests.test_honda_radar_fusion import STEP as FUSION_STEP, advance
+  decoder, fusion = BoschARadarObserver(2), HondaRadarFusion()
+  for index in range(8):
+    decoder.feed(START + index * FUSION_STEP,
+                 scan_frames(slot=0, index=index, life=1 + 2 * index, distance=403,
+                             azimuth=1024, velocity=885, oem_id=7))
+    advance(fusion, index, decoder.drain(), probability=0)
+  track = fusion.tracks[7]
+  assert track.native_motion.qualified and track.native_motion.sample_count == 8
+  return decoder, fusion, track
+
+
+@pytest.mark.parametrize('takeover_first', [True, False])
+def test_same_batch_decoded_old_slot_takeover_preserves_proved_current_migration(takeover_first):
+  from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
+  from openpilot.selfdrive.car.tests.test_honda_radar_fusion import STEP as FUSION_STEP, advance
+  decoder, fusion, old = _decoded_migration_fixture()
+  first = old.native_motion.first_position_ns
+  takeover = scan_frames(slot=0, index=8, life=1, distance=1000, azimuth=1024, velocity=864, oem_id=40)
+  migrated = scan_frames(slot=1, index=8, life=17, distance=403, azimuth=1024, velocity=885, oem_id=7)
+  decoder.feed(START + 8 * FUSION_STEP, takeover + migrated if takeover_first else migrated + takeover)
+  out = advance(fusion, 8, decoder.drain(), probability=0)
+  target = next(track for track in out['tracks'] if track['oemTrackId'] == 7)
+  assert fusion.tracks[7] is old and old.slot == 1
+  assert target['nativeMotion']['qualified'] and target['nativeMotion']['sampleCount'] == 9
+  assert target['nativeMotion']['firstPositionMonoTime'] == first
+  assert target['nativeMotion']['rawRelativeSpeed'] == .328125
+  assert target['groundSpeed'] == target['nativeMotion']['groundSpeed'] == 10.328125
+  assert target['accelerationGood'] and target['acceleration'] == 0
+
+
+@pytest.mark.parametrize('takeover_first', [True, False])
+@pytest.mark.parametrize('fault', ['missingAux', 'invalidAux', 'uncertainAux', 'velocityInnovation',
+                                 'conflictingFrame', 'invalidPosition', 'missedScan', 'sourceGap', 'newIdentity'])
+def test_same_batch_migration_rejects_bad_pairs_and_bounds_pending_assembly(fault, takeover_first):
+  from opendbc.can import CANPacker
+  from opendbc.car.honda.bosch_a_radar import AUX_IDS
+  from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
+  from openpilot.selfdrive.car.tests.test_honda_radar_fusion import Inputs, STEP as FUSION_STEP, body
+  decoder, fusion, old = _decoded_migration_fixture()
+  stamp = START + 8 * FUSION_STEP
+  index = 9 if fault == 'missedScan' else 8
+  identity = 9 if fault == 'newIdentity' else 7
+  if fault == 'sourceGap':
+    stamp = old.position_ns + 100_000_001
+  velocity = 0 if fault == 'invalidAux' else 1504 if fault == 'velocityInnovation' else 885
+  takeover = scan_frames(slot=0, index=index, life=1, distance=1000, azimuth=1024, velocity=864, oem_id=40)
+  migrated = scan_frames(slot=1, index=index, life=1 + 2 * index, distance=4095 if fault == 'invalidPosition' else 403,
+                         azimuth=1024, velocity=velocity, oem_id=identity)
+  auxiliary = migrated[-1]
+  if fault == 'missingAux':
+    migrated = migrated[:-1]
+  elif fault == 'uncertainAux':
+    migrated[-1] = CANPacker('honda_bosch_a_radar').make_can_msg(AUX_IDS[1], 2, {
+      'FRAME_IDX': index, 'REL_VELOCITY_RAW': 885, 'REL_VELOCITY_UNCERTAINTY_RAW': 256,
+    })
+  elif fault == 'conflictingFrame':
+    migrated += scan_frames(slot=1, index=index, life=1 + 2 * index, distance=404,
+                             azimuth=1024, velocity=885, oem_id=7)[:1]
+  decoder.feed(stamp, takeover + migrated if takeover_first else migrated + takeover)
+  out = fusion.update(body(8, decoder.drain()), Inputs(stamp, probability=0), stamp + 1)
+  target = fusion.tracks.get(identity)
+  direct_pending = fault == 'missingAux' and not takeover_first
+  if target is not None:
+    assert not target.native_motion.qualified
+    if direct_pending:
+      assert target.native_motion.sample_count == 8
+    else:
+      assert target.native_motion.sample_count <= 1
+  assert not any(track['nativeMotion']['qualified'] for track in out['tracks'])
+  if fault == 'missingAux':
+    # An explicitly suspended target cannot recover discarded history in a
+    # later batch. A direct position-first migration had no withdrawal and
+    # retains the existing <=50 ms ordinary pending-assembly contract.
+    decoder.feed(stamp + 10_000_000, [auxiliary])
+    out = fusion.update(body(9, decoder.drain()), Inputs(stamp + 10_000_000, probability=0), stamp + 10_000_001)
+    assert fusion.tracks[7].native_motion.sample_count == (9 if direct_pending else 1)
+    assert fusion.tracks[7].native_motion.qualified is direct_pending
+
+
+def test_direct_migrated_position_can_wait_for_timely_aux_without_an_explicit_withdrawal():
+  from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
+  from openpilot.selfdrive.car.tests.test_honda_radar_fusion import Inputs, STEP as FUSION_STEP, body
+  decoder, fusion, old = _decoded_migration_fixture()
+  first = old.native_motion.first_position_ns
+  stamp = START + 8 * FUSION_STEP
+  migrated = scan_frames(slot=1, index=8, life=17, distance=403, azimuth=1024, velocity=885, oem_id=7)
+  decoder.feed(stamp, migrated[:-1])
+  fusion.update(body(8, decoder.drain()), Inputs(stamp, probability=0), stamp + 1)
+  assert old.active and not old.velocity_good and not old.native_motion.qualified
+  assert old.native_motion.pending and old.native_motion.sample_count == 8
+  assert old.native_motion.first_position_ns == first
+  decoder.feed(stamp + 10_000_000, migrated[-1:])
+  fusion.update(body(9, decoder.drain()), Inputs(stamp + 10_000_000, probability=0), stamp + 10_000_001)
+  assert old.native_motion.qualified and old.native_motion.sample_count == 9
+  assert old.native_motion.first_position_ns == first and old.native_motion.ground_speed == 10.328125
+
+
+def test_cross_publication_decoded_slot_withdrawal_never_carries_native_confirmation():
+  from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
+  from openpilot.selfdrive.car.tests.test_honda_radar_fusion import Inputs, STEP as FUSION_STEP, body
+  decoder, fusion, old = _decoded_migration_fixture()
+  stamp = START + 8 * FUSION_STEP
+  decoder.feed(stamp, scan_frames(slot=0, index=8, life=1, distance=1000, azimuth=1024, velocity=864, oem_id=40))
+  fusion.update(body(8, decoder.drain()), Inputs(stamp, probability=0), stamp + 1)
+  assert not old.active and old.native_motion.sample_count == 0
+  decoder.feed(stamp + 10_000_000,
+               scan_frames(slot=1, index=8, life=17, distance=403, azimuth=1024, velocity=885, oem_id=7))
+  fusion.update(body(9, decoder.drain()), Inputs(stamp + 10_000_000, probability=0), stamp + 10_000_001)
+  assert fusion.tracks[7] is old and old.active and old.velocity_good
+  assert old.native_motion.sample_count == 1 and not old.native_motion.qualified
+  assert not old.native_motion.acceleration_valid
+
+
+def test_same_batch_migration_cannot_undo_an_earlier_published_coasting_timeout():
+  from opendbc.car.honda.tests.test_bosch_a_observer import scan_frames
+  from openpilot.selfdrive.car.tests.test_honda_radar_fusion import Inputs, STEP as FUSION_STEP, body
+  decoder, fusion, old = _decoded_migration_fixture()
+  expired_at = old.position_ns + 100_000_001
+  fusion.update(body(8, []), Inputs(expired_at, probability=0), expired_at)
+  assert old.native_motion.reason == 'coasting' and old.native_motion.sample_count == 0
+  # A later received batch can contain a still-fresh source scan. Its arrival
+  # cannot undo the already published timeout or recover the discarded history.
+  stamp = START + 8 * FUSION_STEP
+  takeover = scan_frames(slot=0, index=8, life=1, distance=1000, azimuth=1024, velocity=864, oem_id=40)
+  migrated = scan_frames(slot=1, index=8, life=17, distance=403, azimuth=1024, velocity=885, oem_id=7)
+  decoder.feed(stamp, takeover + migrated)
+  fusion.update(body(9, decoder.drain()), Inputs(expired_at + 1_000_000, probability=0), expired_at + 1_000_000)
+  assert old.active and old.velocity_good
+  assert old.native_motion.sample_count == 1 and not old.native_motion.qualified
+
+
+@pytest.mark.parametrize('reason', ['withdrawn', 'invalidGeometry', 'conflictingFrame'])
+def test_same_batch_real_invalidation_discards_saved_migration_support(reason):
+  from openpilot.selfdrive.car.honda_radar_fusion import HondaRadarFusion
+  from openpilot.selfdrive.car.tests.test_honda_radar_fusion import Inputs, STEP as FUSION_STEP, advance, body, observation
+  fusion = HondaRadarFusion()
+  for frame in range(8):
+    advance(fusion, frame, probability=0)
+  old = fusion.tracks[7]
+  takeover = observation(8, oem=40, distance=60.0)
+  invalid = {'slot': 0, 'positionValid': False, 'positionMonoTime': takeover['positionMonoTime'] + 1,
+             'reason': reason, 'raw': {'oemTrackId': 7}}
+  migrated = observation(8, slot=1)
+  migrated['positionMonoTime'] += 2
+  migrated['velocityMonoTime'] += 2
+  stamp = START + 8 * FUSION_STEP + 3
+  out = fusion.update(body(8, [takeover, invalid, migrated]), Inputs(stamp, probability=0), stamp)
+  assert old.native_motion.sample_count == 0
+  assert fusion.tracks[7].native_motion.sample_count <= 1
+  assert not any(track['nativeMotion']['qualified'] for track in out['tracks'])
+
+
 def test_saturation_identity_recovery_cannot_inherit_old_motion_or_pair_confirmation():
   from openpilot.selfdrive.car.tests.test_honda_radar_fusion import advance, saturation_fixture
   fusion, sentinel, returned = saturation_fixture()

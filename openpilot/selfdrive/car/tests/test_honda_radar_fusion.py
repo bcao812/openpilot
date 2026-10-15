@@ -452,6 +452,9 @@ class TestHondaRadarFusion(unittest.TestCase):
             decoder.feed(START + frame * STEP, frames)
             advance(fusion, frame, decoder.drain())
           tracks = dict(fusion.tracks)
+          native_starts = {oem: track.native_motion.first_position_ns for oem, track in tracks.items()}
+          self.assertTrue(all(track.native_motion.qualified and track.native_motion.sample_count == 16
+                              for track in tracks.values()))
           frames = [can for slot in order for can in scan_frames(slot=slot, index=0, life=4094 if plateau else 33,
                     distance=753 if slot == 0 else 403, azimuth=1024, velocity=864, oem_id=8 if slot == 0 else 7)]
           decoder.feed(START + 16 * STEP, frames)
@@ -460,6 +463,11 @@ class TestHondaRadarFusion(unittest.TestCase):
             self.assertIs(fusion.tracks[oem], tracks[oem])
             self.assertEqual((tracks[oem].slot, tracks[oem].count, tracks[oem].frame_index), (slot, 17, 0))
             self.assertTrue(tracks[oem].active)
+            self.assertTrue(tracks[oem].native_motion.qualified)
+            self.assertEqual(tracks[oem].native_motion.sample_count, 17)
+            self.assertEqual(tracks[oem].native_motion.first_position_ns, native_starts[oem])
+            self.assertEqual(tracks[oem].native_motion.ground_speed, 10.0)
+            self.assertEqual(tracks[oem].native_motion.acceleration, 0.0)
           self.assertEqual(out['counters']['positions'], 34)
 
   def test_reassignment_cannot_restore_a_really_invalidated_posterior(self):

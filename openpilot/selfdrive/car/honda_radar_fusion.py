@@ -489,7 +489,9 @@ class HondaRadarFusion:
     self.tracks[track.oem_id] = track
     return track
 
-  def _invalidate(self, track, reason, position_ns, now_ns):
+  def _invalidate(self, track, reason, position_ns, now_ns, native_migrations=None):
+    if native_migrations is not None:
+      native_migrations.pop(track.identifier, None)
     track.active = track.velocity_good = track.acceleration_good = False
     track.native_motion.invalidate(reason)
     self._sync_native_motion(track)
@@ -502,9 +504,16 @@ class HondaRadarFusion:
       if identifier == track.identifier:
         binding.reject(reason, now_ns)
 
-  def _suspend_slot(self, track, position_ns, position_seq, now_ns):
-    self._invalidate(track, 'slotReassigned', position_ns, now_ns)
+  def _suspend_slot(self, track, position_ns, position_seq, now_ns, native_migrations=None):
+    current = track.native_motion
+    native = current.copy() if (track.active and current.pair_good and current.position_seq == track.position_seq
+                                and current.position_ns == track.position_ns) else None
+    self._invalidate(track, 'slotReassigned', position_ns, now_ns, native_migrations)
     track.slot_reassigned_ns, track.slot_reassigned_seq = position_ns, position_seq
+    if native is not None and native_migrations is not None:
+      # Private to this ingestion batch. No old motion/authority is published
+      # while the same object's new slot and current complete pair are unknown.
+      native_migrations[track.identifier] = (native, 0, 0)
 
   def _suspend_bindings(self, index, reason, timestamp, except_track=0):
     for (model_index, identifier), binding in self.bindings.items():
@@ -550,7 +559,7 @@ class HondaRadarFusion:
       return SaturationRecovery(stamp, index, geometry)
     return None
 
-  def _saturation_return(self, track, observation, observations, now_ns):
+  def _saturation_return(self, track, observation, observations, now_ns, native_migrations=None):
     witness = track.saturation_recovery
     if witness is None:
       return ''
@@ -567,7 +576,7 @@ class HondaRadarFusion:
                  float(read(observation, 'dRel')), float(read(observation, 'yRel')),
                  status, distance, azimuth)
     if witness.return_position is not None and signature != witness.return_position:
-      self._invalidate(track, 'conflictingPosition', stamp, now_ns)
+      self._invalidate(track, 'conflictingPosition', stamp, now_ns, native_migrations)
       self.counts['ambiguous'] += 1
       return ''
     witness.return_position = signature
@@ -580,11 +589,28 @@ class HondaRadarFusion:
     track.velocity_good = track.active and native.pair_good
     track.acceleration, track.acceleration_good = native.acceleration, track.velocity_good and native.acceleration_valid
 
-  def _velocity(self, track, observation, now_ns, projection_cache=None):
+  def _velocity(self, track, observation, now_ns, projection_cache=None, native_migrations=None):
     if not track.active:
       return
     native = track.native_motion
     accepted = native.observe(observation, now_ns, self.history.at, read)
+    migration = native_migrations.get(track.identifier) if native_migrations is not None else None
+    if migration is not None:
+      if migration[1:] != (track.position_seq, track.position_ns):
+        # A different later scan cannot inherit an incomplete migration pair.
+        native_migrations.pop(track.identifier, None)
+      elif accepted:
+        # Geometry/identity already proved this new slot below, and its own
+        # complete native pair just passed. Recheck that pair against the
+        # pre-suspension native state, including scan/source continuity and the
+        # independent native-velocity innovation gate. Rejection clears its
+        # support; a skipped scan restarts it, exactly as for a direct migration.
+        native = migration[0]
+        accepted = native.observe(observation, now_ns, self.history.at, read)
+        track.native_motion = native
+        native_migrations.pop(track.identifier, None)
+      elif native.rejected:
+        native_migrations.pop(track.identifier, None)
     self._sync_native_motion(track)
     if not accepted:
       if int(read(observation, 'frameMask', 0)) & 16 and not native.pair_good:
@@ -601,6 +627,9 @@ class HondaRadarFusion:
     if len(observations) > MAX_EVENTS:
       self.reset()
       return
+    # Atomic within one already-received batch only. Entries are never stored
+    # on HondaRadarFusion/Track or carried to another publication/snapshot.
+    native_migrations = {}
     # Only the bounded batch is sorted, never future route data. Native input
     # is unchanged during ingestion, so reuse the three scalar sorting keys.
     # Ordinary objects retain their original accessor order and exceptions.
@@ -631,7 +660,7 @@ class HondaRadarFusion:
             saturation = (track.saturation_recovery is not None and (slot == track.slot or invalid_oem == track.oem_id)
                           and stamp >= track.saturation_recovery.sentinel_ns)
             if 0 < stamp <= now_ns and (accepted or pending or saturation):
-              self._invalidate(track, reason, stamp, now_ns)
+              self._invalidate(track, reason, stamp, now_ns, native_migrations)
               self.counts['rejectedPosition'] += 1
         elif reason in ('expired', 'invalidGeometry', 'withdrawn'):
           for track in self.tracks.values():
@@ -643,7 +672,7 @@ class HondaRadarFusion:
                           and stamp >= track.saturation_recovery.sentinel_ns)
             if track.position_ns <= stamp <= now_ns and (matching_slot or pending or saturation):
               witness = self._saturation_witness(track, observation, observations, now_ns)
-              self._invalidate(track, reason, stamp, now_ns)
+              self._invalidate(track, reason, stamp, now_ns, native_migrations)
               track.saturation_recovery = witness
         continue
       seq = metadata[2] if metadata is not None else int(read(observation, 'positionSeq', 0))
@@ -658,7 +687,7 @@ class HondaRadarFusion:
           for previous in self.tracks.values():
             pending = previous.slot_reassigned_ns and previous.oem_id == identifier and stamp >= previous.slot_reassigned_ns
             if previous.position_ns <= stamp <= now_ns and (previous.slot == slot or pending):
-              self._invalidate(previous, 'invalidGeometry', stamp, now_ns)
+              self._invalidate(previous, 'invalidGeometry', stamp, now_ns, native_migrations)
         self.counts['rejectedPosition'] += 1
         continue
       track = self.tracks.get(identifier)
@@ -667,10 +696,10 @@ class HondaRadarFusion:
         last = track.positions[-1] if track.positions else (track.position_ns, math.nan, math.nan)
         if (slot != track.slot or stamp != track.position_ns or index != track.frame_index or life != track.lifecycle
             or abs(x - last[1]) > 1e-4 or abs(y - last[2]) > 1e-4):
-          self._invalidate(track, 'conflictingPosition', stamp, now_ns)
+          self._invalidate(track, 'conflictingPosition', stamp, now_ns, native_migrations)
           self.counts['ambiguous'] += 1
         else:
-          self._velocity(track, observation, now_ns, projection_cache)
+          self._velocity(track, observation, now_ns, projection_cache, native_migrations)
         continue
       # Distinct slots in one CAN envelope have the same source timestamp.
       # They can still make contradictory claims to the same OEM/frame. Check
@@ -680,7 +709,7 @@ class HondaRadarFusion:
           and 0 <= stamp - track.position_ns <= MAX_AGE_NS):
         self.counts['duplicate'] += 1
         self.counts['ambiguous'] += 1
-        self._invalidate(track, 'slotConflict', stamp, now_ns)
+        self._invalidate(track, 'slotConflict', stamp, now_ns, native_migrations)
         continue
       if track is not None and (stamp <= track.position_ns or seq < track.position_seq):
         self.counts['old'] += 1
@@ -688,9 +717,10 @@ class HondaRadarFusion:
       for previous in self.tracks.values():
         if (previous is not track and previous.slot == slot and (previous.active or previous.saturation_recovery is not None)
             and previous.position_ns <= stamp):
-          self._suspend_slot(previous, stamp, seq, now_ns)
+          self._suspend_slot(previous, stamp, seq, now_ns, native_migrations)
       birth_reason = 'newObject'
       old_track = track
+      migration = False
       saturation_recovery = False
       if track is not None:
         delta = (index - track.frame_index) & 15
@@ -699,7 +729,7 @@ class HondaRadarFusion:
           self.counts['duplicate'] += 1
           last = track.positions[-1]
           if slot != track.slot or abs(x - last[1]) > 1e-4 or abs(y - last[2]) > 1e-4:
-            self._invalidate(track, 'slotConflict' if slot != track.slot else 'conflictingPosition', stamp, now_ns)
+            self._invalidate(track, 'slotConflict' if slot != track.slot else 'conflictingPosition', stamp, now_ns, native_migrations)
             self.counts['ambiguous'] += 1
           continue
         continuous = radar_scan_continuous(track.frame_index, track.lifecycle, track.position_ns, index, life, stamp)
@@ -711,7 +741,7 @@ class HondaRadarFusion:
           # invalidGeometry exception; it still needs position and native AUX.
           migration = (track.slot_reassigned_ns and slot != track.slot and stamp >= track.slot_reassigned_ns
                        and seq > track.slot_reassigned_seq and continuous)
-          recovery = self._saturation_return(track, observation, observations, now_ns)
+          recovery = self._saturation_return(track, observation, observations, now_ns, native_migrations)
           if recovery == 'waiting':
             continue
           saturation_recovery = recovery == 'ready'
@@ -730,6 +760,8 @@ class HondaRadarFusion:
       else:
         prediction = track.project(stamp, self.history, projection_cache)
         if prediction is None:
+          if migration or slot != track.slot:
+            self._invalidate(track, 'positionProjection', stamp, now_ns, native_migrations)
           self.counts['rejectedPosition'] += 1
           continue
         mean, covariance = prediction
@@ -737,9 +769,13 @@ class HondaRadarFusion:
         x_gate = min(8.0, max(3.0, 3 * math.sqrt(float(covariance[0, 0]) + POSITION_NOISE**2)))
         y_gate = min(3.0, max(1.0, 3 * math.sqrt(float(covariance[1, 1]) + .8**2)))
         if abs(dx) > x_gate or abs(dy) > y_gate:
-          self._invalidate(track, 'positionInnovation', stamp, now_ns)
+          self._invalidate(track, 'positionInnovation', stamp, now_ns, native_migrations)
           self.counts['rejectedPosition'] += 1
           continue
+        if migration and track.identifier in native_migrations:
+          # Only the existing migration identity proof AND the normal position
+          # innovation checks can identify which new pair may use this history.
+          native_migrations[track.identifier] = (native_migrations[track.identifier][0], seq, stamp)
         saturation_ready = (track.active and track.mature and slot == track.slot and delta == 1
                             and track.lifecycle == 4091 and life == 4093)
         if saturation_recovery:
@@ -783,10 +819,10 @@ class HondaRadarFusion:
       # Only a newly accepted position scan can replace its width. Missing or
       # invalid new bounds erase the old extent; a late AUX never renews it.
       track.body = measured_radar_body(observation, now_ns)
-      self._velocity(track, observation, now_ns, projection_cache)
+      self._velocity(track, observation, now_ns, projection_cache, native_migrations)
       if saturation_recovery:
         if not track.velocity_good:
-          self._invalidate(old_track, 'invalidVelocity', stamp, now_ns)
+          self._invalidate(old_track, 'invalidVelocity', stamp, now_ns, native_migrations)
           continue
         self.tracks[identifier] = track
       self.counts['positions'] += 1
