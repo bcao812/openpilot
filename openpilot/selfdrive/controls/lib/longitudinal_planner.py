@@ -299,7 +299,6 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.observation_attempt = None
     self.observation_result = None
     self._radar_publication = None
-    self._radar_input_mono_time = 0
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
     self.pitch_bias = PitchBiasEstimator(self.dt)
     self._passive_input_times = dict.fromkeys(PASSIVE_PITCH_INPUTS, 0)
@@ -328,16 +327,6 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # recorded consumer time explicitly; input timestamps cannot date themselves.
     if now_ns is None:
       now_ns = time.monotonic_ns()
-    # Capture the supplied publication once for this attempt. Publication may
-    # occur after SubMaster advances; a newer packet did not generate this plan.
-    # Like other observation metadata, an unreadable clock cannot change control.
-    self._radar_input_mono_time = 0
-    try:
-      radar_input_ns = getattr(sm, 'logMonoTime', {}).get('radarState', 0)
-      if self._passive_timestamp_valid(radar_input_ns):
-        self._radar_input_mono_time = int(radar_input_ns)
-    except Exception:
-      pass
     self.mpc.set_failure_context(sm, now_ns)
     self._radar_publication = None
     self.observation_result = None
@@ -444,7 +433,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                                           and (not self.unified or self.motion_intent.valid)))
 
     longitudinalPlan = plan_send.longitudinalPlan
-    longitudinalPlan.radarStateInputMonoTime = self._radar_input_mono_time
+    # set_failure_context already snapshots the actual update inputs, even
+    # when optional diagnostics are off. Never relabel with publish-time data.
+    radar_input_ns = getattr(self.mpc, '_diagnostic_input_times', {}).get('radarStateMonoTime')
+    longitudinalPlan.radarStateInputMonoTime = int(radar_input_ns) if self._passive_timestamp_valid(radar_input_ns) else 0
     longitudinalPlan.modelMonoTime = sm.logMonoTime['modelV2']
     longitudinalPlan.processingDelay = (plan_send.logMonoTime - sm.logMonoTime['modelV2']) / 1e9
     longitudinalPlan.solverExecutionTime = self.mpc.solve_time
