@@ -30,6 +30,127 @@ def executing_state():
 
 
 class TestControlInfluenceRendering(HeadlessUITestCase):
+  def test_cached_visual_marker_and_distance_share_the_current_owner_color(self):
+    from openpilot.selfdrive.ui.onroad import model_renderer as renderer
+    from openpilot.selfdrive.ui.sunnypilot.onroad import chevron_metrics
+
+    sm = executing_state()
+    radar = sm['radarState']
+    radar.leadOne = {'present': True, 'radar': True, 'dRel': 18.92, 'vRel': -1.07,
+                     'evidence': {'version': 1, 'source': 'radar', 'sessionId': 'fixture', 'trackId': 42}}
+    radar.leadTwo = {'present': True, 'radar': False, 'dRel': 20.31, 'vRel': -2.25,
+                     'evidence': {'version': 1, 'source': 'vision', 'modelMonoTime': START, 'visionIndex': 0}}
+    record = sm['controlsState'].motionState.objectInfluences[0]
+    record.sessionId, record.trackId = '', 0
+    sm['modelV2'] = SimpleNamespace()
+    sm['extrinsicsCalibration'] = SimpleNamespace(height=[1.2])
+    sm.recv_frame = {'extrinsicsCalibration': 1, 'modelV2': 1}
+    sm.updated = dict.fromkeys(('carParams', 'modelV2', 'radarState'), False)
+    rect = rl.Rectangle(0, 0, 1280, 720)
+    ui = SimpleNamespace(sm=sm, started_frame=0, chevron_metrics=chevron_metrics.ChevronOptions.DISTANCE_ONLY, is_metric=True)
+    with patch.object(renderer, 'ui_state', ui), patch.object(chevron_metrics, 'ui_state', ui), \
+         patch.object(renderer.gui_app, 'font', return_value=object()), patch.object(renderer.gui_app, 'mark_phase'), \
+         patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
+         patch.object(chevron_metrics, 'measure_text_cached', return_value=rl.Vector2(90, 40)), \
+         patch.object(rl, 'draw_triangle_fan') as triangles, patch.object(rl, 'draw_text_ex') as text:
+      model = renderer.ModelRenderer.__new__(renderer.ModelRenderer)
+      model._counter, model._transform_dirty, model._longitudinal_control, model._rect = 1, False, True, rect
+      model._draw_lane_lines, model._draw_path, model._update_leads = Mock(), Mock(), Mock()
+      model.chevron_metrics = chevron_metrics.ChevronMetrics()
+      model.chevron_metrics._lead_status_alpha = 1.0
+      model._lead_vehicles = [model._update_lead_vehicle(18.92, -1.07, (250, 170), rect),
+                              model._update_lead_vehicle(20.31, -2.25, (550, 170), rect)]
+      for strength in (0.25, 1.0):
+        record.strength = strength
+        triangles.reset_mock()
+        text.reset_mock()
+        model._render(rect)
+        self.assertEqual(triangles.call_count, 4)
+        color = triangles.call_args_list[0].args[-1]
+        self.assertEqual((color.r, color.g, color.b), (218, 202, 37))
+        for call in triangles.call_args_list[2:]:
+          color = call.args[-1]
+          self.assertEqual((color.r, color.g, color.b, color.a), (*influence_rgb(strength), 255))
+        foreground = [call.args for call in text.call_args_list if call.args[-1].r != 0]
+        self.assertEqual([call[1] for call in foreground], ['20 m'])
+        color = foreground[0][-1]
+        self.assertEqual((color.r, color.g, color.b), influence_rgb(strength))
+
+      ui.chevron_metrics = chevron_metrics.ChevronOptions.OFF
+      text.reset_mock()
+      triangles.reset_mock()
+      model._render(rect)
+      text.assert_not_called()
+      self.assertEqual(triangles.call_count, 4)
+      color = triangles.call_args.args[-1]
+      self.assertEqual((color.r, color.g, color.b, color.a), (*influence_rgb(1.0), 255))
+
+      sm['carState'].gasPressed = True
+      triangles.reset_mock()
+      model._render(rect)
+      color = triangles.call_args_list[2].args[-1]
+      self.assertEqual((color.r, color.g, color.b), (218, 202, 37))
+      model._update_leads.assert_not_called()
+
+  def test_far_adopted_marker_is_visible_without_retaining_its_color(self):
+    from openpilot.selfdrive.ui.onroad import model_renderer as renderer
+
+    sm = executing_state()
+    radar = sm['radarState']
+    radar.leadOne = {'present': True, 'radar': True, 'dRel': 65.0, 'vRel': -18.0,
+                     'evidence': {'version': 1, 'source': 'radar', 'sessionId': 'fixture', 'trackId': 42}}
+    model = renderer.ModelRenderer.__new__(renderer.ModelRenderer)
+    lead = model._update_lead_vehicle(65.0, -18.0, (500, 300), rl.Rectangle(0, 0, 1280, 720))
+    self.assertEqual(lead.fill_alpha, 0)
+    model._lead_vehicles = [lead, renderer.LeadVehicle()]
+    with patch.object(renderer.time, 'monotonic_ns', return_value=START + 2) as clock, \
+         patch.object(rl, 'draw_triangle_fan') as triangles:
+      model._draw_lead_indicator(sm, radar)
+      for call in triangles.call_args_list:
+        color = call.args[-1]
+        self.assertEqual((color.r, color.g, color.b, color.a), (*influence_rgb(0.25), 255))
+      clock.return_value = START + 200_000_001
+      triangles.reset_mock()
+      model._draw_lead_indicator(sm, radar)
+      glow, fill = (call.args[-1] for call in triangles.call_args_list)
+      self.assertEqual((glow.r, glow.g, glow.b), (218, 202, 37))
+      self.assertEqual(fill.a, 0)
+      self.assertEqual(lead.fill_alpha, 0)
+
+  def test_marker_color_does_not_transfer_to_an_unmatched_or_stale_detection(self):
+    from openpilot.selfdrive.ui.onroad import model_renderer as renderer
+
+    for case in ('new_session', 'other_track', 'new_model_frame', 'other_vision_index', 'stale_radar', 'withdrawn'):
+      with self.subTest(case=case):
+        sm = executing_state()
+        radar = sm['radarState']
+        radar.leadOne = {'present': True, 'radar': True, 'dRel': 20.0,
+                         'evidence': {'version': 1, 'source': 'radar', 'sessionId': 'fixture', 'trackId': 42}}
+        if case == 'new_session':
+          radar.leadOne.evidence.sessionId = 'replacement'
+        elif case == 'other_track':
+          radar.leadOne.evidence.trackId = 43
+        elif case in ('new_model_frame', 'other_vision_index'):
+          radar.leadOne.radar = False
+          radar.leadOne.evidence = {'version': 1, 'source': 'vision', 'modelMonoTime': START, 'visionIndex': 0}
+          record = sm['controlsState'].motionState.objectInfluences[0]
+          record.sessionId, record.trackId = '', 0
+          if case == 'new_model_frame':
+            radar.leadOne.evidence.modelMonoTime = START + 1
+          else:
+            radar.leadOne.evidence.visionIndex = 1
+        elif case == 'stale_radar':
+          sm.logMonoTime['radarState'] = START - 200_000_001
+        else:
+          sm['controlsState'].motionState.objectInfluences = []
+        model = renderer.ModelRenderer.__new__(renderer.ModelRenderer)
+        model._lead_vehicles = [model._update_lead_vehicle(20.0, 0.0, (500, 300), rl.Rectangle(0, 0, 1280, 720)),
+                                renderer.LeadVehicle()]
+        with patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), patch.object(rl, 'draw_triangle_fan') as triangles:
+          model._draw_lead_indicator(sm, radar)
+          color = triangles.call_args_list[0].args[-1]
+          self.assertEqual((color.r, color.g, color.b), (218, 202, 37))
+
   def test_nearby_lead_labels_prioritize_the_adopted_visual_braking_identity(self):
     from openpilot.selfdrive.ui.sunnypilot.onroad import chevron_metrics as renderer
 

@@ -8,7 +8,6 @@ import pyray as rl
 
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
-from openpilot.selfdrive.ui.sunnypilot.onroad.braking_target import BrakingTargetRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import DeveloperUiRenderer, DeveloperUiState, get_bottom_dev_ui_offset
 from openpilot.selfdrive.ui.sunnypilot.onroad.rocket_fuel import RocketFuel
 from openpilot.selfdrive.ui.sunnypilot.onroad.speed_limit import SpeedLimitRenderer
@@ -35,7 +34,6 @@ class HudRendererSP(HudRenderer):
     self.turn_signal_controller = TurnSignalController()
     self.circular_alerts_renderer = CircularAlertsRenderer()
     self.speed_renderer = SpeedRenderer()
-    self.braking_target_renderer = BrakingTargetRenderer()
     self._torque_bar = TorqueBar(scale=3.0, always=True)
 
     self.pcm_cruise_speed: bool = True
@@ -153,8 +151,6 @@ class HudRendererSP(HudRenderer):
     gui_app.mark_phase('hud_speedlimit')
     self.smart_cruise_control_renderer.render(rect)
     gui_app.mark_phase('hud_scc')
-    self.braking_target_renderer.render(rect, ui_state.sm)
-    gui_app.mark_phase('hud_braking_target')
     self.turn_signal_controller.render(rect)
     gui_app.mark_phase('hud_turnsig')
     self.circular_alerts_renderer.render(rect)

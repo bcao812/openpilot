@@ -1,4 +1,5 @@
 import colorsys
+import time
 import numpy as np
 import pyray as rl
 from openpilot.cereal import messaging
@@ -14,6 +15,9 @@ from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient, Prepa
 from openpilot.system.ui.widgets import Widget
 
 from openpilot.selfdrive.ui.sunnypilot.onroad.model_renderer import ChevronMetrics, ModelRendererSP
+from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import (
+  MESSAGE_MAX_AGE_NS, accepted_influences, influence_rgb, lead_influence_strength,
+)
 
 CLIP_MARGIN = 500
 MIN_DRAW_DISTANCE = 10.0
@@ -169,7 +173,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     gui_app.mark_phase('model_path')
 
     if render_lead_indicator and radar_state:
-      self._draw_lead_indicator()
+      self._draw_lead_indicator(sm, radar_state)
       self.chevron_metrics.draw_lead_status(sm, radar_state, self._rect, self._lead_vehicles)
     gui_app.mark_phase('model_chevron')
 
@@ -385,14 +389,27 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       )
       draw_polygon(self._rect, self._path.polygon, gradient=gradient)
 
-  def _draw_lead_indicator(self):
-    # Draw lead vehicles if available
-    for lead in self._lead_vehicles:
+  def _draw_lead_indicator(self, sm, radar_state):
+    # Geometry can be cached, but owner attribution must be checked every draw.
+    now_ns = time.monotonic_ns()
+    influences = accepted_influences(sm, now_ns)
+    if (not sm.valid.get('radarState', False)
+        or not 0 <= now_ns - sm.logMonoTime.get('radarState', 0) <= MESSAGE_MAX_AGE_NS):
+      influences = ()
+    model_ns = getattr(radar_state, 'mdMonoTime', 0)
+    detections = (radar_state.leadOne, radar_state.leadTwo)
+    for slot, (lead, detection) in enumerate(zip(self._lead_vehicles, detections, strict=True)):
       if not lead.glow or not lead.chevron:
         continue
 
-      rl.draw_triangle_fan(lead.glow, len(lead.glow), rl.Color(218, 202, 37, 255))
-      rl.draw_triangle_fan(lead.chevron, len(lead.chevron), rl.Color(201, 34, 49, lead.fill_alpha))
+      strength = lead_influence_strength(detection, influences, legacy_model_ns=model_ns, legacy_slot=slot)
+      rgb = influence_rgb(strength)
+      # Use the same scale as radar points and distance text. An adopted target
+      # stays visible beyond the ordinary distance-based 40m fill cutoff.
+      glow_color = rl.Color(*(rgb or (218, 202, 37)), 255)
+      fill_color = rl.Color(*(rgb or (201, 34, 49)), 255 if rgb else lead.fill_alpha)
+      rl.draw_triangle_fan(lead.glow, len(lead.glow), glow_color)
+      rl.draw_triangle_fan(lead.chevron, len(lead.chevron), fill_color)
 
   @staticmethod
   def _get_path_length_idx(pos_x_array: np.ndarray, path_distance: float) -> int:

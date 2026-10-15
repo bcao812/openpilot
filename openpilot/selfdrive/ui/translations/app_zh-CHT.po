@@ -2267,31 +2267,3 @@ msgstr[1] "{} 分鐘前"
 #: openpilot/selfdrive/ui/widgets/prime.py
 msgid "✓ SUBSCRIBED"
 msgstr "✓ 已訂閱"
-
-#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
-msgid "Target constraint"
-msgstr "目標約束強度"
-
-#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
-msgid "+{count} more"
-msgstr "另有 {count} 項"
-
-#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
-msgid "RADAR #{track}"
-msgstr "雷達 #{track}"
-
-#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
-msgid "RADAR #{track} + V{index}"
-msgstr "雷達 #{track} + 視覺 {index}"
-
-#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
-msgid "VISION {index}"
-msgstr "視覺 {index}"
-
-#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
-msgid "Hold"
-msgstr "駐停"
-
-#: openpilot/selfdrive/ui/sunnypilot/onroad/braking_target.py
-msgid "Braking"
-msgstr "制動"
