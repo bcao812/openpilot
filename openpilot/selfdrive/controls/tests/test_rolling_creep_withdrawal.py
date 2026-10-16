@@ -40,7 +40,7 @@ def test_rolling_creep_withdrawal_preserves_the_negative_target_and_brake_releas
   harness = ControlHarness()
   harness.state.vEgo = 0.8
   harness.state.aEgo = -0.35
-  stop_intent = replace(ROLLING_INTENT, reasons=StopReason.CLOSE_LEAD)
+  stop_intent = MotionIntent(reasons=StopReason.CLOSE_LEAD, producer_instance_ns=ROLLING_INTENT.producer_instance_ns)
   for _ in range(150):
     harness.step(-0.35, stop_intent)
   assert harness.control.motion_reasons == StopReason.CLOSE_LEAD | StopReason.CREEP
