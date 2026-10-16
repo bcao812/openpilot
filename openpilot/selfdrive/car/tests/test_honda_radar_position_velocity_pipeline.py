@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from openpilot.selfdrive.car.honda_radar_observer_config import SERVICE
+from openpilot.selfdrive.car.honda_radar_native import VERSION as NATIVE_VERSION
 from openpilot.selfdrive.car.tests import honda_radar_control_test_support as pipeline_support
 from openpilot.selfdrive.car.tests.honda_radar_control_test_support import Target, control_pipeline
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
@@ -131,7 +132,7 @@ def timing_and_peak(rows):
 
 def current_quality(track):
   quality = track['nativeMotion']
-  assert quality['version'] == 1
+  assert quality['version'] == NATIVE_VERSION
   assert quality['positionSeq'] == track['positionSeq']
   assert quality['positionMonoTime'] == track['positionMonoTime']
   assert quality['velocityMonoTime'] == track['velocityMonoTime']

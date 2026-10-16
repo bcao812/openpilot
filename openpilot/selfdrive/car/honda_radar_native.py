@@ -2,18 +2,28 @@
 
 Only AUX and the ego sample at its original timestamp determine longitudinal
 motion. Distance can reject a pair; it never supplies or corrects its velocity.
-The distance/velocity residual is diagnostic, not a calibrated rejection gate.
+New native support must also agree with independent raw distance changes before
+it can authorize control. Accepted correcting AUX still updates native motion.
+The single-interval distance residual remains diagnostic for admitted episodes.
 """
 from dataclasses import dataclass, replace
 import math
 
 
-VERSION = 1
+VERSION = 2
 MIN_PAIRS = 5
 MIN_SPAN_NS = 250_000_000
 MAX_PAIR_NS = 50_000_000
 MAX_GAP_NS = 100_000_000
 MAX_AGE_NS = 200_000_000
+# Startup/recovery admission bounds, not calibrated sensor accuracy. A fixed
+# distance allowance covers quantization/reflection movement; the span term
+# bounds sustained disagreement. Current lateral positions/yaw bound the
+# rotating-frame contribution separately, so turning is not a missing witness.
+ADMISSION_DISTANCE_MARGIN = .5
+ADMISSION_SPEED_MARGIN = 3.0
+ADMISSION_WINDOW_NS = 500_000_000
+ADMISSION_MAX_SAMPLES = 16
 
 
 def _read(obj, name, default=None):
@@ -63,7 +73,15 @@ class NativeMotion:
   last_ground_speed: float = 0.0
   last_velocity_variance: float = 0.0
   last_yaw: float = 0.0
+  last_lateral: float = 0.0
   filtered_acceleration: float = 0.0
+  admission_ready: bool = False
+  # Immutable (position timestamp, interval residual, rotation allowance)
+  # samples keep tentative same-batch migration copies independent.
+  admission_samples: tuple[tuple[int, float, float], ...] = ()
+  admission_span_ns: int = 0
+  admission_residual: float = 0.0
+  admission_limit: float = 0.0
 
   def copy(self):
     return replace(self)
@@ -72,8 +90,32 @@ class NativeMotion:
     self.sample_count = self.first_position_ns = 0
     self.last_position_ns = self.last_velocity_ns = self.last_velocity_seq = 0
     self.last_distance = self.last_relative_speed = self.last_ground_speed = self.last_yaw = 0.0
+    self.last_lateral = 0.0
     self.last_velocity_variance = 0.0
     self.filtered_acceleration = 0.0
+    self.admission_ready = False
+    self.admission_samples = ()
+    self.admission_span_ns = 0
+    self.admission_residual = self.admission_limit = 0.0
+
+  def _admit_motion(self, stamp, residual, rotation_allowance):
+    if self.admission_ready:
+      return
+    samples = tuple(s for s in self.admission_samples if stamp - s[0] <= ADMISSION_WINDOW_NS)
+    samples = (samples + ((stamp, residual, rotation_allowance),))[-ADMISSION_MAX_SAMPLES:]
+    # Use the shortest recent suffix with the original pair-count/time support.
+    # A bad startup must age out through real new pairs, never a fixed timeout.
+    while len(samples) > MIN_PAIRS and stamp - samples[1][0] >= MIN_SPAN_NS:
+      samples = samples[1:]
+    self.admission_samples = samples
+    self.admission_span_ns = stamp - samples[0][0]
+    # The first interval starts before this window and cannot be counted.
+    self.admission_residual = sum(s[1] for s in samples[1:])
+    self.admission_limit = (ADMISSION_DISTANCE_MARGIN + ADMISSION_SPEED_MARGIN * self.admission_span_ns / 1e9
+                            + sum(s[2] for s in samples[1:]))
+    self.admission_ready = (len(samples) >= MIN_PAIRS and self.admission_span_ns >= MIN_SPAN_NS
+                            and math.isfinite(self.admission_residual)
+                            and abs(self.admission_residual) <= self.admission_limit)
 
   def _clear_current_motion(self):
     self.velocity_seq = self.velocity_ns = self.pair_complete_ns = 0
@@ -210,6 +252,7 @@ class NativeMotion:
     self.distance_residual = 0.0
     self.acceleration_valid = False
     self.acceleration = 0.0
+    admission_residual = rotation_allowance = 0.0
     if self.last_velocity_ns:
       dt = (vstamp - self.last_velocity_ns) / 1e9
       self.acceleration_valid = 0 < dt <= .2
@@ -217,16 +260,24 @@ class NativeMotion:
         acceleration = max(-10.0, min(5.0, (ground - self.last_ground_speed) / dt))
         self.filtered_acceleration += dt / (.5 + dt) * (acceleration - self.filtered_acceleration)
         self.acceleration = self.filtered_acceleration
-      # This diagnostic uses only a causal native-speed integral. Restrict it
-      # to nearly unchanged body axes (<=0.005 rad over the interval). Neither
-      # this engineering comparability flag nor the residual rejects a pair.
+      # Integrate AUX at the original position timestamps, including split
+      # position/AUX arrival. Neither this check nor its outcome changes AUX.
       position_dt = (stamp - self.last_position_ns) / 1e9
-      if 0 < position_dt <= MAX_GAP_NS / 1e9 and max(abs(ego.yaw), abs(self.last_yaw)) * position_dt <= .005:
+      if 0 < position_dt <= MAX_GAP_NS / 1e9:
         slope = (float(value) - self.last_relative_speed) / dt
         prior_at_position = self.last_relative_speed + slope * (self.last_position_ns - self.last_velocity_ns) / 1e9
         current_at_position = float(value) + slope * (stamp - vstamp) / 1e9
-        self.distance_residual = float(x) - self.last_distance - .5 * (prior_at_position + current_at_position) * position_dt
-        self.distance_residual_valid = math.isfinite(self.distance_residual)
+        admission_residual = float(x) - self.last_distance - .5 * (prior_at_position + current_at_position) * position_dt
+        angle = max(abs(ego.yaw), abs(self.last_yaw)) * position_dt
+        # For rotating body axes, x-dot includes -yaw*y. Bound that component
+        # with current measured endpoints instead of rejecting turning leads
+        # or using a distance-derived/visual speed as the native measurement.
+        rotation_allowance = max(abs(float(y)), abs(self.last_lateral)) * angle
+        # Preserve the published V1 diagnostic meaning for nearly unchanged
+        # axes. The startup window above is a separate engineering admission.
+        if angle <= .005:
+          self.distance_residual = admission_residual
+          self.distance_residual_valid = math.isfinite(self.distance_residual)
 
     self.velocity_seq, self.velocity_ns = vseq, vstamp
     self.raw_relative_speed, self.ground_speed = float(value), ground
@@ -234,18 +285,21 @@ class NativeMotion:
     self.sample_count = min(65535, self.sample_count + 1)
     if self.sample_count == 1:
       self.first_position_ns = stamp
+    self._admit_motion(stamp, admission_residual, rotation_allowance)
     self.pair_complete_ns = now_ns
     self.last_position_ns, self.last_velocity_ns, self.last_velocity_seq = stamp, vstamp, vseq
     self.last_distance, self.last_relative_speed = float(x), float(value)
     self.last_ground_speed, self.last_yaw = ground, ego.yaw
+    self.last_lateral = float(y)
     self.last_velocity_variance = variance
     self.pair_good, self.pending, self.rejected = True, False, False
-    self.reason = 'qualified' if self.qualified else restart or 'insufficientSupport'
+    supported = self.sample_count >= MIN_PAIRS and stamp - self.first_position_ns >= MIN_SPAN_NS
+    self.reason = 'qualified' if self.qualified else 'motionDisagreement' if supported else restart or 'insufficientSupport'
     return True
 
   @property
   def qualified(self):
-    return bool(self.pair_good and self.sample_count >= MIN_PAIRS
+    return bool(self.pair_good and self.admission_ready and self.sample_count >= MIN_PAIRS
                 and self.position_ns - self.first_position_ns >= MIN_SPAN_NS)
 
   def snapshot(self, now_ns, *, active=True):

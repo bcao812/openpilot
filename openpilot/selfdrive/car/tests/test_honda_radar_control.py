@@ -8,6 +8,7 @@ import pytest
 from openpilot.selfdrive.car.honda_radar_control import (
   FUSION_VERSION, HORIZON, MAX_TRACKS, SWEPT_HALF_WIDTH, HondaRadarControl, _Corridor, _corridors, _qualified_path,
 )
+from openpilot.selfdrive.car.honda_radar_native import VERSION as NATIVE_VERSION
 
 
 START = 10_000_000_000
@@ -42,7 +43,7 @@ def native_motion_quality(track, **changes):
   stamp, velocity_stamp = track['positionMonoTime'], track['velocityMonoTime']
   known_times = type(stamp) is int and type(velocity_stamp) is int
   qualified = count >= 5 and track['velocityGood'] is True and known_times and min(stamp, velocity_stamp) > 0
-  result = {'version': 1, 'qualified': qualified, 'reason': 'qualified' if qualified else 'insufficientSupport',
+  result = {'version': NATIVE_VERSION, 'qualified': qualified, 'reason': 'qualified' if qualified else 'insufficientSupport',
             'positionSeq': track['positionSeq'], 'positionMonoTime': stamp, 'velocitySeq': track['positionSeq'],
             'velocityMonoTime': velocity_stamp, 'sampleCount': max(0, count),
             'firstPositionMonoTime': stamp - max(0, count - 1) * STEP if type(stamp) is int else 0,
@@ -897,6 +898,7 @@ def test_qualified_position_history_cannot_supply_missing_native_velocity():
    'qualified': False, 'reason': 'insufficientSupport'},
   {'qualified': False, 'reason': 'awaitingAux'}, {'qualified': False, 'reason': 'pairTimeout'},
   {'qualified': False, 'reason': 'invalidPosition'}, {'qualified': False, 'reason': 'sourceGap'},
+  {'qualified': False, 'reason': 'motionDisagreement'},
 ])
 def test_pending_native_quality_withdraws_all_roles_and_recovers_only_from_current_qualified_pairs(quality_changes):
   controller = HondaRadarControl()
@@ -941,7 +943,8 @@ def test_pending_native_quality_cannot_issue_measured_out_clearance():
 
 
 @pytest.mark.parametrize('changes', [
-  {'version': 2}, {'version': True}, {'version': []}, {'positionSeq': 99}, {'positionMonoTime': START},
+  {'version': 1}, {'version': NATIVE_VERSION + 1}, {'version': True}, {'version': []},
+  {'reason': 'motionDisagreement'}, {'positionSeq': 99}, {'positionMonoTime': START},
   {'velocitySeq': 0}, {'velocityMonoTime': START}, {'sampleCount': 17}, {'sampleCount': 4}, {'sampleCount': True},
   {'firstPositionMonoTime': START + STEP - 249_999_999}, {'firstPositionMonoTime': 0},
   {'validUntilMonoTime': START + STEP + 200_000_001}, {'pairCompleteMonoTime': START},

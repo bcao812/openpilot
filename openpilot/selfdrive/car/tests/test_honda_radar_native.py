@@ -52,14 +52,15 @@ def test_native_velocity_jump_withdraws_instead_of_following_the_position_poster
   assert not native.qualified and native.sample_count == 0
   assert native.ground_speed == 0.0
   for index in range(6, 11):
-    assert observe(native, sample(index, relative=-7.0))
+    assert observe(native, sample(index, relative=-7.0, distance=29.0 - 7.0 * (index - 5) * STEP / 1e9))
   assert native.qualified and native.ground_speed == 13.0
 
 
 def test_coherent_native_hard_braking_can_remain_qualified():
   native = NativeMotion()
   for index in range(12):
-    assert observe(native, sample(index, relative=-1.0 - 8.0 * index * STEP / 1e9))
+    elapsed = index * STEP / 1e9
+    assert observe(native, sample(index, relative=-1.0 - 8.0 * elapsed, distance=30.0 - elapsed - 4.0 * elapsed**2))
     if index >= 4:
       assert native.qualified
   assert native.acceleration_valid and native.acceleration < -3.0
@@ -219,7 +220,9 @@ def test_native_motion_depends_only_on_native_velocity_and_aligned_ego():
     observe(perturbed, altered)
     assert (reference.ground_speed, reference.acceleration, reference.acceleration_valid) == (
       perturbed.ground_speed, perturbed.acceleration, perturbed.acceleration_valid)
-  assert reference.qualified and perturbed.qualified
+  # Native numerical motion remains independent. Deliberately contradictory
+  # positions may now delay the separate startup admission.
+  assert reference.qualified
   assert reference.acceleration_valid and reference.acceleration < -2
   assert reference.distance_residual != perturbed.distance_residual
 

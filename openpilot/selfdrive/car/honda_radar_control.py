@@ -355,6 +355,10 @@ def _native_motion_state(evidence, track, *, now_ns, observation_ns):
     return 'invalid'
   if not quality['qualified']:
     return 'pending'
+  # V2 is a producer admission contract, including independent startup motion
+  # consistency. A pending/recovery reason cannot accompany a qualified claim.
+  if quality['reason'] != 'qualified':
+    return 'invalid'
   p_ns, v_ns = track['positionMonoTime'], track['velocityMonoTime']
   integers = ('positionSeq', 'positionMonoTime', 'velocitySeq', 'velocityMonoTime', 'sampleCount',
               'firstPositionMonoTime', 'validUntilMonoTime', 'pairCompleteMonoTime', 'u10Raw',
