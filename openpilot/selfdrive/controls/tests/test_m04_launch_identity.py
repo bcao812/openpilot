@@ -1,7 +1,7 @@
 """Current-track launch continuity through the real planner and motion owner.
 
-M04 provides a qualified current radar object; M003 supplies the held model
-history. Constructed source-label transitions test identity, not vehicle timing.
+M04 provides current car/radar samples; M003 supplies the held model history.
+The combined samples and source-label transitions test identity, not vehicle timing.
 """
 
 from copy import deepcopy
@@ -17,6 +17,7 @@ from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolate
 from openpilot.selfdrive.controls.tests.test_m003_stationary_departure import (
   FIRST, held_case as held_case, load_snapshot, step,
 )
+from openpilot.selfdrive.controls.tests.test_m04_stationary_residue import FIXTURE as STATIONARY_FIXTURE
 
 
 FIXTURE = json.loads((Path(__file__).with_name('fixtures') / 'm04_launch_identity.json').read_text())
@@ -24,6 +25,11 @@ FIXTURE = json.loads((Path(__file__).with_name('fixtures') / 'm04_launch_identit
 
 def load_current_observations(state, frame):
   load_snapshot(state, FIRST, frame)
+  # M003's small negative aEgo also makes its cruise-policy acceleration
+  # negative, outside LeadLaunch's unchanged policy gate. Use M04's recorded
+  # stopped car sample (including its speed residue) for this identity test.
+  for field, value in STATIONARY_FIXTURE['car'].items():
+    setattr(state['carState'], field, value)
   radar = deepcopy(FIXTURE['radar'])
   now_ns = 1_000_000_000 + frame * 50_000_000
   shift = now_ns - radar['mdMonoTime']
@@ -43,7 +49,7 @@ def confirm_current_track(case):
     plan, _ = step(case, frame)
     launch = planner.reference_planner.lead_launch
     assert plan.solverStatus == 0 and plan.motionIntent.valid
-    assert launch.confirmed_ns == (frame - 20) * 50_000_000
+    assert launch.confirmed_ns == (frame - 20) * 50_000_000, (frame, launch.reason)
     assert launch.active == (frame == 25)
   return planner.reference_planner.lead_launch
 
