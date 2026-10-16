@@ -225,6 +225,80 @@ def test_ordinary_acc_never_learns_positive_i_but_can_correct_excess_response_at
   assert harness.pid.i < 0.0
 
 
+def negative_tracking_feedback(target=-0.1717, response_domain=ResponseDomain.ABSOLUTE_ACC):
+  harness = FeedbackHarness()
+  harness.step(base=target, target=target, measured=target, rolling=True, response_domain=response_domain)
+  # A carried controller state, rounded from B265; not a route/vehicle replay.
+  harness.pid.i = -0.3513
+  return harness
+
+
+@pytest.mark.parametrize('target', [-0.1717, 0.0, 0.2])
+def test_weak_acc_overdeceleration_releases_negative_i_faster_without_resetting(target):
+  harness = negative_tracking_feedback(target)
+  initial = harness.pid.i
+  for _ in range(100):
+    before = harness.pid.i
+    output = harness.step(base=target, target=target, measured=target - 0.165, rolling=True,
+                          response_domain=ResponseDomain.ABSOLUTE_ACC)
+    assert before < harness.pid.i <= 0.0
+    assert 0.0 < harness.pid.i - before <= 0.003
+    assert output <= target
+  # The old .4/s correction would release .066 in this declared one-second
+  # response. Require an improvement while retaining most of the carried I.
+  assert initial + 0.096 < harness.pid.i < -0.2
+
+
+@pytest.mark.parametrize('error', [0.0, 0.04])
+def test_load_compensation_survives_zero_error_and_small_balanced_noise(error):
+  harness = negative_tracking_feedback()
+  initial = harness.pid.i
+  for _ in range(100):
+    for measured in (-0.1717 - error, -0.1717 + error):
+      harness.step(base=-0.1717, target=-0.1717, measured=measured, rolling=True,
+                   response_domain=ResponseDomain.ABSOLUTE_ACC)
+  assert harness.pid.i == pytest.approx(initial)
+
+
+@pytest.mark.parametrize('target', [-0.1717, -1.0])
+def test_insufficient_braking_still_accumulates_the_original_correction(target):
+  harness = negative_tracking_feedback(target)
+  initial = harness.pid.i
+  for _ in range(100):
+    harness.step(base=target, target=target, measured=target + 0.165, rolling=True,
+                 response_domain=ResponseDomain.ABSOLUTE_ACC)
+  assert harness.pid.i == pytest.approx(initial - 0.066)
+
+
+@pytest.mark.parametrize('target,response_domain,rolling', [
+  (-0.21, ResponseDomain.ABSOLUTE_ACC, True),
+  (-1.0, ResponseDomain.ABSOLUTE_ACC, True),
+  (-0.1717, ResponseDomain.LEAD_BRAKING, True),
+  (-0.1717, ResponseDomain.ABSOLUTE_ACC, False),
+])
+def test_stronger_references_independent_braking_and_near_rest_keep_original_unwind(target, response_domain, rolling):
+  harness = negative_tracking_feedback(target, response_domain)
+  initial = harness.pid.i
+  for _ in range(100):
+    harness.step(base=target, target=target, measured=target - 0.165, rolling=rolling,
+                 response_domain=response_domain)
+  assert harness.pid.i == pytest.approx(initial + 0.066)
+
+
+@pytest.mark.parametrize('elapsed_ns,count', [(10_000_000, 100), (50_000_000, 20)])
+def test_extra_negative_i_release_is_rate_bounded_uses_elapsed_time_and_cannot_cross_zero(elapsed_ns, count):
+  harness = negative_tracking_feedback()
+  initial = harness.pid.i
+  harness.step(base=0.0, target=0.0, measured=-2.0, rolling=True, elapsed_ns=elapsed_ns,
+               response_domain=ResponseDomain.ABSOLUTE_ACC)
+  elapsed = elapsed_ns / 1e9
+  assert harness.pid.i - initial == pytest.approx((0.4 * 2.0 + 0.2) * elapsed)
+  for _ in range(count):
+    assert harness.step(base=0.0, target=0.0, measured=-2.0, rolling=True, elapsed_ns=elapsed_ns,
+                        response_domain=ResponseDomain.ABSOLUTE_ACC) <= 0.0
+  assert harness.pid.i == 0.0
+
+
 @pytest.mark.parametrize('response_domain', [ResponseDomain.ABSOLUTE_ACC, ResponseDomain.LEAD_BRAKING])
 def test_explicit_rolling_domains_do_not_create_feedback_near_rest(response_domain):
   harness = FeedbackHarness()

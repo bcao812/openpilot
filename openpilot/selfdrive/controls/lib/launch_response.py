@@ -15,6 +15,13 @@ LAUNCH_RESPONSE_KI = 1.0  # 1/s; candidate for the frozen short-response enginee
 # delay<=1 s, response<=.8 s; coupled MPC/mode changes require separate tests.
 # This is an engineering envelope, not identified Honda response or calibration.
 TRACKING_RESPONSE_KI = 0.4
+# Extra unwind applies only to a weak current ACC reference with measured
+# over-deceleration. The deadband leaves the nominal small-error response
+# above unchanged; these are engineering bounds, not a vehicle calibration.
+TRACKING_RELEASE_MIN_TARGET = -0.2  # m/s^2
+TRACKING_RELEASE_ERROR_DEADBAND = 0.05  # m/s^2
+TRACKING_RELEASE_EXTRA_KI = 0.4  # 1/s, added only while unwinding negative I
+TRACKING_RELEASE_EXTRA_RATE = 0.2  # m/s^3, maximum additional unwind
 
 
 class ResponseDomain(IntEnum):
@@ -210,6 +217,15 @@ class LaunchResponse:
         # discontinuous withdrawal of previously confirmed launch effort.
         minimum = max(minimum, min(self.bias, 0.0))
     stored = min(maximum, max(minimum, self.bias))
+    if (rolling and response_domain == ResponseDomain.ABSOLUTE_ACC and stored < 0.0
+        and a_target >= TRACKING_RELEASE_MIN_TARGET):
+      # Retire only correction contradicted by the current measured response.
+      # No target identity, reference history or timed decay is involved: zero
+      # error still preserves load compensation, and insufficient braking
+      # still accumulates with the original tracking gain. Stronger references,
+      # independent lead braking, MODEL, APPROACH and HOLD keep their paths.
+      release_error = max(0.0, error - TRACKING_RELEASE_ERROR_DEADBAND)
+      change += elapsed * min(TRACKING_RELEASE_EXTRA_RATE, TRACKING_RELEASE_EXTRA_KI * release_error)
     candidate = min(maximum, max(minimum, stored + change))
     return self._propose_output(base_output, candidate, upper_limit,
                                 qualify=bool(model_response and forward and positive_allowed and a_target >= 0.0))
