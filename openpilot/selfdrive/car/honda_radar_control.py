@@ -46,6 +46,8 @@ LATERAL_POSITION_MAX_VARIANCE = 4.0
 LATERAL_VELOCITY_MAX_VARIANCE = 4.0
 # Initial engineering admission bounds, pending route/vehicle validation.
 CUT_IN_HALF_WIDTH = 1.0  # Body intrusion only; ordinary point admission keeps SWEPT_HALF_WIDTH.
+CUT_IN_NEAR_DISTANCE = 6.0
+CUT_IN_NEAR_MIN_INTRUSION = .15
 CUT_IN_MIN_WIDTH = .4
 CUT_IN_MAX_WIDTH = 3.2
 CUT_IN_MAX_DISTANCE = 45.0
@@ -466,6 +468,11 @@ class HondaRadarControl:
     if not 0 < distance <= CUT_IN_MAX_DISTANCE or closing < .5 or distance / closing > CUT_IN_MAX_TTC:
       return None
     nearest = low if low > 0 else high if high < 0 else 0.0
+    # Near-range body geometry can turn a shallow adjacent span into a very
+    # close longitudinal obstacle. Require strictly more current penetration,
+    # preserving the approach history above for immediate deeper entry.
+    if distance < CUT_IN_NEAR_DISTANCE and abs(nearest) >= CUT_IN_HALF_WIDTH - CUT_IN_NEAR_MIN_INTRUSION:
+      return None
     return _Path('inPath', nearest, rate, source=left.source + '+radarBody', lateral_motion_valid=True,
                  authority_reason=CUT_IN_REASON)
 

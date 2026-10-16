@@ -31,6 +31,16 @@ def update(control, frame, target, **kwargs):
   return control.update(**scene(frame, tracks=[target], ego=20.92, **kwargs))
 
 
+def near_body_track(frame, *, side=1, distance=5.5, edge=.84):
+  target = body_track(frame, side=side, lateral=side * (edge + .8), dRel=distance,
+                      bodyLeftX=distance, bodyRightX=distance)
+  # Set the measured endpoints directly so the strict .85 m boundary is not
+  # shifted by adding/subtracting the reflection offset in this fixture.
+  right, left = sorted((side * edge, side * (edge + 1.4)))
+  target.update(bodyLeftY=left, bodyRightY=right)
+  return target
+
+
 @pytest.mark.parametrize('side', [-1, 1])
 def test_measured_body_enters_before_the_point_and_only_gets_braking(side):
   control = HondaRadarControl()
@@ -181,3 +191,87 @@ def test_missing_width_preserves_existing_point_following(lateral):
   target = radar(0, distance=16.0, lateral=lateral)
   lead = update(HondaRadarControl(), 0, target).leads[0]
   assert qualified_lead(lead, 'follow') and qualified_lead(lead, 'stop')
+
+
+@pytest.mark.parametrize('side', [-1, 1])
+@pytest.mark.parametrize('distance', [5.999, 6.0, 6.001])
+@pytest.mark.parametrize(('edge', 'near_admitted'), [(.851, False), (.850, False), (.849, True)])
+def test_near_body_requires_strictly_more_than_fifteen_centimeters(side, distance, edge, near_admitted):
+  control = HondaRadarControl()
+  for frame in range(3):
+    target = near_body_track(frame, side=side, distance=distance + (2-frame)*.1,
+                             edge=edge + (2-frame)*.03)
+    result = update(control, frame, target)
+  leads = present_leads(result)
+  assert bool(leads) is (near_admitted or distance >= 6.0)
+  if leads:
+    lead, = leads
+    assert CUT_IN_REASON in lead['evidence']['reason']
+    assert qualified_lead(lead, 'brake')
+    assert not any(qualified_lead(lead, role) for role in ('follow', 'stop', 'departure', 'fcw'))
+
+
+@pytest.mark.parametrize('side', [-1, 1])
+def test_near_shallow_approach_history_allows_current_deep_entry_without_new_delay(side):
+  control = HondaRadarControl()
+  for frame, edge in enumerate([1.04, 1.01, .98, .95, .92, .89, .86, .84]):
+    result = update(control, frame, near_body_track(frame, side=side, distance=5.8-.1*frame, edge=edge))
+    assert bool(present_leads(result)) is (frame == 7)
+  assert control._body_approaches[572].samples == 8
+
+
+@pytest.mark.parametrize('side', [-1, 1])
+def test_crossing_six_meters_withdraws_shallow_body_then_current_depth_restores_it(side):
+  control = HondaRadarControl()
+  for frame, (distance, edge, admitted) in enumerate([
+      (6.3, .96, False), (6.2, .93, False), (6.1, .90, True), (5.99, .89, False), (5.9, .84, True)]):
+    result = update(control, frame, near_body_track(frame, side=side, distance=distance, edge=edge))
+    assert bool(present_leads(result)) is admitted
+    assert result.healthy and not result.degraded and not result.cleared
+  # No lock-in of the former brake role when a new observation is too shallow.
+  result = update(control, 5, near_body_track(5, side=side, distance=5.8, edge=.86))
+  assert not present_leads(result)
+
+
+@pytest.mark.parametrize('side', [-1, 1])
+@pytest.mark.parametrize(('base_distance', 'admitted'), [(6.005, False), (6.025, True)])
+def test_near_body_gate_uses_the_closest_projected_endpoint(side, base_distance, admitted):
+  control = HondaRadarControl()
+  for frame in range(3):
+    edge = .90 + (2-frame)*.03
+    target = near_body_track(frame, side=side, distance=base_distance+(2-frame)*.1, edge=edge)
+    target.update(bodyLeftX=target['dRel']+side*.01, bodyRightX=target['dRel']-side*.01,
+                  bodyWidth=math.hypot(1.4, .02))
+    # The reflection lies 0.8/1.4 of the way from the near to the far edge.
+    target['dRel'] = base_distance+(2-frame)*.1 + .01*(.8/.7-1)
+    result = update(control, frame, target)
+  assert target['dRel'] > 6.0
+  assert (min(target['bodyLeftX'], target['bodyRightX']) < 6.0) is (not admitted)
+  assert control._body_approaches[572].samples == 3
+  assert bool(present_leads(result)) is admitted
+
+
+@pytest.mark.parametrize('side', [-1, 1])
+@pytest.mark.parametrize(('edge', 'admitted'), [(.84, True), (.86, False)])
+def test_near_body_depth_is_relative_to_the_curved_path(side, edge, admitted):
+  control = HondaRadarControl()
+  for frame in range(3):
+    distance = 5.5 - .1*frame
+    target = near_body_track(frame, side=side, distance=distance,
+                             edge=edge+(2-frame)*.03+.003*distance**2)
+    target['lateralSpeed'] = side*(target['groundSpeed']*.006*distance-.45)
+    inputs = scene(frame, tracks=[target], ego=20.92)
+    xs = [2.0*i for i in range(33)]
+    inputs['model']['position'] = {'x': [x+1.52 for x in xs], 'y': [-side*.003*x**2 for x in xs]}
+    result = control.update(**inputs)
+  assert min(abs(target['bodyLeftY']), abs(target['bodyRightY'])) > .85
+  assert control._body_approaches[572].samples == 3
+  assert bool(present_leads(result)) is admitted
+
+
+@pytest.mark.parametrize('lateral', [-1.1, 0.0, 1.1])
+def test_near_body_margin_does_not_block_an_ordinary_current_point_target(lateral):
+  result = update(HondaRadarControl(), 0, radar(0, distance=4.0, lateral=lateral))
+  lead, = present_leads(result)
+  assert CUT_IN_REASON not in lead['evidence']['reason']
+  assert all(qualified_lead(lead, role) for role in ('brake', 'follow', 'stop'))
