@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from openpilot.common.realtime import DT_CTRL, DT_MDL
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, CREEP_MAX_T, STOP_SPEED, get_departure_accel_from_plan
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, STOP_SPEED, get_departure_accel_from_plan
 from openpilot.selfdrive.controls.lib.motion_supervisor import MAX_CONTROL_GAP_NS, MotionIntent, MotionPhase, MotionSupervisor, StopReason
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
@@ -106,11 +106,10 @@ def test_recorded_b05_negative_targets_cannot_unlock_a_preexisting_hold():
   assert all(phase in (MotionPhase.APPROACH, MotionPhase.HOLD) for _, _, _, phase, _ in results)
 
 
-def test_b05_permission_not_returning_still_reaches_the_bounded_creep_stop():
+def test_b05_missing_departure_permission_cannot_create_a_stop_without_current_evidence():
   results = list(replay_b05(withdraw_permission=True))
-  first_stop_ns = next(row['now_ns'] for row, _, stopped, _, reasons in results if stopped and reasons & StopReason.CREEP)
-  # The first fresh permission discards its preceding budget. Permanent loss
-  # then remains bounded by the original one-second guard and one control gap.
-  assert FIRST_PERMISSION_WITHDRAWAL_NS <= first_stop_ns <= FIRST_PERMISSION_NS + round(CREEP_MAX_T * 1e9) + MAX_CONTROL_GAP_NS
-  held = [result for result in results if result[0]['standstill']]
-  assert held and all(stopped and reasons & StopReason.HOLD for _, _, stopped, _, reasons in held)
+  # Preserve the recorded allowCreep flag as an input to the current consumer.
+  # Even that old permission cannot substitute for absent raw stop evidence.
+  assert any(row['now_ns'] >= RETURNED_PERMISSION_NS and plan['target'] < 0.0 for row, plan, _, _, _ in results)
+  assert not any(reasons & StopReason.CREEP for _, _, _, _, reasons in results)
+  assert all(not stopped for row, _, stopped, _, _ in results if not row['standstill'])

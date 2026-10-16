@@ -8,10 +8,11 @@ and measured speeds remain provenance; they do not recreate the retired
 sample/off-credit policy. The unchanged reconstructed stop/moving/release facts
 are now carried by the current UNIFIED intent.
 
-The original first-round deadline and braking request comparisons remain risk
-assertions. A different active/rearm clock cannot silently weaken them. This
-fixed-request owner regression is neither full planner replay nor proof of
-physical braking; qualified regression must also examine the rearm intervals.
+The recorded inputs contain no explicit stop reason. The current policy keeps
+their negative tracking requests without recreating the historical independent
+creep stop. Synthetic budget tests below supply explicit stop evidence and
+separate that immediate stop from the later CREEP bit. This fixed-input owner
+regression is neither full planner replay nor proof of physical braking.
 """
 from dataclasses import replace
 from types import SimpleNamespace
@@ -203,41 +204,41 @@ def recorded_inputs():
 
 def sample_step(owner, timestamp, *, intent=None, v_ego=0.7, a_ego=0.0, a_target=-0.2,
                 active=True, now_ns=None, plan_ns=None, model_ns=None, **kwargs):
-  return owner.update(active, v_ego, a_ego, False, a_target, MotionIntent() if intent is None else intent,
+  return owner.update(active, v_ego, a_ego, False, a_target, MotionIntent(reasons=StopReason.E2E) if intent is None else intent,
                       plan_time_ns=timestamp + 1_000_000 if plan_ns is None else plan_ns,
                       model_time_ns=timestamp if model_ns is None else model_ns,
                       now_ns=timestamp + 2_000_000 if now_ns is None else now_ns, **kwargs)
 
 
-def test_recorded_pedal_reentry_meets_first_round_stopping_deadline():
+def test_recorded_pedal_reentry_does_not_invent_a_stop_without_current_evidence():
   owner = MotionSupervisor()
-  first_stop = None
+  active_rows = 0
   for now_ns, plan_ns, model_ns, _, speed, accel, gas, brake, _, target, intent in recorded_inputs():
     stop = owner.update(not gas and not brake, speed, accel, False, target, intent,
                         now_ns=now_ns, plan_time_ns=plan_ns, model_time_ns=model_ns)
     if gas or brake:
       assert not stop
       assert owner.phase == MotionPhase.OFF
-    elif stop and first_stop is None:
-      assert owner.reasons & StopReason.CREEP
-      first_stop = now_ns
-  assert first_stop is not None
-  assert first_stop <= FIRST_ROUND_STOP_CONTROL_NS, (
-    f"stop entry {first_stop} still later than {FIRST_ROUND_STOP_CONTROL_NS}; " +
-    f"second-round observed entry was {SECOND_ROUND_STOP_CONTROL_NS}"
-  )
+    else:
+      assert not intent.reasons
+      assert not stop
+      active_rows += 1
+    assert not owner.reasons & StopReason.CREEP
+    assert owner.creep_total_t == 0.0
+  assert active_rows > 50
 
 
 def test_unified_keeps_its_existing_control_time_contract():
   owner = MotionSupervisor()
   base = 2_000_000_000
-  intent = MotionIntent()
+  intent = MotionIntent(reasons=StopReason.E2E)
   for tick in range(20):
-    assert not sample_step(owner, base, intent=intent, now_ns=base + 2_000_000 + tick * 10_000_000)
+    assert sample_step(owner, base, intent=intent, now_ns=base + 2_000_000 + tick * 10_000_000)
+    assert not owner.reasons & StopReason.CREEP
   assert owner.creep_total_t == pytest.approx(0.2)
 
 
-def test_recorded_longcontrol_ramp_inherits_request_and_manual_brake_wins():
+def test_recorded_longcontrol_keeps_the_negative_reference_and_manual_brake_wins():
   from opendbc.car.honda.interface import CarInterface
   from opendbc.car.honda.values import CAR, CarControllerParams
   from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
@@ -246,9 +247,8 @@ def test_recorded_longcontrol_ramp_inherits_request_and_manual_brake_wins():
   params.openpilotLongitudinalControl = True
   extension = CarInterface.get_non_essential_params_sp(params, CAR.HONDA_ACCORD)
   controller = LongControl(params, extension)
-  first_stop = None
-  braking_rows = 0
-  for now_ns, plan_ns, model_ns, _, speed, accel, gas, brake, baseline_request, target, intent in recorded_inputs():
+  tracking_rows = 0
+  for now_ns, plan_ns, model_ns, _, speed, accel, gas, brake, _baseline_request, target, intent in recorded_inputs():
     car_state = SimpleNamespace(vEgo=speed, aEgo=accel, standstill=False, gasPressed=gas, brakePressed=brake,
                                 cruiseState=SimpleNamespace(standstill=False))
     output = float(controller.update(True, car_state, target, False,
@@ -258,13 +258,13 @@ def test_recorded_longcontrol_ramp_inherits_request_and_manual_brake_wins():
       assert output == 0.0
       assert controller.long_control_state == LongCtrlState.off
       assert controller.motion_phase == MotionPhase.OFF
-    elif controller.long_control_state == LongCtrlState.stopping:
-      if first_stop is None:
-        first_stop = now_ns
-      assert output <= baseline_request + 1e-6
-      braking_rows += 1
-  assert first_stop is not None and first_stop <= FIRST_ROUND_STOP_CONTROL_NS
-  assert braking_rows > 20
+    elif not controller.motion_input_constrained:
+      assert controller.long_control_state == LongCtrlState.pid
+      assert not controller.resolved_should_stop
+      assert output == pytest.approx(target)
+      tracking_rows += 1
+    assert not controller.motion_reasons & StopReason.CREEP
+  assert tracking_rows > 50
 
 
 @pytest.mark.parametrize('off_valid', [True, False])
@@ -294,7 +294,7 @@ def test_off_observation_never_accumulates_active_creep_time():
   assert not sample_step(owner, timestamp, now_ns=timestamp + 12_000_000)
   assert owner.waiting_for_fresh_input and not owner.degraded
   assert owner.creep_total_t == 0.0
-  assert not sample_step(owner, timestamp + 50_000_000)
+  assert sample_step(owner, timestamp + 50_000_000)
   assert not owner.degraded
   assert owner.creep_total_t == pytest.approx(0.04)
 
@@ -308,14 +308,17 @@ def _progress_window(speed_for_frame, *, frames=60, intent_for_frame=None, targe
   for frame in range(frames):
     producer_ns = base + frame // 5 * 50_000_000
     instance_ns = base + (frame // 10 * 100_000_000 if rotating_producer else 0)
-    intent = MotionIntent() if intent_for_frame is None else intent_for_frame(frame)
+    intent = MotionIntent(reasons=StopReason.E2E) if intent_for_frame is None else intent_for_frame(frame)
     intent = replace(intent, producer_instance_ns=instance_ns)
     speed = speed_for_frame(frame)
     stopped = sample_step(owner, producer_ns, intent=intent, v_ego=speed,
                           a_ego=(speed - previous_speed) / DT_CTRL, a_target=target,
                           now_ns=base + 2_000_000 + frame * 10_000_000)
     assert not owner.degraded
-    history.append({'stop': stopped, 'phase': owner.phase, 'elapsed': (frame + 1) * DT_CTRL, 'speed': speed,
+    if intent.reasons:
+      assert stopped
+    history.append({'resolved_stop': stopped, 'creep': bool(owner.reasons & StopReason.CREEP),
+                    'phase': owner.phase, 'elapsed': (frame + 1) * DT_CTRL, 'speed': speed,
                     'previous_speed': previous_speed, 'anchor': owner.creep_v, 'window': owner.creep_t,
                     'distance': owner.creep_distance, 'total': owner.creep_total_t, 'moving': owner.moving_lead_t})
     previous_speed = speed
@@ -330,7 +333,7 @@ def test_distance_budget_changes_only_growing_speed_without_stopping_progress(pr
     'prompt_deceleration': lambda frame: 0.95 - 0.008 * frame,
   }
   _, rows = _progress_window(speeds[profile])
-  first = next((row for row in rows if row['stop']), None)
+  first = next((row for row in rows if row['creep']), None)
   if profile == 'prompt_deceleration':
     assert first is None
     # A completed prompt-deceleration window clears its distance along with
@@ -349,14 +352,14 @@ def test_distance_budget_changes_only_growing_speed_without_stopping_progress(pr
 @pytest.mark.parametrize('spike_frame', [0, 1, 10, 25, 45, 49])
 def test_one_speed_spike_cannot_advance_the_constant_speed_window(spike_frame):
   _, rows = _progress_window(lambda frame: 1.1 if frame == spike_frame else 0.7)
-  assert not any(row['stop'] for row in rows[:50])
+  assert not any(row['creep'] for row in rows[:50])
 
 
 @pytest.mark.parametrize('spike_frame', [41, 43, 44, 45, 46, 48, 49])
 @pytest.mark.parametrize('repeated_controls', [2, 3])
 def test_repeated_consumption_of_one_speed_spike_cannot_confirm_early_stop(spike_frame, repeated_controls):
   _, rows = _progress_window(lambda frame: 1.1 if spike_frame <= frame < spike_frame + repeated_controls else 0.4)
-  assert not any(row['stop'] for row in rows[:50])
+  assert not any(row['creep'] for row in rows[:50])
 
 
 @pytest.mark.parametrize('advance_identity', ['neither', 'plan_only', 'model_only'])
@@ -372,7 +375,7 @@ def test_distance_excess_needs_fresh_plan_and_model_confirmation(advance_identit
     elif advance_identity == 'model_only':
       model_ns += 1
     sample_step(owner, 2_400_000_000, v_ego=1.1, a_target=-0.22,
-                intent=MotionIntent(producer_instance_ns=2_000_000_000), plan_ns=plan_ns, model_ns=model_ns,
+                intent=MotionIntent(reasons=StopReason.E2E, producer_instance_ns=2_000_000_000), plan_ns=plan_ns, model_ns=model_ns,
                 now_ns=2_002_000_000 + frame * 10_000_000)
     assert not owner.reasons & StopReason.CREEP
   if advance_identity == 'model_only':
@@ -385,71 +388,64 @@ def test_distance_excess_needs_fresh_plan_and_model_confirmation(advance_identit
 @pytest.mark.parametrize('entry_speed', [0.0, 1e-6, 0.05, STOP_SPEED - 1e-6])
 def test_near_zero_distance_budget_does_not_turn_small_motion_into_early_stop(entry_speed):
   _, rows = _progress_window(lambda frame: entry_speed if frame == 0 else entry_speed + 0.01, frames=50)
-  assert not any(row['stop'] for row in rows)
+  assert not any(row['creep'] for row in rows)
 
 
-def test_pending_moving_lead_keeps_confirmation_and_confirmed_follow_clears_distance():
+def test_pending_moving_lead_does_not_start_a_budget_without_stop_evidence():
   _, rows = _progress_window(lambda frame: 0.7 + 0.004 * frame,
                             intent_for_frame=lambda frame: MotionIntent(moving_lead=True))
-  assert not any(row['stop'] for row in rows)
-  assert any(row['distance'] > 0.0 and row['moving'] < CREEP_STOP_T for row in rows)
+  assert not any(row['creep'] for row in rows)
+  assert all(row['distance'] == row['total'] == 0.0 and not row['resolved_stop'] for row in rows)
   assert rows[-1]['moving'] == pytest.approx(CREEP_STOP_T)
   assert rows[-1]['window'] == rows[-1]['distance'] == rows[-1]['total'] == 0.0
 
 
-def test_pending_moving_lead_exempts_only_the_added_distance_trigger():
+def test_late_moving_evidence_is_not_required_to_avoid_an_unrequested_stop():
   _, rows = _progress_window(lambda frame: 0.7 + 0.004 * frame,
                             intent_for_frame=lambda frame: MotionIntent(moving_lead=frame >= 25))
-  first = next(row for row in rows if row['stop'])
-  assert first['elapsed'] == pytest.approx(CREEP_STOP_T + DT_CTRL)
+  assert all(not row['resolved_stop'] and row['total'] == 0.0 for row in rows)
 
 
 @pytest.mark.parametrize('growing', [False, True])
-def test_explicit_fresh_rolling_permission_retires_the_independent_creep_deadline(growing):
-  # Explicit movement permission differs from a pending moving-lead hint.
-  # The negative target still brakes; this only keeps the owner from adding
-  # a second stop while the current producer permits continued rolling.
+def test_rolling_permission_without_stop_evidence_has_no_creep_deadline(growing):
+  # The current negative target still brakes. Neither fresh permission nor
+  # its repeated consumption creates a separate stop-assistance budget.
   _, rows = _progress_window(lambda frame: 0.7 + (0.004 * frame if growing else 0.0), frames=110,
                             intent_for_frame=lambda frame: MotionIntent(reference_kind=MotionReferenceKind.FORWARD,
                                                                        release_allowed=True))
-  assert not any(row['stop'] for row in rows)
-  assert max(row['total'] for row in rows) == pytest.approx(4 * DT_CTRL)
+  assert not any(row['creep'] for row in rows)
+  assert all(row['total'] == 0.0 and not row['resolved_stop'] for row in rows)
 
 
 @pytest.mark.parametrize('profile', ['growing', 'prompt_deceleration'])
-def test_transient_moving_evidence_cannot_extend_the_original_window_deadlines(profile):
+def test_transient_moving_evidence_cannot_create_a_stop_deadline(profile):
   speed = (lambda frame: 0.7 + 0.004 * frame) if profile == 'growing' else (lambda frame: 1.15 - 0.006 * frame)
   _, rows = _progress_window(speed, frames=110,
                             intent_for_frame=lambda frame: MotionIntent(moving_lead=frame >= 25 and frame % 10 >= 5))
-  first = next(row for row in rows if row['stop'])
   assert any(row['moving'] > 0.0 for row in rows)
-  assert rows[30]['total'] == pytest.approx(31 * DT_CTRL)
-  if profile == 'growing':
-    assert first['elapsed'] <= CREEP_STOP_T + DT_CTRL
-  else:
-    assert first['elapsed'] == pytest.approx(1.0)
+  assert all(row['total'] == 0.0 and not row['resolved_stop'] for row in rows)
 
 
 @pytest.mark.parametrize('target', [0.0, 0.01, 0.2])
 def test_positive_or_neutral_target_cannot_spend_the_distance_budget(target):
   _, rows = _progress_window(lambda frame: 0.7 + 0.004 * frame, target=target)
-  assert not any(row['stop'] for row in rows)
+  assert not any(row['creep'] for row in rows)
   assert all(row['distance'] == row['total'] == 0.0 for row in rows)
 
 
 def test_withheld_creep_qualification_cannot_spend_distance():
   _, rows = _progress_window(lambda frame: 0.7 + 0.004 * frame,
-                            intent_for_frame=lambda frame: MotionIntent(allow_creep=False))
-  assert not any(row['stop'] for row in rows)
+                            intent_for_frame=lambda frame: MotionIntent(reasons=StopReason.E2E, allow_creep=False))
+  assert not any(row['creep'] for row in rows)
   assert all(row['distance'] == row['total'] == 0.0 for row in rows)
 
 
 @pytest.mark.parametrize('fault', ['repeat_clock', 'backward_clock', 'clock_gap', 'invalid_plan', 'expired_plan', 'inactive', 'out_of_band'])
 def test_original_window_revocation_paths_clear_distance(fault):
   owner, rows = _progress_window(lambda frame: 0.7 + 0.004 * frame, frames=30)
-  assert rows[-1]['distance'] > 0.0 and not rows[-1]['stop']
+  assert rows[-1]['distance'] > 0.0 and not rows[-1]['creep']
   timestamp = 2_300_000_000
-  options = {'now_ns': timestamp + 2_000_000, 'intent': MotionIntent(producer_instance_ns=2_000_000_000)}
+  options = {'now_ns': timestamp + 2_000_000, 'intent': MotionIntent(reasons=StopReason.E2E, producer_instance_ns=2_000_000_000)}
   if fault in ('repeat_clock', 'backward_clock'):
     options['now_ns'] = owner._last_now_ns - int(fault == 'backward_clock')
   elif fault == 'clock_gap':
@@ -502,7 +498,7 @@ def test_distance_stop_keeps_stronger_controller_braking_and_immediate_pedal_rev
   limits = (CarControllerParams.BOSCH_ACCEL_MIN, CarControllerParams.BOSCH_ACCEL_MAX)
   cs = SimpleNamespace(vEgo=0.7, aEgo=0.4, standstill=False, gasPressed=False, brakePressed=False,
                        cruiseState=SimpleNamespace(standstill=False))
-  intent = MotionIntent(producer_instance_ns=2_000_000_000)
+  intent = MotionIntent(reasons=StopReason.E2E, producer_instance_ns=2_000_000_000)
   for frame in range(50):
     cs.vEgo = 0.7 + 0.004 * frame
     model_ns = 2_000_000_000 + frame // 5 * 50_000_000

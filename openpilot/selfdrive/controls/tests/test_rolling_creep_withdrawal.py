@@ -1,8 +1,10 @@
-"""Current rolling permission removes a duplicate stop, without weakening HOLD.
+"""Current stop evidence bounds creep assistance, without weakening HOLD.
 
 These are fixed-input controller checks of the B05 conflict, not claims about
 delivered vehicle deceleration or closed-loop stopping distance.
 """
+
+from dataclasses import replace
 
 import pytest
 
@@ -16,30 +18,42 @@ ROLLING_INTENT = MotionIntent(reference_kind=int(MotionReferenceKind.FORWARD), r
                               release_allowed=True, producer_instance_ns=1_000_000_000)
 
 
-def test_permitted_rolling_follow_keeps_tracking_its_moderate_negative_target():
+@pytest.mark.parametrize('release_allowed', [False, True])
+@pytest.mark.parametrize('moving_lead', [False, True])
+@pytest.mark.parametrize('target', [-0.215, -0.145])
+def test_rolling_follow_keeps_its_negative_target_without_stop_evidence(release_allowed, moving_lead, target):
   harness = ControlHarness()
   harness.state.vEgo = 0.8
-  harness.state.aEgo = -0.35
+  harness.state.aEgo = target
+  intent = replace(ROLLING_INTENT, release_allowed=release_allowed, moving_lead=moving_lead)
   for frame in range(250):
-    output = harness.step(-0.35, ROLLING_INTENT, new_input=frame % 5 == 0)
-    assert output == pytest.approx(-0.35)
+    output = harness.step(target, intent, new_input=frame % 5 == 0)
+    assert output == pytest.approx(target)
     assert harness.control.long_control_state == LongCtrlState.pid
     assert harness.control.motion_phase == MotionPhase.TRACK
     assert not harness.control.motion_reasons
     assert not harness.control.resolved_should_stop
 
 
-def test_rolling_creep_withdrawal_preserves_the_negative_target_and_brake_release_rate():
+@pytest.mark.parametrize('release_allowed', [False, True])
+def test_rolling_creep_withdrawal_preserves_the_negative_target_and_brake_release_rate(release_allowed):
   harness = ControlHarness()
   harness.state.vEgo = 0.8
   harness.state.aEgo = -0.35
+  stop_intent = replace(ROLLING_INTENT, reasons=StopReason.CLOSE_LEAD)
   for _ in range(150):
-    harness.step(-0.35)
+    harness.step(-0.35, stop_intent)
+  assert harness.control.motion_reasons == StopReason.CLOSE_LEAD | StopReason.CREEP
+  intent = replace(ROLLING_INTENT, release_allowed=release_allowed)
+  # A plan-only withdrawal removes CLOSE_LEAD but cannot spend fresh model
+  # evidence to withdraw CREEP. The next complete input must clear that cause
+  # without waiting for departure permission or a positive target.
+  harness.step(-0.35, intent, new_input=False, plan_time_ns=harness.now_ns + round(DT_CTRL * 1e9))
   assert harness.control.motion_reasons == StopReason.CREEP
   assert harness.control.last_output_accel <= ROLLING_STOP_ACCEL
   previous = harness.control.last_output_accel
   for _ in range(30):
-    output = harness.step(-0.35, ROLLING_INTENT)
+    output = harness.step(-0.35, intent)
     assert output <= previous + STARTING_ACCEL_RATE * DT_CTRL + 1e-12
     assert output <= -0.35
     assert not harness.control.resolved_should_stop

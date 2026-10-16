@@ -305,6 +305,7 @@ def test_explicit_zero_speed_goal_never_requests_positive_drive(force_decel, spe
   expected_reason = StopReason.FORCE_DECEL if force_decel else StopReason.CRUISE
   assert plan.motionIntent.reasons & int(expected_reason)
   assert plan.shouldStop
+  assert plan.motionIntent.allowCreep
   assert not plan.motionIntent.releaseAllowed
   assert plan.aTarget <= CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
   assert motion.resolvedStop
@@ -313,9 +314,10 @@ def test_explicit_zero_speed_goal_never_requests_positive_drive(force_decel, spe
   assert all(item['GAS_COMMAND'] <= 0 for item in decoded_commands([command.actuators.accel]))
 
 
-def test_no_departure_permission_does_not_turn_nonzero_cruise_into_a_stop(monkeypatch):
-  planner, extension = make_planner(speed=20.0)
-  state = make_state(speed=20.0, target=10.0)
+@pytest.mark.parametrize('speed,target', [(20.0, 10.0), (1.0, 0.5), (0.8, 0.5)])
+def test_no_departure_permission_does_not_turn_nonzero_cruise_into_a_stop(monkeypatch, speed, target):
+  planner, extension = make_planner(speed=speed)
+  state = make_state(speed=speed, target=target)
   state['radarState'].leadOne.present = False
   state['radarState'].leadTwo.present = False
   # A lower cruise request no longer implies a particular internal MPC motion
@@ -324,11 +326,15 @@ def test_no_departure_permission_does_not_turn_nonzero_cruise_into_a_stop(monkey
   monkeypatch.setattr('openpilot.selfdrive.controls.lib.unified_longitudinal_planner.reference_requests_departure',
                       lambda *args: False)
   consumer = tracking_consumer(planner, extension)
-  plan, command, motion = publish_and_consume(planner, state, consumer)
-  assert plan.aTarget < 0.0
-  assert not plan.motionIntent.releaseAllowed
-  assert not plan.motionIntent.reasons
-  assert not plan.shouldStop
-  assert motion.phase == 'track'
-  assert not motion.resolvedStop
-  assert command.longActive
+  # Stay beyond both old creep windows using the actual producer and consumer.
+  for _ in range(30):
+    plan, command, motion = publish_and_consume(planner, state, consumer)
+    assert plan.aTarget < 0.0
+    assert not plan.motionIntent.releaseAllowed
+    assert not plan.motionIntent.reasons
+    assert not plan.motionIntent.allowCreep
+    assert not plan.shouldStop
+    assert motion.phase == 'track'
+    assert not motion.resolvedStop
+    assert command.longActive
+    assert command.actuators.accel < 0.0

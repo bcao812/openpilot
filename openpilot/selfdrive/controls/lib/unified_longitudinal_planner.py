@@ -1122,7 +1122,7 @@ class UnifiedLongitudinalPlanner:
         response_kind = MotionResponseKind.LEAD_BRAKING
     planner.motion_intent = MotionIntent(
       mode=int(planner.longitudinal_mode), reasons=int(reasons), moving_lead=moving_lead, release_allowed=release_allowed,
-      allow_creep=bool(active and healthy), valid=bool(healthy and car_state.vCruise != V_CRUISE_UNSET),
+      allow_creep=bool(active and healthy and reasons), valid=bool(healthy and car_state.vCruise != V_CRUISE_UNSET),
       reference_kind=int(raw_kind), producer_instance_ns=self.producer_instance_ns, response_kind=int(response_kind),
     )
     planner.output_a_target = output

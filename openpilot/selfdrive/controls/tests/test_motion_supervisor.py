@@ -36,6 +36,13 @@ class MotionHarness:
     self.step(MotionIntent(reasons=StopReason.MPC), v_ego=0.0, standstill=True)
     assert self.supervisor.phase == MotionPhase.HOLD
 
+  def creep_stopped(self, intent=None, v_ego=0.8, a_target=-0.35):
+    """Seed a retained state from the retired independent-creep policy."""
+    self.step(intent, v_ego=v_ego, a_target=a_target)
+    self.supervisor.phase = MotionPhase.APPROACH
+    self.supervisor.reasons = StopReason.CREEP
+    self.supervisor.resolved_should_stop = True
+
 
 def test_contract_is_immutable_and_wire_reasons_are_separate():
   intent = MotionIntent()
@@ -278,8 +285,7 @@ def test_fresh_rolling_movement_keeps_a_negative_target_without_an_independent_c
 
 def test_fresh_rolling_movement_withdraws_an_unheld_creep_stop():
   harness = MotionHarness()
-  for _ in range(60):
-    harness.step(v_ego=0.8, a_target=-0.35)
+  harness.creep_stopped()
   assert harness.supervisor.reasons == StopReason.CREEP
   assert not harness.step(MotionIntent(release_allowed=True), v_ego=0.8, a_target=-0.35)
   assert harness.supervisor.phase == MotionPhase.RELEASE
@@ -290,22 +296,20 @@ def test_fresh_rolling_movement_withdraws_an_unheld_creep_stop():
 def test_rolling_permission_discards_the_preceding_creep_deadline():
   harness = MotionHarness()
   for frame in range(90):
-    assert not harness.step(v_ego=1.15 - 0.6 * frame * DT_CTRL, a_target=-0.35)
+    assert harness.step(MotionIntent(reasons=StopReason.E2E), v_ego=1.15 - 0.6 * frame * DT_CTRL, a_target=-0.35)
   assert harness.supervisor.creep_total_t == pytest.approx(0.9)
   assert not harness.step(MotionIntent(release_allowed=True), v_ego=0.61, a_target=-0.35)
-  # One newly qualified movement frame ends that old observation window.
-  # Its later withdrawal starts a new bounded window, without inheriting
-  # the unrelated deadline which was about to force a stop.
+  # Withdrawal of the current stop ends its assistance budget. Missing
+  # movement permission later cannot recreate that stop evidence.
   for _ in range(45):
     assert not harness.step(v_ego=0.61, a_target=-0.35)
-  assert harness.supervisor.creep_total_t == pytest.approx(0.45)
+  assert harness.supervisor.creep_total_t == 0.0
 
 
 @pytest.mark.parametrize('speed', [0.0, STOP_SPEED - 1e-6, STOP_SPEED])
 def test_rolling_creep_withdrawal_respects_the_existing_stop_speed_boundary(speed):
   harness = MotionHarness()
-  for _ in range(60):
-    harness.step(v_ego=0.8, a_target=-0.35)
+  harness.creep_stopped()
   stopped = harness.step(MotionIntent(release_allowed=True), v_ego=speed, a_target=-0.35)
   assert stopped == (speed < STOP_SPEED)
   assert bool(harness.supervisor.reasons & StopReason.CREEP) == (speed < STOP_SPEED)
@@ -323,8 +327,7 @@ def test_rolling_permission_with_a_negative_target_cannot_release_an_actual_hold
 @pytest.mark.parametrize('reason', [StopReason.MPC, StopReason.E2E, StopReason.CRUISE, StopReason.CLOSE_LEAD, StopReason.FORCE_DECEL])
 def test_current_raw_stops_take_priority_over_rolling_creep_withdrawal(reason):
   harness = MotionHarness()
-  for _ in range(60):
-    harness.step(v_ego=0.8, a_target=-0.35)
+  harness.creep_stopped()
   assert harness.step(MotionIntent(release_allowed=True, reasons=reason), v_ego=0.8, a_target=-0.35)
   assert harness.supervisor.reasons & reason
   assert not harness.supervisor.degraded
@@ -352,21 +355,20 @@ def test_cached_rolling_permission_cannot_clear_an_existing_creep_stop(new_plan,
   intent = MotionIntent(release_allowed=True)
   # Permission is genuine but first consumed below the rolling threshold.
   # A later speed sample alone cannot turn it into new movement evidence.
-  for _ in range(60):
-    harness.step(intent, v_ego=0.2, a_target=-0.35)
+  harness.creep_stopped(intent, v_ego=0.2)
   assert harness.supervisor.reasons == StopReason.CREEP
   assert harness.step(intent, v_ego=0.8, a_target=-0.35, new_plan=new_plan, new_model=new_model)
   assert harness.supervisor.reasons == StopReason.CREEP
   assert not harness.supervisor.degraded
 
 
-def test_repeated_rolling_permission_cannot_renew_its_lease_or_erase_creep_time():
+def test_repeated_rolling_permission_cannot_renew_its_input_lease():
   harness = MotionHarness()
   intent = MotionIntent(release_allowed=True)
   assert not harness.step(intent, v_ego=0.8, a_target=-0.35)
   for _ in range(20):
     assert not harness.step(intent, v_ego=0.8, a_target=-0.35, new_plan=False, new_model=False)
-  assert harness.supervisor.creep_total_t == pytest.approx(20 * DT_CTRL)
+  assert harness.supervisor.creep_total_t == 0.0
   for _ in range(6):
     harness.step(intent, v_ego=0.8, a_target=-0.35, new_plan=False, new_model=False)
   assert harness.supervisor.degraded
@@ -376,24 +378,23 @@ def test_repeated_rolling_permission_cannot_renew_its_lease_or_erase_creep_time(
 @pytest.mark.parametrize('failure', [{'plan_valid': False}, {'solver_status': 4}])
 def test_failed_input_cannot_spend_rolling_permission_to_withdraw_creep(failure):
   harness = MotionHarness()
-  for _ in range(60):
-    harness.step(v_ego=0.8, a_target=-0.35)
+  harness.creep_stopped()
   assert harness.step(MotionIntent(release_allowed=True), v_ego=0.8, a_target=-0.35, **failure)
   assert harness.supervisor.degraded
   assert harness.supervisor.reasons & StopReason.CREEP
   assert harness.supervisor.reasons & StopReason.INVALID
 
 
-def test_withdrawn_rolling_permission_restores_the_bounded_creep_guard():
+def test_withdrawn_rolling_permission_needs_current_stop_evidence_to_enable_creep():
   harness = MotionHarness()
   for _ in range(150):
     assert not harness.step(MotionIntent(release_allowed=True), v_ego=0.8, a_target=-0.35)
-  # Fresh movement permission is not a permanent bypass. A red-light/slow
-  # convergence input with no such evidence still has the original deadline.
-  for frame in range(60):
-    stopped = harness.step(v_ego=0.8, a_target=-0.35)
-    if frame < 50:
-      assert not stopped
+  for _ in range(150):
+    assert not harness.step(v_ego=0.8, a_target=-0.35)
+  assert harness.supervisor.creep_total_t == 0.0
+  # An actual new stop request retains immediate authority and its budget.
+  for _ in range(60):
+    assert harness.step(MotionIntent(reasons=StopReason.E2E), v_ego=0.8, a_target=-0.35)
   assert harness.supervisor.reasons & StopReason.CREEP
 
 
@@ -403,9 +404,10 @@ def test_discontinuous_moving_lead_samples_do_not_spend_the_unobserved_gap(perio
   intent = MotionIntent(moving_lead=True)
   for frame in range(70):
     new_input = frame % period == 0
-    harness.step(intent, v_ego=1.0, a_target=-0.2, new_plan=new_input, new_model=new_input)
+    assert not harness.step(intent, v_ego=1.0, a_target=-0.2, new_plan=new_input, new_model=new_input)
     assert harness.supervisor.moving_lead_t <= DT_MDL
-  assert harness.supervisor.reasons & StopReason.CREEP
+  assert not harness.supervisor.reasons
+  assert harness.supervisor.creep_total_t == 0.0
 
 
 def test_first_departure_sample_does_not_credit_the_preceding_unqualified_gap():
@@ -450,14 +452,15 @@ def test_healthy_moving_follow_uses_the_same_elapsed_time_as_creep(periods):
 
 def test_a_real_creep_uses_control_time_and_latches_once():
   harness = MotionHarness()
+  intent = MotionIntent(reasons=StopReason.E2E)
   for frame in range(60):
     new_input = frame % 5 == 0
-    harness.step(v_ego=0.5, new_plan=new_input, new_model=new_input)
+    assert harness.step(intent, v_ego=0.5, new_plan=new_input, new_model=new_input)
     if frame < 50:
-      assert not harness.supervisor.resolved_should_stop
+      assert not harness.supervisor.reasons & StopReason.CREEP
   assert harness.supervisor.reasons & StopReason.CREEP
   for frame in range(20):
-    assert harness.step(v_ego=max(0.31, 0.5 - frame * 0.01))
+    assert harness.step(intent, v_ego=max(0.31, 0.5 - frame * 0.01))
   assert not harness.step(MotionIntent(release_allowed=True), v_ego=0.5, a_target=0.05)
   assert harness.supervisor.phase == MotionPhase.RELEASE
 
@@ -466,17 +469,17 @@ def test_total_creep_deadline_and_prompt_stop_are_distinct():
   harness = MotionHarness()
   speed = 1.15
   for _ in range(60):
-    harness.step(v_ego=speed)
+    assert harness.step(MotionIntent(reasons=StopReason.E2E), v_ego=speed)
     speed -= 0.65 * DT_CTRL
-  assert not harness.supervisor.resolved_should_stop
+  assert not harness.supervisor.reasons & StopReason.CREEP
 
   harness = MotionHarness()
   speed = 1.15
   for frame in range(round(CREEP_MAX_T / DT_CTRL)):
-    harness.step(v_ego=speed)
+    assert harness.step(MotionIntent(reasons=StopReason.E2E), v_ego=speed)
     speed *= 1.0 - 0.6 * DT_CTRL
     if frame < 99:
-      assert not harness.supervisor.resolved_should_stop
+      assert not harness.supervisor.reasons & StopReason.CREEP
   assert harness.supervisor.reasons & StopReason.CREEP
 
 
@@ -491,18 +494,18 @@ def test_positive_launch_does_not_accumulate_anti_creep(a_target):
 def test_anti_creep_requires_explicit_operating_qualification():
   harness = MotionHarness()
   for _ in range(150):
-    assert not harness.step(MotionIntent(allow_creep=False))
+    assert harness.step(MotionIntent(reasons=StopReason.E2E, allow_creep=False))
+    assert not harness.supervisor.reasons & StopReason.CREEP
   assert harness.supervisor.creep_total_t == 0.0
 
 
-def test_late_moving_evidence_cannot_undo_an_existing_creep_stop():
+def test_current_no_stop_evidence_withdraws_an_unheld_creep_stop():
   harness = MotionHarness()
-  for _ in range(60):
-    harness.step()
+  harness.creep_stopped()
   for _ in range(100):
-    assert harness.step(MotionIntent(moving_lead=True))
-  assert harness.supervisor.reasons & StopReason.CREEP
-  assert harness.supervisor.moving_lead_t == 0.0
+    assert not harness.step(MotionIntent(moving_lead=True))
+  assert not harness.supervisor.reasons
+  assert harness.supervisor.moving_lead_t == pytest.approx(CREEP_STOP_T)
 
 
 def test_withdrawn_close_lead_does_not_latch_or_require_positive_acceleration():
