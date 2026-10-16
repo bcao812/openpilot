@@ -89,8 +89,14 @@ def test_current_identity_or_authority_loss_clears_launch_without_spending_old_c
     lead.evidence.coasting = True
   else:
     lead.evidence.positionMonoTime = 1_000_000_000 + 26 * 50_000_000 - MAX_MEASUREMENT_AGE_NS - 1
-  plan, _ = step(held_case, 26)
-  assert plan.solverStatus == 0 and plan.motionIntent.valid
+  plan, outputs = step(held_case, 26)
+  if change in ('coasting', 'expired_measurement'):
+    # An invalid formal object can take the existing input-failure path.
+    # Both that path and ordinary withdrawal must revoke departure authority.
+    assert not plan.motionIntent.releaseAllowed
+    assert max(outputs) <= 0.0
+  else:
+    assert plan.solverStatus == 0 and plan.motionIntent.valid
   assert not planner.reference_planner.lead_launch_active
   assert not planner.reference_planner.lead_launch.active
   assert planner.reference_planner.lead_launch.confirmed_ns == 0
