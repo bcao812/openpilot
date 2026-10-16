@@ -479,13 +479,15 @@ def test_current_physical_departure_uses_only_current_formal_leads(other):
   assert has_departing_lead(radar, 0.0, .5, now_ns=CONSUMPTION) is (other in ('none', 'departing', 'caution'))
 
 
-@pytest.mark.parametrize('speed,standstill,departure_allowed', [
-  (0.0, True, True), (-1.9180846832417676e-23, True, True),
-  (-np.finfo(float).eps, True, True), (-2.0 * np.finfo(float).eps, True, False),
-  (-4.236371e-8, True, False), (-0.001, True, False), (-0.5, False, False),
-  (-1.9180846832417676e-23, False, False),
+@pytest.mark.parametrize('speed,standstill,raw_speed,departure_allowed', [
+  (0.0, True, 0.0, True), (-1.9180846832417676e-23, True, 0.0, True),
+  (-np.finfo(float).eps, True, 0.0, True), (-2.0 * np.finfo(float).eps, True, 0.0, True),
+  (-4.236371e-8, True, 0.0, True), (-1e-6, True, 0.0, True), (-1.0001e-6, True, 0.0, False),
+  (-0.001, True, 0.0, False), (-0.5, False, -0.5, False),
+  (-1.9180846832417676e-23, False, 0.0, False),
+  (-4.236371e-8, True, -0.01, False), (-4.236371e-8, True, 0.01, False),
 ])
-def test_radar_consumption_preserves_measured_speed_and_independent_departure_guards(speed, standstill, departure_allowed):
+def test_radar_consumption_preserves_measured_speed_and_independent_departure_guards(speed, standstill, raw_speed, departure_allowed):
   from openpilot.selfdrive.controls.tests.test_lead_qualification import formal_lead
   from openpilot.selfdrive.controls.tests.test_radar_consumption import CONSUMPTION, PUBLICATION, radar_frame
   from openpilot.selfdrive.controls.tests.test_unified_radar_consumption import enabled_planner, state_at
@@ -493,6 +495,7 @@ def test_radar_consumption_preserves_measured_speed_and_independent_departure_gu
   primary = formal_lead(now_ns=PUBLICATION, dRel=15.0, vLead=1.0, vLeadK=1.0, vRel=1.0)
   state = state_at(radar_frame(primary, display=(primary,)), speed=0.0)
   state['carState'].vEgo, state['carState'].standstill = float(speed), standstill
+  state['carState'].vEgoRaw = raw_speed
   wire_speed = state['carState'].as_reader().vEgo
   planner = enabled_planner(0.0)
   with patch.object(planner.dec, 'enabled', return_value=True):

@@ -11,7 +11,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CREEP_MAX_T, CREEP_ST
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_STOP_DISTANCE, RISK_STOP_DISTANCE
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanSource
-from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, StopReason
+from openpilot.selfdrive.controls.lib.motion_supervisor import MotionIntent, MotionPhase, StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_control_test_support import ControlHarness
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import advance, make_planner, make_state, patch_sampled_accel
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
@@ -245,17 +245,18 @@ def test_other_platform_and_stock_modes_have_no_unified_parking_producer(platfor
   assert not hasattr(planner, 'reference_planner')
 
 
-def test_parking_candidate_does_not_change_either_existing_creep_deadline():
+def test_current_parking_stop_preserves_both_creep_deadlines():
   assert CREEP_STOP_T == .5 and CREEP_MAX_T == 1.0
+  intent = MotionIntent(reasons=StopReason.E2E)
   harness = MotionHarness()
   for _ in range(round(CREEP_STOP_T / DT_CTRL) + 2):
-    harness.step(v_ego=.6, a_target=-.1)
+    harness.step(intent, v_ego=.6, a_target=-.1)
   assert harness.supervisor.reasons & StopReason.CREEP
   progressing = MotionHarness()
   speed = 1.15
   for frame in range(round(CREEP_MAX_T / DT_CTRL)):
-    progressing.step(v_ego=speed, a_target=-.1)
+    progressing.step(intent, v_ego=speed, a_target=-.1)
     speed *= 1.0 - .6 * DT_CTRL
     if frame < 99:
-      assert not progressing.supervisor.resolved_should_stop
+      assert not progressing.supervisor.reasons & StopReason.CREEP
   assert progressing.supervisor.reasons & StopReason.CREEP

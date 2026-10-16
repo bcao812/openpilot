@@ -74,15 +74,16 @@ def test_cached_continuation_does_not_withdraw_a_stop(new_plan, new_model):
   assert harness.supervisor.phase == MotionPhase.APPROACH
 
 
-@pytest.mark.parametrize('reason', [StopReason.CLOSE_LEAD, StopReason.CREEP])
-def test_current_continuation_keeps_an_applicable_owned_stop(reason):
+@pytest.mark.parametrize('reason', [StopReason.CLOSE_LEAD, StopReason.MPC])
+def test_current_continuation_keeps_current_stop_evidence_authoritative(reason):
   harness = MotionHarness()
   if reason == StopReason.CLOSE_LEAD:
     harness.step(MotionIntent(reasons=reason), v_ego=1.0, a_target=-0.2)
   else:
     for _ in range(60):
-      harness.step(v_ego=1.0, a_target=-0.2)
-  intent = MotionIntent(reference_kind=int(MotionReferenceKind.MOVING), producer_instance_ns=1_000_000_000)
+      harness.step(MotionIntent(reasons=reason), v_ego=1.0, a_target=-0.2)
+    assert harness.supervisor.reasons & StopReason.CREEP
+  intent = MotionIntent(reasons=reason, reference_kind=int(MotionReferenceKind.MOVING), producer_instance_ns=1_000_000_000)
   assert harness.step(intent, v_ego=1.0, a_target=-0.2)
   assert harness.supervisor.reasons & reason
 

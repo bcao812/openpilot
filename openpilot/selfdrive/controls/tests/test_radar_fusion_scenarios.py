@@ -24,7 +24,7 @@ def target_motion(timestamp):
   return 31.0 + .4 * elapsed**2 + 4.0 * max(0.0, timestamp - 14.0), .8 * elapsed
 
 
-def simulate_radar_following(*, dropout=False):
+def simulate_radar_following(*, dropout=False, current_model_stop=False):
   plant = IdealPlant(6.0, delay=.2, response_time=.25)
   rows = []
   duration = 12.0 if dropout else 17.0
@@ -36,7 +36,9 @@ def simulate_radar_following(*, dropout=False):
       gap = position - ego_position
       assert gap > 0.0, f'Collision at {timestamp:.2f}s: gap={gap:.3f}, ego={plant.speed:.3f}, target={speed:.3f}'
       row = pipeline.step(speed=plant.speed, accel=plant.accel, radar=[Target(gap, speed)],
-                          observer_online=not dropout or timestamp < 8.0, plant=plant)
+                          observer_online=not dropout or timestamp < 8.0,
+                          model_stop=current_model_stop and timestamp >= 8.0,
+                          model_accel=0.0 if current_model_stop and timestamp >= 8.0 else .6, plant=plant)
       row.update(gap=gap, ego_position=ego_position, target_position=position, target_speed=speed,
                  end_speed=plant.speed, end_position=plant.position)
       rows.append(row)
@@ -79,8 +81,8 @@ def test_radar_only_closed_loop_stops_and_follows_same_target_departure(record_p
              for row in rows)
 
 
-def test_radar_dropout_during_closed_loop_hold_cannot_be_cleared_by_ttl(record_property):
-  rows, metrics = simulate_radar_following(dropout=True)
+def test_radar_dropout_preserves_hold_requested_by_the_current_model(record_property):
+  rows, metrics = simulate_radar_following(dropout=True, current_model_stop=True)
   record_property('radar_hold_dropout_metrics', json.dumps(metrics, allow_nan=False))
   record_property('radar_hold_dropout_trace', json.dumps(rows, allow_nan=False, separators=(',', ':')))
   assert metrics['minimum_gap'] > 1.5 and metrics['hold_seconds'] >= .5, metrics
@@ -91,3 +93,18 @@ def test_radar_dropout_during_closed_loop_hold_cannot_be_cleared_by_ttl(record_p
              for row in dropped)
   assert all(sample['brake'] and not sample['release'] and sample['accel'] <= 0.0
              for row in dropped for sample in row['can'])
+
+
+def test_radar_dropout_with_current_forward_model_withdraws_old_target_authority(record_property):
+  # Keep the original dropout inputs, including the independently current
+  # forward model. They do not describe a current stop or observed clearance.
+  rows, metrics = simulate_radar_following(dropout=True)
+  record_property('radar_dropout_forward_metrics', json.dumps(metrics, allow_nan=False))
+  record_property('radar_dropout_forward_trace', json.dumps(rows, allow_nan=False, separators=(',', ':')))
+  dropped = [row for row in rows if row['time'] >= 8.5]
+  assert dropped and all(row['radar'].get('fusionDegraded', False) for row in dropped)
+  assert all(row['observer']['model_input_valid'] and row['solver'] == 0 for row in dropped)
+  assert all(not row['radar'][slot]['present'] for row in dropped for slot in ('leadOne', 'leadTwo'))
+  assert any(row['release'] and any(sample['accel'] > 0.0 for sample in row['can']) for row in dropped)
+  assert metrics['pedal_conflicts'] == metrics['solver_failures'] == 0
+  assert metrics['maximum_request_jerk'] <= 8.0 + 1e-9

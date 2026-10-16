@@ -259,6 +259,7 @@ def geometry_mpc(initial_state):
   # These geometry tests deliberately have no solver; lead preparation and
   # restoration of the actual, unclipped distance still use real MPC methods.
   mpc = LongitudinalMpc.__new__(LongitudinalMpc)
+  mpc.speed_based_following = False  # Match the constructor's default domain.
   mpc.solution_status = 0
   mpc.params = np.zeros((N+1, PARAM_DIM))
   mpc.a_prev = np.zeros(N+1)

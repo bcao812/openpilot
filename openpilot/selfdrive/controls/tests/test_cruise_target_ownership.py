@@ -304,7 +304,7 @@ def test_ordinary_acc_keeps_the_real_lead_goal_source_and_immediate_stronger_bra
 
 
 @pytest.mark.parametrize('slot,source', [('leadOne', LongitudinalPlanSource.lead0), ('leadTwo', LongitudinalPlanSource.lead1)])
-def test_far_lead_appearance_loss_and_recovery_keep_one_cruise_response_and_existing_history(slot, source):
+def test_far_lead_changes_keep_one_cruise_response_and_withdraw_unsupported_history(slot, source):
   planner, owner, state = ordinary_case(speed=20.23, target=20.0)
   lead = getattr(state['radarState'], slot)
   lead.dRel, lead.vLead, lead.vRel = 100.0, state['carState'].vEgo, 0.0
@@ -331,7 +331,13 @@ def test_far_lead_appearance_loss_and_recovery_keep_one_cruise_response_and_exis
       if instance is None:
         instance = plan.reference.producerInstanceMonoTime
       assert plan.reference.producerInstanceMonoTime == instance
-      if frame:
+      # Losing the formal lead removes its old comfort-cost authority in
+      # that same update. The next current solve may establish new history.
+      if frame in (8, 16):
+        assert planner.mpc.diagnostic_reference_weights[0, 4] == 0.0
+        assert planner.mpc.diagnostic_reference_history['reason'] == 'anonymous_support_removed'
+        assert planner.mpc.diagnostic_reference_history['supportChanged']
+      elif frame:
         assert planner.mpc.diagnostic_reference_weights[0, 4] > 0.0
 
 

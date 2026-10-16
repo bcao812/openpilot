@@ -530,7 +530,9 @@ def test_rest_rejection_and_zero_chain_take_priority_over_learned_launch_effort(
   assert harness.step(-3.5, rejected, plan_valid=False, braking_plan_valid=True, solver_status=status) == -3.5
   assert harness.control.launch_response.bias == 0.0
   assert not harness.control.launch_response.armed
-  zero = forward_intent(reference_kind=int(MotionReferenceKind.EXACT_ZERO), release_allowed=False)
+  # Match a current zero-motion plan's stop evidence; the classification
+  # label alone does not renew a preceding rejected plan's stop obligation.
+  zero = forward_intent(reference_kind=int(MotionReferenceKind.EXACT_ZERO), release_allowed=False, reasons=StopReason.MPC)
   for _ in range(20):
     assert harness.step(-0.1, zero) == -3.5
     assert harness.control.launch_response.bias == 0.0

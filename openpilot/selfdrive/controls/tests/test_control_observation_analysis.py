@@ -7,6 +7,7 @@ from opendbc.car.honda.values import CAR
 from openpilot.cereal import log
 from openpilot.common.longitudinal_logging import CHECK_FLAGS
 from openpilot.selfdrive.controls.lib.control_observation import ControlObservation, supervisor_snapshot
+from openpilot.selfdrive.controls.lib.motion_supervisor import StopReason
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_control_observation import control_payload
 from openpilot.selfdrive.controls.tests.test_motion_fault_braking import native_command
@@ -103,6 +104,8 @@ def test_rearm_barrier_and_live_creep_timing_are_copied_after_real_reentry():
   assert analysis(harness).motionAfter.waitingForFreshInput
   assert not analysis(harness).motionAfter.degraded
   harness.plan.motionIntent.allowCreep = True
+  # The timer observes assistance for a current stop, not weak braking alone.
+  harness.plan.motionIntent.reasons = int(StopReason.MPC)
   harness.step()
   value = analysis(harness).motionAfter
   supervisor = harness.control.LoC.motion_supervisor

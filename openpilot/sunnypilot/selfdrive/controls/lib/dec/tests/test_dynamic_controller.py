@@ -120,7 +120,7 @@ def test_extra_raw_radar_objects_cannot_make_dec_detect_a_lead(malformed):
 
 @pytest.mark.parametrize('source', ['radar', 'fused', 'predicted'])
 @pytest.mark.parametrize('path,start', [('entering', 0.0), ('entering', .5), ('inPath', .5)])
-def test_predicted_adjacent_entry_is_not_a_lead_until_currently_in_path(source, path, start):
+def test_adjacent_sources_need_current_in_path_qualification(source, path, start):
   sm = fusion_sm()
   candidate = formal_lead(source=source, vLead=10.0,
                           evidence={'pathState': path, 'conflictStart': start, 'conflictEnd': 2.0,
@@ -134,7 +134,11 @@ def test_predicted_adjacent_entry_is_not_a_lead_until_currently_in_path(source, 
   candidate.evidence.pathState, candidate.evidence.conflictStart = 'inPath', 0.0
   for _ in range(20):
     controller.update(sm)
-  assert controller._has_lead_filtered and controller._fusion_risks == (candidate,)
+  if source == 'predicted':
+    # Crossing a path boundary cannot make an unmeasured object current.
+    assert not controller._has_lead_filtered and controller._fusion_risks == ()
+  else:
+    assert controller._has_lead_filtered and controller._fusion_risks == (candidate,)
 
 
 class TestDynamicExperimentalController(OpenpilotTestCase):
