@@ -137,6 +137,29 @@ def rolling_feedback(*, braking=False):
   return harness
 
 
+def test_weak_acc_brake_tail_releases_without_delaying_new_strong_braking():
+  harness = rolling_feedback(braking=True)
+  target = -0.1717
+  harness.state.aEgo = -0.3367
+  intent = absolute_intent()
+  harness.step(target, intent)
+  initial = harness.control.pid.i
+  for _ in range(100):
+    before = harness.control.last_output_accel
+    output = harness.step(target, intent)
+    assert output <= target
+    assert output - before <= 0.08 + 1e-12
+    assert harness.control.motion_phase == MotionPhase.TRACK
+  assert initial + 0.096 < harness.control.pid.i < 0.0
+  # Fresh stronger braking enters this frame and keeps its original feedback;
+  # the new unwind permission ends with the current weak reference.
+  before_i = harness.control.pid.i
+  output = harness.step(-2.0, intent)
+  assert output == pytest.approx(-2.0 + harness.control.pid.i)
+  assert output < -2.0
+  assert harness.control.pid.i < before_i
+
+
 def test_cold_moving_reference_cannot_integrate_the_real_speed_filter_startup_transient():
   parameters = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
   parameters_sp = CarInterface.get_non_essential_params_sp(parameters, CAR.HONDA_ACCORD)
