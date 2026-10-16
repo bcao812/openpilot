@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from openpilot.selfdrive.controls.lib.drive_helpers import STOP_RELEASE_ACCEL
+from openpilot.selfdrive.controls.lib.lead_launch import STANDSTILL_RESIDUE
 from openpilot.selfdrive.controls.lib.model_reference import ModelReferenceAdapter, stationary_lead_departure_compatible
 from openpilot.selfdrive.controls.lib.motion_supervisor import MotionPhase, MotionReferenceKind
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import consume, make_handover_state, make_planner_owner
@@ -42,8 +43,8 @@ LOGGED_LATER_NEGATIVE_VELOCITY = np.array([
 ])
 
 
-def compatible(reference, *, standstill=True, speed=0.0):
-  return stationary_lead_departure_compatible(reference, actual_standstill=standstill, measured_speed=speed)
+def compatible(reference, *, standstill=True, speed=0.0, raw_speed=0.0):
+  return stationary_lead_departure_compatible(reference, actual_standstill=standstill, measured_speed=speed, raw_speed=raw_speed)
 
 
 def changed_sample(index, value):
@@ -53,7 +54,7 @@ def changed_sample(index, value):
 
 
 @pytest.mark.parametrize('speed', [
-  -0.0, 0.05, -np.finfo(float).eps,
+  -0.0, 0.05, -np.finfo(float).eps, -STANDSTILL_RESIDUE, -5.507021637210334e-14,
   # Exact stopped vEgo residues from route 00000091--cfe14c017c, segment 29,
   # 22:19:11.864--22:19:12.063 +08:00 on 2026-10-09, source 9e3a811dd8a8.
   # Only measured speed varies here; the raw model fixture above is separate.
@@ -77,7 +78,7 @@ def test_recorded_departure_is_compatible_without_reclassifying_model_or_grantin
 
 @pytest.mark.parametrize('standstill,speed', [
   (False, 0.0), (True, 0.050001), (True, 0.2), (True, -0.001),
-  (True, np.nextafter(-np.finfo(float).eps, -np.inf)), (False, -1e-23),
+  (True, np.nextafter(-STANDSTILL_RESIDUE, -np.inf)), (False, -1e-23),
   (None, -1e-23), (True, None), (True, np.nan), (True, np.inf), (True, -np.inf), (True, True), (1, 0.0),
 ])
 def test_measured_movement_or_invalid_standstill_cannot_use_stationary_compatibility(standstill, speed):
@@ -223,7 +224,7 @@ def held_recorded_departure_case():
   return planner, owner, state
 
 
-@pytest.mark.parametrize('measured_speed', [0.0, -1.9180846832417676e-23])
+@pytest.mark.parametrize('measured_speed', [0.0, -1.9180846832417676e-23, -5.507021637210334e-14])
 def test_recorded_shape_with_departing_lead_releases_actual_held_owner_after_confirmation(measured_speed):
   planner, owner, state = held_recorded_departure_case()
   state['carState'].vEgo = measured_speed

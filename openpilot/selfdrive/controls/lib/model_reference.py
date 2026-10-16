@@ -12,6 +12,7 @@ from numbers import Integral
 import numpy as np
 
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, STOP_SPEED
+from openpilot.selfdrive.controls.lib.lead_launch import STANDSTILL_RESIDUE
 from openpilot.selfdrive.controls.lib.motion_supervisor import MODEL_LEASE_NS
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_MAX_AGE_NS, finite_state
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -230,17 +231,18 @@ def _timestamp(value):
   return isinstance(value, Integral) and not isinstance(value, bool) and 0 < value < (1 << 64)
 
 
-def normalize_standstill_speed(measured_speed, *, actual_standstill):
+def normalize_standstill_speed(measured_speed, *, actual_standstill, raw_speed):
   """Remove only negative arithmetic residue from an explicitly stopped ego."""
-  # Around 1e-23 m/s was recorded after the stopped estimator settled.
-  # Forward projection of every negative speed would hide real rollback.
-  if (actual_standstill is True and finite_state((measured_speed,))
-      and -np.finfo(float).eps <= measured_speed < 0.0):
+  # M04 recorded -5.5e-14 m/s with zero raw wheel speed. Reuse the bounded
+  # launch tolerance, with the same independent standstill/wheel evidence;
+  # clipping every negative estimate would hide real rollback.
+  if (actual_standstill is True and finite_state((measured_speed, raw_speed)) and raw_speed == 0.0
+      and -STANDSTILL_RESIDUE <= measured_speed < 0.0):
     return 0.0
   return measured_speed
 
 
-def stationary_lead_departure_compatible(evidence, *, actual_standstill, measured_speed):
+def stationary_lead_departure_compatible(evidence, *, actual_standstill, measured_speed, raw_speed):
   """Bounded model compatibility for an independently qualified lead departure.
 
   This supplies neither model departure permission nor a FORWARD classification.
@@ -249,8 +251,9 @@ def stationary_lead_departure_compatible(evidence, *, actual_standstill, measure
   duration and displacement bounds are a conservative engineering domain for
   this stationary case, not calibrated sensor/model error bounds.
   """
-  measured_speed = normalize_standstill_speed(measured_speed, actual_standstill=actual_standstill)
-  if (actual_standstill is not True or not finite_state((measured_speed,)) or not 0.0 <= measured_speed <= 0.05
+  measured_speed = normalize_standstill_speed(measured_speed, actual_standstill=actual_standstill, raw_speed=raw_speed)
+  if (actual_standstill is not True or not finite_state((measured_speed, raw_speed)) or raw_speed != 0.0
+      or not 0.0 <= measured_speed <= 0.05
       or evidence is None or evidence.raw_velocity is None or evidence.raw_motion is None):
     return False
   source = evidence.source

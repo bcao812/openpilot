@@ -124,7 +124,7 @@ def test_weak_recorded_model_is_compatible_without_reclassifying_its_raw_intent(
   ref = evidence(LOGGED_WEAK_VELOCITY, 0.0, model_ns=SOURCE_NS + int(later_publication) * 5_000_000,
                  now_ns=SOURCE_NS + 10_000_000)
   before = ref.events
-  assert not stationary_lead_departure_compatible(ref, actual_standstill=True, measured_speed=0.0)
+  assert not stationary_lead_departure_compatible(ref, actual_standstill=True, measured_speed=0.0, raw_speed=0.0)
   assert lead_launch_model_compatible(ref)
   assert ref.events == before and not ref.allows_departure and not ref.allows_external_departure
 

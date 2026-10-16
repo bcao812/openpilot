@@ -22,7 +22,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import (CLOSE_LEAD_STOP_SPEE
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, MPC_FAILURE_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import CONTINUATION_VERSION
 from openpilot.selfdrive.controls.lib.lead_qualification import MAX_MODEL_AGE_NS, control_leads, lead_identity, qualified_lead
-from openpilot.selfdrive.controls.lib.lead_launch import LeadLaunch, LeadLaunchSample, LEAD_LAUNCH_MAX_SPEED, STANDSTILL_RESIDUE
+from openpilot.selfdrive.controls.lib.lead_launch import LeadLaunch, LeadLaunchSample, LEAD_LAUNCH_MAX_SPEED
 from openpilot.selfdrive.controls.lib.radar_consumption import RadarConsumption
 from openpilot.selfdrive.controls.lib.low_speed_stop_distance import LowSpeedStopDistance
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
@@ -436,7 +436,8 @@ class UnifiedLongitudinalPlanner:
       if state.valid.get('radarState', False) and state.all_checks(service_list=['radarState']):
         radar = self.radar_consumption.update(
           radar, publication_ns=state.logMonoTime.get('radarState'), now_ns=now_ns,
-          speed=normalize_standstill_speed(state['carState'].vEgo, actual_standstill=state['carState'].standstill),
+          speed=normalize_standstill_speed(state['carState'].vEgo, actual_standstill=state['carState'].standstill,
+                                          raw_speed=state['carState'].vEgoRaw),
         )
         if (self.radar_consumption.publication_view is not None
             and self.radar_consumption.publication_ns == state.logMonoTime.get('radarState')):
@@ -467,8 +468,10 @@ class UnifiedLongitudinalPlanner:
       return 'radar_measurement_expired'
     if primary_identity is None or primary_identity[0] != getattr(radar, 'fusionSessionId', None):
       return 'radar_session_mismatch'
-    speed = normalize_standstill_speed(state['carState'].vEgo, actual_standstill=state['carState'].standstill)
-    stationary = state['carState'].standstill is True and math.isfinite(speed) and 0.0 <= speed <= 0.05
+    speed = normalize_standstill_speed(state['carState'].vEgo, actual_standstill=state['carState'].standstill,
+                                      raw_speed=state['carState'].vEgoRaw)
+    stationary = (state['carState'].standstill is True and state['carState'].vEgoRaw == 0.0
+                  and math.isfinite(speed) and 0.0 <= speed <= 0.05)
     continuing = (launch_continuation and self.lead_launch.active and math.isfinite(speed)
                   and 0.0 <= speed < LEAD_LAUNCH_MAX_SPEED)
     if not stationary and not continuing:
@@ -701,8 +704,9 @@ class UnifiedLongitudinalPlanner:
       launch_rejection = self.unbound_radar_departure_rejection(state, now_ns=now_ns,
                                                               launch_continuation=self.lead_launch.active)
     raw_speed = float(car_state.vEgoRaw)
+    stationary_speed = normalize_standstill_speed(float(car_state.vEgo), actual_standstill=bool(car_state.standstill), raw_speed=raw_speed)
     stationary_measurement = (bool(car_state.standstill) and math.isfinite(raw_speed) and raw_speed == 0.0
-                              and -STANDSTILL_RESIDUE <= float(car_state.vEgo) <= 0.05)
+                              and math.isfinite(stationary_speed) and 0.0 <= stationary_speed <= 0.05)
     can_start_launch = stationary_measurement and motion.phase == 'hold' and motion.resolvedStop
     launch_enabled = (
       planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl and planner.unified
@@ -725,7 +729,10 @@ class UnifiedLongitudinalPlanner:
           continue
         lead_evidence = getattr(lead, 'evidence', None)
         physical = lead_identity(lead)
-        identity = (str(lead_evidence.source), physical) if physical is not None else ('vision', slot)
+        # A current radar/vision association can change the source label
+        # without changing the physical track. Current qualification above
+        # still withdraws launch immediately when that track loses authority.
+        identity = ('track', *physical) if physical is not None else ('vision', slot)
         lateral = lead_evidence.pathOffset if getattr(lead_evidence, 'version', 0) == 1 else lead.yRel
         launch_samples.append(LeadLaunchSample(identity, float(lead.dRel), float(lead.vLead), float(lead.vRel), float(lateral)))
     self.lead_launch_active = self.lead_launch.update(
@@ -966,7 +973,7 @@ class UnifiedLongitudinalPlanner:
     stationary_model_compatible = (
       not model.meta.hardBrakePredicted and model.action.desiredAcceleration >= 0.0
       and stationary_lead_departure_compatible(
-        evidence, actual_standstill=bool(car_state.standstill), measured_speed=float(car_state.vEgo)))
+        evidence, actual_standstill=bool(car_state.standstill), measured_speed=float(car_state.vEgo), raw_speed=float(car_state.vEgoRaw)))
     model_allows_external_departure = (self.lead_launch_active or evidence is None or evidence.allows_external_departure
                                       or stationary_model_compatible)
     # P's ordinary action can request departure without raw speed growth.

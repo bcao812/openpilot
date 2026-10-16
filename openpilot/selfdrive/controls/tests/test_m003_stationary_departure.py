@@ -57,7 +57,8 @@ def test_exact_m003_model_keeps_unknown_while_current_leads_may_supply_departure
   reference = recorded_reference(point)
   before = reference.events, reference.raw_motion
   raw = np.asarray(point['model']['velocity']['x'])
-  assert stationary_lead_departure_compatible(reference, actual_standstill=True, measured_speed=point['car']['vEgo'])
+  assert stationary_lead_departure_compatible(reference, actual_standstill=True, measured_speed=point['car']['vEgo'],
+                                              raw_speed=point['car']['vEgoRaw'])
   assert reference.unknown.reason == 'backward_then_forward_is_ambiguous'
   assert reference.raw_motion.kind == 'unknown' and reference.moving is None
   assert not reference.allows_departure and not reference.allows_external_departure
