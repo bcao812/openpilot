@@ -637,7 +637,8 @@ class MotionSupervisor:
       reasons = StopReason.NONE
       self._reset_creep()
     elif (stopped_phase and not reasons and not rolling_continuation
-          and (held_stop or near_standstill or not intent.release_allowed or self.reasons & StopReason.CREEP)):
+          and (held_stop or near_standstill or not intent.release_allowed
+               or not new_input and self.reasons & StopReason.CREEP)):
       reasons = (self.reasons & ~StopReason.INVALID) or StopReason.HOLD
       if near_standstill:
         reasons |= StopReason.HOLD
