@@ -150,7 +150,7 @@ def test_solver_failure_is_invalid_not_a_successful_zero_trajectory():
   assert not publisher.messages['longitudinalPlan'].valid
 
 
-@pytest.mark.parametrize('failure', ['solver_status', 'nonfinite_input', 'unhealthy_input', 'nonfinite_sample'])
+@pytest.mark.parametrize('failure', ['solver_status', 'nonfinite_input', 'unhealthy_solver_failure', 'nonfinite_sample'])
 @pytest.mark.parametrize('previous_target', [0.3, -1.5])
 def test_invalidated_plan_clears_fcw_and_success_can_warn_again(failure, previous_target):
   planner, _ = make_planner()
@@ -169,16 +169,16 @@ def test_invalidated_plan_clears_fcw_and_success_can_warn_again(failure, previou
   planner.output_a_target = previous_target
 
   with ExitStack() as stack:
-    if failure == 'solver_status':
+    if failure in ('solver_status', 'unhealthy_solver_failure'):
       failing_solver = Mock(wraps=planner.mpc.solver)
       failing_solver.solve.return_value = 4
       stack.enter_context(patch.object(planner.mpc, 'solver', failing_solver))
+      if failure == 'unhealthy_solver_failure':
+        stack.enter_context(patch.object(state, 'all_checks', return_value=False))
     elif failure == 'nonfinite_input':
       invalid_car_state = state['carState'].as_reader().as_builder()
       invalid_car_state.vCruise = float('nan')
       stack.enter_context(patch.dict(state, {'carState': invalid_car_state}))
-    elif failure == 'unhealthy_input':
-      stack.enter_context(patch.object(state, 'all_checks', return_value=False))
     else:
       # A later sampling failure must also revoke a warning from this solve.
       stack.enter_context(patch.object(planner.mpc, 'update_lead_fcw', side_effect=current_warning))
