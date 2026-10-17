@@ -233,6 +233,8 @@ class UnifiedLongitudinalPlanner:
 
   def invalidate(self, speed, reason, *, preserve_continuation=False, failure=True):
     planner = self.planner
+    # An invalidated plan cannot carry a collision warning from its predecessor.
+    planner.fcw = False
     self.lead_launch.clear(reason)
     self.lead_launch_active = False
     self.continuation.invalidate(reason, now_ns=self._radar_update_ns, keep_offer=preserve_continuation, failure=failure)

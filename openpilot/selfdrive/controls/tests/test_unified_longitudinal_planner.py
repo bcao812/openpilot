@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -11,7 +12,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_trace import LongitudinalTrac
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, MotionIntent, StopReason
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS
 from openpilot.selfdrive.controls.lib.unified_longitudinal_planner import departing_lead_rejection, has_departing_lead, model_reference_from_velocity
-from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state, advance, Publisher
+from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import make_planner, make_state, advance, patch_sampled_accel, Publisher
 from openpilot.selfdrive.controls.tests.longitudinal_test_support import isolated_params as isolated_params
 from openpilot.selfdrive.controls.tests.test_longitudinal_following_scenarios import simulate_following
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -147,6 +148,64 @@ def test_solver_failure_is_invalid_not_a_successful_zero_trajectory():
   publisher = Publisher()
   planner.publish(state, publisher)
   assert not publisher.messages['longitudinalPlan'].valid
+
+
+@pytest.mark.parametrize('failure', ['solver_status', 'nonfinite_input', 'unhealthy_input', 'nonfinite_sample'])
+@pytest.mark.parametrize('previous_target', [0.3, -1.5])
+def test_invalidated_plan_clears_fcw_and_success_can_warn_again(failure, previous_target):
+  planner, _ = make_planner()
+  state = make_state()
+  publisher = Publisher()
+
+  def current_warning(*args, **kwargs):
+    planner.mpc.crash_cnt = 3
+
+  # Inject the detector result; native solving, invalidation and publication stay real.
+  with patch.object(planner.mpc, 'update_lead_fcw', side_effect=current_warning):
+    planner.update(state, now_ns=advance(state, 0))
+  assert planner.motion_intent.valid and planner.fcw
+  planner.publish(state, publisher)
+  assert publisher.messages['longitudinalPlan'].longitudinalPlan.fcw
+  planner.output_a_target = previous_target
+
+  with ExitStack() as stack:
+    if failure == 'solver_status':
+      failing_solver = Mock(wraps=planner.mpc.solver)
+      failing_solver.solve.return_value = 4
+      stack.enter_context(patch.object(planner.mpc, 'solver', failing_solver))
+    elif failure == 'nonfinite_input':
+      invalid_car_state = state['carState'].as_reader().as_builder()
+      invalid_car_state.vCruise = float('nan')
+      stack.enter_context(patch.dict(state, {'carState': invalid_car_state}))
+    elif failure == 'unhealthy_input':
+      stack.enter_context(patch.object(state, 'all_checks', return_value=False))
+    else:
+      # A later sampling failure must also revoke a warning from this solve.
+      stack.enter_context(patch.object(planner.mpc, 'update_lead_fcw', side_effect=current_warning))
+      stack.enter_context(patch_sampled_accel(planner, return_value=float('nan')))
+
+    expected_target = min(previous_target, -0.5 if failure == 'solver_status' else -0.2)
+    for frame in (1, 2):
+      planner.update(state, now_ns=advance(state, frame))
+      assert not planner.fcw
+      assert not planner.motion_intent.valid
+      assert planner.output_a_target == pytest.approx(expected_target)
+      planner.publish(state, publisher)
+      with log.Event.from_bytes(publisher.messages['longitudinalPlan'].as_builder().to_bytes()) as message:
+        assert not message.valid
+        assert not message.longitudinalPlan.fcw
+        assert message.longitudinalPlan.aTarget == pytest.approx(expected_target)
+
+  # Current healthy evidence replaces the revoked flag; later real warnings remain eligible.
+  planner.update(state, now_ns=advance(state, 3))
+  assert planner.motion_intent.valid and not planner.fcw
+  planner.publish(state, publisher)
+  assert not publisher.messages['longitudinalPlan'].longitudinalPlan.fcw
+  with patch.object(planner.mpc, 'update_lead_fcw', side_effect=current_warning):
+    planner.update(state, now_ns=advance(state, 4))
+  assert planner.motion_intent.valid and planner.fcw
+  planner.publish(state, publisher)
+  assert publisher.messages['longitudinalPlan'].longitudinalPlan.fcw
 
 
 def test_reference_and_intent_round_trip_preserve_distinct_semantics():
