@@ -13,7 +13,7 @@ SOURCE_ALERTS = frozenset(f'{name}/{kind}' for name in ('modeldLagging', 'locati
                           for kind in (ET.SOFT_DISABLE, ET.NO_ENTRY, ET.PERMANENT))
 
 
-def merge_perception_alerts(alerts, events, manager, frame, *, recovered_model_lag=False):
+def merge_perception_alerts(alerts, events, manager, frame, *, recovered_model_lag=False, lateral_takeover=''):
   # Remove only the entries being replaced, including their minimum-duration
   # caches. Other warnings retain their original priority and duration.
   grouped = [alert for alert in alerts if alert.alert_type in SOURCE_ALERTS]
@@ -34,7 +34,12 @@ def merge_perception_alerts(alerts, events, manager, frame, *, recovered_model_l
 
   selected = max(grouped, key=lambda alert: alert.priority)
   recovered = recovered_model_lag and not location_fault and selected.event_type != ET.NO_ENTRY
-  if recovered:
+  if lateral_takeover in ('pending', 'disabled') and model_lag and not location_fault and selected.event_type != ET.NO_ENTRY:
+    detail = 'Steering assist ending; speed control active' if lateral_takeover == 'pending' else 'Steering assist unavailable; speed control active'
+    combined = Alert(tr_noop('Steer Manually'), detail, AlertStatus.critical, AlertSize.full, Priority.HIGH,
+                     VisualAlert.steerRequired, AudibleAlert.warningImmediate, 0.1)
+    combined.event_type = ET.PERMANENT
+  elif recovered:
     combined = Alert(tr_noop('Model / Localization Delay'), 'Inputs recovered; monitoring frame drops',
                      AlertStatus.normal, AlertSize.mid, Priority.LOW, VisualAlert.none, AudibleAlert.none, 0.2)
     combined.event_type = ET.PERMANENT

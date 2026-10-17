@@ -75,6 +75,7 @@ class EngagementDecision:
   hold_for_takeover: bool = False
   hold_remaining_ns: int = 0
   recovered_model_lag: bool = False
+  recovered_model_lag_lateral: bool = False
 
 
 class StoppedHandoff:
@@ -212,7 +213,7 @@ class EngagementPolicy:
     )
 
   @staticmethod
-  def _lateral_inputs_healthy(sm, CS, now_ns):
+  def _lateral_inputs_healthy(sm, CS, now_ns, *, standstill_output_gated=False):
     return bool(
       not (CS.steerFaultTemporary or CS.steerFaultPermanent)
       and all(fresh_service(sm, name, now_ns, INPUT_LEASE_NS) for name in ('modelV2', 'deviceMotion', 'vehicleParameters'))
@@ -220,7 +221,7 @@ class EngagementPolicy:
       and finite(CS.steeringAngleDeg, CS.steeringRateDeg, sm['modelV2'].action.desiredCurvature,
                  sm['vehicleParameters'].steerRatio, sm['vehicleParameters'].stiffnessFactor)
       and sm['vehicleParameters'].steerRatio > 0 and sm['vehicleParameters'].stiffnessFactor > 0
-      and sm['carControl'].latActive
+      and (sm['carControl'].latActive or standstill_output_gated)
     )
 
   @staticmethod
@@ -257,7 +258,7 @@ class EngagementPolicy:
 
   def update(self, daemon, CS, now_ns):
     preserve_lateral = preserve_longitudinal = hold_valid = False
-    recovered_model_lag = False
+    recovered_model_lag = recovered_model_lag_lateral = False
     self.lateral_available = False
     self.longitudinal_available = False
     events = daemon.events
@@ -299,10 +300,21 @@ class EngagementPolicy:
           model_recovered and self.longitudinal_available
           and daemon.state_machine.state in (State.enabled, State.softDisabling, State.overriding)
         )
+        # MADS can remain armed while controlsd normally gates steering output
+        # at standstill. Source health can recover that already-active state;
+        # this does not change controlsd's speed gate or command latActive.
+        standstill_output_gated = (not daemon.CP.steerAtStandstill
+                                   and (CS.standstill or abs(CS.vEgo) <= max(daemon.CP.minSteerSpeed, 0.3)))
+        recovered_model_lag_lateral = bool(
+          recovered_model_lag and mads_enabled and daemon.mads.active
+          and self._lateral_inputs_healthy(daemon.sm, CS, now_ns, standstill_output_gated=standstill_output_gated)
+          and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=True)
+        )
         hold_valid = bool(self._holding(daemon, CS) and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=False))
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
       # Unknown inputs may not authorize an exception to the existing exits.
       preserve_lateral = preserve_longitudinal = hold_valid = recovered_model_lag = False
+      recovered_model_lag_lateral = False
       self.lateral_available = False
       self.longitudinal_available = False
 
@@ -320,7 +332,7 @@ class EngagementPolicy:
       self.hold_ended_until_ns = now_ns + HOLD_EXTRA_NS
     self.decision = EngagementDecision(preserve_lateral, preserve_longitudinal, hold_active,
                                        max(0, self.handoff.extended_deadline_ns - now_ns) if hold_active else 0,
-                                       recovered_model_lag)
+                                       recovered_model_lag, recovered_model_lag_lateral)
     return self.decision
 
   def observe_states(self, daemon, CS):

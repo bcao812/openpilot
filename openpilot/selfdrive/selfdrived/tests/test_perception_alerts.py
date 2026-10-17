@@ -13,6 +13,7 @@ from openpilot.selfdrive.selfdrived.events import ET, Events
 from openpilot.selfdrive.selfdrived.perception_alerts import PERCEPTION_ALERT, SOURCE_ALERTS, merge_perception_alerts
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 from openpilot.selfdrive.selfdrived.tests.test_engagement_policy import CONTROL_STEP_NS, MadsState, NOW, make_daemon
+from openpilot.selfdrive.selfdrived.tests.test_model_lag_recovery import Streams as RecoveryStreams, consume, publish
 
 
 EventName = log.OnroadEvent.EventName
@@ -31,9 +32,9 @@ def raw_alerts(events, types=(ET.PERMANENT, ET.SOFT_DISABLE)):
   return events.create_alerts(types, [None, None, sm, True, 300, log.LongitudinalPersonality.standard])
 
 
-def display(manager, events, frame, *, recovered=False, types=(ET.PERMANENT, ET.SOFT_DISABLE)):
+def display(manager, events, frame, *, recovered=False, types=(ET.PERMANENT, ET.SOFT_DISABLE), lateral_takeover=''):
   alerts = merge_perception_alerts(raw_alerts(events, types), events, manager, frame,
-                                    recovered_model_lag=recovered)
+                                    recovered_model_lag=recovered, lateral_takeover=lateral_takeover)
   manager.add_many(frame, alerts)
   manager.process_alerts(frame, set())
   return manager.current_alert
@@ -82,12 +83,13 @@ def test_persistent_fault_retains_takeover_minimum_after_disengagement():
   assert display(manager, events, 201, types=(ET.PERMANENT,)).event_type == ET.PERMANENT
 
 
-def test_no_entry_and_higher_priority_faults_remain_visible():
+@pytest.mark.parametrize('lateral_takeover', ['', 'pending', 'disabled'])
+def test_no_entry_and_higher_priority_faults_remain_visible(lateral_takeover):
   events = event_set(EventName.modeldLagging)
   manager = AlertManager()
-  assert display(manager, events, 0, recovered=True, types=(ET.NO_ENTRY, ET.PERMANENT)).event_type == ET.NO_ENTRY
+  assert display(manager, events, 0, recovered=True, types=(ET.NO_ENTRY, ET.PERMANENT), lateral_takeover=lateral_takeover).event_type == ET.NO_ENTRY
   events.add(EventName.fcw)
-  alert = display(manager, events, 1)
+  alert = display(manager, events, 1, lateral_takeover=lateral_takeover)
   assert alert.alert_type == 'fcw/permanent'
   events.remove(EventName.modeldLagging)
   alert = display(manager, events, 2)
@@ -218,3 +220,60 @@ def test_actual_controlsd_uses_the_recovered_state_for_long_active_and_force_dec
   command, _ = controls.step(intent_fields={'ready': True})
   assert command.enabled and command.longActive
   assert controls.control.pm.messages['controlsState'].controlsState.forceDecel == location_fault
+
+
+@pytest.mark.parametrize('held,steer_at_standstill,lateral_kept', [(True, False, True), (True, True, False), (False, False, False)])
+def test_real_recovery_policy_state_and_alert_chain_when_lateral_output_is_inactive(held, steer_at_standstill, lateral_kept):
+  daemon, CS = make_daemon(held=held)
+  daemon.CP.steerAtStandstill = steer_at_standstill
+  daemon.sm['carControl'].latActive = False
+  daemon.events.add(EventName.modeldLagging)
+  daemon._longitudinal_soft_disable_remaining_ns = None
+  daemon.AM = AlertManager()
+  daemon.personality = log.LongitudinalPersonality.standard
+  daemon.is_metric = True
+  source = RecoveryStreams()
+  source['modelV2'].action = SimpleNamespace(desiredCurvature=0.0)
+  source['modelV2'].frameDropPerc = 2.0
+  source['controlsState'].longControlState = daemon.sm['carControl'].actuators.longControlState
+  source['controlsState'].motionState.phase = 'hold' if held else 'track'
+  source['controlsState'].motionState.resolvedStop = held
+  source['controlsState'].motionState.reasons = int(daemon.sm['controlsState'].motionState.reasons)
+  first_recovery = None
+  saw_lateral_pending = False
+  for frame in range(401):
+    now_ns = NOW + frame * CONTROL_STEP_NS
+    if frame % 5 == 0 and frame:
+      publish(source, now_ns)
+    consume(source, now_ns)
+    source['longitudinalPlan'].aTarget = daemon.sm['carControl'].actuators.accel
+    source['controlsState'].forceDecel = daemon.state_machine.state == State.softDisabling
+    daemon.sm.logMonoTime.update(dict.fromkeys(daemon.sm, now_ns))
+    for service in source:
+      daemon.sm[service] = source[service]
+      daemon.sm.logMonoTime[service] = source.logMonoTime[service]
+    daemon.sm.frame = frame
+    daemon._car_state_mono_ns = now_ns
+    with patch('openpilot.selfdrive.selfdrived.selfdrived.time.monotonic_ns', return_value=now_ns):
+      SelfdriveD.update_engagement_state(daemon, CS)
+    daemon.mads.enabled, daemon.mads.active = daemon.mads.state_machine.update()
+    SelfdriveD.update_alerts(daemon, CS)
+    if daemon.engagement_policy.decision.recovered_model_lag:
+      first_recovery = frame if first_recovery is None else first_recovery
+      assert daemon.enabled and daemon.state_machine.state == State.enabled
+      if lateral_kept:
+        assert daemon.mads.active and daemon.mads.state_machine.state == MadsState.enabled
+        assert daemon.AM.current_alert.alert_text_2 == 'Inputs recovered; monitoring frame drops'
+      else:
+        assert daemon.AM.current_alert.alert_text_1 == 'Steer Manually'
+        assert daemon.AM.current_alert.alert_status == log.SelfdriveState.AlertStatus.critical
+        if daemon.mads.state_machine.state == MadsState.softDisabling:
+          saw_lateral_pending = True
+          assert daemon.AM.current_alert.alert_text_2 == 'Steering assist ending; speed control active'
+        else:
+          assert daemon.AM.current_alert.alert_text_2 == 'Steering assist unavailable; speed control active'
+  assert first_recovery is not None and 100 <= first_recovery < 300
+  assert daemon.enabled and daemon.mads.active == lateral_kept
+  assert lateral_kept or saw_lateral_pending
+  # Recovery changes the armed state, never the actuator's original speed gate.
+  assert not daemon.sm['carControl'].latActive

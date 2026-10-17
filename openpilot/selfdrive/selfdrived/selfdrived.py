@@ -60,6 +60,7 @@ LONGITUDINAL_PERSONALITY_MAP = {v: k for k, v in log.LongitudinalPersonality.sch
 
 ThermalStatus = log.DeviceState.ThermalStatus
 State = log.SelfdriveState.OpenpilotState
+MadsState = custom.ModularAssistiveDrivingSystem.ModularAssistiveDrivingSystemState
 PandaType = log.PandaState.PandaType
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
@@ -892,7 +893,7 @@ class SelfdriveD(CruiseHelper):
       self.engagement_policy = EngagementPolicy()
     decision = self.engagement_policy.update(self, CS, time.monotonic_ns())
     self.mads.longitudinal_failure_isolated = decision.preserve_lateral
-    self.mads.model_lag_recovered = decision.recovered_model_lag and self.engagement_policy.lateral_available
+    self.mads.model_lag_recovered = decision.recovered_model_lag_lateral
     self.enabled, self.active = self.state_machine.update(
       LongitudinalEvents(self.events, decision.preserve_longitudinal,
                          recovered_model_lag=decision.recovered_model_lag),
@@ -925,16 +926,28 @@ class SelfdriveD(CruiseHelper):
     if self.state_machine.state == State.softDisabling:
       timers.append(self.state_machine.soft_disable_timer)
     mads_machine = getattr(self.mads, 'state_machine', None)
-    if mads_machine is not None and mads_machine.state == custom.ModularAssistiveDrivingSystem.ModularAssistiveDrivingSystemState.softDisabling:
+    mads_state = mads_machine.state if mads_machine is not None else None
+    if mads_state == MadsState.softDisabling:
       timers.append(mads_machine.soft_disable_timer)
     callback_args = [self.CP, CS, self.sm, self.is_metric, min(timers, default=0), pers]
 
-    alerts = self.events.create_alerts(self.state_machine.current_alert_types, callback_args)
-    alerts_sp = self.events_sp.create_alerts(self.state_machine.current_alert_types, callback_args)
+    alert_types = self.state_machine.current_alert_types.copy()
+    if mads_state == MadsState.softDisabling and ET.SOFT_DISABLE not in alert_types:
+      alert_types.append(ET.SOFT_DISABLE)
+    alerts = self.events.create_alerts(alert_types, callback_args)
+    alerts_sp = self.events_sp.create_alerts(alert_types, callback_args)
     model_recovered = getattr(self, '_model_lag_recovered', False)
-    if mads_machine is not None and mads_machine.state == custom.ModularAssistiveDrivingSystem.ModularAssistiveDrivingSystemState.softDisabling:
+    lateral_takeover = ''
+    if (model_recovered and self.enabled and self.state_machine.state != State.softDisabling
+        and getattr(self.mads, 'enabled_toggle', False) and not getattr(self.mads, 'model_lag_recovered', False)):
+      if mads_state == MadsState.softDisabling:
+        lateral_takeover = 'pending'
+      elif mads_state == MadsState.disabled:
+        lateral_takeover = 'disabled'
+    if mads_state == MadsState.softDisabling:
       model_recovered = model_recovered and getattr(self.mads, 'model_lag_recovered', False)
-    alerts = merge_perception_alerts(alerts, self.events, self.AM, self.sm.frame, recovered_model_lag=model_recovered)
+    alerts = merge_perception_alerts(alerts, self.events, self.AM, self.sm.frame,
+                                     recovered_model_lag=model_recovered, lateral_takeover=lateral_takeover)
 
     takeover_alert = self.engagement_policy.alert(self, CS) if hasattr(self, 'engagement_policy') else None
     if takeover_alert is not None:
