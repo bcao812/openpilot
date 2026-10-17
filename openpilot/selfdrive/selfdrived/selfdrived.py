@@ -937,12 +937,20 @@ class SelfdriveD(CruiseHelper):
     alerts = self.events.create_alerts(alert_types, callback_args)
     alerts_sp = self.events_sp.create_alerts(alert_types, callback_args)
     model_recovered = getattr(self, '_model_lag_recovered', False)
+    # Disabled alone does not prove this fault withdrew steering: the driver
+    # may have been using longitudinal control without MADS from the start.
+    if (not self.enabled or not self.events.has(EventName.modeldLagging)
+        or not getattr(self.mads, 'enabled_toggle', False)
+        or mads_state not in (MadsState.softDisabling, MadsState.disabled)):
+      self._model_lag_lateral_exit = False
+    elif mads_state == MadsState.softDisabling and not getattr(self.mads, 'model_lag_recovered', False):
+      self._model_lag_lateral_exit = True
     lateral_takeover = ''
     if (model_recovered and self.enabled and self.state_machine.state != State.softDisabling
         and getattr(self.mads, 'enabled_toggle', False) and not getattr(self.mads, 'model_lag_recovered', False)):
       if mads_state == MadsState.softDisabling:
         lateral_takeover = 'pending'
-      elif mads_state == MadsState.disabled:
+      elif mads_state == MadsState.disabled and getattr(self, '_model_lag_lateral_exit', False):
         lateral_takeover = 'disabled'
     if mads_state == MadsState.softDisabling:
       model_recovered = model_recovered and getattr(self.mads, 'model_lag_recovered', False)

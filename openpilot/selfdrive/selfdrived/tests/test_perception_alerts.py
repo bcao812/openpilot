@@ -222,9 +222,16 @@ def test_actual_controlsd_uses_the_recovered_state_for_long_active_and_force_dec
   assert controls.control.pm.messages['controlsState'].controlsState.forceDecel == location_fault
 
 
-@pytest.mark.parametrize('held,steer_at_standstill,lateral_kept', [(True, False, True), (True, True, False), (False, False, False)])
-def test_real_recovery_policy_state_and_alert_chain_when_lateral_output_is_inactive(held, steer_at_standstill, lateral_kept):
+@pytest.mark.parametrize('held,steer_at_standstill,initial_mads_state,lateral_kept', [
+  (True, False, MadsState.enabled, True), (True, True, MadsState.enabled, False), (False, False, MadsState.enabled, False),
+  (False, False, MadsState.disabled, False), (False, False, MadsState.paused, False),
+])
+def test_real_recovery_policy_state_and_alert_chain_when_lateral_output_is_inactive(held, steer_at_standstill, initial_mads_state, lateral_kept):
   daemon, CS = make_daemon(held=held)
+  was_active = initial_mads_state == MadsState.enabled
+  daemon.mads.state_machine.state = initial_mads_state
+  daemon.mads.active = was_active
+  daemon.mads.enabled = initial_mads_state != MadsState.disabled
   daemon.CP.steerAtStandstill = steer_at_standstill
   daemon.sm['carControl'].latActive = False
   daemon.events.add(EventName.modeldLagging)
@@ -264,7 +271,7 @@ def test_real_recovery_policy_state_and_alert_chain_when_lateral_output_is_inact
       if lateral_kept:
         assert daemon.mads.active and daemon.mads.state_machine.state == MadsState.enabled
         assert daemon.AM.current_alert.alert_text_2 == 'Inputs recovered; monitoring frame drops'
-      else:
+      elif was_active:
         assert daemon.AM.current_alert.alert_text_1 == 'Steer Manually'
         assert daemon.AM.current_alert.alert_status == log.SelfdriveState.AlertStatus.critical
         if daemon.mads.state_machine.state == MadsState.softDisabling:
@@ -272,8 +279,36 @@ def test_real_recovery_policy_state_and_alert_chain_when_lateral_output_is_inact
           assert daemon.AM.current_alert.alert_text_2 == 'Steering assist ending; speed control active'
         else:
           assert daemon.AM.current_alert.alert_text_2 == 'Steering assist unavailable; speed control active'
+      else:
+        assert daemon.mads.state_machine.state == initial_mads_state
+        assert daemon.AM.current_alert.alert_text_2 == 'Inputs recovered; monitoring frame drops'
+        assert daemon.AM.current_alert.alert_status == log.SelfdriveState.AlertStatus.normal
+        assert daemon.AM.current_alert.audible_alert == log.SelfdriveState.AudibleAlert.none
   assert first_recovery is not None and 100 <= first_recovery < 300
   assert daemon.enabled and daemon.mads.active == lateral_kept
-  assert lateral_kept or saw_lateral_pending
+  assert not was_active or lateral_kept or saw_lateral_pending
   # Recovery changes the armed state, never the actuator's original speed gate.
   assert not daemon.sm['carControl'].latActive
+
+
+@pytest.mark.parametrize('cleared_state', [MadsState.enabled, MadsState.paused])
+def test_lateral_takeover_history_clears_after_recovery_or_manual_pause(cleared_state):
+  daemon, CS = qualified_daemon()
+  daemon._model_lag_recovered = True
+  daemon.AM = AlertManager()
+  daemon.personality = log.LongitudinalPersonality.standard
+  daemon.is_metric = True
+  daemon.mads.model_lag_recovered = False
+  daemon.mads.state_machine.state = MadsState.softDisabling
+  daemon.sm.frame = 1
+  SelfdriveD.update_alerts(daemon, CS)
+  assert daemon._model_lag_lateral_exit
+  daemon.mads.state_machine.state = cleared_state
+  daemon.sm.frame = 2
+  SelfdriveD.update_alerts(daemon, CS)
+  assert not daemon._model_lag_lateral_exit
+  daemon.mads.state_machine.state = MadsState.disabled
+  daemon.sm.frame = 3
+  SelfdriveD.update_alerts(daemon, CS)
+  assert daemon.AM.current_alert.alert_text_1 != 'Steer Manually'
+  assert daemon.AM.current_alert.audible_alert == log.SelfdriveState.AudibleAlert.none
