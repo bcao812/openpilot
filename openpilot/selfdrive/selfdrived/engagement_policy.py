@@ -15,6 +15,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mode import LongitudinalMode,
 from openpilot.selfdrive.controls.lib.longitudinal_continuation import UNSTABLE_DISABLE_NS
 from openpilot.selfdrive.controls.lib.motion_supervisor import MOTION_INTENT_VERSION, StopReason
 from openpilot.selfdrive.selfdrived.events import ET, Alert, AlertSize, AlertStatus, AudibleAlert, Priority, VisualAlert
+from openpilot.selfdrive.selfdrived.model_lag_recovery import ModelLagRecovery
 
 
 EventName = log.OnroadEvent.EventName
@@ -52,14 +53,18 @@ def other_disable(events, allowed=()):
 
 class LongitudinalEvents:
   """A read-only FSM view. Original types remain available to MADS and logging."""
-  def __init__(self, events, isolated_eps=False):
+  def __init__(self, events, isolated_eps=False, *, recovered_model_lag=False):
     self.events = events
     self.isolated_eps = isolated_eps is True
+    self.recovered_model_lag = recovered_model_lag is True
 
   def contains(self, event_type):
-    if self.isolated_eps and event_type in (ET.IMMEDIATE_DISABLE, ET.SOFT_DISABLE):
+    if ((self.isolated_eps and event_type in (ET.IMMEDIATE_DISABLE, ET.SOFT_DISABLE))
+        or (self.recovered_model_lag and event_type == ET.SOFT_DISABLE)):
       mapping = self.events.get_events_mapping()
-      return any(name not in EPS_EVENTS and event_type in mapping.get(name, {}) for name in self.events.names)
+      return any(event_type in mapping.get(name, {}) for name in self.events.names
+                 if not (self.isolated_eps and name in EPS_EVENTS)
+                 and not (self.recovered_model_lag and event_type == ET.SOFT_DISABLE and name == EventName.modeldLagging))
     return self.events.contains(event_type)
 
 
@@ -69,6 +74,7 @@ class EngagementDecision:
   preserve_longitudinal: bool = False
   hold_for_takeover: bool = False
   hold_remaining_ns: int = 0
+  recovered_model_lag: bool = False
 
 
 class StoppedHandoff:
@@ -155,6 +161,7 @@ class StoppedHandoff:
 class EngagementPolicy:
   def __init__(self):
     self.handoff = StoppedHandoff()
+    self.model_lag_recovery = ModelLagRecovery()
     self.last_now_ns = 0
     self.speed_takeover = False
     self.steering_takeover = False
@@ -250,6 +257,7 @@ class EngagementPolicy:
 
   def update(self, daemon, CS, now_ns):
     preserve_lateral = preserve_longitudinal = hold_valid = False
+    recovered_model_lag = False
     self.lateral_available = False
     self.longitudinal_available = False
     events = daemon.events
@@ -261,6 +269,9 @@ class EngagementPolicy:
       self.last_now_ns = now_ns
     try:
       supported = resolve_longitudinal_mode(daemon.CP, daemon.CP_SP) == LongitudinalMode.UNIFIED
+      model_recovered = self.model_lag_recovery.update(
+        daemon.sm, now_ns, lagging=supported and events.has(EventName.modeldLagging),
+      )
       execution = supported and clock_valid and self._execution_healthy(daemon, CS, now_ns)
       mads_enabled = daemon.mads.enabled_toggle is True and bool(daemon.CP.alternativeExperience & MADS_FLAG)
       if execution:
@@ -281,10 +292,17 @@ class EngagementPolicy:
           and (CS.steerFaultPermanent or CS.steerFaultTemporary)
           and self.longitudinal_available
         )
+        # Historical drop percentage is diagnostic once current source and
+        # consumer health are confirmed. Recover an existing soft-disable too;
+        # staying in that state would continue forceDecel after the input heals.
+        recovered_model_lag = bool(
+          model_recovered and self.longitudinal_available
+          and daemon.state_machine.state in (State.enabled, State.softDisabling, State.overriding)
+        )
         hold_valid = bool(self._holding(daemon, CS) and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=False))
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
       # Unknown inputs may not authorize an exception to the existing exits.
-      preserve_lateral = preserve_longitudinal = hold_valid = False
+      preserve_lateral = preserve_longitudinal = hold_valid = recovered_model_lag = False
       self.lateral_available = False
       self.longitudinal_available = False
 
@@ -301,7 +319,8 @@ class EngagementPolicy:
     if was_holding and not hold_active:
       self.hold_ended_until_ns = now_ns + HOLD_EXTRA_NS
     self.decision = EngagementDecision(preserve_lateral, preserve_longitudinal, hold_active,
-                                       max(0, self.handoff.extended_deadline_ns - now_ns) if hold_active else 0)
+                                       max(0, self.handoff.extended_deadline_ns - now_ns) if hold_active else 0,
+                                       recovered_model_lag)
     return self.decision
 
   def observe_states(self, daemon, CS):

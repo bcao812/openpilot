@@ -714,7 +714,9 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
 
   # Every frame from the camera should be processed by the model. If modeld
   # is not processing frames fast enough they have to be dropped. This alert is
-  # thrown when over 20% of frames are dropped.
+  # generated above 1% in selfdrived (10-second filtered history). A separately
+  # qualified recovery may remove its soft-disable effect for an active axis;
+  # the diagnostic event and initial engagement gate remain available.
   EventName.modeldLagging: {
     ET.SOFT_DISABLE: soft_disable_alert("Driving Model Lagging"),
     ET.NO_ENTRY: NoEntryAlert(tr_noop("Driving Model Lagging")),

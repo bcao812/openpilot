@@ -36,6 +36,7 @@ from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.longitudinal_observation import SelfdriveObservation
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
+from openpilot.selfdrive.selfdrived.perception_alerts import merge_perception_alerts
 
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware import HARDWARE
@@ -891,8 +892,10 @@ class SelfdriveD(CruiseHelper):
       self.engagement_policy = EngagementPolicy()
     decision = self.engagement_policy.update(self, CS, time.monotonic_ns())
     self.mads.longitudinal_failure_isolated = decision.preserve_lateral
+    self.mads.model_lag_recovered = decision.recovered_model_lag and self.engagement_policy.lateral_available
     self.enabled, self.active = self.state_machine.update(
-      LongitudinalEvents(self.events, decision.preserve_longitudinal),
+      LongitudinalEvents(self.events, decision.preserve_longitudinal,
+                         recovered_model_lag=decision.recovered_model_lag),
       soft_disable_remaining_ns=getattr(self, '_longitudinal_soft_disable_remaining_ns', None),
       hold_for_takeover=decision.hold_for_takeover,
     )
@@ -901,6 +904,12 @@ class SelfdriveD(CruiseHelper):
       cloudlog.event('controlTakeover', lateralRetained=signature[0], longitudinalRetained=signature[1],
                      stoppedHandoff=signature[2], holdRemainingNs=decision.hold_remaining_ns)
     self._takeover_signature = signature
+    if decision.recovered_model_lag != getattr(self, '_model_lag_recovered', False):
+      motion = self.sm['controlsState'].motionState
+      cloudlog.event('modelLagRecovery', recovered=decision.recovered_model_lag,
+                     frameId=int(self.sm['modelV2'].frameId), modelMonoTime=int(self.sm.logMonoTime['modelV2']),
+                     consumedModelMonoTime=int(motion.modelMonoTime), consumedPlanMonoTime=int(motion.planMonoTime))
+    self._model_lag_recovered = decision.recovered_model_lag
 
   def update_alerts(self, CS):
     clear_event_types = set()
@@ -922,6 +931,10 @@ class SelfdriveD(CruiseHelper):
 
     alerts = self.events.create_alerts(self.state_machine.current_alert_types, callback_args)
     alerts_sp = self.events_sp.create_alerts(self.state_machine.current_alert_types, callback_args)
+    model_recovered = getattr(self, '_model_lag_recovered', False)
+    if mads_machine is not None and mads_machine.state == custom.ModularAssistiveDrivingSystem.ModularAssistiveDrivingSystemState.softDisabling:
+      model_recovered = model_recovered and getattr(self.mads, 'model_lag_recovered', False)
+    alerts = merge_perception_alerts(alerts, self.events, self.AM, self.sm.frame, recovered_model_lag=model_recovered)
 
     takeover_alert = self.engagement_policy.alert(self, CS) if hasattr(self, 'engagement_policy') else None
     if takeover_alert is not None:

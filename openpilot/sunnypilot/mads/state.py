@@ -39,13 +39,15 @@ class StateMachine:
       self.ss_state_machine.current_alert_types.append(alert_type)
 
   def check_contains(self, event_type: str) -> bool:
-    if (event_type == ET.SOFT_DISABLE and self.state in ACTIVE_STATES
-        and getattr(self.mads, 'longitudinal_failure_isolated', False) is True):
+    isolated_longitudinal = getattr(self.mads, 'longitudinal_failure_isolated', False) is True
+    recovered_model_lag = getattr(self.mads, 'model_lag_recovered', False) is True
+    if event_type == ET.SOFT_DISABLE and self.state in ACTIVE_STATES and (isolated_longitudinal or recovered_model_lag):
       # Preserve established lateral authority only. Keep the original event,
       # including its NO_ENTRY and alert types, for the other consumers.
       mapping = self._events.get_events_mapping()
       return (any(event_type in mapping.get(event, {}) for event in self._events.names
-                  if event != EventName.longitudinalControlUnavailable)
+                  if not (isolated_longitudinal and event == EventName.longitudinalControlUnavailable)
+                  and not (recovered_model_lag and event == EventName.modeldLagging))
               or self._events_sp.contains(event_type))
     return bool(self._events.contains(event_type) or self._events_sp.contains(event_type))
 
