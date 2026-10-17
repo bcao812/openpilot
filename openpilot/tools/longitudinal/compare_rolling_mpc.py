@@ -117,7 +117,7 @@ class Series:
   def __init__(self, rows):
     self.rows = rows
     self.times = [row['mono_ns'] for row in rows]
-    if any(not timestamp(stamp) for stamp in self.times) or any(b <= a for a, b in zip(self.times, self.times[1:])):
+    if any(not timestamp(stamp) for stamp in self.times) or any(b <= a for a, b in zip(self.times, self.times[1:], strict=False)):
       raise ValueError('Series timestamps must be unique, increasing UInt64 values')
     self.by_time = dict(zip(self.times, rows, strict=True))
 
