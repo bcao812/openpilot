@@ -56,6 +56,7 @@ class ModelLagRecovery:
     self.reset()
 
   def reset(self):
+    self._episode_active = False
     self.recovered = False
     self.clean_since_ns = 0
     self.good_frames = 0
@@ -81,8 +82,12 @@ class ModelLagRecovery:
 
   def update(self, sm, now_ns, *, lagging: bool) -> bool:
     if lagging is not True:
-      self.reset()
+      # Clear evidence when a warning ends, without rebuilding empty histories
+      # on every normal 100 Hz tick. Even an invalid first tick starts an episode.
+      if self._episode_active:
+        self.reset()
       return False
+    self._episode_active = True
     if not valid_timestamp(now_ns):
       return self._fault(self._last_now_ns)
     previous_ns = self._last_now_ns

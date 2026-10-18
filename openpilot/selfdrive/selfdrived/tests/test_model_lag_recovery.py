@@ -337,9 +337,25 @@ def test_force_decel_and_valid_stop_phases_can_prove_recovery(phase):
   assert states[-1]
 
 
-def test_a_new_episode_cannot_inherit_recovery_from_a_previous_warning():
+@pytest.mark.parametrize('idle_ticks', [1, 20, 200])
+def test_a_new_episode_cannot_inherit_recovery_from_a_previous_warning(idle_ticks):
   observer, sm, now_ns = recovered()
-  assert not observer.update(sm, now_ns + 10 * MS, lagging=False)
-  assert not observer.recovered and observer.good_frames == 0
-  assert not observer.update(sm, now_ns + 20 * MS, lagging=True)
+  for _ in range(idle_ticks):
+    now_ns += 10 * MS
+    assert not observer.update(sm, now_ns, lagging=False)
+    assert not observer.recovered and observer.good_frames == 0
+  assert not observer.update(sm, now_ns + 10 * MS, lagging=True)
   assert observer.clean_since_ns == 0
+
+
+@pytest.mark.parametrize('bad_clock', [None, True, float(NOW), -1])
+def test_invalid_first_warning_can_end_and_start_a_fresh_recovery(bad_clock):
+  observer, sm = ModelLagRecovery(), Streams()
+  assert not observer.update(sm, bad_clock, lagging=True)
+  # With no warning, neither input health nor a clock is recovery evidence.
+  for _ in range(20):
+    assert not observer.update(None, None, lagging=False)
+    assert not observer.recovered and observer.good_frames == 0
+  assert not observer.update(sm, NOW, lagging=True)
+  _, states = advance(observer, sm, NOW)
+  assert states[-1]
