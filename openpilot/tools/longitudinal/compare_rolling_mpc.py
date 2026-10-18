@@ -57,6 +57,7 @@ class Arm:
   comfort_delta_m: float = 0.0
   history_scale: float = 1.0
   jerk_scale: float = 1.0
+  guarded_jerk: bool = False
 
   def __post_init__(self):
     if not math.isfinite(self.comfort_delta_m) or not -3.0 <= self.comfort_delta_m <= 0.0:
@@ -65,6 +66,8 @@ class Arm:
       raise ValueError('Diagnostic history scale must be between 0 and 1')
     if isinstance(self.jerk_scale, bool) or not math.isfinite(self.jerk_scale) or not 1.0 <= self.jerk_scale <= 8.0:
       raise ValueError('Diagnostic jerk scale must be between 1 and 8')
+    if type(self.guarded_jerk) is not bool:
+      raise ValueError('Diagnostic jerk guard must be Boolean')
 
 
 ARMS = {'baseline': Arm('baseline'), 'geometry': Arm('geometry', -1.0), 'continuity': Arm('continuity', history_scale=0.5)}
@@ -406,6 +409,45 @@ def history_scale(urgency, minimum_scale, arm):
   return (1.0 - (1.0 - minimum_scale) * urgency) * arm.history_scale
 
 
+def current_braking_jerk_scale(inputs, rt, maximum):
+  """Exploratory current-input gate; not a calibrated braking guarantee.
+
+  No elapsed-time latch, previous object or waiting period is introduced.
+  A brake-only cut-in, expired role, independent strong brake or current
+  relative braking demand withdraws this objective change immediately.
+  Resulting trajectories must still be evaluated for their risk/physical gap.
+  """
+  if not all(finite_number(v) for v in (inputs.speed, inputs.delay, inputs.ceiling, maximum)):
+    return 1.0
+  if inputs.speed < 3.0 or not 0.0 <= inputs.delay <= 1.0 or inputs.ceiling < -0.3:
+    return 1.0
+  leads = tuple(rt.lm.control_leads(inputs.radar))
+  if not leads:
+    return 1.0
+  t_follow = rt.lm.get_T_FOLLOW(inputs.personality, v_ego=inputs.speed)
+  ego_distance = rt.lm.get_safe_obstacle_distance(inputs.speed, t_follow)
+  gain, closing_present = 1.0, False
+  for lead in leads:
+    if (not rt.lm.qualified_lead(lead, 'follow', .95, now_ns=inputs.producer_ns)
+        or not all(finite_number(v) for v in (lead.dRel, lead.vRel, lead.vLead, lead.aLeadK))
+        or lead.dRel <= 0 or lead.vLead < 0 or abs(lead.vLead - inputs.speed - lead.vRel) > 1.0):
+      return 1.0
+    closing = max(0.0, -lead.vRel)
+    closing_present |= closing >= .5
+    available = lead.dRel - closing * (inputs.delay + rt.lp.DT_MDL)
+    reserve = available - rt.lm.STOP_DISTANCE
+    if reserve <= 0.0:
+      return 1.0
+    required = max(0.0, -lead.aLeadK) + closing ** 2 / (2.0 * reserve)
+    risk_margin = available + rt.lm.get_stopped_equivalence_factor(lead.vLead) - rt.lm.LEAD_DANGER_FACTOR * ego_distance
+    # Explicit diagnostic scales, selected to test the proposal rather than
+    # installed as production constants. Both factors saturate toward the
+    # unmodified cost as current braking urgency increases.
+    gain = min(gain, max(0.0, min(1.0, risk_margin / 10.0)),
+               max(0.0, min(1.0, (1.5 - required) / 1.0)))
+  return 1.0 + (maximum - 1.0) * gain if closing_present else 1.0
+
+
 def physical_gap_at(times, trajectory, states, jerks, horizon):
   """Linear physical lead prediction minus exact constant-jerk ego position."""
   if not times[0] <= horizon <= times[-1]:
@@ -486,13 +528,15 @@ class NativeArm:
     urgency = max(braking_urgency, approach_urgency)
     scale = history_scale(urgency, rt.lp.LEAD_BRAKING_MIN_CHANGE_SCALE, self.arm)
     reference = arm_reference(inputs.reference, self.arm)
+    jerk_scale = (current_braking_jerk_scale(inputs, rt, self.arm.jerk_scale)
+                  if self.arm.guarded_jerk else self.arm.jerk_scale)
     mpc.set_weights(prepared, personality=inputs.personality, a_change_scale=scale)
     # This opt-in experiment changes the native motion's jerk objective, not
     # the published command after solving. Current obstacles, their original
     # qualification/expiry and all physical/risk constraints remain installed.
-    if self.arm.jerk_scale != 1.0:
+    if jerk_scale != 1.0:
       weights = mpc._cost_weights.copy()
-      weights[5] *= self.arm.jerk_scale
+      weights[5] *= jerk_scale
       mpc.set_cost_weights(weights, mpc._constraint_cost_weights.copy())
     mpc.set_cur_state(inputs.speed, inputs.accel)
     self.problem = None
@@ -508,7 +552,8 @@ class NativeArm:
               'previous_source_age_s': None if previous_epoch is None else (inputs.epoch_ns - previous_epoch) / NS,
               'previous_producer_age_s': None if previous_producer is None else (inputs.producer_ns - previous_producer) / NS,
               'previous_projected_request': prior_request, 'braking_urgency': braking_urgency, 'approach_urgency': approach_urgency,
-              'a_change_scale': scale, 'jerk_scale': self.arm.jerk_scale,
+              'a_change_scale': scale, 'jerk_scale': jerk_scale,
+              'guarded_jerk': self.arm.guarded_jerk,
               'comfort_raw_m': inputs.reference.comfort_stop_distance,
               'comfort_candidate_m': reference.comfort_stop_distance,
               'physical_problem_sha256': value_hash(invariant_fields(self.problem, rt)) if self.problem else None}
@@ -684,7 +729,8 @@ def run(args):
     raise ValueError('Select a finite, positive window no longer than 180 seconds and a UInt64 mark')
   arm_choices = {**ARMS, 'geometry': Arm('geometry', args.geometry_delta),
                  'continuity': Arm('continuity', history_scale=args.continuity_scale),
-                 'jerk': Arm('jerk', jerk_scale=getattr(args, 'jerk_scale', 4.0))}
+                 'jerk': Arm('jerk', jerk_scale=getattr(args, 'jerk_scale', 4.0)),
+                 'guarded_jerk': Arm('guarded_jerk', jerk_scale=getattr(args, 'jerk_scale', 4.0), guarded_jerk=True)}
   names = args.arms.split(',')
   if not names or names[0] != 'baseline' or len(set(names)) != len(names) or any(name not in arm_choices for name in names):
     raise ValueError('Arms must start with baseline and contain unique supported names')

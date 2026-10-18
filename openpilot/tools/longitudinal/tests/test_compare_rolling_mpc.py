@@ -150,6 +150,33 @@ def test_braking_jerk_experiment_runs_the_native_motion_with_current_risk_unchan
   assert candidate.mpc._source_leads == ()
 
 
+def test_current_jerk_guard_is_withdrawn_by_current_lead_risk_or_role(runtime):
+  rt = runtime
+  inputs = native_inputs(rt)
+  radar = inputs.radar.as_builder()
+  radar.leadOne.dRel = 45.0
+  radar.leadOne.vLead = 3.0
+  radar.leadOne.vRel = -2.0
+  inputs.radar = inputs.original_radar = radar.as_reader()
+  assert replay.current_braking_jerk_scale(inputs, rt, 4.0) > 1.0
+  radar.leadOne.aLeadK = -3.0
+  inputs.radar = radar.as_reader()
+  assert replay.current_braking_jerk_scale(inputs, rt, 4.0) == 1.0
+  radar.leadOne.aLeadK = 0.0
+  radar.leadOne.dRel = 5.0
+  inputs.radar = radar.as_reader()
+  assert replay.current_braking_jerk_scale(inputs, rt, 4.0) == 1.0
+  radar.leadOne.present = False
+  inputs.radar = radar.as_reader()
+  assert replay.current_braking_jerk_scale(inputs, rt, 4.0) == 1.0
+
+
+def test_current_jerk_guard_does_not_override_an_independent_braking_constraint(runtime):
+  inputs = native_inputs(runtime)
+  inputs.ceiling = -1.0
+  assert replay.current_braking_jerk_scale(inputs, runtime, 4.0) == 1.0
+
+
 def test_native_history_is_marked_after_solve_and_retires_removed_support(runtime):
   runner = replay.NativeArm(replay.ARMS['baseline'], runtime)
   first, _ = runner.solve(native_inputs(runtime))
