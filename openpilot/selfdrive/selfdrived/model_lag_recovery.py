@@ -53,22 +53,26 @@ def fresh(sm, service, now_ns, lease_ns):
 
 class ModelLagRecovery:
   def __init__(self):
+    self._service_times = {}
+    self._models = deque(maxlen=IDENTITY_HISTORY_SIZE)
+    self._plans = deque(maxlen=IDENTITY_HISTORY_SIZE)
     self.reset()
 
   def reset(self):
-    self._episode_active = False
     self.recovered = False
     self.clean_since_ns = 0
     self.good_frames = 0
     self._last_now_ns = 0
     self._fault_ns = 0
-    self._service_times = {}
+    self._service_times.clear()
     self._last_model = None
     self._last_drop_perc = 0.0
     self._last_plan = None
     self._last_consumed = None
-    self._models = deque(maxlen=IDENTITY_HISTORY_SIZE)
-    self._plans = deque(maxlen=IDENTITY_HISTORY_SIZE)
+    # Normal operation resets at 100 Hz. Empty the bounded identity histories
+    # immediately while reusing their containers; no evidence survives reset.
+    self._models.clear()
+    self._plans.clear()
 
   def _fault(self, now_ns):
     self.recovered = False
@@ -82,12 +86,8 @@ class ModelLagRecovery:
 
   def update(self, sm, now_ns, *, lagging: bool) -> bool:
     if lagging is not True:
-      # Clear evidence when a warning ends, without rebuilding empty histories
-      # on every normal 100 Hz tick. Even an invalid first tick starts an episode.
-      if self._episode_active:
-        self.reset()
+      self.reset()
       return False
-    self._episode_active = True
     if not valid_timestamp(now_ns):
       return self._fault(self._last_now_ns)
     previous_ns = self._last_now_ns
