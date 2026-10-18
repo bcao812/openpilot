@@ -15,6 +15,9 @@ this version therefore makes no speculative stationary-object class rejection.
 from dataclasses import dataclass, field, replace
 import math
 from numbers import Real
+
+from capnp.lib.capnp import _DynamicStructBuilder, _DynamicStructReader
+
 from openpilot.selfdrive.car.honda_radar_relevance import loss_relevant
 from openpilot.selfdrive.car.honda_radar_native import (
   MAX_PAIR_NS as NATIVE_MAX_PAIR_NS, MIN_PAIRS as NATIVE_MIN_PAIRS,
@@ -58,14 +61,29 @@ CUT_IN_MAX_POSITION_VARIANCE = .64
 CUT_IN_WIDTH_STEP = .35
 CUT_IN_MIN_LATERAL_PROGRESS = .02
 CUT_IN_REASON = 'radarBodyCutIn'
+# Dynamic cereal fields can call their native handler directly. Keep static
+# properties/methods and every other object on the ordinary lookup path.
+_CEREAL_READERS = {cls: (cls.__getattr__, frozenset(dir(cls))) for cls in (_DynamicStructBuilder, _DynamicStructReader)}
 
 
 def _read(obj, name, default=None):
-  return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
+  if isinstance(obj, dict):
+    return obj.get(name, default)
+  native = _CEREAL_READERS.get(type(obj))
+  if native is not None and type(name) is str and name not in native[1]:
+    try:
+      return native[0](obj, name)
+    except AttributeError:
+      pass
+  return getattr(obj, name, default)
 
 
 def _finite(*values):
-  return all(isinstance(v, Real) and not isinstance(v, bool) and math.isfinite(v) for v in values)
+  # Cereal produces exact builtins. Retain Real/subclass handling, boolean
+  # rejection and conversion errors for other callers without ABC checks on
+  # each ordinary scalar in the per-frame geometry/qualification loops.
+  return all((type(v) is float or type(v) is int or isinstance(v, Real) and not isinstance(v, bool))
+             and math.isfinite(v) for v in values)
 
 
 def _integer(value):
