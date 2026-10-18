@@ -56,12 +56,15 @@ class Arm:
   name: str
   comfort_delta_m: float = 0.0
   history_scale: float = 1.0
+  jerk_scale: float = 1.0
 
   def __post_init__(self):
     if not math.isfinite(self.comfort_delta_m) or not -3.0 <= self.comfort_delta_m <= 0.0:
       raise ValueError('Diagnostic comfort delta must be between -3 and 0 m')
     if not math.isfinite(self.history_scale) or not 0.0 <= self.history_scale <= 1.0:
       raise ValueError('Diagnostic history scale must be between 0 and 1')
+    if isinstance(self.jerk_scale, bool) or not math.isfinite(self.jerk_scale) or not 1.0 <= self.jerk_scale <= 8.0:
+      raise ValueError('Diagnostic jerk scale must be between 1 and 8')
 
 
 ARMS = {'baseline': Arm('baseline'), 'geometry': Arm('geometry', -1.0), 'continuity': Arm('continuity', history_scale=0.5)}
@@ -425,12 +428,16 @@ def installed_problem(mpc, rt):
           't': rt.lm.T_IDXS.copy()}
 
 
-def invariant_fields(problem, rt):
-  """Candidate effects on a_prev/comfort/history weights are the ONLY exclusions."""
+def invariant_fields(problem, rt, *, allow_jerk=False):
+  """Separate declared objective changes from the unchanged physical problem.
+
+  Jerk cost is excluded only when an explicitly selected jerk arm requests it.
+  The default geometry/history comparison keeps its original invariant set.
+  """
   if problem is None:
     return None
   columns = [index for index in range(rt.lm.PARAM_DIM) if index not in (3, rt.lm.COMFORT_STOP_DISTANCE)]
-  weights = [index for index in range(rt.lm.COST_DIM) if index != 4]
+  weights = [index for index in range(rt.lm.COST_DIM) if index != 4 and not (allow_jerk and index == 5)]
   return {**{key: problem[key] for key in ('x0', 'constraint_weights', 'yref', 'bounds', 'general_constraints', 't')},
           'risk_and_physical_params': problem['params'][:, columns], 'nonhistory_weights': problem['weights'][:, weights]}
 
@@ -480,6 +487,13 @@ class NativeArm:
     scale = history_scale(urgency, rt.lp.LEAD_BRAKING_MIN_CHANGE_SCALE, self.arm)
     reference = arm_reference(inputs.reference, self.arm)
     mpc.set_weights(prepared, personality=inputs.personality, a_change_scale=scale)
+    # This opt-in experiment changes the native motion's jerk objective, not
+    # the published command after solving. Current obstacles, their original
+    # qualification/expiry and all physical/risk constraints remain installed.
+    if self.arm.jerk_scale != 1.0:
+      weights = mpc._cost_weights.copy()
+      weights[5] *= self.arm.jerk_scale
+      mpc.set_cost_weights(weights, mpc._constraint_cost_weights.copy())
     mpc.set_cur_state(inputs.speed, inputs.accel)
     self.problem = None
     mpc.update(inputs.radar, personality=inputs.personality, reference=reference,
@@ -494,7 +508,8 @@ class NativeArm:
               'previous_source_age_s': None if previous_epoch is None else (inputs.epoch_ns - previous_epoch) / NS,
               'previous_producer_age_s': None if previous_producer is None else (inputs.producer_ns - previous_producer) / NS,
               'previous_projected_request': prior_request, 'braking_urgency': braking_urgency, 'approach_urgency': approach_urgency,
-              'a_change_scale': scale, 'comfort_raw_m': inputs.reference.comfort_stop_distance,
+              'a_change_scale': scale, 'jerk_scale': self.arm.jerk_scale,
+              'comfort_raw_m': inputs.reference.comfort_stop_distance,
               'comfort_candidate_m': reference.comfort_stop_distance,
               'physical_problem_sha256': value_hash(invariant_fields(self.problem, rt)) if self.problem else None}
     node = {'problem': self.problem, 'input_reference': asdict(reference), 'history': actual_history,
@@ -667,7 +682,9 @@ def run(args):
   if (not math.isfinite(args.start_offset) or not math.isfinite(args.end_offset)
       or not 0 < args.end_offset - args.start_offset <= MAX_WINDOW_S or not timestamp(args.mark_ns)):
     raise ValueError('Select a finite, positive window no longer than 180 seconds and a UInt64 mark')
-  arm_choices = {**ARMS, 'geometry': Arm('geometry', args.geometry_delta), 'continuity': Arm('continuity', history_scale=args.continuity_scale)}
+  arm_choices = {**ARMS, 'geometry': Arm('geometry', args.geometry_delta),
+                 'continuity': Arm('continuity', history_scale=args.continuity_scale),
+                 'jerk': Arm('jerk', jerk_scale=getattr(args, 'jerk_scale', 4.0))}
   names = args.arms.split(',')
   if not names or names[0] != 'baseline' or len(set(names)) != len(names) or any(name not in arm_choices for name in names):
     raise ValueError('Arms must start with baseline and contain unique supported names')
@@ -680,6 +697,7 @@ def run(args):
   source_proof = source_provenance(rt, args.source_binding)
   reference_inputs = ReferenceInputs(rt)
   arms = [arm_choices[name] for name in names]
+  allow_jerk = any(arm.jerk_scale != 1.0 for arm in arms)
   runners = [NativeArm(arm, rt) for arm in arms]
   plans = [row for row in tables['longitudinalPlan'].rows if start_ns <= row['mono_ns'] <= end_ns]
   if not plans or plans[0]['mono_ns'] > start_ns + rt.timing.REFERENCE_MAX_AGE_NS or plans[-1]['mono_ns'] < end_ns - rt.timing.REFERENCE_MAX_AGE_NS:
@@ -703,7 +721,7 @@ def run(args):
           if rejection is not None:
             raise rejection
           result, node = runner.solve(inputs)
-          invariants = invariant_fields(runner.problem, rt)
+          invariants = invariant_fields(runner.problem, rt, allow_jerk=allow_jerk)
           if runner.arm.name == 'baseline':
             baseline_invariants = invariants
             result['invariants_match_baseline'] = True if invariants is not None else None
@@ -729,6 +747,7 @@ def run(args):
   result = {'schema_version': 1, 'status': 'DIAGNOSTIC_COMPLETE', 'source': source_proof, 'inputs': input_proof,
             'mark_ns': args.mark_ns, 'start_offset_s': args.start_offset, 'end_offset_s': args.end_offset,
             'arms': [asdict(arm) for arm in arms], 'plans_in_selected_prefix': len(plans),
+            'jerk_objective_change_allowed': allow_jerk,
             'scope': 'Recorded-state native MPC sensitivity; not planner/CAN/vehicle acceptance',
             'window_clock': 'longitudinalPlan Event mono_ns', 'planned_jerk_clock': 'actual producerMonoTime',
             'history': 'Own accepted native references; reset at every unsupported/rejected frame; no logged aTarget feedback',
@@ -762,6 +781,8 @@ def main():
   parser.add_argument('--arms', default='baseline,geometry,continuity')
   parser.add_argument('--geometry-delta', type=float, default=-1.0, help='Diagnostic comfort-only delta in metres')
   parser.add_argument('--continuity-scale', type=float, default=0.5, help='Diagnostic multiplier of current a_change_scale')
+  parser.add_argument('--jerk-scale', type=float, default=4.0,
+                      help='Opt-in jerk arm multiplier (1..8); production MPC weights are unchanged')
   parser.add_argument('--source-binding', type=Path, help='Explicit host snapshot source/native artifact binding')
   run(parser.parse_args())
 

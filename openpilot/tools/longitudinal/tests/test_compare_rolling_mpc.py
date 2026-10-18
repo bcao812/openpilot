@@ -113,6 +113,43 @@ def test_candidate_fields_and_installed_physical_constraints_are_isolated(runtim
   assert all(abs(runner.previous_request) <= 1.4 for runner in runners.values())
 
 
+@pytest.mark.parametrize('scale', [True, 0.0, 0.99, 8.01, float('nan'), float('inf')])
+def test_jerk_experiment_refuses_unbounded_or_weakening_weights(scale):
+  with pytest.raises(ValueError, match='jerk scale'):
+    replay.Arm('jerk', jerk_scale=scale)
+
+
+def test_braking_jerk_experiment_runs_the_native_motion_with_current_risk_unchanged(runtime):
+  rt = runtime
+  baseline = replay.NativeArm(replay.ARMS['baseline'], rt)
+  candidate = replay.NativeArm(replay.Arm('jerk', jerk_scale=4.0), rt)
+  inputs = native_inputs(rt)
+  # A current newly selected slower lead, with no inherited acceleration
+  # reference. Both arms must solve it; neither edits the finished command.
+  radar = inputs.radar.as_builder()
+  radar.leadOne.dRel = 11.0
+  radar.leadOne.vLead = 3.0
+  radar.leadOne.vRel = -2.0
+  inputs.radar = inputs.original_radar = radar.as_reader()
+  b, _ = baseline.solve(inputs)
+  c, _ = candidate.solve(inputs)
+  assert b['status'] == c['status'] == 'solved'
+  assert not b['history_prepared'] and not c['history_prepared']
+  assert replay.value_hash(replay.invariant_fields(baseline.problem, rt, allow_jerk=True)) == replay.value_hash(
+    replay.invariant_fields(candidate.problem, rt, allow_jerk=True))
+  assert replay.value_hash(replay.invariant_fields(baseline.problem, rt)) != replay.value_hash(
+    replay.invariant_fields(candidate.problem, rt))
+  rt.np.testing.assert_allclose(candidate.problem['weights'][:, 5], baseline.problem['weights'][:, 5] * 4.0)
+  assert abs(candidate.mpc.j_solution[0]) < abs(baseline.mpc.j_solution[0])
+  assert candidate.previous_request == pytest.approx(min(float(candidate.mpc.sample_solution(inputs.action_t)[1]), inputs.ceiling))
+
+  missing = native_inputs(rt, 1, present=False)
+  c2, _ = candidate.solve(missing)
+  assert c2['status'] == 'solved'
+  assert not c2['history_enabled']
+  assert candidate.mpc._source_leads == ()
+
+
 def test_native_history_is_marked_after_solve_and_retires_removed_support(runtime):
   runner = replay.NativeArm(replay.ARMS['baseline'], runtime)
   first, _ = runner.solve(native_inputs(runtime))
