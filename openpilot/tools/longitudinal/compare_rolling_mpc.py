@@ -421,7 +421,7 @@ def current_braking_jerk_scale(inputs, rt, maximum):
     return 1.0
   if inputs.speed < 3.0 or not 0.0 <= inputs.delay <= 1.0 or inputs.ceiling < -0.3:
     return 1.0
-  leads = tuple(rt.lm.control_leads(inputs.radar))
+  leads = tuple(rt.lp.control_leads(inputs.radar))
   if not leads:
     return 1.0
   t_follow = rt.lm.get_T_FOLLOW(inputs.personality, v_ego=inputs.speed)
