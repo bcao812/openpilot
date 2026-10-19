@@ -31,16 +31,16 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import Cru
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.vision_controller import VisionState
 
 
-def make_scc_case(*, target=30.0, initial_accel=0.0, experimental=False, enabled=True):
+def make_scc_case(*, speed=20.0, target=30.0, initial_accel=0.0, experimental=False, enabled=True):
   params = Params()
   # SCC reads its enable switch during construction. Nonblocking fixture writes
   # can miss that read and defer activation until its next parameter refresh.
   params.put_bool('SmartCruiseControlVision', enabled, block=True)
   params.put_bool('DynamicExperimentalControl', False, block=True)
   assert params.get_bool('SmartCruiseControlVision') == enabled
-  planner, _ = make_planner(speed=20.0, initial_accel=initial_accel)
+  planner, _ = make_planner(speed=speed, initial_accel=initial_accel)
   assert planner.scc.vision.adaptive_curve_speed
-  state = make_state(speed=20.0, target=target, experimental=experimental)
+  state = make_state(speed=speed, target=target, experimental=experimental)
   return planner, state
 
 
@@ -97,6 +97,70 @@ def assert_published_arbitration(plan, state, cruise_ceiling, *, curve_ceiling=A
   # their declared rounding directly, without widening a solver tolerance.
   assert plan.reference.constraintAccel == float(np.float32(expected_constraint))
   assert plan.aTarget == float(np.clip(min(plan.reference.accel, plan.reference.constraintAccel), ACCEL_MIN, ACCEL_MAX))
+
+
+def test_low_demand_saturation_does_not_interrupt_low_speed_planner_or_owner_commands():
+  speed = 2.6
+  requests, commands = [], []
+  for saturated in (False, True):
+    params = Params()
+    params.put_bool('SmartCruiseControlVision', True, block=True)
+    params.put_bool('DynamicExperimentalControl', False, block=True)
+    planner, owner = make_planner_owner(speed=speed, initial_accel=.8)
+    state = make_handover_state(speed=speed, target=70. / 3.6)
+    state['carState'].aEgo = .8
+    state['modelV2'].action.desiredAcceleration = 2.4
+    state['modelV2'].action.desiredCurvature = .04 / speed ** 2
+    set_curve(state, .039 / speed ** 2, .006 / speed ** 2)
+    lateral = state['controlsState'].lateralControlState.init('pidState')
+    lateral.active = True
+    arm_requests, arm_commands = [], []
+    for frame in range(50):
+      # The flag appears and clears mid-acceleration, as in M01. Vehicle motion
+      # is fixed in this contract; it does not predict the road launch or gap.
+      lateral.saturated = saturated and 10 <= frame < 30
+      plan, outputs = consume(planner, owner, state, frame)
+      assert plan.solverStatus == 0 and plan.motionIntent.valid
+      assert not planner.scc.vision.is_active
+      arm_requests.append(plan.aTarget)
+      arm_commands.extend(outputs)
+    requests.append(arm_requests)
+    commands.append(arm_commands)
+  np.testing.assert_array_equal(requests[0], requests[1])
+  np.testing.assert_array_equal(commands[0], commands[1])
+  np.testing.assert_array_equal(np.diff(commands[0]) / DT_CTRL, np.diff(commands[1]) / DT_CTRL)
+  assert min(requests[1][10:30]) > .2
+  assert min(commands[1][50:150]) > .2
+
+
+def test_qualified_low_speed_saturation_caps_planner_and_recovers_without_history_reset():
+  speed = 3.
+  planner, state = make_scc_case(speed=speed, initial_accel=.8)
+  state['carState'].aEgo = .8
+  set_curve(state, .1 / speed ** 2, .1 / speed ** 2)
+  lateral = state['controlsState'].lateralControlState.init('pidState')
+  lateral.active = lateral.saturated = True
+  previous, requests = .8, []
+  for frame in range(30):
+    # The requested turn initially exceeds the achieved response. Later it
+    # clears while the diagnostic remains saturated; no curvature state is patched.
+    state['modelV2'].action.desiredCurvature = (1.2 if frame < 10 else .04) / speed ** 2
+    plan = step(planner, state, frame)
+    previous = p_cruise_step(planner, state, previous)
+    assert planner.reference_planner.cruise_response._previous_accel == previous
+    if frame < 10:
+      assert planner.scc.vision.is_active and planner.scc.vision.steering_limited
+      assert planner.scc.vision.output_a_target == 0.
+      assert plan.reference.constraintAccel <= 0.
+      assert plan.aTarget <= 0.
+    elif frame < 19:
+      assert planner.scc.vision.is_active and not planner.scc.vision.steering_limited
+      assert planner.scc.vision.output_a_target == .5
+      assert plan.reference.constraintAccel <= .5
+    else:
+      assert not planner.scc.vision.is_active
+    requests.append(plan.aTarget)
+  assert requests[-1] > .5
 
 
 def test_real_scc_cycle_and_reentry_keep_continuous_p_response_history():

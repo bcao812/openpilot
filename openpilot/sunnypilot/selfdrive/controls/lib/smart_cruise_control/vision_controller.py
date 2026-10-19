@@ -29,6 +29,12 @@ _FINISH_LAT_ACC_TH = 1.1  # Lat Acc threshold to trigger the end of the turn cyc
 
 _A_LAT_REG_MAX = 2.  # Automatic curve comfort target, not a measured tire/steering limit.
 
+# Low-speed angle tracking can saturate with negligible lateral demand. Match
+# the steering alert's 1 m/s^2 demand scale before that diagnostic limits speed;
+# a small demand hysteresis avoids toggling the zero-acceleration cap near it.
+_STEERING_LIMIT_LAT_ACC = 1.0
+_STEERING_LIMIT_RELEASE_LAT_ACC = 0.8
+
 _NO_OVERSHOOT_TIME_HORIZON = 4.  # s. Time to use for velocity desired based on a_target when not overshooting.
 
 # Lookup table for the minimum smooth deceleration during the ENTERING state
@@ -93,7 +99,7 @@ class SmartCruiseControlVision:
             or not (np.isfinite(self.v_target) or self.v_target == float('inf') and self.max_pred_lat_acc == 0.)):
           return float('nan')
         # A pedal release selects this cycle's speed over the automatic
-        # geometry policy. Actual steering saturation still invokes the
+        # geometry policy. Demand-qualified steering saturation still invokes the
         # geometric slowdown and prevents acceleration toward that choice.
         if self.driver_speed is not None and not self.steering_limited:
           target = self.driver_speed
@@ -118,6 +124,7 @@ class SmartCruiseControlVision:
 
   def _update_calculations(self, sm: messaging.SubMaster) -> None:
     if not self.long_enabled:
+      self.steering_limited = False
       return
     else:
       rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
@@ -128,6 +135,13 @@ class SmartCruiseControlVision:
       if self.adaptive_curve_speed:
         lateral = controls.lateralControlState
         lateral = getattr(lateral, lateral.which())
+        model_time = getattr(sm, 'logMonoTime', {}).get('modelV2')
+        history_current = (model_time is None or self._model_mono_time is None
+                           or 0. <= (model_time - self._model_mono_time) * 1e-9 <= _OVERRIDE_RELEASE_TIME)
+        was_steering_limited = (self.steering_limited and self._curve_state in ACTIVE_STATES
+                                and history_current and np.isfinite(self.max_pred_lat_acc))
+        # Keep invalid curve inputs on the existing invalid-target path; do not
+        # turn a nonfinite demand into permission to accelerate.
         self.steering_limited = bool(lateral.active and lateral.saturated)
         if not len(rate_plan) or rate_plan.shape != vel_plan.shape:
           self.max_pred_lat_acc = self.v_target = float('nan')
@@ -139,6 +153,17 @@ class SmartCruiseControlVision:
       if self.adaptive_curve_speed and (not np.isfinite(self.max_pred_lat_acc) or self.max_pred_lat_acc < 0.):
         self.v_target = float('nan')
         return
+
+      if self.adaptive_curve_speed:
+        # Include requested demand: a steering-limited car can have high target
+        # curvature while its measured lateral acceleration remains small.
+        desired_lat_acc = self.v_ego ** 2 * abs(sm['modelV2'].action.desiredCurvature)
+        if not np.isfinite(desired_lat_acc) or not np.isfinite(self.current_lat_acc):
+          self.max_pred_lat_acc = self.v_target = float('nan')
+          return
+        lateral_demand = max(self.current_lat_acc, self.max_pred_lat_acc, desired_lat_acc)
+        threshold = _STEERING_LIMIT_RELEASE_LAT_ACC if was_steering_limited else _STEERING_LIMIT_LAT_ACC
+        self.steering_limited = bool(self.steering_limited and lateral_demand >= threshold)
 
       # get the maximum curve based on the current velocity
       v_ego = max(self.v_ego, 0.1)  # ensure a value greater than 0 for calculations
@@ -319,7 +344,7 @@ class SmartCruiseControlVision:
         # Track the driver's selected speed without reintroducing geometric
         # braking through the entering/turning tables on a small overshoot.
         # Positive recovery remains bounded; independent lead/model braking
-        # and actual steering saturation still win.
+        # and demand-qualified steering saturation still win.
         a_target = min(_LEAVING_ACC, speed_error / _NO_OVERSHOOT_TIME_HORIZON)
       else:
         if self.state == VisionState.entering:

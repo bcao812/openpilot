@@ -391,6 +391,7 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     controller = self._adaptive_controller(speed=10., predicted_lateral=1.5, current_lateral=.5)
     lateral = self.sm['controlsState'].lateralControlState.init('pidState')
     lateral.active = lateral.saturated = True
+    self.sm['modelV2'].action.desiredCurvature = .012  # 1.2 m/s^2 demand despite the smaller achieved response.
     self._set_curve(10., .8, .5)
     for _ in range(20):
       controller.update(self.sm, True, False, 10., 0., 30.)
@@ -404,6 +405,117 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     self._set_curve(10., 1.5, .5)
     controller.update(self.sm, True, False, 10., 0., 30.)
     assert 0. < controller.output_a_target <= .5
+
+  @parameterized.expand([(2.41934,), (3.1,), (10.,), (25.,)])
+  def test_small_lateral_demand_saturation_does_not_activate_scc(self, speed):
+    # M01 was saturated for 0.963 s while its predicted lateral demand stayed
+    # below 0.04 m/s^2. The diagnostic alone must not interrupt acceleration.
+    self._set_curve(speed, .0392, .0364)
+    self.sm['modelV2'].action.desiredCurvature = .04 / speed ** 2
+    lateral = self.sm['controlsState'].lateralControlState.init('pidState')
+    lateral.active = lateral.saturated = True
+    controller = SmartCruiseControlVision(adaptive_curve_speed=True)
+    for _ in range(40):
+      controller.update(self.sm, True, False, speed, 1., 30.)
+      assert not controller.is_active
+      assert not controller.steering_limited
+      assert controller.output_v_target == V_CRUISE_UNSET
+
+  @parameterized.expand([('desired', -1.), ('desired', 1.), ('predicted', 1.), ('current', 1.)])
+  def test_meaningful_saturated_demand_can_enter_below_twenty_kph(self, source, sign):
+    speed = 3.
+    self._set_curve(speed, 1.2 if source == 'predicted' else .1, 1.2 if source == 'current' else .1)
+    self.sm['modelV2'].action.desiredCurvature = sign * (1.2 if source == 'desired' else .1) / speed ** 2
+    lateral = self.sm['controlsState'].lateralControlState.init('pidState')
+    lateral.active = lateral.saturated = True
+    controller = SmartCruiseControlVision(adaptive_curve_speed=True)
+    controller.update(self.sm, True, False, speed, 1., 30.)
+    assert controller.is_active and controller.steering_limited
+    assert controller.output_v_target == speed
+    assert controller.output_a_target == 0.
+
+  def test_saturation_demand_hysteresis_and_clear_do_not_pin_recovery(self):
+    speed = 3.
+    self._set_curve(speed, .1, .1)
+    lateral = self.sm['controlsState'].lateralControlState.init('pidState')
+    lateral.active = lateral.saturated = True
+    controller = SmartCruiseControlVision(adaptive_curve_speed=True)
+    for desired, limited in ((.99, False), (1.01, True), (.99, True), (1.01, True),
+                             (.81, True), (.79, False), (.81, False), (.99, False)):
+      self.sm['modelV2'].action.desiredCurvature = desired / speed ** 2
+      controller.update(self.sm, True, False, speed, 1., 30.)
+      assert controller.steering_limited == limited
+      if limited:
+        assert controller.is_active and controller.output_a_target == 0.
+      elif controller.is_active:
+        assert controller.output_a_target == .5
+    # Raw saturation continues, but cannot prevent the existing curve-clear timer.
+    for _ in range(10):
+      controller.update(self.sm, True, False, speed, 1., 30.)
+    assert not controller.is_active
+
+  @parameterized.expand([('inactive',), ('unsaturated',), ('long_disabled',)])
+  def test_saturation_qualification_clears_when_its_authority_clears(self, reason):
+    speed = 3.
+    self._set_curve(speed, .1, .1)
+    self.sm['modelV2'].action.desiredCurvature = 1.2 / speed ** 2
+    lateral = self.sm['controlsState'].lateralControlState.init('pidState')
+    lateral.active = lateral.saturated = True
+    controller = SmartCruiseControlVision(adaptive_curve_speed=True)
+    controller.update(self.sm, True, False, speed, 0., 30.)
+    assert controller.steering_limited
+    lateral.active = reason != 'inactive'
+    lateral.saturated = reason != 'unsaturated'
+    controller.update(self.sm, reason != 'long_disabled', False, speed, 0., 30.)
+    assert not controller.steering_limited
+    assert not controller.is_active or controller.output_a_target > 0.
+
+  @parameterized.expand([(500_000_000,), (-50_000_000,)])
+  def test_model_discontinuity_does_not_reuse_saturation_demand_hysteresis(self, time_jump):
+    self.sm = DatedState(self.sm)
+    speed = 3.
+    self._set_curve(speed, .1, .1)
+    self.sm['modelV2'].action.desiredCurvature = 1.2 / speed ** 2
+    lateral = self.sm['controlsState'].lateralControlState.init('pidState')
+    lateral.active = lateral.saturated = True
+    controller = SmartCruiseControlVision(adaptive_curve_speed=True)
+    controller.update(self.sm, True, False, speed, 0., 30.)
+    assert controller.is_active
+    self.sm['modelV2'].action.desiredCurvature = .9 / speed ** 2
+    self.sm.logMonoTime['modelV2'] += time_jump
+    controller.update(self.sm, True, False, speed, 0., 30.)
+    assert not controller.steering_limited
+    assert not controller.is_active
+
+  @parameterized.expand([('desired', float('nan')), ('desired', float('inf')),
+                         ('current', float('nan'))])
+  def test_invalid_demand_is_not_misread_as_small_lateral_demand(self, source, invalid):
+    speed = 3.
+    self._set_curve(speed, .1, .1)
+    self.sm['modelV2'].action.desiredCurvature = .04 / speed ** 2
+    if source == 'desired':
+      self.sm['modelV2'].action.desiredCurvature = invalid
+    else:
+      self.sm['controlsState'].curvature = invalid
+    lateral = self.sm['controlsState'].lateralControlState.init('pidState')
+    lateral.active = lateral.saturated = True
+    controller = SmartCruiseControlVision(adaptive_curve_speed=True)
+    controller.update(self.sm, True, False, speed, 0., 30.)
+    assert not np.isfinite(controller.output_v_target)
+    assert not np.isfinite(controller.output_a_target)
+    # An invalid cycle cannot establish the lower continuing-demand threshold.
+    self._set_curve(speed, .1, .1)
+    self.sm['modelV2'].action.desiredCurvature = .9 / speed ** 2
+    controller.update(self.sm, True, False, speed, 0., 30.)
+    assert not controller.steering_limited
+    assert controller.output_a_target > 0.
+
+  def test_sharp_curve_below_twenty_kph_still_brakes_without_saturation(self):
+    controller = self._adaptive_controller(speed=3., predicted_lateral=4., current_lateral=2.2)
+    assert controller.is_active
+    assert not controller.steering_limited
+    assert controller.output_v_target < 3.
+    assert controller.output_a_target < 0.
 
   def test_current_lateral_limit_alone_can_activate_curve_braking(self):
     controller = self._adaptive_controller(speed=20., predicted_lateral=.8, current_lateral=3.)
