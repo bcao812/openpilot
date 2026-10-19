@@ -153,7 +153,7 @@ def test_current_same_object_visual_confirmation_preserves_radar_authority(side)
                                  'absent-current-vision'])
 def test_visual_presence_or_old_association_alone_cannot_exempt_the_radar_point(case):
   target = narrow_track()
-  visual = vision(distance=4.0, speed=4.0)
+  visual = vision(distance=4.0, speed=4.0, probability=.99)
   association = binding(bias_y=1.2)
   if case == 'unbound':
     associations = []
@@ -172,7 +172,10 @@ def test_visual_presence_or_old_association_alone_cannot_exempt_the_radar_point(
   leads = present_leads(result)
   assert all(not lead['radar'] for lead in leads)
   if case != 'absent-current-vision':
-    assert len(leads) == 1 and qualified_lead(leads[0], 'brake')
+    assert len(leads) == 1 and leads[0]['evidence']['brakeQualified']
+    # Independent vision keeps the consumer's existing probability threshold;
+    # publication by this adapter does not waive that separate .95 check.
+    assert qualified_lead(leads[0], 'brake') is (visual['modelProb'] >= .95)
 
 
 @pytest.mark.parametrize('recovery', ['centered-point', 'wider-span', 'farther-point', 'missing-span', 'current-vision'])
