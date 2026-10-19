@@ -8,9 +8,9 @@ Missing position, velocity or path evidence never creates a predicted lead.
 It does not publish messages, read settings or own actuation. In particular, a
 missing visual detection is not evidence that a radar obstacle does not exist.
 
-Bounds below are engineering admission parameters, not sensor calibration. The
-two collected drives contain no observed in-path metal-cover/sign false targets;
-this version therefore makes no speculative stationary-object class rejection.
+Bounds below are engineering admission parameters, not sensor calibration.
+The near, narrow, offset-point restriction does not classify the physical object;
+current same-object vision and measured body intrusion keep their own authority.
 """
 from dataclasses import dataclass, field, replace
 import math
@@ -39,6 +39,10 @@ RADAR_TO_CAMERA = 1.52
 # brake qualification below uses the measured asymmetric body extent instead.
 OVERLAP_HALF_WIDTH = 2.0
 SWEPT_HALF_WIDTH = 1.25  # 1.10 m ego half-width + .15 m geometric margin
+NARROW_POINT_MAX_WIDTH = .70
+NARROW_POINT_MAX_DISTANCE = 7.0
+NARROW_POINT_MIN_OFFSET = 1.1
+NARROW_POINT_MAX_OFFSET = 1.3
 LANE_SUPPORT_M = 60.0
 LANE_MIN_PROB = .65
 LANE_MAX_STD = .5
@@ -238,6 +242,33 @@ def _object_path(corridors, x, y, vx, vy, position_variance, velocity_variance, 
   # measured-OUT reporting: an outer-band reflection is neither a qualified
   # ordinary lead nor proof that the whole vehicle body has cleared the path.
   return replace(inner, observed_out=outer.state == 'outOfPath')
+
+
+def _narrow_point_unconfirmed(track, distance, path_offset, *, now_ns, observation_ns, vision_confirmed):
+  """Restrict ordinary point authority using only this scan's measured span."""
+  if (vision_confirmed or not _finite(distance, path_offset)
+      or not 0 < distance < NARROW_POINT_MAX_DISTANCE
+      or not NARROW_POINT_MIN_OFFSET < abs(path_offset) <= NARROW_POINT_MAX_OFFSET):
+    return False
+  stamp, body_stamp, available = (track.get(key) for key in
+                                 ('positionMonoTime', 'bodyMonoTime', 'bodyAvailableMonoTime'))
+  if (track.get('bodyValid') is not True or not _integer(body_stamp) or body_stamp != stamp
+      or not _fresh(stamp, now_ns) or not _integer(available) or not stamp <= available <= observation_ns):
+    return False
+  width, lx, ly, rx, ry, x, y = (track.get(key) for key in
+                                ('bodyWidth', 'bodyLeftX', 'bodyLeftY', 'bodyRightX', 'bodyRightY', 'dRel', 'yRel'))
+  if not _finite(width, lx, ly, rx, ry, x, y) or not 0 < width < NARROW_POINT_MAX_WIDTH:
+    return False
+  # Check the span in its recorded epoch, before aligning the reflection and
+  # path to the current camera frame. Never borrow a different scan's edges.
+  dx, dy = lx - rx, ly - ry
+  span = math.hypot(dx, dy)
+  if span <= 0 or not math.isclose(span, width, rel_tol=1e-5, abs_tol=1e-5):
+    return False
+  ux, uy = dx / span, dy / span
+  along = ((x - rx) * ux + (y - ry) * uy) / span
+  cross = abs((x - rx) * uy - (y - ry) * ux)
+  return -1e-5 <= along <= 1.0 + 1e-5 and cross <= 1e-4
 
 
 def _points(line, limit=math.inf):
@@ -843,15 +874,23 @@ class HondaRadarControl:
           continue
       path = _object_path(corridors, px, py, pvx, pvy, lateral_position_variance, lateral_velocity_variance,
                           lateral_velocity_valid, vision=vision is not None)
+      narrow_point = _narrow_point_unconfirmed(track, px, path.offset, now_ns=now_ns, observation_ns=observation_ns,
+                                              vision_confirmed=vision is not None)
       body_path = self._cut_in_path(track, corridors, source_eof=source_eof, eof=eof, now_ns=now_ns,
                                    observation_ns=observation_ns, speed=speed, yaw=yaw, vx=pvx, vy=pvy,
                                    position_variance=lateral_position_variance, velocity_variance=lateral_velocity_variance,
                                    direct_velocity=direct_velocity, previous=previous_body_approaches.get(identifier))
       # Keep ordinary point/visual following independent. A body-only cut-in
       # does not acquire ordinary authority from an earlier point/visual lead.
-      if body_path is not None and (path.state != 'inPath'
+      if body_path is not None and (narrow_point or path.state != 'inPath'
                                     or path.lateral_motion_valid and abs(path.rate) >= .5 and path.source != 'visionLead'):
         path = body_path
+      elif narrow_point:
+        # A current narrow return withdraws ordinary authority even for an
+        # already selected lead. It is neither a fault nor measured clearance,
+        # and creates no blacklist or delayed recovery on later measurements.
+        self._tracks.pop(identifier, None)
+        continue
       old_position = previous_positions.get(identifier)
       # A position first seen while its AUX was pending becomes a newly
       # complete native pair when that same scan's real velocity arrives.
