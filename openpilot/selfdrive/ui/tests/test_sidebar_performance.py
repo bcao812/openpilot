@@ -55,7 +55,7 @@ def capture_metric_draws():
     return rect.x, rect.y, rect.width, rect.height
 
   def color(rgba):
-    return rgba.r, rgba.g, rgba.b, rgba.a
+    return rgba if isinstance(rgba, tuple) else (rgba.r, rgba.g, rgba.b, rgba.a)
 
   def rounded(rect, roundness, segments, rgba):
     draws.append(("edge", rectangle(rect), roundness, segments, color(rgba)))
