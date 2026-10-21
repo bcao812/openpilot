@@ -173,7 +173,7 @@ class Sidebar(Widget, SidebarSP):
     # Show the max CPU temperature value instead of just GOOD/HIGH.
     cpu_temps = device_state.cpuTempC
     max_temp = max(cpu_temps) if cpu_temps else 0.0
-    temp_str = "{:.0f}°C".format(max_temp)
+    temp_str = f"{max_temp:.0f}°C"
     thermal_status = device_state.thermalStatus
 
     if thermal_status == ThermalStatus.ok:
@@ -282,7 +282,7 @@ class Sidebar(Widget, SidebarSP):
       total_h = sum(size.y for size in text_sizes)
       text_y = metric_rect.y + (metric_rect.height / 2 - total_h / 2)
       text_layout = []
-      for text, size in zip(labels, text_sizes):
+      for text, size in zip(labels, text_sizes, strict=True):
         text_layout.append((text, rl.Vector2(metric_rect.x + 22 + (metric_rect.width - 22 - size.x) / 2, text_y)))
         text_y += size.y
       layout = _MetricLayout(key, font, metric_rect, edge_rect, tuple(text_layout))

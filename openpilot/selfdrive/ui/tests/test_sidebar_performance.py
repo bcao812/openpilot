@@ -41,7 +41,7 @@ def reference_metric(module, sidebar, rect, metric, y):
   text_sizes = [module.measure_text_cached(sidebar._font_bold, text, module.FONT_SIZE) for text in labels]
   total_h = sum(size.y for size in text_sizes)
   text_y = metric_rect.y + (metric_rect.height / 2 - total_h / 2)
-  for text, size in zip(labels, text_sizes):
+  for text, size in zip(labels, text_sizes, strict=True):
     position = rl.Vector2(metric_rect.x + 22 + (metric_rect.width - 22 - size.x) / 2, text_y)
     rl.draw_text_ex(sidebar._font_bold, text, position, module.FONT_SIZE, 0, module.Colors.WHITE)
     text_y += size.y
@@ -279,7 +279,7 @@ class TestSidebarMetricLayout(SidebarTestCase):
       for _ in range(30):
         self.sidebar._draw_metrics(rect)
       self.assertEqual(measure.call_count, 6)
-      self.assertTrue(all(metric._layout is layout for metric, layout in zip(metrics, layouts)))
+      self.assertTrue(all(metric._layout is layout for metric, layout in zip(metrics, layouts, strict=True)))
       self.sidebar._temp_status.color = self.module.Colors.DANGER
       self.sidebar._draw_metrics(rect)
       self.assertEqual(measure.call_count, 6)
