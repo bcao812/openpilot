@@ -10,7 +10,8 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import (
 )
 from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import accepted_influences, influence_rgb, radar_influence_strength
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.ui.lib.application import FontWeight, gui_app
+from openpilot.system.ui.lib.application import FontWeight, font_fallback, gui_app
+from openpilot.system.ui.lib.multilang import multilang
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 
 SERVICE = 'hondaRadarObservations'
@@ -40,6 +41,16 @@ class HondaRadarOverlay:
     self.last_error_ns = 0
     self.font = None
     self.layout_key = None
+    self.layout_context = None
+    self.layout_font = None
+    self.point_layouts = {}
+    self.labels = []
+
+  def _clear_layout(self):
+    self.layout_key = None
+    self.layout_context = None
+    self.layout_font = None
+    self.point_layouts = {}
     self.labels = []
 
   def render(self, view, rect):
@@ -48,6 +59,7 @@ class HondaRadarOverlay:
     except Exception:
       # An optional diagnostic overlay cannot take down the main driving UI.
       self.state.clear()
+      self._clear_layout()
       now = time.monotonic_ns()
       if now - self.last_error_ns > 5_000_000_000:
         self.last_error_ns = now
@@ -68,10 +80,12 @@ class HondaRadarOverlay:
         or not sm['longitudinalPlanSP'].dec.enabled or not sm['longitudinalPlanSP'].dec.active):
       if self.state.active:
         self.state.clear()
+      self._clear_layout()
       return
     if any(not sm.valid[name] or not 0 <= now - sm.logMonoTime[name] <= 500_000_000
            for name in ('selfdriveState', 'longitudinalPlanSP')):
       self.state.clear()
+      self._clear_layout()
       return
     if self.sm is None:
       self.sm = messaging.SubMaster([SERVICE], frequency=20)
@@ -86,16 +100,42 @@ class HondaRadarOverlay:
     calib = sm['extrinsicsCalibration']
     if (not sm.valid['extrinsicsCalibration'] or calib.calStatus != log.ExtrinsicsCalibration.Status.calibrated
         or not calib.height or view.frame is None or view.device_camera is None):
+      self._clear_layout()
       return
     frame_ns = int(view.client.timestamp_eof)
     points = self.state.points(frame_ns, now)
     if not self.state.active:
+      self._clear_layout()
       return
     transform = view.model_renderer._car_space_transform
     height = float(calib.height[0])
-    key = (tuple(points), transform.tobytes(), height, self.camera_offset, rect.x, rect.y, rect.width, rect.height, id(self.font))
+    # Text measurement/drawing may use a language fallback even though the
+    # overlay's nominal font object has not changed.
+    layout_font = font_fallback(self.font)
+    font_key = (id(self.font), id(layout_font), getattr(getattr(layout_font, 'texture', None), 'id', None), multilang.language)
+    context = (transform.tobytes(), height, self.camera_offset, rect.x, rect.y, rect.width, rect.height, font_key)
+    key = (tuple(points), context)
     if key != self.layout_key:
-      self.labels = self._layout_labels(points, transform.tolist(), height, rect)
+      # A staggered scan often changes just one slot. Rebuild those points in
+      # one batch, retaining only the current selection (at most 16 slots).
+      # Full point identity includes source/session, sample time and boundaries;
+      # a cached offscreen result is still tied to that exact current point.
+      previous = self.point_layouts if context == self.layout_context else {}
+      current, changed = {}, []
+      for point in points:
+        cached = previous.get(point.slot)
+        if cached is not None and cached[0] == point:
+          current[point.slot] = cached
+        else:
+          current[point.slot] = (point, None)
+          changed.append(point)
+      if changed:
+        for label in self._layout_labels(changed, transform.tolist(), height, rect):
+          current[label.point.slot] = (label.point, label)
+      self.labels = [cached[1] for point in points if (cached := current[point.slot])[1] is not None]
+      self.point_layouts = current
+      self.layout_context = context
+      self.layout_font = layout_font
       self.layout_key = key
     # Scope, source freshness and camera time are checked on every frame above.
     # Cached layout never caches validity or opacity.

@@ -1,11 +1,14 @@
 import pyray as rl
+import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections.abc import Callable
+from threading import Thread
 from openpilot.cereal import log
+from openpilot.common.realtime import drop_realtime, set_core_affinity
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, FONT_SCALE
-from openpilot.system.ui.lib.multilang import tr, tr_noop
+from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, FONT_SCALE, font_fallback
+from openpilot.system.ui.lib.multilang import multilang, tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 
@@ -53,10 +56,21 @@ NETWORK_TYPES = {
 
 
 @dataclass(slots=True)
+class _MetricLayout:
+  key: tuple
+  font: rl.Font
+  rect: rl.Rectangle
+  edge_rect: rl.Rectangle
+  text: tuple[tuple[str, rl.Vector2], ...]
+
+
+@dataclass(slots=True)
 class MetricData:
   label: str
   value: str
   color: rl.Color
+  # One current layout per metric; previous values and positions are not retained.
+  _layout: _MetricLayout | None = field(default=None, init=False, repr=False, compare=False)
 
   def update(self, label: str, value: str, color: rl.Color):
     self.label = label
@@ -77,6 +91,7 @@ class Sidebar(Widget, SidebarSP):
     self._recording_audio = False
     self._ip = ""
     self._ip_last = 0.0
+    self._ip_thread: Thread | None = None
 
     self._home_img = gui_app.texture("images/button_home.png", HOME_BTN.width, HOME_BTN.height)
     self._flag_img = gui_app.texture("images/button_flag.png", HOME_BTN.width, HOME_BTN.height)
@@ -125,18 +140,34 @@ class Sidebar(Widget, SidebarSP):
     self._get_ip()
 
   def _get_ip(self):
-    # refresh at most every 5s
+    # Rendering reads the last completed result. An optional network query must
+    # never wait on the UI thread, nor accumulate workers while one is pending.
     now = time.monotonic()
-    if now - getattr(self, "_ip_last", 0.0) < 5.0:
-      return getattr(self, "_ip", "")
-    self._ip_last = now
-    try:
-      import subprocess
-      out = subprocess.check_output(["hostname", "-I"], text=True, timeout=2).strip()
-      self._ip = out.split()[0] if out else ""
-    except Exception:
-      self._ip = ""
+    if now - self._ip_last >= 5.0 and (self._ip_thread is None or not self._ip_thread.is_alive()):
+      self._ip_last = now
+      try:
+        self._ip_thread = Thread(target=self._refresh_ip, name="sidebar-ip", daemon=True)
+        self._ip_thread.start()
+      except RuntimeError:
+        self._ip_thread = None
+        self._ip = ""
     return self._ip
+
+  def _refresh_ip(self):
+    ip = ""
+    try:
+      # Threads inherit the UI's FIFO policy. Demote before spawning hostname;
+      # on demotion failure this optional query falls back to the network type.
+      drop_realtime()
+      try:
+        set_core_affinity([0, 1, 2])
+      except Exception:
+        pass
+      out = subprocess.check_output(["hostname", "-I"], text=True, timeout=2).strip()
+      ip = out.split()[0] if out else ""
+    except Exception:
+      pass
+    self._ip = ip
 
   def _update_temperature_status(self, device_state):
     # Show the max CPU temperature value instead of just GOOD/HIGH.
@@ -239,25 +270,33 @@ class Sidebar(Widget, SidebarSP):
       self._draw_metric(rect, metric, rect.y + y_offset)
 
   def _draw_metric(self, rect: rl.Rectangle, metric: MetricData, y: float):
-    metric_rect = rl.Rectangle(rect.x + METRIC_MARGIN, y, METRIC_WIDTH, METRIC_HEIGHT)
+    labels = (tr(metric.label), tr(metric.value))
+    font = font_fallback(self._font_bold)
+    key = (labels, rect.x, rect.y, rect.width, rect.height, y, METRIC_MARGIN, METRIC_WIDTH, METRIC_HEIGHT,
+           FONT_SIZE, FONT_SCALE, font.texture.id, multilang.language)
+    layout = metric._layout
+    if layout is None or layout.font is not font or layout.key != key:
+      metric_rect = rl.Rectangle(rect.x + METRIC_MARGIN, y, METRIC_WIDTH, METRIC_HEIGHT)
+      edge_rect = rl.Rectangle(metric_rect.x + 4, metric_rect.y + 4, 100, 118)
+      text_sizes = [measure_text_cached(self._font_bold, text, FONT_SIZE) for text in labels]
+      total_h = sum(size.y for size in text_sizes)
+      text_y = metric_rect.y + (metric_rect.height / 2 - total_h / 2)
+      text_layout = []
+      for text, size in zip(labels, text_sizes):
+        text_layout.append((text, rl.Vector2(metric_rect.x + 22 + (metric_rect.width - 22 - size.x) / 2, text_y)))
+        text_y += size.y
+      layout = _MetricLayout(key, font, metric_rect, edge_rect, tuple(text_layout))
+      metric._layout = layout
+
+    metric_rect = layout.rect
     # Draw colored left edge (clipped rounded rectangle)
-    edge_rect = rl.Rectangle(metric_rect.x + 4, metric_rect.y + 4, 100, 118)
     rl.begin_scissor_mode(int(metric_rect.x + 4), int(metric_rect.y), 18, int(metric_rect.height))
-    rl.draw_rectangle_rounded(edge_rect, 0.3, 10, metric.color)
+    rl.draw_rectangle_rounded(layout.edge_rect, 0.3, 10, metric.color)
     rl.end_scissor_mode()
 
     # Draw border
     rl.draw_rectangle_rounded_lines_ex(metric_rect, 0.3, 10, 2, Colors.METRIC_BORDER)
 
     # Draw label and value (vertically centered using actual measured heights)
-    labels = [tr(metric.label), tr(metric.value)]
-    text_sizes = [measure_text_cached(self._font_bold, t, FONT_SIZE) for t in labels]
-    total_h = sum(ts.y for ts in text_sizes)
-    text_y = metric_rect.y + (metric_rect.height / 2 - total_h / 2)
-    for text, text_size in zip(labels, text_sizes):
-      text_pos = rl.Vector2(
-        metric_rect.x + 22 + (metric_rect.width - 22 - text_size.x) / 2,
-        text_y
-      )
-      rl.draw_text_ex(self._font_bold, text, text_pos, FONT_SIZE, 0, Colors.WHITE)
-      text_y += text_size.y
+    for text, position in layout.text:
+      rl.draw_text_ex(self._font_bold, text, position, FONT_SIZE, 0, Colors.WHITE)
