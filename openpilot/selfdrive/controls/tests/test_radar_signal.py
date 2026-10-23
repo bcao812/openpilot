@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from opendbc.car.interfaces import RadarInterfaceBase
+from opendbc.car.can_definitions import CanData
 from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR
 from opendbc.car.honda.tests.test_bosch_a_observer import START, scan_frames
@@ -21,6 +22,7 @@ from openpilot.selfdrive.car.tests.test_actuation_observation import CardHarness
 from openpilot.selfdrive.car.tests.test_honda_radar_observer import can_message, configuration, state
 from openpilot.selfdrive.controls.radard import RadarD
 from openpilot.selfdrive.controls.tests.longitudinal_planner_test_support import Publisher, advance, make_planner, make_state
+from openpilot.selfdrive.controls.tests.longitudinal_process_test_support import ControlsHarness, selfdrive_event_harness
 from openpilot.selfdrive.controls.tests.test_radard_publication import Inputs, publish_at
 from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
 
@@ -75,20 +77,25 @@ def test_card_latches_setting_and_never_constructs_a_sensor_parser_when_off():
     assert car.RI.rcp is None and not car.radar_signal
     params.put_bool('RadarSignal', True, block=True)
     assert not car.radar_signal
+    cp.clear_write_flag()
     restarted = Car(CI=ci, RI=sensor)
     assert restarted.radar_signal and restarted.RI is sensor
     sensor.update.assert_not_called()
+    del car, restarted
 
 
 def test_card_keeps_vehicle_state_but_passes_no_can_to_radar_when_off():
   harness = CardHarness(enabled=False)
   harness.card.radar_signal = False
   harness.card.RI = RadarInterfaceBase(harness.card.CP, harness.card.CP_SP)
+  packets = [(START, [CanData(0x400, b'\x01' * 8, 2)])]
   with patch.object(harness.card.CI, 'update', wraps=harness.card.CI.update) as vehicle_update, \
-       patch.object(harness.card.RI, 'update', wraps=harness.card.RI.update) as radar_update:
+       patch.object(harness.card.RI, 'update', wraps=harness.card.RI.update) as radar_update, \
+       patch('openpilot.selfdrive.car.card.can_capnp_to_list', return_value=packets):
     for _ in range(5):
       harness.step()
     assert vehicle_update.call_count == 5
+    assert all(call.args == (packets,) for call in vehicle_update.call_args_list)
     assert radar_update.call_count == 5
     assert all(call.args == ([],) for call in radar_update.call_args_list)
   tracks = harness.card.pm.messages['radarTracks']
@@ -195,7 +202,10 @@ def test_both_planners_ignore_injected_radar_and_publish_the_same_vision_result(
     pm = Publisher()
     candidate.publish(incoming, pm)
     plan = pm.messages['longitudinalPlan'].longitudinalPlan
-    assert not plan.hasLead and not plan.objectInfluences
+    assert not plan.hasLead
+    # The retained visual lead may legitimately influence the plan; only the
+    # disabled radar identity and its old control evidence must disappear.
+    assert all(not item.sessionId and item.visionIndex == 1 for item in plan.objectInfluences)
     assert incoming['radarState'].leadOne.present and incoming['radarState'].fusionActive
     assert RadarSignalInput(incoming, False).valid is incoming.valid
 
@@ -211,3 +221,24 @@ def test_direct_car_control_sp_path_removes_radar_but_keeps_visual_lead():
   controls.radar_signal = True
   enabled = controls.state_control_ext(inputs)
   assert enabled.leadOne.status and enabled.leadOne.radar and enabled.leadOne.dRel == 2.0
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('error,event', [('canError', 'canError'), ('radarUnavailableTemporary', 'radarTempUnavailable')])
+def test_only_radar_faults_follow_the_switch_while_blindspot_lane_change_guard_remains(enabled, error, event):
+  harness = ControlsHarness()
+  harness.step()
+  daemon, car_state = selfdrive_event_harness(harness.control.pm.messages['controlsState'])
+  daemon.CP, daemon.CP_SP = harness.control.CP, harness.control.CP_SP
+  daemon.radar_signal = enabled
+  radar = daemon.sm['radarState'].as_builder()
+  setattr(radar.radarErrors, error, True)
+  daemon.sm.data['radarState'] = radar.as_reader()
+  daemon.sm.recv_frame['radarState'] = 1
+  model = daemon.sm['modelV2'].as_builder()
+  model.meta.laneChangeState, model.meta.laneChangeDirection = 'preLaneChange', 'left'
+  daemon.sm.data['modelV2'] = model.as_reader()
+  car_state.leftBlindspot = True
+  daemon.update_events(car_state)
+  assert (getattr(log.OnroadEvent.EventName, event) in daemon.events.names) is enabled
+  assert log.OnroadEvent.EventName.laneChangeBlocked in daemon.events.names
