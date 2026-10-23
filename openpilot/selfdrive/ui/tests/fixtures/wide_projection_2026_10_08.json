@@ -2,6 +2,48 @@
   "source": "_logs/wide-projection-2026-10-09/fit-v1/matches",
   "selection": "All matches from two preselected 2026-10-08 validation frames; no filtering by correction residual. Coefficients fitted on 2026-10-07.",
   "camera_identity": ["tizi", "ox03c10", "ox03c10"],
+  "runtime_camera_identity": ["tici", "ox03c10", "ox03c10"],
+  "runtime_identity_evidence": {
+    "source": "_logs/wide-projection-2026-10-24/identity-probe.json",
+    "description": "Original camera_identity uses the vendor initData alias. The same device publishes tici in deviceState, which the production UI consumes. October 9 native export and October 23 raw messages agree.",
+    "date": "2026-10-23",
+    "route": "000000b1--e34caaf4ca",
+    "segment": 0,
+    "recording_commit": "07274acc1d32696deab452ce06692779cb24d4db",
+    "rlog_sha256": "05626586c89ce51ea42cf68d15cd78b9bb6e1a5d2b568e3a73464a75d53969a9",
+    "messages": {
+      "initData": {
+        "deviceType": "tizi"
+      },
+      "deviceState": {
+        "deviceType": "tici"
+      },
+      "narrowRoadCameraState": {
+        "sensor": "ox03c10"
+      },
+      "wideRoadCameraState": {
+        "sensor": "ox03c10"
+      }
+    },
+    "message_evidence": {
+      "initData": {
+        "mono_ns": 26305945352,
+        "wire_sha256": "5e9c1a8a78cf3c583e3e697ca556abe8795dd7197ef791ccd27ea9f1ab7c3830"
+      },
+      "deviceState": {
+        "mono_ns": 26676164102,
+        "wire_sha256": "cc97944a9dfaffc288ca2d67cc7d36344fefd848bd54f00bdd6db90d2f88e271"
+      },
+      "narrowRoadCameraState": {
+        "mono_ns": 27141240873,
+        "wire_sha256": "dac17d459454560526f8d8616d254aa11d88392b73ce51219d20df33083610a3"
+      },
+      "wideRoadCameraState": {
+        "mono_ns": 27138978842,
+        "wire_sha256": "90d204b060fd9e5910723675b6c752fff7467de24c59cb5c3085acda80ac102a"
+      }
+    }
+  },
   "frame_size": [1928, 1208],
   "columns": ["narrow_x", "narrow_y", "wide_x", "wide_y"],
   "pixel_rounding_decimals": 6,
