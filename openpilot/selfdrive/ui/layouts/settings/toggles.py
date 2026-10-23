@@ -23,7 +23,7 @@ DESCRIPTIONS = {
     "Your attention is required at all times to use this feature."
   ),
   "DisengageOnAccelerator": tr_noop("When enabled, pressing the accelerator pedal will disengage sunnypilot."),
-  "RadarSignal": tr_noop("Use forward radar detections for driving assistance and onroad displays. When disabled, vision detections are still used. "
+  "RadarSignal": tr_noop("Use forward radar detections for driving assistance and onroad displays. When disabled, vision detections are still used. " +
                          "Changes take effect on the next drive."),
   "LongitudinalPersonality": tr_noop(
     "Standard is recommended. In aggressive mode, sunnypilot will follow lead cars closer and be more aggressive with the gas and brake. " +
