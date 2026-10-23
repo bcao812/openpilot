@@ -44,25 +44,19 @@ class RecordingBeepd(beep.Beepd):
   def _legacy_beep(self, on):
     self._write_gpio(on)
 
-  def wait_for_transitions(self, count):
-    with self.transition_condition:
-      return self.transition_condition.wait_for(lambda: len(self.transitions) >= count, timeout=1)
 
-
-class TestBeepPWM(unittest.TestCase):
+class TestBeepGPIO(unittest.TestCase):
   def setUp(self):
     self.driver = RecordingBeepd()
     self.addCleanup(self.driver.close)
 
-  def test_pwm_duty_cycle(self):
-    self.assertEqual(beep.BEEP_DUTY_CYCLE, 0.6)
-    self.assertEqual(beep.BEEP_PWM_PERIOD, 0.002)
-    with patch.object(self.driver._pwm_condition, 'wait_for', wraps=self.driver._pwm_condition.wait_for) as wait:
-      self.driver._beep(True)
-      self.assertTrue(self.driver.wait_for_transitions(6))
-      self.driver.close()
-      timeouts = [arguments.kwargs['timeout'] for arguments in wait.call_args_list if 'timeout' in arguments.kwargs]
-    self.assertEqual(timeouts[:4], [0.0012, 0.0008] * 2)
+  def test_on_holds_high_until_off(self):
+    self.driver._beep(True)
+    self.assertEqual(self.driver.transitions, [True])
+    with self.driver.transition_condition:
+      self.assertFalse(self.driver.transition_condition.wait_for(lambda: len(self.driver.transitions) > 1, timeout=0.02))
+    self.driver._beep(False)
+    self.assertEqual(self.driver.transitions, [True, False])
 
   def test_direct_gpio_writes(self):
     with patch('builtins.open', mock_open()) as gpio:
@@ -71,72 +65,88 @@ class TestBeepPWM(unittest.TestCase):
       self.assertEqual(gpio.call_args_list, [call('/sys/class/gpio/gpio42/value', 'w')] * 2)
       self.assertEqual(gpio().write.call_args_list, [call('1'), call('0')])
 
-  def test_idle_worker_does_not_write(self):
+  def test_idle_does_not_write(self):
     time.sleep(0.02)
     self.assertEqual(self.driver.transitions, [])
 
-  def test_pwm_repeats_and_stops_low(self):
-    self.driver._beep(True)
-    self.assertTrue(self.driver.wait_for_transitions(6))
-    self.driver._beep(False)
-    with self.driver.transition_condition:
-      self.assertTrue(self.driver.transition_condition.wait_for(lambda: not self.driver.transitions[-1], timeout=1))
-    time.sleep(0.02)
-    transitions = list(self.driver.transitions)
-    time.sleep(0.02)
-    self.assertEqual(self.driver.transitions, transitions)
-    self.assertEqual(transitions[:6], [True, False] * 3)
-    self.assertFalse(transitions[-1])
-
-  def test_stop_interrupts_high_phase(self):
-    with patch.object(beep, 'BEEP_PWM_PERIOD', 1):
-      self.driver._beep(True)
-      self.assertTrue(self.driver.wait_for_transitions(1))
-      started = time.monotonic()
-      self.driver._beep(False)
-      self.assertTrue(self.driver.wait_for_transitions(2))
-      self.assertLess(time.monotonic() - started, 0.2)
-      self.assertFalse(self.driver.transitions[-1])
-
-  def test_close_stops_worker_and_prevents_reactivation(self):
-    self.driver._beep(True)
-    self.assertTrue(self.driver.wait_for_transitions(1))
-    self.driver.close()
-    self.assertFalse(self.driver._pwm_thread.is_alive())
-    self.assertFalse(self.driver.transitions[-1])
-    transitions = list(self.driver.transitions)
-    self.driver._beep(True)
-    self.assertEqual(self.driver.transitions, transitions)
-
-  def test_pwm_failure_falls_back_to_original_driver(self):
-    fallback_started = threading.Event()
-    with patch.object(self.driver, '_write_gpio', side_effect=PermissionError), \
-         patch.object(self.driver, '_legacy_beep', side_effect=lambda on: fallback_started.set()) as fallback:
-      self.driver._beep(True)
-      self.assertTrue(fallback_started.wait(1))
-      self.driver._beep(False)
-      self.driver._beep(True)
-      self.driver.close()
-      self.assertEqual(fallback.call_args_list, [call(True), call(False), call(True), call(False)])
-      self.assertFalse(self.driver._pwm_thread.is_alive())
-
-  def test_gpio_failure_during_close_still_releases_buzzer(self):
-    with patch.object(self.driver, '_write_gpio', side_effect=OSError), patch.object(self.driver, '_legacy_beep') as fallback:
-      self.driver.close()
-      fallback.assert_called_once_with(False)
-      self.assertFalse(self.driver._pwm_thread.is_alive())
-
-  def test_rapid_transitions_leave_one_worker_and_end_low(self):
-    worker = self.driver._pwm_thread
+  def test_rapid_transitions_keep_every_edge(self):
     for _ in range(100):
       self.driver._beep(True)
       self.driver._beep(False)
+    self.assertEqual(self.driver.transitions, [True, False] * 100)
+
+  def test_close_waits_for_inflight_output_and_ends_low(self):
+    high_started = threading.Event()
+    release_high = threading.Event()
+    close_started = threading.Event()
+    close_finished = threading.Event()
+    transitions = []
+
+    def write(on):
+      if on:
+        high_started.set()
+        release_high.wait()
+      transitions.append(on)
+
+    def close():
+      close_started.set()
+      self.driver.close()
+      close_finished.set()
+
+    writer = threading.Thread(target=self.driver._beep, args=(True,), daemon=True)
+    closer = threading.Thread(target=close, daemon=True)
+    with patch.object(self.driver, '_write_gpio', side_effect=write):
+      writer.start()
+      try:
+        self.assertTrue(high_started.wait(1))
+        closer.start()
+        self.assertTrue(close_started.wait(1))
+        self.assertFalse(close_finished.wait(0.02))
+      finally:
+        release_high.set()
+        writer.join(1)
+        if closer.ident is not None:
+          closer.join(1)
+      self.assertFalse(writer.is_alive())
+      self.assertFalse(closer.is_alive())
+      self.assertTrue(close_finished.is_set())
+      self.driver._beep(True)
+    self.assertEqual(transitions, [True, False])
+
+  def test_close_releases_buzzer_and_prevents_reactivation(self):
     self.driver._beep(True)
-    self.assertTrue(self.driver.wait_for_transitions(2))
     self.driver.close()
-    self.assertIs(self.driver._pwm_thread, worker)
-    self.assertFalse(worker.is_alive())
-    self.assertFalse(self.driver.transitions[-1])
+    self.assertTrue(self.driver._repeat_stop.is_set())
+    self.driver._beep(True)
+    self.driver._beep(False)
+    self.driver.close()
+    self.assertEqual(self.driver.transitions, [True, False])
+
+  def test_direct_gpio_failure_falls_back_to_original_driver(self):
+    with patch.object(self.driver, '_write_gpio', side_effect=PermissionError) as direct, \
+         patch.object(self.driver, '_legacy_beep') as fallback:
+      self.driver._beep(True)
+      self.driver._beep(False)
+      self.driver._beep(True)
+      self.driver.close()
+      direct.assert_called_once_with(True)
+      self.assertEqual(fallback.call_args_list, [call(True), call(False), call(True), call(False)])
+
+  def test_gpio_failure_during_close_still_releases_buzzer(self):
+    self.driver._beep(True)
+    with patch.object(self.driver, '_write_gpio', side_effect=OSError), patch.object(self.driver, '_legacy_beep') as fallback:
+      self.driver.close()
+      self.driver._beep(True)
+      fallback.assert_called_once_with(False)
+
+  def test_gpio_failure_turning_off_still_releases_buzzer(self):
+    self.driver._beep(True)
+    with patch.object(self.driver, '_write_gpio', side_effect=OSError) as direct, \
+         patch.object(self.driver, '_legacy_beep') as fallback:
+      self.driver._beep(False)
+      self.driver.close()
+      direct.assert_called_once_with(False)
+      self.assertEqual(fallback.call_args_list, [call(False), call(False)])
 
 
 class TestBeepAlerts(unittest.TestCase):
