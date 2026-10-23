@@ -145,6 +145,7 @@ class TestCameraFrameProjection(HeadlessUITestCase):
         yield draw
       finally:
         view.close()
+        view.shader = None
 
   def test_recorded_runtime_identity_aligns_actual_draw_paths_across_stream_switches(self):
     fixture = json.loads((Path(__file__).parent / "fixtures" / "wide_projection_2026_10_08.json").read_text())
