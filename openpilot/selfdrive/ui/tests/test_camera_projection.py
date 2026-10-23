@@ -1,11 +1,11 @@
 import itertools
 import json
 import unittest
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pyray as rl
@@ -16,7 +16,7 @@ from openpilot.selfdrive.ui.onroad.camera_projection import get_overlay_projecti
 from openpilot.selfdrive.ui.tests.test_sunnylink_removed import HeadlessUITestCase
 
 
-VERIFIED_CAMERA = ("tizi", "ox03c10", "ox03c10")
+VERIFIED_CAMERA = ("tici", "ox03c10", "ox03c10")
 VERIFIED_SIZE = (1928, 1208)
 
 
@@ -49,7 +49,7 @@ class TestOverlayProjection(unittest.TestCase):
         narrow, observed_wide = points[:, :2], points[:, 2:]
         nominal = camera.wide_road.intrinsics @ view @ rot_from_euler(frame["wide_from_device_euler"]) @ view.T
         nominal = nominal @ camera.narrow_road.intrinsics_inv
-        corrected = get_overlay_projection(nominal, tuple(fixture["camera_identity"]), True, tuple(fixture["frame_size"]))
+        corrected = get_overlay_projection(nominal, tuple(fixture["runtime_camera_identity"]), True, tuple(fixture["frame_size"]))
         before = np.linalg.norm(project(nominal, narrow) - observed_wide, axis=1)
         after = np.linalg.norm(project(corrected, narrow) - observed_wide, axis=1)
         # Every match from each preselected validation frame is retained, including the tails.
@@ -88,7 +88,12 @@ class TestCameraFrameProjection(HeadlessUITestCase):
     self.sm.valid = {"extrinsicsCalibration": True}
 
     def camera_init(view, name, stream_type):
+      view._name = name
       view._stream_type = stream_type
+      view._target_client = view._target_stream_type = None
+      view._switching = False
+      view._texture_needs_update = True
+      view._texture1_loc = 1
       view.texture_y = view.texture_uv = view.egl_texture = view.shader = view.frame = view.client = None
       view.egl_images = {}
       view.available_streams = []
@@ -105,6 +110,80 @@ class TestCameraFrameProjection(HeadlessUITestCase):
     view._content_rect = rl.Rectangle(37, 21, 2160, 1080)
     view._update_calibration()
     return view
+
+  @contextmanager
+  def camera_backend(self, view, hardware):
+    """Exercise both production draw paths; only IPC and GPU operations are replaced."""
+    from openpilot.selfdrive.ui.onroad import cameraview
+    width, height = VERIFIED_SIZE
+    stride = 2048
+    frame = SimpleNamespace(width=width, height=height, stride=stride, uv_offset=stride * height,
+                            idx=0, fd=-1, data=bytearray(stride * height * 3 // 2))
+
+    def client(*args, **kwargs):
+      ipc = Mock(width=width, height=height, stride=stride, num_buffers=1)
+      ipc.is_connected.return_value = True
+      ipc.recv.return_value = frame
+      return ipc
+
+    view.client = client()
+    view.shader = SimpleNamespace(id=1)
+    with ExitStack() as stack:
+      stack.enter_context(patch.object(cameraview, "COMMA_HARDWARE", hardware))
+      stack.enter_context(patch.object(cameraview, "VisionIpcClient", side_effect=client))
+      stack.enter_context(patch.object(cameraview, "create_egl_image", return_value=object()))
+      for name in ("bind_egl_image_to_texture", "destroy_egl_image"):
+        stack.enter_context(patch.object(cameraview, name))
+      for name in ("begin_shader_mode", "end_shader_mode", "set_shader_value_texture", "update_texture", "unload_texture", "unload_shader"):
+        stack.enter_context(patch.object(rl, name))
+      stack.enter_context(patch.object(rl, "load_texture_from_image",
+                                      side_effect=lambda img: SimpleNamespace(id=2, width=img.width, height=img.height)))
+      draw = stack.enter_context(patch.object(rl, "draw_texture_pro"))
+      view.egl_texture = SimpleNamespace(id=3, width=width, height=height) if hardware else None
+      view._initialize_textures()
+      try:
+        yield draw
+      finally:
+        view.close()
+
+  def test_recorded_runtime_identity_aligns_actual_draw_paths_across_stream_switches(self):
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "wide_projection_2026_10_08.json").read_text())
+    evidence = fixture["runtime_identity_evidence"]
+    # The vendor logger aliases tici to tizi. UI consumes deviceState, not initData.
+    self.assertNotEqual(evidence["messages"]["initData"]["deviceType"], evidence["messages"]["deviceState"]["deviceType"])
+    for hardware, recorded in itertools.product((False, True), fixture["frames"]):
+      with self.subTest(hardware=hardware, frame=recorded["id"]):
+        view = self.make_view(tuple(fixture["runtime_camera_identity"]))
+        for name, payload in evidence["messages"].items():
+          event = self.road.log.Event.new_message(**{name: payload})
+          self.sm[name] = getattr(event, name).as_reader()
+        self.sm["extrinsicsCalibration"].wideFromDeviceEuler = recorded["wide_from_device_euler"]
+        view._update_calibration()
+        self.assertEqual(view._camera_identity, tuple(fixture["runtime_camera_identity"]))
+        matches = np.array(recorded["correspondences"])
+        narrow_pixels = np.column_stack((matches[:, :2], np.ones(len(matches))))
+        rays = np.linalg.solve(view.device_camera.narrow_road.intrinsics @ view.view_from_calib, narrow_pixels.T).T
+        with self.camera_backend(view, hardware) as draw:
+          for stream in (self.road.WIDE_CAM, self.road.NARROW_ROAD_CAM, self.road.WIDE_CAM):
+            view.switch_stream(stream)
+            self.road.CameraView._render(view, view._content_rect)
+            self.assertEqual(view.stream_type, stream)
+            texture, source, destination, *_ = draw.call_args.args
+            self.assertIs(texture, view.egl_texture if hardware else view.texture_y)
+            self.assertEqual((source.width, source.height), VERIFIED_SIZE)
+            # Independent observed image correspondences go through the actual draw rectangles.
+            scale = np.array([destination.width / source.width, destination.height / source.height])
+            raw_pixels = matches[:, 2:] if stream == self.road.WIDE_CAM else matches[:, :2]
+            observed_screen = (raw_pixels - [source.x, source.y]) * scale + [destination.x, destination.y]
+            projected = rays @ view.model_renderer._car_space_transform.T
+            projected_screen = projected[:, :2] / projected[:, 2:]
+            error_pixels = np.linalg.norm((projected_screen - observed_screen) / scale, axis=1)
+            if stream == self.road.WIDE_CAM:
+              self.assertLess(np.median(error_pixels), 5.0)
+              self.assertLess(np.percentile(error_pixels, 95), 10.0)
+            else:
+              self.assertLess(np.max(error_pixels), 1e-3)
+          self.assertEqual(draw.call_count, 3)
 
   def baseline_matrices(self, view):
     """Reference the pre-correction camera framing, using only physical K and calibration."""
@@ -147,7 +226,7 @@ class TestCameraFrameProjection(HeadlessUITestCase):
     self.assertFalse(view.model_renderer._transform_dirty)
 
   def test_unverified_hardware_and_narrow_camera_keep_original_overlay(self):
-    identities = [None, ("unlisted", "unknown", None), ("tici", "ox03c10", "ox03c10"),
+    identities = [None, ("unlisted", "unknown", None), ("tizi", "ox03c10", "ox03c10"),
                   ("tizi", "ar0231", "ar0231"), ("mici", "os04c10", "os04c10"), ("tizi", "ox03c10", "ar0231")]
     for identity, wide in itertools.product(identities, (False, True)):
       with self.subTest(identity=identity, wide=wide):
@@ -162,7 +241,7 @@ class TestCameraFrameProjection(HeadlessUITestCase):
     original_overlay = view.model_renderer._car_space_transform.copy()
     self.sm.seen.update(deviceState=True, narrowRoadCameraState=True)
     self.sm["narrowRoadCameraState"].sensor = "ox03c10"
-    for device in ("unknown", "tizi"):
+    for device in ("unknown", "tici"):
       self.sm["deviceState"].deviceType = device
       view.model_renderer._transform_dirty = False
       view._update_calibration()
