@@ -37,6 +37,7 @@ def control_inputs(lead_names=(), phase=0, mads=None, icbm=None):
 
 def test_default_state_control_ext_copies_wire_defaults():
   control = ControlsExt.__new__(ControlsExt)  # Assembly has no Params or transport dependency.
+  control.radar_signal = True
   radar, state, expected = control_inputs()
   actual = control.state_control_ext({'radarState': radar.as_reader(), 'selfdriveStateSP': state.as_reader()})
   assert actual.to_dict() == expected.to_dict()
@@ -47,6 +48,7 @@ def test_default_state_control_ext_copies_wire_defaults():
                          ids=['no-lead', 'first-lead', 'second-lead', 'two-leads'])
 def test_state_control_ext_reads_current_leads_and_all_sp_states(lead_names):
   control = ControlsExt.__new__(ControlsExt)
+  control.radar_signal = True
   previous = None
   previous_fields = None
   targets = (0.0, -0.0, -12.5, 255.75, 3.4028234663852886e38)
@@ -68,6 +70,7 @@ def test_state_control_ext_reads_current_leads_and_all_sp_states(lead_names):
 
 def test_withdrawal_and_input_mutation_leave_previous_output_independent():
   control = ControlsExt.__new__(ControlsExt)
+  control.radar_signal = True
   radar, state, expected = control_inputs(('leadOne', 'leadTwo'), mads={
     'state': 'enabled', 'enabled': True, 'active': True, 'available': True,
   }, icbm={'state': 'increasing', 'sendButton': 'increase', 'vTarget': 31.25})

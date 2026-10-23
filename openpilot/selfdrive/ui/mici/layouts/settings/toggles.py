@@ -1,6 +1,7 @@
 from collections.abc import Callable
 
 from openpilot.cereal import log
+from openpilot.common.radar_signal import radar_signal_enabled
 
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.mici.widgets.button import BigParamControl, BigMultiParamToggle, BigToggle, GreyBigButton
@@ -44,6 +45,8 @@ class TogglesLayoutMici(NavScroller):
     self._personality_toggle = BigMultiParamToggle("driving personality", "LongitudinalPersonality", ["aggressive", "standard", "relaxed"])
     self._experimental_btn = BigToggle("experimental mode", initial_state=ui_state.params.get_bool("ExperimentalMode"),
                                        toggle_callback=self._on_experimental_mode)
+    self._radar_signal_btn = BigToggle("radar signal", "off: vision only\napplies next drive",
+                                       initial_state=radar_signal_enabled(ui_state.params), toggle_callback=self._on_radar_signal)
     is_metric_toggle = BigParamControl("use metric units", "IsMetric")
     ldw_toggle = BigParamControl("lane departure warnings", "IsLdwEnabled")
     always_on_dm_toggle = BigParamControl("always-on driver monitor", "AlwaysOnDM")
@@ -54,6 +57,7 @@ class TogglesLayoutMici(NavScroller):
     self._scroller.add_widgets([
       self._personality_toggle,
       self._experimental_btn,
+      self._radar_signal_btn,
       is_metric_toggle,
       ldw_toggle,
       always_on_dm_toggle,
@@ -65,6 +69,7 @@ class TogglesLayoutMici(NavScroller):
     # Toggle lists
     self._refresh_toggles = (
       ("ExperimentalMode", self._experimental_btn),
+      ("RadarSignal", self._radar_signal_btn),
       ("IsMetric", is_metric_toggle),
       ("IsLdwEnabled", ldw_toggle),
       ("AlwaysOnDM", always_on_dm_toggle),
@@ -74,6 +79,7 @@ class TogglesLayoutMici(NavScroller):
     )
 
     enable_openpilot.set_enabled(lambda: not ui_state.engaged)
+    self._radar_signal_btn.set_enabled(lambda: ui_state.is_offroad())
     record_front.set_enabled(False if ui_state.params.get_bool("RecordFrontLock") else (lambda: not ui_state.engaged))
     record_mic.set_enabled(lambda: not ui_state.engaged)
 
@@ -113,7 +119,12 @@ class TogglesLayoutMici(NavScroller):
 
     # Refresh toggles from params to mirror external changes
     for key, item in self._refresh_toggles:
-      item.set_checked(ui_state.params.get_bool(key))
+      item.set_checked(radar_signal_enabled(ui_state.params) if key == "RadarSignal" else ui_state.params.get_bool(key))
+
+  def _on_radar_signal(self, state: bool):
+    if ui_state.is_offroad():
+      ui_state.params.put_bool("RadarSignal", state, block=True)
+    self._radar_signal_btn.set_checked(radar_signal_enabled(ui_state.params))
 
   def _on_experimental_mode(self, state: bool):
     if state and not ui_state.params.get_bool("ExperimentalModeConfirmed"):

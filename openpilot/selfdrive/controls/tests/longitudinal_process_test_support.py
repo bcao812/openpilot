@@ -83,6 +83,7 @@ class ControlsHarness:
     self.plan.motionIntent.allowCreep = False
 
     control = Controls.__new__(Controls)
+    control.radar_signal = True
     control.CP = car.CarParams.new_message()
     control.CP.carFingerprint = platform
     control.CP.openpilotLongitudinalControl = openpilot_long
@@ -204,7 +205,7 @@ def selfdrive_event_harness(control_state):
   daemon.cp_safety_configs = []
   daemon.ignored_processes = set()
   daemon.not_running = set()
-  for name in ('enabled', 'initialized', 'cp_olc', 'is_metric'):
+  for name in ('enabled', 'initialized', 'cp_olc', 'is_metric', 'radar_signal'):
     setattr(daemon, name, True)
   for name in (
     'cp_not_car', 'cp_pcm_cruise', 'cp_passive', 'cp_alt_experience', 'big_model_loading', 'big_model_active',

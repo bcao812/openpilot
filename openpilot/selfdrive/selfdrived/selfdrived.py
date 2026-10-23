@@ -13,6 +13,7 @@ from msgq.visionipc import VisionIpcClient
 
 
 from openpilot.common.params import Params
+from openpilot.common.radar_signal import radar_signal_enabled
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper, DT_CTRL
 from openpilot.common.swaglog import cloudlog
@@ -115,6 +116,7 @@ PHASES = ("recv_carState", "sm_update", "data_sample_rest", "update_events", "st
 class SelfdriveD(CruiseHelper):
   def __init__(self, CP=None, CP_SP=None):
     self.params = Params()
+    self.radar_signal = radar_signal_enabled(self.params)
 
     # Ensure the current branch is cached, otherwise the first cycle lags
     build_metadata = get_build_metadata()
@@ -681,7 +683,7 @@ class SelfdriveD(CruiseHelper):
           self.events.add(EventName.cameraFrameRate)
     if not REPLAY and self.rk.lagging:
       self.events.add(EventName.selfdrivedLagging)
-    if self.cp_olc:
+    if self.cp_olc and self.radar_signal:
       # radarState publishes at 20 Hz, so to_dict() -- which builds a fresh dict out of the
       # capnp struct -- was running 5 times per message. The two direct field reads below are
       # cheap attribute access and stay live; only the dict build is cached. Keyed on

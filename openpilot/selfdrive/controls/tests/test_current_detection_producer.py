@@ -19,7 +19,7 @@ from openpilot.selfdrive.controls.tests.test_radard_publication import Inputs, p
 
 
 def make_producer(*, fusion=False):
-  producer = RadarD(SimpleNamespace(brand='honda', flags=0), SimpleNamespace(flags=0), params=SimpleNamespace())
+  producer = RadarD(SimpleNamespace(brand='honda', flags=0), SimpleNamespace(flags=0), params=SimpleNamespace(get=lambda _: None))
   producer.control_enabled = Mock(return_value=fusion)
   if fusion:
     producer.fusion_control = HondaRadarControl()

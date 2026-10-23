@@ -1,5 +1,6 @@
 from openpilot.cereal import log
 from openpilot.common.params import Params, UnknownKeyName
+from openpilot.common.radar_signal import radar_signal_enabled
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.list_view import multiple_button_item, toggle_item
 from openpilot.system.ui.widgets.scroller_tici import Scroller
@@ -22,6 +23,8 @@ DESCRIPTIONS = {
     "Your attention is required at all times to use this feature."
   ),
   "DisengageOnAccelerator": tr_noop("When enabled, pressing the accelerator pedal will disengage sunnypilot."),
+  "RadarSignal": tr_noop("Use forward radar detections for driving assistance and onroad displays. When disabled, vision detections are still used. "
+                         "Changes take effect on the next drive."),
   "LongitudinalPersonality": tr_noop(
     "Standard is recommended. In aggressive mode, sunnypilot will follow lead cars closer and be more aggressive with the gas and brake. " +
     "In relaxed mode sunnypilot will stay further away from lead cars. On supported cars, you can cycle through these personalities with " +
@@ -58,6 +61,12 @@ class TogglesLayout(Widget):
         lambda: tr("Experimental Mode"),
         "",
         "experimental_white.png",
+        False,
+      ),
+      "RadarSignal": (
+        lambda: tr("Radar Signal"),
+        DESCRIPTIONS["RadarSignal"],
+        "speed_limit.png",
         False,
       ),
       "DisengageOnAccelerator": (
@@ -129,7 +138,7 @@ class TogglesLayout(Widget):
         locked = self._params.get_bool(param + "Lock")
       except UnknownKeyName:
         locked = False
-      if param == "RecordRoadCameras" and not locked:
+      if param in ("RadarSignal", "RecordRoadCameras") and not locked:
         toggle.action_item.set_enabled(lambda: ui_state.is_offroad())
       else:
         toggle.action_item.set_enabled(not locked)
@@ -156,6 +165,8 @@ class TogglesLayout(Widget):
     ui_state.add_engaged_transition_callback(self._update_toggles)
 
   def _get_toggle_state(self, param: str) -> bool:
+    if param == "RadarSignal":
+      return radar_signal_enabled(self._params)
     if param == "RecordRoadCameras":
       return self._params.get(param, return_default=True)
     return self._params.get_bool(param)
@@ -253,7 +264,7 @@ class TogglesLayout(Widget):
       self._params.put_bool("ExperimentalMode", state, block=True)
 
   def _toggle_callback(self, state: bool, param: str):
-    if param == "RecordRoadCameras":
+    if param in ("RadarSignal", "RecordRoadCameras"):
       if ui_state.is_offroad():
         self._params.put_bool(param, state, block=True)
       self._toggles[param].action_item.set_state(self._get_toggle_state(param))

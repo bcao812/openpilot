@@ -9,6 +9,7 @@ from openpilot.cereal import log, custom
 from opendbc.car.structs import car
 
 from openpilot.common.params import Params
+from openpilot.common.radar_signal import radar_signal_enabled
 from openpilot.common.longitudinal_logging import observe
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
 from openpilot.sunnypilot.common.phase_timer import PhaseTimer
@@ -98,6 +99,7 @@ class Car:
     self.last_actuators_output = structs.CarControl.Actuators()
 
     self.params = Params()
+    self.radar_signal = radar_signal_enabled(self.params)
 
     self.can_callbacks = can_comm_callbacks(self.can_sock, self.pm.sock['sendcan'])
 
@@ -126,7 +128,6 @@ class Car:
       self.CI = get_car(*self.can_callbacks, obd_callback(self.params), alpha_long_allowed, is_release, cached_params,
                         fixed_fingerprint, init_params_list_sp, is_release_sp)
       sunnypilot_interfaces.setup_interfaces(self.CI, self.params)
-      self.RI = interfaces[self.CI.CP.carFingerprint].RadarInterface(self.CI.CP, self.CI.CP_SP)
       self.CP = self.CI.CP
       self.CP_SP = self.CI.CP_SP
 
@@ -134,6 +135,13 @@ class Car:
       self.params.put_bool("FirmwareQueryDone", True, block=True)
     else:
       self.CI, self.CP, self.CP_SP = CI, CI.CP, CI.CP_SP
+
+    if not self.radar_signal:
+      # Keep the standard empty-track heartbeat without creating a sensor parser.
+      self.RI = RadarInterfaceBase(self.CP, self.CP_SP)
+    elif CI is None:
+      self.RI = interfaces[self.CP.carFingerprint].RadarInterface(self.CP, self.CP_SP)
+    else:
       self.RI = RI
 
     self.CP.alternativeExperience = 0
@@ -231,7 +239,7 @@ class Car:
       self.prof.mark("can_parse")
 
     # Update radar tracks from CAN
-    RD: structs.RadarDataT | None = self.RI.update(can_list)
+    RD: structs.RadarDataT | None = self.RI.update(can_list if self.radar_signal else [])
     if self.prof:
       self.prof.mark("radar_update")
 

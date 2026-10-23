@@ -1,5 +1,6 @@
 """Admission gates for the fixed Accord radar fusion pipeline."""
 from dataclasses import dataclass
+from openpilot.common.radar_signal import radar_signal_enabled
 
 PROCESS_NAME = 'hondaRadarObserver'
 SERVICE = 'hondaRadarObservations'
@@ -15,18 +16,19 @@ class ObserverSettings:
   experimental: bool = False
   dec: bool = False
   available: bool = True
+  radar_signal: bool = True
 
   @classmethod
   def read(cls, params):
     try:
       return cls(params.get_bool('AlphaLongitudinalEnabled'), params.get_bool('ExperimentalMode'),
-                 params.get_bool('DynamicExperimentalControl'))
+                 params.get_bool('DynamicExperimentalControl'), radar_signal=radar_signal_enabled(params))
     except Exception:
       # Missing keys/backend errors disable only this optional observer.
       return cls(available=False)
 
   def requested(self, cp):
-    return (self.available and self.alpha and self.experimental and self.dec
+    return (self.available and self.radar_signal and self.alpha and self.experimental and self.dec
             and cp.carFingerprint == 'HONDA_ACCORD' and cp.openpilotLongitudinalControl and not cp.notCar)
 
   def control_requested(self, cp, cp_sp):

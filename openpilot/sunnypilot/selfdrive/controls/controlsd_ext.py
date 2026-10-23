@@ -11,6 +11,7 @@ from openpilot.cereal import log, custom
 
 from opendbc.car import structs
 from openpilot.common.params import Params
+from openpilot.common.radar_signal import radar_signal_enabled, radar_state_for_mode
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD
 from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
@@ -24,6 +25,7 @@ class ControlsExt(ModelStateBase):
     ModelStateBase.__init__(self)
     self.CP = CP
     self.params = params
+    self.radar_signal = radar_signal_enabled(params)
     self._param_update_time: float = 0.0
     self.blinker_pause_lateral = BlinkerPauseLateral()
 
@@ -89,8 +91,9 @@ class ControlsExt(ModelStateBase):
   def state_control_ext(self, sm: messaging.SubMaster) -> custom.CarControlSP:
     CC_SP = custom.CarControlSP.new_message()
 
-    self.get_lead_data(CC_SP.leadOne, sm['radarState'].leadOne)
-    self.get_lead_data(CC_SP.leadTwo, sm['radarState'].leadTwo)
+    radar = radar_state_for_mode(sm['radarState'], self.radar_signal)
+    self.get_lead_data(CC_SP.leadOne, radar.leadOne)
+    self.get_lead_data(CC_SP.leadTwo, radar.leadTwo)
 
     # MADS state
     mads_src = sm['selfdriveStateSP'].mads

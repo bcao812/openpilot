@@ -115,6 +115,7 @@ class StartupHarness:
     self.restart_planner()
 
     self.card = Car.__new__(Car)
+    self.card.radar_signal = True
     self.card.CP = self.CP
     self.card.CP_SP = self.CP_SP
     self.card.CP_SP_capnp = convert_to_capnp(self.CP_SP)

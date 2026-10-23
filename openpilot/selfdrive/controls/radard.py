@@ -10,6 +10,7 @@ from openpilot.cereal import messaging, log, custom
 from opendbc.car.structs import car
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
+from openpilot.common.radar_signal import radar_signal_enabled
 from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.simple_kalman import KF1D
@@ -216,6 +217,7 @@ class RadarD:
 
     self.ready = False
     self.params = params if params is not None else Params()
+    self.radar_signal = radar_signal_enabled(self.params)
     self.radar_settings = ObserverSettings()
     self.settings_next_ns = 0
     self.fusion_control = None
@@ -223,6 +225,9 @@ class RadarD:
     self.control_scope_unavailable = False
 
   def control_enabled(self, sm, now_ns):
+    if not self.radar_signal:
+      self.control_scope_unavailable = False
+      return False
     # Unavailable feedback revokes current execution scope, but does not
     # establish a driver/configuration exit or clear an old obstacle.
     self.control_scope_unavailable = True
@@ -261,7 +266,7 @@ class RadarD:
     self.control_scope_unavailable = False
     return bool(sm['selfdriveState'].experimentalMode and dec.enabled and dec.active)
 
-  def update(self, sm: messaging.SubMaster, rr: car.RadarData, *, now_ns=None):
+  def update(self, sm: messaging.SubMaster, rr: car.RadarData | None, *, now_ns=None):
     now_ns = time.monotonic_ns() if now_ns is None else now_ns
     self.radar_qualified_ns = now_ns
     self.ready = sm.seen['modelV2']
@@ -271,7 +276,7 @@ class RadarD:
       self.v_ego_hist.append(self.v_ego)
       self.last_v_ego_frame = sm.recv_frame['carState']
 
-    ar_pts = {pt.trackId: [pt.dRel, pt.yRel, pt.vRel] for pt in rr.points}
+    ar_pts = {pt.trackId: [pt.dRel, pt.yRel, pt.vRel] for pt in rr.points} if self.radar_signal else {}
 
     # *** remove missing points from meta data ***
     for ids in list(self.tracks.keys()):
@@ -293,11 +298,12 @@ class RadarD:
     # *** publish radarState ***
     # Optional Honda inputs do not create a circular primary-health dependency.
     # The original vision path keeps publishing while perception/DEC starts.
-    self.radar_state_valid = sm.all_checks(['modelV2', 'carState', 'radarTracks'])
+    self.radar_state_valid = sm.all_checks(['modelV2', 'carState', 'radarTracks'] if self.radar_signal else ['modelV2', 'carState'])
     self.radar_state = log.RadarState.new_message()
     self.radar_state.fusionRiskUnresolved = False
     self.radar_state.mdMonoTime = sm.logMonoTime['modelV2']
-    self.radar_state.radarErrors = rr.errors
+    if self.radar_signal:
+      self.radar_state.radarErrors = rr.errors
 
     if len(sm['modelV2'].velocity.x):
       model_v_ego = sm['modelV2'].velocity.x[0]
@@ -311,6 +317,12 @@ class RadarD:
                                           self.CP, self.CP_SP, low_speed_override=False)
     self.radar_state.visionLeadOne = self.radar_state.leadOne
     self.radar_state.visionLeadTwo = self.radar_state.leadTwo
+    if not self.radar_signal:
+      self.fusion_control = None
+      self.fusion_state = None
+      self.publication_expiry.clear()
+      self.radar_state.fusionReason = 'radarSignalDisabled'
+      return
     enabled = self.control_enabled(sm, now_ns)
     if enabled and self.fusion_control is None:
       from openpilot.selfdrive.car.honda_radar_control import HondaRadarControl
@@ -435,17 +447,17 @@ def main() -> None:
   cloudlog.info("radard got CarParamsSP")
 
   # *** setup messaging
-  optional_services = [HONDA_RADAR_SERVICE, 'selfdriveState', 'longitudinalPlanSP', 'carControl']
-  sm = messaging.SubMaster(['modelV2', 'carState', 'radarTracks', *optional_services], poll='modelV2',
+  RD = RadarD(CP, CP_SP, CP.radarDelay, params=params)
+  optional_services = [HONDA_RADAR_SERVICE, 'selfdriveState', 'longitudinalPlanSP', 'carControl'] if RD.radar_signal else []
+  radar_services = ['radarTracks'] if RD.radar_signal else []
+  sm = messaging.SubMaster(['modelV2', 'carState', *radar_services, *optional_services], poll='modelV2',
                           ignore_alive=optional_services, ignore_avg_freq=optional_services, ignore_valid=optional_services)
   pm = messaging.PubMaster(['radarState'])
-
-  RD = RadarD(CP, CP_SP, CP.radarDelay, params=params)
 
   while 1:
     sm.update()
 
-    RD.update(sm, sm['radarTracks'])
+    RD.update(sm, sm['radarTracks'] if RD.radar_signal else None)
     RD.publish(pm)
 
 

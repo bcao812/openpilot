@@ -58,7 +58,7 @@ def publish_at(rd, now):
 
 
 def make_radard():
-  return RadarD(SimpleNamespace(), SimpleNamespace(), params=SimpleNamespace())
+  return RadarD(SimpleNamespace(), SimpleNamespace(), params=SimpleNamespace(get=lambda _: None))
 
 
 @pytest.mark.parametrize('source,caution', [

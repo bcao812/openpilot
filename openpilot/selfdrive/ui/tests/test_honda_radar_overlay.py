@@ -222,7 +222,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     overlay.sm, overlay.enabled, overlay.next_params_ns = observer, True, START + 1_000_000_000
     view = SimpleNamespace(frame=object(), client=SimpleNamespace(timestamp_eof=START), device_camera=object(),
                            model_renderer=SimpleNamespace(_car_space_transform=np.array(((640., 1000., 0), (360., 0, 1000.), (1., 0, 0)))))
-    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
+    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, radar_signal=True)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
          patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)), \
@@ -274,7 +274,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     params = Mock()
     params.get.return_value = 3
     params.get_bool.return_value = True
-    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, params=params, active_bundle=False)
+    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, params=params, active_bundle=False, radar_signal=True)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2) as clock, \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
          patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)) as measure, \
@@ -403,7 +403,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     overlay.sm, overlay.enabled, overlay.next_params_ns = observer_sm, True, START + 1_000_000_000
     view = SimpleNamespace(frame=object(), client=SimpleNamespace(timestamp_eof=START), device_camera=object(),
                            model_renderer=SimpleNamespace(_car_space_transform=np.array(((640., 1000., 0), (660., 0, 1000.), (1., 0, 0)))))
-    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
+    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, radar_signal=True)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
          patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)), \

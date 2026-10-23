@@ -44,16 +44,17 @@ class TestControlInfluenceRendering(HeadlessUITestCase):
     record.sessionId, record.trackId = '', 0
     sm['modelV2'] = SimpleNamespace()
     sm['extrinsicsCalibration'] = SimpleNamespace(height=[1.2])
-    sm.recv_frame = {'extrinsicsCalibration': 1, 'modelV2': 1}
+    sm.recv_frame = {'extrinsicsCalibration': 1, 'modelV2': 1, 'radarState': 1}
     sm.updated = dict.fromkeys(('carParams', 'modelV2', 'radarState'), False)
     rect = rl.Rectangle(0, 0, 1280, 720)
-    ui = SimpleNamespace(sm=sm, started_frame=0, chevron_metrics=chevron_metrics.ChevronOptions.DISTANCE_ONLY, is_metric=True)
+    ui = SimpleNamespace(sm=sm, started_frame=0, chevron_metrics=chevron_metrics.ChevronOptions.DISTANCE_ONLY, is_metric=True, radar_signal=True)
     with patch.object(renderer, 'ui_state', ui), patch.object(chevron_metrics, 'ui_state', ui), \
          patch.object(renderer.gui_app, 'font', return_value=object()), patch.object(renderer.gui_app, 'mark_phase'), \
          patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
          patch.object(chevron_metrics, 'measure_text_cached', return_value=rl.Vector2(90, 40)), \
          patch.object(rl, 'draw_triangle_fan') as triangles, patch.object(rl, 'draw_text_ex') as text:
       model = renderer.ModelRenderer.__new__(renderer.ModelRenderer)
+      model._radar_signal = True
       model._counter, model._transform_dirty, model._longitudinal_control, model._rect = 1, False, True, rect
       model._draw_lane_lines, model._draw_path, model._update_leads = Mock(), Mock(), Mock()
       model.chevron_metrics = chevron_metrics.ChevronMetrics()
@@ -253,7 +254,7 @@ class TestControlInfluenceRendering(HeadlessUITestCase):
                            model_renderer=SimpleNamespace(_car_space_transform=np.array(((640., 1000., 0), (360., 0, 1000.), (1., 0, 0)))))
     params = Mock()
     params.get.return_value, params.get_bool.return_value = 4, True
-    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, params=params, active_bundle=False)
+    ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, params=params, active_bundle=False, radar_signal=True)
     with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', return_value=START + 2), \
          patch.object(renderer.gui_app, 'font', return_value=object()), \
          patch.object(renderer, 'measure_text_cached', return_value=rl.Vector2(64, 40)), \

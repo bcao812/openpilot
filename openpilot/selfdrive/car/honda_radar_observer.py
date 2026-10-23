@@ -54,6 +54,12 @@ class HondaRadarObserver:
       self.last_fusion_error_ns = now_ns
 
   def update(self, envelopes, sm, settings, now_ns, fusion_sm=None):
+    if not settings.radar_signal:
+      self.decoder.reset()
+      self.fusion = None
+      self.active = False
+      self.fusion_input_error = False
+      return None
     started_ns = time.monotonic_ns()
     active, reason, scope = scope_state(self.cp, self.cp_sp, settings, sm)
     if active != self.active:
@@ -138,6 +144,9 @@ def main():
   from openpilot.common.params import Params
 
   params = Params()
+  settings = ObserverSettings.read(params)
+  if not settings.radar_signal:
+    return
   with car.CarParams.from_bytes(params.get('CarParams', block=True)) as cp, \
        custom.CarParamsSP.from_bytes(params.get('CarParamsSP', block=True)) as cp_sp:
     observer = HondaRadarObserver(cp, cp_sp)
@@ -145,9 +154,14 @@ def main():
     fusion_sm = messaging.SubMaster(['carState', 'modelV2'])
     pm = messaging.PubMaster([SERVICE])
     can_sock = messaging.sub_sock('can', timeout=20)
-    settings = ObserverSettings.read(params)
     next_settings_ns = 0
     while True:
+      now_ns = time.monotonic_ns()
+      if now_ns >= next_settings_ns:
+        settings = ObserverSettings.read(params)
+        next_settings_ns = now_ns + HEARTBEAT_NS
+      if not settings.radar_signal:
+        return
       # Bound each drain: a busy CAN producer cannot starve scope checks or expiry.
       envelopes = []
       first = can_sock.receive()
@@ -161,10 +175,6 @@ def main():
         if len(envelopes) == MAX_ENVELOPES:
           observer.backlog_count += 1
       sm.update(0)
-      now_ns = time.monotonic_ns()
-      if now_ns >= next_settings_ns:
-        settings = ObserverSettings.read(params)
-        next_settings_ns = now_ns + HEARTBEAT_NS
       fusion_sm.update(0)
       # Model/carState may have arrived during the settings/subscriber reads.
       # Validate their source times against a clock taken after those reads.

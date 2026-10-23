@@ -54,6 +54,15 @@ class HondaRadarOverlay:
         cloudlog.exception('Honda radar overlay unavailable')
 
   def _render(self, view, rect):
+    if not ui_state.radar_signal:
+      if self.sm is not None or self.state.active or self.labels or self.layout_key is not None:
+        self.sm = None
+        self.state = RadarOverlayState()
+        self.labels = []
+        self.layout_key = None
+      self.next_params_ns = 0
+      return
+
     now = time.monotonic_ns()
     if now >= self.next_params_ns:
       self.enabled = ui_state.params.get_bool('HondaBoschARadarOverlay')

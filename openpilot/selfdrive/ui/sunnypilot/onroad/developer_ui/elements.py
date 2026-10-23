@@ -8,6 +8,7 @@ import pyray as rl
 from dataclasses import dataclass
 
 from openpilot.common.constants import CV
+from openpilot.common.radar_signal import radar_state_for_mode
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 
@@ -41,7 +42,9 @@ class UiElement:
 class LeadInfoElement:
   @staticmethod
   def get_lead_status(sm):
-    lead_one = sm['radarState'].leadOne
+    if sm.recv_frame['radarState'] < ui_state.started_frame:
+      return False, 0.0, 0.0
+    lead_one = radar_state_for_mode(sm['radarState'], ui_state.radar_signal).leadOne
     return lead_one.present, lead_one.dRel, lead_one.vRel
 
   @staticmethod

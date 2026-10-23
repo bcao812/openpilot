@@ -10,6 +10,8 @@ from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.longitudinal_logging import observe
+from openpilot.common.params import Params
+from openpilot.common.radar_signal import RadarSignalInput, radar_signal_enabled
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import ROLLING_STOP_ACCEL, STOPPING_DECEL_RATE
@@ -283,9 +285,10 @@ def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, 
 
 
 class LongitudinalPlanner(LongitudinalPlannerSP):
-  def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, trace=None, diagnostics=None):
+  def __init__(self, CP, CP_SP, init_v=0.0, init_a=0.0, dt=DT_MDL, *, trace=None, diagnostics=None, params=None):
     self.CP = CP
     self.CP_SP = CP_SP
+    self.radar_signal = radar_signal_enabled(params if params is not None else Params())
     self.longitudinal_mode = resolve_longitudinal_mode(CP, CP_SP)
     self.unified = self.longitudinal_mode == LongitudinalMode.UNIFIED
     self.mpc = LongitudinalMpc(dt=dt, speed_based_following=self.unified)
@@ -323,6 +326,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self._update_reference = partial(update_legacy_reference, self)
 
   def update(self, sm, *, now_ns=None):
+    if not self.radar_signal:
+      sm = RadarSignalInput(sm, False)
     # Native execution samples its own monotonic clock. Replays must provide the
     # recorded consumer time explicitly; input timestamps cannot date themselves.
     if now_ns is None:
@@ -423,6 +428,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     return source
 
   def publish(self, sm, pm):
+    if not self.radar_signal:
+      sm = RadarSignalInput(sm, False)
     plan_send = messaging.new_message('longitudinalPlan', logMonoTime=time.monotonic_ns())
 
     # A healthy OFF standby is transport, not a new MPC result. Keep the last

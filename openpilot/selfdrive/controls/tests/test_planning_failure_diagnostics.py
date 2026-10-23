@@ -279,6 +279,7 @@ def test_planner_records_actual_consumed_publications_without_opt_in(diagnosed_m
 
   state = State(radarState=no_leads())
   planner = LongitudinalPlanner.__new__(LongitudinalPlanner)
+  planner.radar_signal = True
   planner.mpc, planner.trace, planner.observation = mpc, None, None
 
   def update(current, *, now_ns):
@@ -310,6 +311,7 @@ def test_context_read_failure_cannot_replace_the_underlying_planner_result(diagn
       raise RuntimeError('diagnostic timestamp access failed')
 
   planner = LongitudinalPlanner.__new__(LongitudinalPlanner)
+  planner.radar_signal = True
   planner.mpc, planner.trace, planner.observation = mpc, None, None
   planner._update_reference = lambda sm, now_ns: 'underlying result'
   assert planner.update(BrokenTimes(), now_ns=EPOCH_NS) == 'underlying result'

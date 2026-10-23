@@ -175,14 +175,14 @@ class TestModelPolygonCache(HeadlessUITestCase):
                                     laneLineProbs=[0.8] * 4, roadEdgeStds=[0.1, 0.2], acceleration=SimpleNamespace(x=np.zeros(33)))
 
     class Messages(dict):
-      recv_frame = {'extrinsicsCalibration': 1, 'modelV2': 1}
+      recv_frame = {'extrinsicsCalibration': 1, 'modelV2': 1, 'radarState': 1}
       updated = {'carParams': False, 'modelV2': True, 'radarState': False}
       valid = {'radarState': False, 'selfdriveStateSP': False}
       logMonoTime = {'modelV2': 123}
 
     sm = Messages(modelV2=model_message, selfdriveState=SimpleNamespace(experimentalMode=False),
                   extrinsicsCalibration=SimpleNamespace(height=[1.22]), longitudinalPlan=SimpleNamespace(allowThrottle=True))
-    state = SimpleNamespace(sm=sm, started_frame=0, active_bundle=False, rainbow_path=False, status=UIStatus.ENGAGED)
+    state = SimpleNamespace(sm=sm, started_frame=0, active_bundle=False, rainbow_path=False, status=UIStatus.ENGAGED, radar_signal=True)
     self.enterContext(patch.object(model, "ui_state", state))
     self.enterContext(patch.object(model_sp, "ui_state", state))
     self.enterContext(patch.object(model, "Params", return_value=Mock(get=Mock(return_value=None))))

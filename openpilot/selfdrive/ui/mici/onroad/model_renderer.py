@@ -5,6 +5,7 @@ from openpilot.cereal import messaging
 from opendbc.car.structs import car
 from dataclasses import dataclass, field
 from openpilot.common.params import Params
+from openpilot.common.radar_signal import radar_state_for_mode
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
@@ -63,6 +64,7 @@ class ModelRenderer(Widget, ModelRendererSP):
     self._lane_line_probs = np.zeros(4, dtype=np.float32)
     self._road_edge_stds = np.zeros(2, dtype=np.float32)
     self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
+    self._radar_signal = ui_state.radar_signal
     self._path_offset_z = HEIGHT_INIT[0]
 
     # Initialize ModelPoints objects
@@ -104,6 +106,11 @@ class ModelRenderer(Widget, ModelRendererSP):
   def _render(self, rect: rl.Rectangle):
     sm = ui_state.sm
 
+    if self._radar_signal != ui_state.radar_signal:
+      self._radar_signal = ui_state.radar_signal
+      self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
+      self._transform_dirty = True
+
     if self._counter % 180 == 0:  # This runs at 60fps, so we query every 3 seconds
       self._camera_offset = ui_state.params.get("CameraOffset", return_default=True) if ui_state.active_bundle else 0.0
     self._counter += 1
@@ -130,7 +137,8 @@ class ModelRenderer(Widget, ModelRendererSP):
       self._longitudinal_control = sm['carParams'].openpilotLongitudinalControl
 
     model = sm['modelV2']
-    radar_state = sm['radarState'] if sm.valid['radarState'] else None
+    radar_current = sm.valid['radarState'] and sm.recv_frame['radarState'] >= ui_state.started_frame
+    radar_state = radar_state_for_mode(sm['radarState'], self._radar_signal) if radar_current else None
     lead_one = radar_state.leadOne if radar_state else None
     render_lead_indicator = self._longitudinal_control and radar_state is not None
 

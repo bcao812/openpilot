@@ -629,6 +629,7 @@ def test_card_can_send_the_last_positive_command_for_its_alive_tail_after_contro
   assert not harness.motion.degraded
   assert last_command.carControl.actuators.accel > 0.0
   card = Car.__new__(Car)
+  card.radar_signal = True
   card.CP = harness.control.CP
   card.CP_SP = harness.control.CP_SP
   card.sm = bounded_submaster(['carControl'])
@@ -759,6 +760,7 @@ def test_card_pedal_edge_restriction_is_scoped_and_keeps_cached_control_immutabl
   assert last_command.carControl.longActive
   assert last_command.carControl.actuators.accel > 0.0
   card = Car.__new__(Car)
+  card.radar_signal = True
   card.CP = harness.control.CP
   card.CP_SP = harness.control.CP_SP
   card.sm = bounded_submaster(['carControl'])

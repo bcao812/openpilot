@@ -54,6 +54,7 @@ class CardHarness:
     card.can_rcv_cum_timeout_counter = 0
     card.is_metric = True
     card.experimental_mode = False
+    card.radar_signal = True
     card.dynamic_experimental_control = False
     card.rk = SimpleNamespace(remaining=0.0)
     card.last_actuators_output = car.CarControl.Actuators.new_message()

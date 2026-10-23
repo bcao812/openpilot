@@ -7,6 +7,7 @@ from openpilot.cereal import messaging, log
 from opendbc.car.structs import car
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
+from openpilot.common.radar_signal import radar_signal_enabled
 from openpilot.common.realtime import drop_realtime
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.lib.prime_state import PrimeState
@@ -92,6 +93,7 @@ class UIState(UIStateSP):
     self.always_on_dm: bool = self.params.get_bool("AlwaysOnDM")
     self.experimental_mode: bool = self.params.get_bool("ExperimentalMode")
     self.experimental_mode_confirmed: bool = self.params.get_bool("ExperimentalModeConfirmed")
+    self.radar_signal: bool = radar_signal_enabled(self.params)
     self.chestnut_present: bool = False
     self.chestnut_compiled: bool = chestnut_compiled()
     self.chestnut_active: bool | None = None
@@ -206,6 +208,8 @@ class UIState(UIStateSP):
     # Handle onroad/offroad transition
     if self.started != self._started_prev or self.sm.frame == 1:
       if self.started:
+        # Match the onroad processes: a saved change applies to the next drive.
+        self.radar_signal = radar_signal_enabled(self.params)
         self.status = UIStatus.DISENGAGED
         self.started_frame = self.sm.frame
         self.started_time = time.monotonic()
