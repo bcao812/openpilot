@@ -18,8 +18,8 @@ POSITION = np.array(FIXTURE['position'])
 
 
 def qualifies(raw=VELOCITY, position=POSITION, **changes):
-  values = dict(actual_standstill=True, measured_speed=0.0, raw_speed=0.0,
-                wheel_speeds=(0.0, 0.0, 0.0, 0.0), model_mono_time_ns=SOURCE_NS)
+  values = {'actual_standstill': True, 'measured_speed': 0.0, 'raw_speed': 0.0,
+            'wheel_speeds': (0.0, 0.0, 0.0, 0.0), 'model_mono_time_ns': SOURCE_NS}
   position_times = changes.pop('position_times', MODEL_TIMES)
   velocity_times = changes.pop('velocity_times', MODEL_TIMES)
   reference = changes.pop('reference', evidence(raw, 0.0))

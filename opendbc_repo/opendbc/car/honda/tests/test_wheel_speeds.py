@@ -22,3 +22,21 @@ def test_raw_can_wheels_are_explicitly_published_even_when_transmission_reports_
   actual = tuple(getattr(current.wheelSpeeds, name) for name in ('fl', 'fr', 'rl', 'rr'))
   assert actual == pytest.approx(tuple(value / 3.6 for value in wheels), abs=0.003)
   assert current.vEgoRaw == 0.0 and current.standstill
+
+
+@pytest.mark.parametrize('age_ns,current', [(50_000_000, True), (100_000_000, True), (100_000_001, False)])
+def test_wheel_source_age_is_checked_independently_of_a_new_engine_packet(age_ns, current):
+  harness = AccFaultHarness(CAR.HONDA_ACCORD, alpha_long=True)
+  stamp = 1_000_000_000
+  wheel = harness.packer.make_can_msg('WHEEL_SPEEDS', harness.bus, {'COUNTER': 0})
+  harness.car_interface.update([(stamp, [CanData(wheel[0], wheel[1], harness.bus)])])
+  engine = harness.packer.make_can_msg('ENGINE_DATA', harness.bus, {'XMISSION_SPEED': 0.0, 'COUNTER': 0})
+  result, _ = harness.car_interface.update([(stamp + age_ns, [CanData(engine[0], engine[1], harness.bus)])])
+  assert result._has('wheelSpeeds') is current
+
+
+def test_unreceived_wheels_cannot_publish_a_zero_measurement_at_startup():
+  harness = AccFaultHarness(CAR.HONDA_ACCORD, alpha_long=True)
+  engine = harness.packer.make_can_msg('ENGINE_DATA', harness.bus, {'XMISSION_SPEED': 0.0, 'COUNTER': 0})
+  result, _ = harness.car_interface.update([(1_000_000_000, [CanData(engine[0], engine[1], harness.bus)])])
+  assert not result._has('wheelSpeeds')

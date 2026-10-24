@@ -133,7 +133,7 @@ class NativeMotion:
     # after its rotating-axis allowance; alternating errors must not cancel.
     intervals = [(math.copysign(max(0.0, abs(current[1]) - current[2]), current[1]),
                   (current[0] - previous[0]) / 1e9)
-                 for previous, current in zip(samples, samples[1:])]
+                 for previous, current in zip(samples, samples[1:], strict=False)]
 
     def directional_excess(sign):
       contributions = [(max(0.0, sign * value), duration) for value, duration in intervals]
