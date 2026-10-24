@@ -79,7 +79,9 @@ def test_real_stationary_slow_and_braking_leads_keep_original_admission_time(lea
 @pytest.mark.parametrize('lead_speed', [0.0, 8.0])
 def test_turning_lead_uses_current_body_geometry_without_waiting_for_a_straight_road(lead_speed):
   native = NativeMotion()
-  ego_speed, yaw = 10.0, .8
+  # Exercise mature updates while staying inside the raw azimuth field's
+  # +/-0.5 radian range for the entire longer sequence.
+  ego_speed, yaw = 10.0, .3
   for index in range(12):
     elapsed = index * STEP / 1e9
     heading = yaw * elapsed

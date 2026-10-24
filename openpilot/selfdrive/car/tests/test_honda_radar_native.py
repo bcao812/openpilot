@@ -268,7 +268,9 @@ def test_formal_track_speed_and_acceleration_ignore_joint_distance_and_lateral_s
   reference, perturbed = HondaRadarFusion(), HondaRadarFusion()
   for index in range(10):
     expected = advance(reference, index, [observation(index, relative=-1.0)], probability=0)['tracks'][0]
-    actual = advance(perturbed, index, [observation(index, relative=-1.0, distance=20 + .3 * math.sin(index),
+    # Quantization-scale geometry perturbations retain a qualified current
+    # pair. Sustained contradictory position motion is covered separately.
+    actual = advance(perturbed, index, [observation(index, relative=-1.0, distance=20 + .03 * math.sin(index),
                                                    lateral=.1 * math.sin(index))], probability=0)['tracks'][0]
     for field in ('groundSpeed', 'acceleration', 'accelerationGood'):
       assert expected[field] == actual[field]
