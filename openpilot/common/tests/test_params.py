@@ -114,6 +114,24 @@ class TestParams(OpenpilotTestCase):
     assert len(keys) == len(set(keys))
     assert b"CarParams" in keys
 
+  def test_params_all_keys_by_flag_retains_distinct_names(self):
+    registered = set(self.params.all_keys())
+    expected = {
+      ParamKeyFlag.BACKUP: {b"IsMetric", b"LongitudinalPersonality", b"SoundMode"},
+      ParamKeyFlag.PERSISTENT: {b"DongleId", b"IsMetric"},
+      ParamKeyFlag.CLEAR_ON_MANAGER_START: {b"CarParams", b"ControlsReady"},
+    }
+    for flag, required in expected.items():
+      with self.subTest(flag=flag):
+        keys = self.params.all_keys(flag)
+        assert required <= set(keys)
+        assert set(keys) <= registered
+        assert len(keys) == len(set(keys))
+        # Other string-returning calls must not corrupt the already copied names.
+        self.params.get_param_path("SoundMode")
+        assert set(self.params.all_keys(flag)) == set(keys)
+    assert self.params.all_keys(ParamKeyFlag(0)) == []
+
   def test_params_default_value(self):
     self.params.remove("LanguageSetting")
     self.params.remove("LongitudinalPersonality")

@@ -23,6 +23,7 @@ struct ParamsHandle {
 namespace {
 thread_local char last_error[512] = {};
 thread_local std::string result;
+thread_local std::vector<std::string> result_list;
 
 void set_error(const char *error) {
   snprintf(last_error, sizeof(last_error), "%s", error);
@@ -162,12 +163,14 @@ ParamsBuffer params_key_at(ParamsHandle *handle, size_t index) noexcept {
 
 size_t params_keys_by_flag(ParamsHandle *handle, uint32_t flag, ParamsBuffer *out, size_t out_size) noexcept {
   return translate_exceptions(size_t{0}, [&]() {
-    auto filtered = handle->params.allKeys(static_cast<ParamKeyFlag>(flag));
-    size_t count = std::min(filtered.size(), out_size);
+    // Keep every buffer alive until the caller copies the complete list.
+    // return_string() only retains one string and would invalidate earlier entries.
+    result_list = handle->params.allKeys(static_cast<ParamKeyFlag>(flag));
+    size_t count = std::min(result_list.size(), out_size);
     for (size_t i = 0; i < count; i++) {
-      out[i] = return_string(filtered[i]);
+      out[i] = {result_list[i].data(), result_list[i].size()};
     }
-    return filtered.size();
+    return result_list.size();
   });
 }
 
