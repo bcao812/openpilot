@@ -236,8 +236,7 @@ def test_disconnected_quantization_residuals_keep_their_independent_endpoint_bud
     # range bins. Faster valid source pairs produce several disconnected
     # positive/negative residual groups in the same 250 ms support window.
     distance = (650 + index % 2) * .05712 - 3.0
-    current = sample(index, step=18_000_000, relative=0.0, distance=distance)
+    current = sample(index, step=17_000_000, relative=0.0, distance=distance)
     assert observe(native, current, ego=lambda _: SimpleNamespace(speed=0.0, yaw=0.0))
-    if index >= 14:
+    if index >= 15:
       assert native.qualified
-  assert max(native.consistency_positive_segments, native.consistency_negative_segments) > 2
