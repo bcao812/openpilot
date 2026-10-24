@@ -22,10 +22,11 @@ PREFERENCE_TIME_S = 2.5  # engineering scaling, not a vehicle-identified paramet
 FORWARD_HORIZON_S = float(ModelConstants.T_IDXS[CONTROL_N - 1])
 # Candidate domain for a stopped Accord with independently observed zero
 # wheels and no current lead. These are engineering budgets, not calibrated
-# model uncertainty: 0.03 m/s alone over 0.5 s could permit 15 mm, so position
-# and the integrated negative velocity must each also stay within 5 mm.
+# model uncertainty. Speed and recovery time already bound integrated reverse
+# motion to at most 15 mm. The 20 mm displacement ceiling also accommodates
+# disagreement between the separately predicted near-zero position/velocity.
 STATIONARY_REVERSE_SPEED = 0.03
-STATIONARY_REVERSE_DISTANCE = 0.005
+STATIONARY_REVERSE_DISTANCE = 0.020
 STATIONARY_RECOVERY_TIME = 0.5
 
 

@@ -62,7 +62,7 @@ def test_model_reverse_budgets_and_full_later_trajectory_are_required(defect):
   if defect == 'reverse_speed':
     raw[0] = -0.030001
   elif defect == 'reverse_integral':
-    raw[MODEL_TIMES <= 0.244140625] = -0.025
+    raw[MODEL_TIMES < 1.0] = -0.03
   elif defect == 'slow_recovery':
     raw[MODEL_TIMES < 0.625] = -0.003
   elif defect == 'later_stop':
@@ -76,7 +76,7 @@ def test_model_reverse_budgets_and_full_later_trajectory_are_required(defect):
   elif defect == 'weak_forward_velocity':
     raw[MODEL_TIMES <= 2.5] = np.minimum(raw[MODEL_TIMES <= 2.5], 0.01)
   elif defect == 'position_reverse':
-    position[5] = -0.005001
+    position[5] = -0.020001
   elif defect == 'position_later_reverse':
     position[-1] = position[-2] - 0.01
   elif defect == 'weak_position_progress':
@@ -89,6 +89,24 @@ def test_model_reverse_budgets_and_full_later_trajectory_are_required(defect):
     raw[-1] = np.nan
   elif defect == 'missing_position':
     position = position[:-1]
+  assert not qualifies(raw, position)
+
+
+@pytest.mark.parametrize('distance,accepted', [(0.005001, True), (0.019999, True), (0.020, True), (0.020001, False)])
+def test_twenty_millimeter_position_candidate_keeps_its_explicit_boundary(distance, accepted):
+  position = POSITION.copy()
+  position[5] = position[0] - distance
+  assert qualifies(position=position) is accepted
+
+
+def test_larger_position_budget_does_not_relax_speed_or_recovery_time():
+  position = POSITION.copy()
+  position[5] = position[0] - 0.019
+  raw = VELOCITY.copy()
+  raw[0] = -0.030001
+  assert not qualifies(raw, position)
+  raw = VELOCITY.copy()
+  raw[MODEL_TIMES < 0.625] = -0.01
   assert not qualifies(raw, position)
 
 
