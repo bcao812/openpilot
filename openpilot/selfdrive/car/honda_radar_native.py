@@ -16,13 +16,18 @@ MIN_SPAN_NS = 250_000_000
 MAX_PAIR_NS = 50_000_000
 MAX_GAP_NS = 100_000_000
 MAX_AGE_NS = 200_000_000
+# Preserve the original untrimmed admission budget as a gross-conflict ceiling
+# on every current window. Robust trimming must not newly approve a startup
+# which the original admission rule rejected.
+ADMISSION_DISTANCE_MARGIN = .5
+ADMISSION_SPEED_MARGIN = 3.0
 # Candidate consistency budget, not calibrated sensor accuracy. Three raw
 # range steps cover the split interval endpoints and one extra quantization
 # step. The speed term bounds remaining sustained disagreement. One isolated
 # interval in each direction is excluded with its time support; opposite
 # sustained errors cannot cancel. Yaw/lateral motion has its own allowance.
-ADMISSION_DISTANCE_MARGIN = 3 * .05712
-ADMISSION_SPEED_MARGIN = 1.0
+CONSISTENCY_DISTANCE_MARGIN = 3 * .05712
+CONSISTENCY_SPEED_MARGIN = 1.0
 ADMISSION_WINDOW_NS = 500_000_000
 ADMISSION_MAX_SAMPLES = 16
 
@@ -133,12 +138,13 @@ class NativeMotion:
       largest, duration = max(contributions, default=(0.0, 0.0))
       span = self.admission_span_ns / 1e9 - (duration if largest > 0.0 else 0.0)
       total = sum(value for value, _ in contributions) - largest
-      return total, ADMISSION_DISTANCE_MARGIN + ADMISSION_SPEED_MARGIN * span
+      return total, CONSISTENCY_DISTANCE_MARGIN + CONSISTENCY_SPEED_MARGIN * span
 
     self.consistency_positive, self.consistency_positive_limit = directional_excess(1.0)
     self.consistency_negative, self.consistency_negative_limit = directional_excess(-1.0)
     self.admission_ready = (len(samples) >= MIN_PAIRS and self.admission_span_ns >= MIN_SPAN_NS
                             and math.isfinite(self.admission_residual)
+                            and abs(self.admission_residual) <= self.admission_limit
                             and self.consistency_positive <= self.consistency_positive_limit
                             and self.consistency_negative <= self.consistency_negative_limit)
 

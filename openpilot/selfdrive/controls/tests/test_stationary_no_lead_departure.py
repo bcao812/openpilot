@@ -184,4 +184,8 @@ def test_held_owner_keeps_independent_vetoes_for_b5_candidate(condition):
     state['controlsState'].longControlState = owner.long_control_state
     plan, outputs = consume(planner, owner, state, frame)
     assert not plan.motionIntent.releaseAllowed
-    assert owner.resolved_should_stop and max(outputs) <= 0.0
+    if condition == 'brake_pressed':
+      # The driver's brake transfers authority away from automatic HOLD.
+      assert owner.motion_phase == MotionPhase.OFF and all(value == 0.0 for value in outputs)
+    else:
+      assert owner.resolved_should_stop and max(outputs) <= 0.0

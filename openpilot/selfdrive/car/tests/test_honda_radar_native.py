@@ -253,11 +253,13 @@ def test_coasting_and_withdrawal_do_not_keep_prior_speed_for_requalification():
   assert not observe(native, sample(6), 2)
 
 
-def test_one_interval_outlier_does_not_prove_sustained_motion_disagreement():
+def test_gross_current_position_conflict_cannot_be_hidden_as_one_trimmed_outlier():
   native = mature()
   current = sample(5, distance=24.0)
   assert observe(native, current)
-  assert native.qualified and native.distance_residual_valid
+  assert not native.qualified and native.distance_residual_valid
+  assert native.reason == 'motionDisagreement'
+  assert native.raw_relative_speed == -1.0 and native.ground_speed == 19.0
   assert native.distance_residual < -5
 
 
