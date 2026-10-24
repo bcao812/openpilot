@@ -15,7 +15,9 @@ def test_raw_can_wheels_are_explicitly_published_even_when_transmission_reports_
       ('WHEEL_SPEEDS', {f'WHEEL_SPEED_{name}': value for name, value in zip(('FL', 'FR', 'RL', 'RR'), wheels, strict=True)}),
       ('ENGINE_DATA', {'XMISSION_SPEED': 0.0}),
     ]
-    packed = [harness.packer.make_can_msg(name, harness.bus, dict(values, COUNTER=frame % 4)) for name, values in messages]
+    packed = [harness.packer.make_can_msg(name, harness.bus,
+                                         dict(values, COUNTER=frame % 4) if name == 'ENGINE_DATA' else values)
+              for name, values in messages]
     current, _ = harness.car_interface.update([(1_000_000_000 + frame * 10_000_000,
                                                [CanData(row[0], row[1], harness.bus) for row in packed])])
   assert current._has('wheelSpeeds')
@@ -27,9 +29,13 @@ def test_raw_can_wheels_are_explicitly_published_even_when_transmission_reports_
 @pytest.mark.parametrize('age_ns,current', [(50_000_000, True), (100_000_000, True), (100_000_001, False)])
 def test_wheel_source_age_is_checked_independently_of_a_new_engine_packet(age_ns, current):
   harness = AccFaultHarness(CAR.HONDA_ACCORD, alpha_long=True)
-  stamp = 1_000_000_000
-  wheel = harness.packer.make_can_msg('WHEEL_SPEEDS', harness.bus, {'COUNTER': 0})
-  harness.car_interface.update([(stamp, [CanData(wheel[0], wheel[1], harness.bus)])])
+  # Honda registers lazily on the first CarState.update; establish a parsed
+  # measurement before evaluating its independent source-time deadline.
+  wheel = harness.packer.make_can_msg('WHEEL_SPEEDS', harness.bus, {})
+  for frame in range(4):
+    stamp = 1_000_000_000 + frame * 10_000_000
+    received, _ = harness.car_interface.update([(stamp, [CanData(wheel[0], wheel[1], harness.bus)])])
+  assert received._has('wheelSpeeds')
   engine = harness.packer.make_can_msg('ENGINE_DATA', harness.bus, {'XMISSION_SPEED': 0.0, 'COUNTER': 0})
   result, _ = harness.car_interface.update([(stamp + age_ns, [CanData(engine[0], engine[1], harness.bus)])])
   assert result._has('wheelSpeeds') is current
