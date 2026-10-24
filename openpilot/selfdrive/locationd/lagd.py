@@ -14,7 +14,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.common.phase_timer import PhaseTimer
-from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose, fft_next_good_size, parabolic_peak_interp
+from openpilot.selfdrive.locationd.helpers import PoseCalibrator, fft_next_good_size, parabolic_peak_interp
 from openpilot.sunnypilot.livedelay.lagd_toggle import LagdToggle
 
 BLOCK_SIZE = 100
@@ -269,10 +269,9 @@ class LateralLagEstimator:
     elif which == "extrinsicsCalibration":
       self.calibrator.feed_extrinsics_calibration(msg)
     elif which == "deviceMotion":
-      device_motion = Pose.from_device_motion(msg)
-      calibrated_pose = self.calibrator.build_calibrated_pose(device_motion)
-      self.yaw_rate = calibrated_pose.angular_velocity.yaw
-      self.yaw_rate_std = calibrated_pose.angular_velocity.yaw_std
+      angular_velocity = self.calibrator.build_calibrated_angular_velocity(msg)
+      self.yaw_rate = angular_velocity.yaw
+      self.yaw_rate_std = angular_velocity.yaw_std
       self.pose_valid = msg.angularVelocityDevice.valid and msg.posenetOK and msg.inputsOK
     self.t = t
 
@@ -321,11 +320,14 @@ class LateralLagEstimator:
       new_values_start_idx = next(-i for i, t in enumerate(reversed(times)) if t <= self.last_estimate_t)
       is_valid = is_valid and not (new_values_start_idx == 0 or not np.any(okay[new_values_start_idx:]))
 
+    if not is_valid:
+      return
+
     desired = masked_symmetric_moving_average(desired, okay, SMOOTH_K, SMOOTH_SIGMA)
     actual = masked_symmetric_moving_average(actual, okay, SMOOTH_K, SMOOTH_SIGMA)
 
     delay, corr, confidence = self.actuator_delay(desired, actual, okay, self.dt, MIN_LAG, MAX_LAG)
-    if corr < self.min_ncc or confidence < self.min_confidence or not is_valid:
+    if corr < self.min_ncc or confidence < self.min_confidence:
       return
 
     self.block_avg.update(delay)

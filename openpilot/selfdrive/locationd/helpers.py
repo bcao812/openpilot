@@ -170,6 +170,9 @@ class PoseCalibrator:
     ned_from_calib_euler_meas = Measurement(euler_from_rot(ned_from_calib), np.full(3, np.nan))
     return ned_from_calib_euler_meas
 
+  def build_calibrated_angular_velocity(self, device_motion: log.DeviceMotion) -> Measurement:
+    return self._transform_calib_from_device(Measurement.from_measurement_xyz(device_motion.angularVelocityDevice))
+
   def build_calibrated_pose(self, pose: Pose) -> Pose:
     ned_from_calib_euler = self._ned_from_calib(pose.orientation)
     angular_velocity_calib = self._transform_calib_from_device(pose.angular_velocity)

@@ -424,6 +424,7 @@ class LongitudinalMpc:
   def reset(self):
     clear_reference_bounds = hasattr(self, '_rest_constraint_buffers')
     self.diagnostic_reset_calls += 1
+    self._rest_defaults_installed = [False] * N
     self.solver.reset()
 
     # The native setters copy their inputs synchronously. Keep private,
@@ -436,13 +437,14 @@ class LongitudinalMpc:
                                       np.full(2, -1.0), np.ones(2)) for _ in range(N)]
     if clear_reference_bounds:
       # solver.reset() clears iterates, not the installed model constraints.
-      # Ordinary update rewrites every row; direct run after failure/reset
+      # Ordinary update refreshes active/changed rows; direct run after failure/reset
       # must also be unable to inherit an old rest row or state box.
       for stage, (C, D, lower, upper) in enumerate(self._rest_constraint_buffers):
         self.solver.constraints_set(stage, 'C', C)
         self.solver.constraints_set(stage, 'D', D)
         self.solver.constraints_set(stage, 'lg', lower)
         self.solver.constraints_set(stage, 'ug', upper)
+        self._rest_defaults_installed[stage] = True
       for stage in range(1, N+1):
         self.solver.constraints_set(stage, 'lbx', np.full(2, -REFERENCE_BOUND))
         self.solver.constraints_set(stage, 'ubx', np.full(2, REFERENCE_BOUND))
@@ -1049,6 +1051,8 @@ class LongitudinalMpc:
     if self.solution_status != 0 or not self.previous_solution_valid or self._influence_problem is None:
       return
     obstacles, tokens, compact_slots, reference = self._influence_problem
+    if not any(token is not None for token in tokens):
+      return
     comfort_bases = np.array([reference.comfort_stop_distance if reference is not None and slot is not None else STOP_DISTANCE
                               for slot in compact_slots])
     risk_bases = np.array([reference.lead_risk_stop_distances[slot] if reference is not None and slot is not None else STOP_DISTANCE
@@ -1616,10 +1620,18 @@ class LongitudinalMpc:
         # At stage zero b1 is fixed and was certified by the split choice.
         # Keeping that row inactive avoids a redundant initial-state equality.
         splits.append(float(split))
+      default_bounds = stage >= constrained_stages
+      if default_bounds and self._rest_defaults_installed[stage]:
+        continue
+      # Cache only successfully installed defaults, never an active rest row.
+      # Clear before the first setter so a partial failure cannot preserve a
+      # stale default claim. Buffers above still describe the current problem.
+      self._rest_defaults_installed[stage] = False
       self.solver.constraints_set(stage, 'C', C)
       self.solver.constraints_set(stage, 'D', D)
       self.solver.constraints_set(stage, 'lg', lower)
       self.solver.constraints_set(stage, 'ug', upper)
+      self._rest_defaults_installed[stage] = default_bounds
     if future:
       self.diagnostic_rest_goal['continuousSpeedCertificate'] = 'quadratic_bernstein'
       self.diagnostic_rest_goal['continuousSpeedSplitTimes'] = splits

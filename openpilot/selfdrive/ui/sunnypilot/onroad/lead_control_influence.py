@@ -8,6 +8,8 @@ from dataclasses import dataclass
 import math
 from numbers import Integral, Real
 
+from capnp.lib.capnp import _DynamicStructReader
+
 
 MESSAGE_MAX_AGE_NS = 200_000_000
 MAX_INFLUENCES = 34
@@ -46,6 +48,26 @@ class ObjectInfluence:
   strength: float
 
 
+class _IndexedInfluences(tuple):
+  """Keep tuple consumers compatible while indexing each existing identity rule."""
+  def __new__(cls, items):
+    result = super().__new__(cls, items)
+    result.radar = {}
+    result.visual = {}
+    result.legacy_visual = {}
+    for item in result:
+      radar_key = (item.session_id, item.track_id)
+      visual_key = (item.model_ns, item.vision_index)
+      if item.session_id:
+        result.radar[radar_key] = max(result.radar.get(radar_key, 0.0), item.strength)
+      else:
+        result.legacy_visual[visual_key] = max(result.legacy_visual.get(visual_key, 0.0), item.strength)
+      # A current visual lead may bind to the visual identity in a fused receipt;
+      # old-layout leads require a pure-visual receipt instead.
+      result.visual[visual_key] = max(result.visual.get(visual_key, 0.0), item.strength)
+    return result
+
+
 def accepted_influences(sm, now_ns):
   """Read the owner's current receipt, never the latest unconsumed plan.
 
@@ -71,10 +93,28 @@ def accepted_influences(sm, now_ns):
       or not _fresh(plan_ns, now_ns) or plan_ns > stamps['controlsState']
       or _read(controls, 'longitudinalPlanMonoTime', 0) != plan_ns):
     return ()
+  ordinary_allowed = not (_read(motion, 'degraded', False) or _read(motion, 'waitingForFreshInput', False))
+  # SubMaster replaces received readers and increments frame on every UI update.
+  # Share only structure decoding within that update; every caller still checks
+  # current age, pedals, plan identity and motion state above. Mutable builders
+  # and dictionary fixtures are intentionally decoded on every call.
+  frame = getattr(sm, 'frame', None)
+  cacheable = _integer(frame) and isinstance(controls, _DynamicStructReader)
+  if cacheable:
+    key = (frame, stamps['controlsState'], ordinary_allowed, phase)
+    cached = getattr(sm, '_ui_influence_cache', None)
+    if cached is not None and cached[0] == key and cached[1] is controls:
+      return cached[2]
+  influences = _decode_influences(motion, ordinary_allowed, phase)
+  if cacheable:
+    sm._ui_influence_cache = (key, controls, influences)
+  return influences
+
+
+def _decode_influences(motion, ordinary_allowed, phase):
   items = _read(motion, 'objectInfluences', ())
   if len(items) > MAX_INFLUENCES:
     return ()
-  ordinary_allowed = not (_read(motion, 'degraded', False) or _read(motion, 'waitingForFreshInput', False))
   accepted = []
   for item in items:
     version = _read(item, 'version', 0)
@@ -99,12 +139,14 @@ def accepted_influences(sm, now_ns):
       continue
     if radar_identity or visual_identity:
       accepted.append(ObjectInfluence(session, int(track), int(model_ns), int(vision_index), kind, float(strength)))
-  return tuple(accepted)
+  return _IndexedInfluences(accepted) if accepted else ()
 
 
 def radar_influence_strength(point, influences):
   if not point.session_id or point.track_id <= 0:
     return 0.0
+  if isinstance(influences, _IndexedInfluences):
+    return influences.radar.get((point.session_id, point.track_id), 0.0)
   return max((item.strength for item in influences
               if (item.session_id, item.track_id) == (point.session_id, point.track_id)), default=0.0)
 
@@ -123,6 +165,8 @@ def lead_influence_strength(lead, influences, *, legacy_model_ns=0, legacy_slot=
     if (_read(lead, 'radar') is not False or not _integer(legacy_model_ns, 1)
         or not _integer(legacy_slot) or legacy_slot not in (0, 1)):
       return 0.0
+    if isinstance(influences, _IndexedInfluences):
+      return influences.legacy_visual.get((legacy_model_ns, legacy_slot), 0.0)
     return max((item.strength for item in influences
                 if not item.session_id and item.track_id == 0
                 and (item.model_ns, item.vision_index) == (legacy_model_ns, legacy_slot)), default=0.0)
@@ -131,10 +175,14 @@ def lead_influence_strength(lead, influences, *, legacy_model_ns=0, legacy_slot=
   source = str(_read(evidence, 'source', 'legacy'))
   session, track = _read(evidence, 'sessionId', ''), _read(evidence, 'trackId', 0)
   if source in ('radar', 'fused', 'predicted') and isinstance(session, str) and session and _integer(track, 1):
+    if isinstance(influences, _IndexedInfluences):
+      return influences.radar.get((session, track), 0.0)
     return max((item.strength for item in influences
                 if (item.session_id, item.track_id) == (session, track)), default=0.0)
   model_ns, vision_index = _read(evidence, 'modelMonoTime', 0), _read(evidence, 'visionIndex', -1)
   if source == 'vision' and session == '' and track == 0 and _integer(model_ns, 1) and _integer(vision_index) and vision_index in (0, 1):
+    if isinstance(influences, _IndexedInfluences):
+      return influences.visual.get((model_ns, vision_index), 0.0)
     return max((item.strength for item in influences
                 if (item.model_ns, item.vision_index) == (model_ns, vision_index)), default=0.0)
   return 0.0

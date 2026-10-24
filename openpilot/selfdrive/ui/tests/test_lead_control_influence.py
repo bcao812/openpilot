@@ -1,10 +1,12 @@
 from copy import deepcopy
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
 from openpilot.cereal import log
+from openpilot.selfdrive.ui.sunnypilot.onroad import lead_control_influence
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import RadarLabelPoint
 from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import (
   MESSAGE_MAX_AGE_NS, ObjectInfluence, _integer, _read, accepted_influences, influence_rgb, lead_influence_strength, radar_influence_strength,
@@ -63,6 +65,119 @@ def capnp_state(sm, capnp_message):
   result.valid = sm.valid.copy()
   result.logMonoTime = sm.logMonoTime.copy()
   return result
+
+
+def received_state(*items):
+  sm = state(*items)
+  sm.frame = 7
+  sm['controlsState'] = log.Event.new_message(controlsState=sm['controlsState']).controlsState.as_reader()
+  return sm
+
+
+def test_receipt_decode_is_shared_only_within_the_current_reader_frame():
+  sm = received_state()
+  with patch.object(lead_control_influence, '_decode_influences', wraps=lead_control_influence._decode_influences) as decode:
+    first = accepted_influences(sm, NOW)
+    assert accepted_influences(sm, NOW + 1) is first
+    assert decode.call_count == 1
+
+    sm.frame += 1
+    assert accepted_influences(sm, NOW + 2) == first
+    assert decode.call_count == 2
+    sm.logMonoTime['controlsState'] += 1
+    assert accepted_influences(sm, NOW + 3) == first
+    assert decode.call_count == 3
+
+    # A replacement reader invalidates the cache even when the timestamp and
+    # frame are unchanged. An explicit withdrawal immediately removes color.
+    replacement = state(influence(trackId=63, strength=0.8))['controlsState']
+    sm['controlsState'] = log.Event.new_message(controlsState=replacement).controlsState.as_reader()
+    assert accepted_influences(sm, NOW + 4) == (ObjectInfluence('radar', 63, MODEL, 0, 'braking', pytest.approx(0.8)),)
+    replacement['motionState']['objectInfluences'] = []
+    sm['controlsState'] = log.Event.new_message(controlsState=replacement).controlsState.as_reader()
+    assert accepted_influences(sm, NOW + 5) == ()
+    assert decode.call_count == 5
+
+
+@pytest.mark.parametrize('builder', (False, True))
+def test_mutable_receipts_are_not_cached_even_when_a_frame_is_present(builder):
+  sm = state()
+  sm.frame = 7
+  if builder:
+    sm['controlsState'] = log.Event.new_message(controlsState=sm['controlsState']).controlsState
+    record = sm['controlsState'].motionState.objectInfluences[0]
+  else:
+    record = sm['controlsState']['motionState']['objectInfluences'][0]
+  assert accepted_influences(sm, NOW)[0].strength == pytest.approx(0.6)
+  if builder:
+    record.strength = 0.25
+  else:
+    record['strength'] = 0.25
+  assert accepted_influences(sm, NOW + 1)[0].strength == 0.25
+
+
+def test_cached_receipt_rechecks_message_health_driver_override_and_expiry():
+  sm = received_state()
+  with patch.object(lead_control_influence, '_decode_influences', wraps=lead_control_influence._decode_influences) as decode:
+    items = accepted_influences(sm, NOW)
+    for service in ('controlsState', 'carControl', 'carState', 'selfdriveState'):
+      sm.valid[service] = False
+      assert accepted_influences(sm, NOW) == ()
+      sm.valid[service] = True
+      stamp = sm.logMonoTime[service]
+      for invalid_stamp in (NOW + 1, NOW - MESSAGE_MAX_AGE_NS - 1):
+        sm.logMonoTime[service] = invalid_stamp
+        assert accepted_influences(sm, NOW) == ()
+      sm.logMonoTime[service] = stamp
+    for service, field in (('carState', 'gasPressed'), ('carState', 'brakePressed'),
+                           ('carControl', 'enabled'), ('carControl', 'longActive'), ('selfdriveState', 'enabled')):
+      previous = sm[service][field]
+      sm[service][field] = not previous
+      assert accepted_influences(sm, NOW) == ()
+      sm[service][field] = previous
+    assert accepted_influences(sm, PLAN + MESSAGE_MAX_AGE_NS) is items
+    assert accepted_influences(sm, PLAN + MESSAGE_MAX_AGE_NS + 1) == ()
+    assert decode.call_count == 1
+
+
+def test_shared_decode_keeps_current_motion_gates_and_physical_mitigation_rules():
+  fields = state(influence(version=2, strength=1.0), influence(trackId=63))['controlsState']
+  sm = received_state()
+
+  def current_items(**changes):
+    fields['motionState'].update(changes)
+    sm['controlsState'] = log.Event.new_message(controlsState=fields).controlsState.as_reader()
+    items = accepted_influences(sm, NOW)
+    assert accepted_influences(sm, NOW + 1) == items
+    return items
+
+  assert [item.track_id for item in current_items()] == [42, 63]
+  assert [item.track_id for item in current_items(degraded=True)] == [42]
+  assert current_items(phase='release') == ()
+  assert [item.track_id for item in current_items(degraded=False)] == [63]
+  for changes in ({'enabled': False}, {'enabled': True, 'planningMode': 1},
+                  {'planningMode': 2, 'planMonoTime': PLAN + 1}):
+    assert current_items(**changes) == ()
+
+
+def test_indexed_strengths_preserve_duplicate_and_visual_identity_matching():
+  items = accepted_influences(state(
+    influence(strength=0.4), influence(kind='hold', strength=0.9),
+    influence(sessionId='', trackId=0, strength=0.6),
+    influence(sessionId='', trackId=0, visionIndex=1, strength=0.3),
+  ), NOW)
+  plain_items = tuple(items)
+  point = RadarLabelPoint(2, 11.5, 0.1, MODEL, 3, 2, 'radar', 42)
+  assert radar_influence_strength(point, items) == radar_influence_strength(point, plain_items) == 0.9
+  for changes, expected in (({}, 0.9), ({'trackId': 63}, 0.0),
+                            ({'source': 'vision', 'sessionId': '', 'trackId': 0}, 0.9),
+                            ({'source': 'vision', 'sessionId': '', 'trackId': 0, 'visionIndex': 1}, 0.3),
+                            ({'source': 'vision', 'sessionId': '', 'trackId': 0, 'modelMonoTime': MODEL + 1}, 0.0)):
+    assert lead_influence_strength(lead(**changes), items) == lead_influence_strength(lead(**changes), plain_items) == expected
+  legacy = {'present': True, 'radar': False}
+  for slot, expected in ((0, 0.6), (1, 0.3)):
+    for lookup_items in (items, plain_items):
+      assert lead_influence_strength(legacy, lookup_items, legacy_model_ns=MODEL, legacy_slot=slot) == expected
 
 
 @pytest.mark.parametrize(('value', 'minimum', 'expected'), (

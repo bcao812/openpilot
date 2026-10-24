@@ -12,7 +12,7 @@ from openpilot.common.realtime import config_realtime_process, DT_MDL
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.common.phase_timer import PhaseTimer
-from openpilot.selfdrive.locationd.helpers import PointBuckets, ParameterEstimator, PoseCalibrator, Pose
+from openpilot.selfdrive.locationd.helpers import PointBuckets, ParameterEstimator, PoseCalibrator
 from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.selfdrive.locationd.torqued_ext import TorqueEstimatorExt
 
@@ -194,12 +194,10 @@ class TorqueEstimator(ParameterEstimator, TorqueEstimatorExt):
       is_valid = msg.angularVelocityDevice.valid and msg.orientationNED.valid and msg.inputsOK and msg.sensorsOK and msg.posenetOK
       if len(self.raw_points['steer_torque']) == self.hist_len and is_valid:
         t = msg.timestamp * 1e-9
-        device_motion = Pose.from_device_motion(msg)
-        calibrated_pose = self.calibrator.build_calibrated_pose(device_motion)
-        angular_velocity_calibrated = calibrated_pose.angular_velocity
+        angular_velocity_calibrated = self.calibrator.build_calibrated_angular_velocity(msg)
 
         yaw_rate = angular_velocity_calibrated.yaw
-        roll = device_motion.orientation.roll
+        roll = msg.orientationNED.x
         # check lat active up to now (without lag compensation)
         lat_active = np.interp(np.arange(t - MIN_ENGAGE_BUFFER, t + self.lag, DT_MDL),
                                self.raw_points['carControl_t'], self.raw_points['lat_active']).astype(bool)

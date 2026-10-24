@@ -10,7 +10,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, DT_MDL
 from openpilot.selfdrive.locationd.models.car_kf import CarKalman, ObservationKind, States
 from openpilot.selfdrive.locationd.models.constants import GENERATED_DIR
-from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
+from openpilot.selfdrive.locationd.helpers import PoseCalibrator
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.common.phase_timer import PhaseTimer
 
@@ -68,10 +68,9 @@ class VehicleParamsLearner:
   def handle_log(self, t: float, which: str, msg: capnp._DynamicStructReader):
     if which == 'deviceMotion':
       t = msg.timestamp * 1e-9
-      device_motion = Pose.from_device_motion(msg)
-      calibrated_pose = self.calibrator.build_calibrated_pose(device_motion)
+      angular_velocity = self.calibrator.build_calibrated_angular_velocity(msg)
 
-      yaw_rate, yaw_rate_std = calibrated_pose.angular_velocity.z, calibrated_pose.angular_velocity.z_std
+      yaw_rate, yaw_rate_std = angular_velocity.z, angular_velocity.z_std
       yaw_rate_valid = msg.angularVelocityDevice.valid
       yaw_rate_valid = yaw_rate_valid and 0 < yaw_rate_std < 10  # rad/s
       yaw_rate_valid = yaw_rate_valid and abs(yaw_rate) < 1  # rad/s
@@ -80,7 +79,7 @@ class VehicleParamsLearner:
         yaw_rate, yaw_rate_std = 0.0, np.radians(10.0)
       self.observed_yaw_rate = yaw_rate
 
-      localizer_roll, localizer_roll_std = device_motion.orientation.x, device_motion.orientation.x_std
+      localizer_roll, localizer_roll_std = msg.orientationNED.x, msg.orientationNED.xStd
       localizer_roll_std = np.radians(1) if np.isnan(localizer_roll_std) else localizer_roll_std
       roll_valid = (localizer_roll_std < ROLL_STD_MAX) and (ROLL_MIN < localizer_roll < ROLL_MAX) and msg.sensorsOK
       if roll_valid:

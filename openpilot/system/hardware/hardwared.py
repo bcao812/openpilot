@@ -107,6 +107,19 @@ OFFROAD_DANGER_TEMP = 85 if HARDWARE.get_device_type() == "mici" else 75
 prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
 
 
+class BoolParamPublisher:
+  def __init__(self, params: Params):
+    self.params = params
+    self.last_values: dict[str, bool] = {}
+
+  def put(self, key: str, value: bool) -> None:
+    value = bool(value)
+    # Preserve state changes even if an earlier asynchronous write is still pending.
+    # Read storage on stable updates so failed writes and external clears are retried.
+    if self.last_values.get(key) != value or self.params.get(key) != value:
+      self.params.put_bool(key, value)
+      self.last_values[key] = value
+
 
 def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_text: str | None=None):
   if not show_alert:
@@ -245,6 +258,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   offroad_cycle_count = 0
 
   params = Params()
+  state_params = BoolParamPublisher(params)
   power_monitor = PowerMonitoring()
 
   uptime_offroad: float = params.get("UptimeOffroad", return_default=True)
@@ -446,7 +460,7 @@ def hardware_thread(end_event, hw_queue) -> None:
 
     # GitHub runner auto off: 9V is used as the threshold because most desktop runners
     # will rarely exceed 5V so 9V is set as our buffer between desk use and car use.
-    params.put_bool("GithubRunnerSufficientVoltage", ((voltage or 0) and voltage > 9000))
+    state_params.put("GithubRunnerSufficientVoltage", bool((voltage or 0) and voltage > 9000))
 
     power_monitor.calculate(voltage, onroad_conditions["ignition"])
     msg.deviceState.offroadPowerUsageUwh = power_monitor.get_power_used()
@@ -511,7 +525,7 @@ def hardware_thread(end_event, hw_queue) -> None:
         except Exception:
           cloudlog.exception("failed to save offroad status")
 
-    params.put_bool("NetworkMetered", msg.deviceState.networkMetered)
+    state_params.put("NetworkMetered", msg.deviceState.networkMetered)
 
     now_ts = time.monotonic()
     if off_ts:
