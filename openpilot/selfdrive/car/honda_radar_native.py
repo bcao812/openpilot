@@ -116,47 +116,65 @@ class NativeMotion:
     self.consistency_positive_segments = self.consistency_negative_segments = 0
 
   def _admit_motion(self, stamp, residual, rotation_allowance):
-    samples = tuple(s for s in self.admission_samples if stamp - s[0] <= ADMISSION_WINDOW_NS)
-    samples = (samples + ((stamp, residual, rotation_allowance),))[-ADMISSION_MAX_SAMPLES:]
+    samples = self.admission_samples + ((stamp, residual, rotation_allowance),)
+    # observe() admits strictly ordered source times, so expired samples form
+    # a prefix. Select the suffix once while retaining immutable copy state.
+    start = max(0, len(samples) - ADMISSION_MAX_SAMPLES)
+    while stamp - samples[start][0] > ADMISSION_WINDOW_NS:
+      start += 1
     # Use the shortest recent suffix with the original pair-count/time support.
     # Startup, revocation and recovery all require real current pairs. An old
     # qualification bit cannot bypass a newer contradictory observation.
-    while len(samples) > MIN_PAIRS and stamp - samples[1][0] >= MIN_SPAN_NS:
-      samples = samples[1:]
+    while len(samples) - start > MIN_PAIRS and stamp - samples[start + 1][0] >= MIN_SPAN_NS:
+      start += 1
+    samples = samples[start:]
     self.admission_samples = samples
     self.admission_span_ns = stamp - samples[0][0]
     # The first interval starts before this window and cannot be counted.
-    self.admission_residual = sum(s[1] for s in samples[1:])
+    intervals = samples[1:]
+    self.admission_residual = sum(s[1] for s in intervals)
     self.admission_limit = (ADMISSION_DISTANCE_MARGIN + ADMISSION_SPEED_MARGIN * self.admission_span_ns / 1e9
-                            + sum(s[2] for s in samples[1:]))
+                            + sum(s[2] for s in intervals))
     # The signed total remains a diagnostic. Test each direction independently
     # after its rotating-axis allowance; alternating errors must not cancel.
-    intervals = [(math.copysign(max(0.0, abs(current[1]) - current[2]), current[1]),
-                  (current[0] - previous[0]) / 1e9)
-                 for previous, current in zip(samples, samples[1:], strict=False)]
-
-    def directional_excess(sign):
-      contributions = [(max(0.0, sign * value), duration) for value, duration in intervals]
-      # A single reflection-point step is not evidence of a sustained speed
-      # error. Exclude at most one such interval, including its time budget;
-      # this does not supply a replacement position or velocity to consumers.
-      excluded = max(range(len(contributions)), key=lambda i: contributions[i][0]) if contributions else None
-      largest, duration = contributions[excluded] if excluded is not None else (0.0, 0.0)
-      span = self.admission_span_ns / 1e9 - (duration if largest > 0.0 else 0.0)
-      total = sum(value for value, _ in contributions) - largest
-      segments, previous = 0, False
-      for index, (value, _) in enumerate(contributions):
-        retained = value > 0.0 and index != excluded
-        segments += retained and not previous
-        previous = retained
-      # Within a contiguous group, position quantization telescopes to two
-      # endpoints (one range step). Clipping opposite signs or excluding an
-      # interval can create more groups; do not assume all noise cancels.
-      distance_margin = max(CONSISTENCY_DISTANCE_MARGIN, segments * RANGE_QUANTUM)
-      return total, distance_margin + CONSISTENCY_SPEED_MARGIN * span, segments
-
-    self.consistency_positive, self.consistency_positive_limit, self.consistency_positive_segments = directional_excess(1.0)
-    self.consistency_negative, self.consistency_negative_limit, self.consistency_negative_segments = directional_excess(-1.0)
+    positive, negative = [], []
+    largest_positive = largest_negative = 0.0
+    positive_duration = negative_duration = 0.0
+    excluded_positive = excluded_negative = -1
+    previous_stamp = samples[0][0]
+    for index, (current_stamp, value, rotation) in enumerate(intervals):
+      adjusted = math.copysign(max(0.0, abs(value) - rotation), value)
+      forward, backward = max(0.0, adjusted), max(0.0, -adjusted)
+      positive.append(forward)
+      negative.append(backward)
+      # Exclude at most one reflection-point step in each direction, with
+      # its time budget. Strict > preserves the first interval on a tie.
+      if forward > largest_positive:
+        largest_positive, excluded_positive = forward, index
+        positive_duration = (current_stamp - previous_stamp) / 1e9
+      if backward > largest_negative:
+        largest_negative, excluded_negative = backward, index
+        negative_duration = (current_stamp - previous_stamp) / 1e9
+      previous_stamp = current_stamp
+    positive_segments = negative_segments = 0
+    previous_positive = previous_negative = False
+    for index in range(len(intervals)):
+      retained_positive = positive[index] > 0.0 and index != excluded_positive
+      retained_negative = negative[index] > 0.0 and index != excluded_negative
+      positive_segments += retained_positive and not previous_positive
+      negative_segments += retained_negative and not previous_negative
+      previous_positive, previous_negative = retained_positive, retained_negative
+    # Retain sum() and its input order for bit-identical floating-point totals.
+    self.consistency_positive = sum(positive) - largest_positive
+    self.consistency_negative = sum(negative) - largest_negative
+    self.consistency_positive_segments = positive_segments
+    self.consistency_negative_segments = negative_segments
+    # Disconnected retained groups need their own quantized-range endpoints.
+    span = self.admission_span_ns / 1e9
+    self.consistency_positive_limit = (max(CONSISTENCY_DISTANCE_MARGIN, positive_segments * RANGE_QUANTUM)
+                                       + CONSISTENCY_SPEED_MARGIN * (span - positive_duration))
+    self.consistency_negative_limit = (max(CONSISTENCY_DISTANCE_MARGIN, negative_segments * RANGE_QUANTUM)
+                                       + CONSISTENCY_SPEED_MARGIN * (span - negative_duration))
     self.admission_ready = (len(samples) >= MIN_PAIRS and self.admission_span_ns >= MIN_SPAN_NS
                             and math.isfinite(self.admission_residual)
                             and abs(self.admission_residual) <= self.admission_limit

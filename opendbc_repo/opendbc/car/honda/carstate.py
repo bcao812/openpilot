@@ -85,14 +85,21 @@ class CarState(CarStateBase, CarStateExt):
 
     # blend in transmission speed at low speed, since it has more low speed accuracy
     # STANDSTILL->WHEELS_MOVING bit can be noisy around zero, so use XMISSION_SPEED
-    wheel_speeds = tuple(cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{s}"] for s in ("FL", "FR", "RL", "RR"))
+    wheel_values = cp.vl["WHEEL_SPEEDS"]
+    wheel_speeds = (wheel_values["WHEEL_SPEED_FL"], wheel_values["WHEEL_SPEED_FR"],
+                    wheel_values["WHEEL_SPEED_RL"], wheel_values["WHEEL_SPEED_RR"])
     # Publish actual current wheels separately from the transmission blend.
     # The parser's startup timeout is longer than a current motion witness;
     # an absent/old measurement must leave this struct absent, not zero-filled.
-    wheel_source_ns = min(cp.ts_nanos['WHEEL_SPEEDS'][f'WHEEL_SPEED_{side}'] for side in ('FL', 'FR', 'RL', 'RR'))
+    wheel_times = cp.ts_nanos['WHEEL_SPEEDS']
+    wheel_source_ns = min(wheel_times['WHEEL_SPEED_FL'], wheel_times['WHEEL_SPEED_FR'],
+                          wheel_times['WHEEL_SPEED_RL'], wheel_times['WHEEL_SPEED_RR'])
     if 0 < wheel_source_ns <= cp._last_update_nanos <= wheel_source_ns + WHEEL_SPEED_MAX_AGE_NS:
-      for name, value in zip(('fl', 'fr', 'rl', 'rr'), wheel_speeds, strict=True):
-        setattr(ret.wheelSpeeds, name, value * CV.KPH_TO_MS)
+      wheels = ret.wheelSpeeds
+      wheels.fl = wheel_speeds[0] * CV.KPH_TO_MS
+      wheels.fr = wheel_speeds[1] * CV.KPH_TO_MS
+      wheels.rl = wheel_speeds[2] * CV.KPH_TO_MS
+      wheels.rr = wheel_speeds[3] * CV.KPH_TO_MS
     v_wheel = sum(wheel_speeds) / 4.0 * CV.KPH_TO_MS
     v_weight = float(np.interp(v_wheel, v_weight_bp, v_weight_v))
     ret.vEgoRaw = (1. - v_weight) * cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] * CV.KPH_TO_MS * self.CP.wheelSpeedFactor + v_weight * v_wheel

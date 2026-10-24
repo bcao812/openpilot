@@ -993,10 +993,11 @@ class UnifiedLongitudinalPlanner:
       and model.action.desiredAcceleration >= STOP_RELEASE_ACCEL and output > 0.0
       and (output >= STOP_RELEASE_ACCEL or departure_accel is not None and departure_accel >= STOP_RELEASE_ACCEL)
     )
-    # Old carState producers did not publish wheelSpeeds. An absent Cap'n
-    # Proto struct reads as four zeros, which is not measurement evidence.
-    wheel_source_present = callable(getattr(car_state, '_has', None)) and car_state._has('wheelSpeeds')
-    stationary_no_lead = (
+    model_allows_trajectory_departure = (self.lead_launch_active or evidence is None or evidence.allows_departure
+                                         or ordinary_absolute_departure)
+    # Only an otherwise unqualified departure needs this additional witness.
+    # Reuse compatibility from this same update; no qualification crosses frames.
+    if not model_allows_trajectory_departure and stationary_model_compatible and (
       planner.CP.carFingerprint == CAR.HONDA_ACCORD and planner.CP.openpilotLongitudinalControl
       and active and healthy and not reset and not forced_decel and not planner.fcw and not admission_reasons
       and not radar.leadOne.present and not radar.leadTwo.present
@@ -1005,14 +1006,15 @@ class UnifiedLongitudinalPlanner:
       and str(car_state.gearShifter) == 'drive'
       and not model.action.shouldStop and not model.meta.hardBrakePredicted
       and model.action.desiredAcceleration >= STOP_RELEASE_ACCEL and output > 0.0
-      and wheel_source_present
-      and stationary_no_lead_departure(
+      # Old producers left wheelSpeeds absent, which reads as four default
+      # zeros. Inspect presence only after the inexpensive current-state gates.
+      and callable(getattr(car_state, '_has', None)) and car_state._has('wheelSpeeds')):
+      wheels = car_state.wheelSpeeds
+      model_allows_trajectory_departure = stationary_no_lead_departure(
         evidence, model.position.x, model.position.t, model.velocity.t,
         actual_standstill=bool(car_state.standstill), measured_speed=float(car_state.vEgo), raw_speed=float(car_state.vEgoRaw),
-        wheel_speeds=tuple(getattr(car_state.wheelSpeeds, name) for name in ('fl', 'fr', 'rl', 'rr')),
-        model_mono_time_ns=getattr(state, 'logMonoTime', {}).get('modelV2')))
-    model_allows_trajectory_departure = (self.lead_launch_active or evidence is None or evidence.allows_departure
-                                         or ordinary_absolute_departure or stationary_no_lead)
+        wheel_speeds=(wheels.fl, wheels.fr, wheels.rl, wheels.rr),
+        model_mono_time_ns=getattr(state, 'logMonoTime', {}).get('modelV2'))
     no_model_risk = (model_allows_external_departure and not model.action.shouldStop
                      and model.action.desiredAcceleration >= CREEP_FOLLOW_MIN_ACCEL
                      and (self.lead_launch_active or model.action.desiredAcceleration >= self.reference_accel - CREEP_FOLLOW_MODEL_MARGIN))

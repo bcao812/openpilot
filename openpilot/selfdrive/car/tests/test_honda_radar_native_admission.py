@@ -240,3 +240,27 @@ def test_disconnected_quantization_residuals_keep_their_independent_endpoint_bud
     assert observe(native, current, ego=lambda _: SimpleNamespace(speed=0.0, yaw=0.0))
     if index >= 15:
       assert native.qualified
+
+
+@pytest.mark.parametrize('sign', [-1.0, 1.0])
+def test_equal_largest_residuals_exclude_the_first_interval_and_its_own_time(sign):
+  native = NativeMotion()
+  # Excluding the 10 ms first maximum permits this bounded window. Choosing
+  # the equal 40 ms interval instead would shrink the budget and reject it.
+  for offset, residual in zip((0, 10, 50, 150, 250), (0.0, .2, .2, .065, .065), strict=True):
+    native._admit_motion(1_000_000_000 + offset * 1_000_000, sign * residual, 0.0)
+  assert native.admission_ready
+  direction = 'positive' if sign > 0 else 'negative'
+  assert getattr(native, 'consistency_' + direction) == sum((.2, .2, .065, .065)) - .2
+  assert getattr(native, 'consistency_' + direction + '_limit') == 2 * .05712 + (.25 - .01)
+  assert getattr(native, 'consistency_' + direction + '_segments') == 1
+
+
+def test_rotation_covered_zero_intervals_do_not_lose_time_or_gain_segments():
+  native = NativeMotion()
+  for index, residual in enumerate((0.0, -.2, .2, -0.0, .1)):
+    native._admit_motion(1_000_000_000 + index * 62_500_000, residual, abs(residual))
+  assert native.admission_ready
+  assert native.consistency_positive == native.consistency_negative == 0.0
+  assert native.consistency_positive_segments == native.consistency_negative_segments == 0
+  assert native.consistency_positive_limit == native.consistency_negative_limit == 2 * .05712 + .25
