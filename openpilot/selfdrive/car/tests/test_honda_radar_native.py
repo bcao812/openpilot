@@ -221,7 +221,7 @@ def test_native_motion_depends_only_on_native_velocity_and_aligned_ego():
     assert (reference.ground_speed, reference.acceleration, reference.acceleration_valid) == (
       perturbed.ground_speed, perturbed.acceleration, perturbed.acceleration_valid)
   # Native numerical motion remains independent. Deliberately contradictory
-  # positions may now delay the separate startup admission.
+  # positions can separately revoke the current consistency qualification.
   assert reference.qualified
   assert reference.acceleration_valid and reference.acceleration < -2
   assert reference.distance_residual != perturbed.distance_residual
@@ -253,7 +253,7 @@ def test_coasting_and_withdrawal_do_not_keep_prior_speed_for_requalification():
   assert not observe(native, sample(6), 2)
 
 
-def test_uncalibrated_distance_residual_remains_diagnostic_only():
+def test_one_interval_outlier_does_not_prove_sustained_motion_disagreement():
   native = mature()
   current = sample(5, distance=24.0)
   assert observe(native, current)

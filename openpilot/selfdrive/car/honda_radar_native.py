@@ -2,9 +2,9 @@
 
 Only AUX and the ego sample at its original timestamp determine longitudinal
 motion. Distance can reject a pair; it never supplies or corrects its velocity.
-New native support must also agree with independent raw distance changes before
-it can authorize control. Accepted correcting AUX still updates native motion.
-The single-interval distance residual remains diagnostic for admitted episodes.
+Current native support must agree with independent raw distance changes before
+and after admission. Accepted correcting AUX still updates native motion. The
+single-interval residual and geometric posterior diagnostics are not this gate.
 """
 from dataclasses import dataclass, replace
 import math
@@ -16,12 +16,13 @@ MIN_SPAN_NS = 250_000_000
 MAX_PAIR_NS = 50_000_000
 MAX_GAP_NS = 100_000_000
 MAX_AGE_NS = 200_000_000
-# Startup/recovery admission bounds, not calibrated sensor accuracy. A fixed
-# distance allowance covers quantization/reflection movement; the span term
-# bounds sustained disagreement. Current lateral positions/yaw bound the
-# rotating-frame contribution separately, so turning is not a missing witness.
-ADMISSION_DISTANCE_MARGIN = .5
-ADMISSION_SPEED_MARGIN = 3.0
+# Candidate consistency budget, not calibrated sensor accuracy. Three raw
+# range steps cover the split interval endpoints and one extra quantization
+# step. The speed term bounds remaining sustained disagreement. One isolated
+# interval in each direction is excluded with its time support; opposite
+# sustained errors cannot cancel. Yaw/lateral motion has its own allowance.
+ADMISSION_DISTANCE_MARGIN = 3 * .05712
+ADMISSION_SPEED_MARGIN = 1.0
 ADMISSION_WINDOW_NS = 500_000_000
 ADMISSION_MAX_SAMPLES = 16
 
@@ -82,6 +83,10 @@ class NativeMotion:
   admission_span_ns: int = 0
   admission_residual: float = 0.0
   admission_limit: float = 0.0
+  consistency_positive: float = 0.0
+  consistency_negative: float = 0.0
+  consistency_positive_limit: float = 0.0
+  consistency_negative_limit: float = 0.0
 
   def copy(self):
     return replace(self)
@@ -97,14 +102,15 @@ class NativeMotion:
     self.admission_samples = ()
     self.admission_span_ns = 0
     self.admission_residual = self.admission_limit = 0.0
+    self.consistency_positive = self.consistency_negative = 0.0
+    self.consistency_positive_limit = self.consistency_negative_limit = 0.0
 
   def _admit_motion(self, stamp, residual, rotation_allowance):
-    if self.admission_ready:
-      return
     samples = tuple(s for s in self.admission_samples if stamp - s[0] <= ADMISSION_WINDOW_NS)
     samples = (samples + ((stamp, residual, rotation_allowance),))[-ADMISSION_MAX_SAMPLES:]
     # Use the shortest recent suffix with the original pair-count/time support.
-    # A bad startup must age out through real new pairs, never a fixed timeout.
+    # Startup, revocation and recovery all require real current pairs. An old
+    # qualification bit cannot bypass a newer contradictory observation.
     while len(samples) > MIN_PAIRS and stamp - samples[1][0] >= MIN_SPAN_NS:
       samples = samples[1:]
     self.admission_samples = samples
@@ -113,9 +119,28 @@ class NativeMotion:
     self.admission_residual = sum(s[1] for s in samples[1:])
     self.admission_limit = (ADMISSION_DISTANCE_MARGIN + ADMISSION_SPEED_MARGIN * self.admission_span_ns / 1e9
                             + sum(s[2] for s in samples[1:]))
+    # The signed total remains a diagnostic. Test each direction independently
+    # after its rotating-axis allowance; alternating errors must not cancel.
+    intervals = [(math.copysign(max(0.0, abs(current[1]) - current[2]), current[1]),
+                  (current[0] - previous[0]) / 1e9)
+                 for previous, current in zip(samples, samples[1:])]
+
+    def directional_excess(sign):
+      contributions = [(max(0.0, sign * value), duration) for value, duration in intervals]
+      # A single reflection-point step is not evidence of a sustained speed
+      # error. Exclude at most one such interval, including its time budget;
+      # this does not supply a replacement position or velocity to consumers.
+      largest, duration = max(contributions, default=(0.0, 0.0))
+      span = self.admission_span_ns / 1e9 - (duration if largest > 0.0 else 0.0)
+      total = sum(value for value, _ in contributions) - largest
+      return total, ADMISSION_DISTANCE_MARGIN + ADMISSION_SPEED_MARGIN * span
+
+    self.consistency_positive, self.consistency_positive_limit = directional_excess(1.0)
+    self.consistency_negative, self.consistency_negative_limit = directional_excess(-1.0)
     self.admission_ready = (len(samples) >= MIN_PAIRS and self.admission_span_ns >= MIN_SPAN_NS
                             and math.isfinite(self.admission_residual)
-                            and abs(self.admission_residual) <= self.admission_limit)
+                            and self.consistency_positive <= self.consistency_positive_limit
+                            and self.consistency_negative <= self.consistency_negative_limit)
 
   def _clear_current_motion(self):
     self.velocity_seq = self.velocity_ns = self.pair_complete_ns = 0
@@ -274,7 +299,7 @@ class NativeMotion:
         # or using a distance-derived/visual speed as the native measurement.
         rotation_allowance = max(abs(float(y)), abs(self.last_lateral)) * angle
         # Preserve the published V1 diagnostic meaning for nearly unchanged
-        # axes. The startup window above is a separate engineering admission.
+        # axes. The continuous window above is a separate engineering gate.
         if angle <= .005:
           self.distance_residual = admission_residual
           self.distance_residual_valid = math.isfinite(self.distance_residual)

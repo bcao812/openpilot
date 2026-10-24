@@ -1,4 +1,4 @@
-"""Current-pair admission after acquisition or a native-support reset."""
+"""Current-pair consistency at acquisition, after admission, and on recovery."""
 import math
 from types import SimpleNamespace
 
@@ -80,7 +80,7 @@ def test_real_stationary_slow_and_braking_leads_keep_original_admission_time(lea
 def test_turning_lead_uses_current_body_geometry_without_waiting_for_a_straight_road(lead_speed):
   native = NativeMotion()
   ego_speed, yaw = 10.0, .8
-  for index in range(5):
+  for index in range(12):
     elapsed = index * STEP / 1e9
     heading = yaw * elapsed
     # World-fixed target trajectory and independently integrated circular ego
@@ -93,7 +93,8 @@ def test_turning_lead_uses_current_body_geometry_without_waiting_for_a_straight_
                      lateral=-s * world_x + c * world_y, relative=lead_speed * c - ego_speed)
     assert observe(native, current, ego=lambda _: SimpleNamespace(speed=ego_speed, yaw=yaw))
     assert native.ground_speed == current['vRel'] + ego_speed
-  assert native.qualified and native.sample_count == 5
+    assert native.qualified is (index >= 4)
+  assert native.qualified and native.sample_count == 12
   assert not native.distance_residual_valid  # The old straight-axis diagnostic is still separate.
 
 
@@ -159,3 +160,68 @@ def test_support_reset_cannot_inherit_prior_consistency_admission(reset):
     assert observe(native, sample(index, relative=-10.0, distance=30.0, generation=generation))
     assert not native.admission_ready and not native.qualified
   assert native.sample_count == 5 and native.reason == 'motionDisagreement'
+
+
+@pytest.mark.parametrize('bias', [2.3, 2.7, 6.3, -2.3, -2.7, -6.3])
+def test_mature_target_loses_authority_on_sustained_native_position_conflict(bias):
+  native = NativeMotion()
+  distance = 35.0
+  for index in range(16):
+    if index:
+      distance += (-1.0 + (bias if index >= 8 else 0.0)) * STEP / 1e9
+    current = sample(index, relative=-1.0, distance=distance)
+    assert observe(native, current)
+    # Contradictory geometry cannot correct or replace the current AUX speed.
+    assert native.ground_speed == 19.0 and native.raw_relative_speed == -1.0
+    if 4 <= index < 8:
+      assert native.qualified
+    if index >= 12:
+      assert not native.qualified and native.reason == 'motionDisagreement'
+      assert not native.snapshot(current['positionMonoTime'] + 1)['qualified']
+
+  count = native.sample_count
+  # Correct NEW current pairs recover normally, without a timer or old speed.
+  for index in range(16, 21):
+    distance -= STEP / 1e9
+    assert observe(native, sample(index, relative=-1.0, distance=distance))
+  assert native.qualified and native.sample_count == count + 5
+
+
+def test_opposite_sustained_interval_errors_cannot_cancel_into_admission():
+  native = NativeMotion()
+  distance = 35.0
+  for index in range(16):
+    if index:
+      distance += (-1.0 + (8.0 * (-1 if index % 2 else 1) if index >= 8 else 0.0)) * STEP / 1e9
+    assert observe(native, sample(index, relative=-1.0, distance=distance))
+    if 4 <= index < 8:
+      assert native.qualified
+    if index >= 12:
+      assert abs(native.admission_residual) < 1e-10
+      assert not native.qualified and native.reason == 'motionDisagreement'
+
+
+@pytest.mark.parametrize('reflection_step', [-.5, .5])
+def test_single_reflection_step_and_range_quantization_do_not_remove_real_target(reflection_step):
+  native = NativeMotion()
+  for index in range(28):
+    distance = 35.0 - index * STEP / 1e9 + (reflection_step if index >= 12 else 0.0)
+    distance = round(distance / .05712) * .05712
+    assert observe(native, sample(index, relative=-1.0, distance=distance))
+    if index >= 4:
+      assert native.qualified
+  assert native.admission_span_ns <= 500_000_000
+  assert native.sample_count > len(native.admission_samples)
+
+
+def test_republication_cannot_recover_a_current_motion_conflict():
+  native = NativeMotion()
+  for index in range(12):
+    current = sample(index, relative=-10.0, distance=35.0 - 7.3 * index * STEP / 1e9)
+    assert observe(native, current)
+  assert not native.qualified
+  count, samples = native.sample_count, native.admission_samples
+  for delay in (2, 10_000_000, 30_000_000):
+    assert not observe(native, current, delay=delay)
+    assert not native.qualified and native.sample_count == count
+    assert native.admission_samples == samples

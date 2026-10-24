@@ -36,7 +36,7 @@ def test_current_publication_does_not_renew_each_original_measurement_deadline(c
     assert not qualified_lead(result.leads[0], 'brake', now_ns=START + 200_001_000)
 
 
-@pytest.mark.parametrize('fault', ['coasting', 'withdrawn', 'bad_aux', 'missing_native', 'generation_restart'])
+@pytest.mark.parametrize('fault', ['coasting', 'withdrawn', 'bad_aux', 'missing_native', 'generation_restart', 'motionDisagreement'])
 @pytest.mark.parametrize('has_visual', [False, True])
 def test_current_quality_revocation_keeps_no_old_stop_or_fcw_obligation(fault, has_visual):
   controller = HondaRadarControl()
@@ -53,8 +53,9 @@ def test_current_quality_revocation_keeps_no_old_stop_or_fcw_obligation(fault, h
   else:
     if fault == 'generation_restart':
       target['generation'] += 1
-    target['nativeMotion'] = native_motion_quality(target, qualified=False, sampleCount=0,
-                                                   reason='identityChanged' if fault == 'generation_restart' else 'invalidVelocity')
+    reason = 'identityChanged' if fault == 'generation_restart' else 'motionDisagreement' if fault == 'motionDisagreement' else 'invalidVelocity'
+    target['nativeMotion'] = native_motion_quality(target, qualified=False,
+                                                   sampleCount=20 if fault == 'motionDisagreement' else 0, reason=reason)
   current = scene(1, tracks=[target], ego=5.0,
                   leads=[vision(distance=26.0, speed=7.0, ego=5.0)] if has_visual else None,
                   bindings=[binding(bias_x=-16.3)] if has_visual else None)
