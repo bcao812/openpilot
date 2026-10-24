@@ -21,12 +21,14 @@ MAX_AGE_NS = 200_000_000
 # which the original admission rule rejected.
 ADMISSION_DISTANCE_MARGIN = .5
 ADMISSION_SPEED_MARGIN = 3.0
-# Candidate consistency budget, not calibrated sensor accuracy. Three raw
-# range steps cover the split interval endpoints and one extra quantization
-# step. The speed term bounds remaining sustained disagreement. One isolated
+# Candidate consistency budget, not calibrated sensor accuracy. Two raw
+# range steps cover the endpoints of two retained interval groups. More
+# disconnected groups receive their own endpoint budget. The speed term
+# bounds remaining sustained disagreement. One isolated
 # interval in each direction is excluded with its time support; opposite
 # sustained errors cannot cancel. Yaw/lateral motion has its own allowance.
-CONSISTENCY_DISTANCE_MARGIN = 3 * .05712
+RANGE_QUANTUM = .05712
+CONSISTENCY_DISTANCE_MARGIN = 2 * RANGE_QUANTUM
 CONSISTENCY_SPEED_MARGIN = 1.0
 ADMISSION_WINDOW_NS = 500_000_000
 ADMISSION_MAX_SAMPLES = 16
@@ -92,6 +94,8 @@ class NativeMotion:
   consistency_negative: float = 0.0
   consistency_positive_limit: float = 0.0
   consistency_negative_limit: float = 0.0
+  consistency_positive_segments: int = 0
+  consistency_negative_segments: int = 0
 
   def copy(self):
     return replace(self)
@@ -109,6 +113,7 @@ class NativeMotion:
     self.admission_residual = self.admission_limit = 0.0
     self.consistency_positive = self.consistency_negative = 0.0
     self.consistency_positive_limit = self.consistency_negative_limit = 0.0
+    self.consistency_positive_segments = self.consistency_negative_segments = 0
 
   def _admit_motion(self, stamp, residual, rotation_allowance):
     samples = tuple(s for s in self.admission_samples if stamp - s[0] <= ADMISSION_WINDOW_NS)
@@ -135,13 +140,23 @@ class NativeMotion:
       # A single reflection-point step is not evidence of a sustained speed
       # error. Exclude at most one such interval, including its time budget;
       # this does not supply a replacement position or velocity to consumers.
-      largest, duration = max(contributions, default=(0.0, 0.0))
+      excluded = max(range(len(contributions)), key=lambda i: contributions[i][0]) if contributions else None
+      largest, duration = contributions[excluded] if excluded is not None else (0.0, 0.0)
       span = self.admission_span_ns / 1e9 - (duration if largest > 0.0 else 0.0)
       total = sum(value for value, _ in contributions) - largest
-      return total, CONSISTENCY_DISTANCE_MARGIN + CONSISTENCY_SPEED_MARGIN * span
+      segments, previous = 0, False
+      for index, (value, _) in enumerate(contributions):
+        retained = value > 0.0 and index != excluded
+        segments += retained and not previous
+        previous = retained
+      # Within a contiguous group, position quantization telescopes to two
+      # endpoints (one range step). Clipping opposite signs or excluding an
+      # interval can create more groups; do not assume all noise cancels.
+      distance_margin = max(CONSISTENCY_DISTANCE_MARGIN, segments * RANGE_QUANTUM)
+      return total, distance_margin + CONSISTENCY_SPEED_MARGIN * span, segments
 
-    self.consistency_positive, self.consistency_positive_limit = directional_excess(1.0)
-    self.consistency_negative, self.consistency_negative_limit = directional_excess(-1.0)
+    self.consistency_positive, self.consistency_positive_limit, self.consistency_positive_segments = directional_excess(1.0)
+    self.consistency_negative, self.consistency_negative_limit, self.consistency_negative_segments = directional_excess(-1.0)
     self.admission_ready = (len(samples) >= MIN_PAIRS and self.admission_span_ns >= MIN_SPAN_NS
                             and math.isfinite(self.admission_residual)
                             and abs(self.admission_residual) <= self.admission_limit
