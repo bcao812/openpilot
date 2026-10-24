@@ -50,6 +50,8 @@ class TestRadarSignalUI(HeadlessUITestCase):
           callback = partial(layout._toggle_callback, param='RadarSignal')
         else:
           layout._radar_signal_btn = Mock()
+          layout._sound_toggle = Mock()
+          layout._sound_options = ["None", "Warning", "All"]
           layout._refresh_toggles = (('RadarSignal', layout._radar_signal_btn),)
           layout._update_toggles()
           layout._radar_signal_btn.set_checked.assert_called_with(True)

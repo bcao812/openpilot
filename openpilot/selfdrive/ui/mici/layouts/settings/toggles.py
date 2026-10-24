@@ -2,9 +2,10 @@ from collections.abc import Callable
 
 from openpilot.cereal import log
 from openpilot.common.radar_signal import radar_signal_enabled
+from openpilot.common.sound_mode import get_sound_mode
 
 from openpilot.system.ui.widgets.scroller import NavScroller
-from openpilot.selfdrive.ui.mici.widgets.button import BigParamControl, BigMultiParamToggle, BigToggle, GreyBigButton
+from openpilot.selfdrive.ui.mici.widgets.button import BigParamControl, BigMultiParamToggle, BigMultiToggle, BigToggle, GreyBigButton
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationCircleButton
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.selfdrive.ui.layouts.settings.common import restart_needed_callback
@@ -47,6 +48,9 @@ class TogglesLayoutMici(NavScroller):
                                        toggle_callback=self._on_experimental_mode)
     self._radar_signal_btn = BigToggle("radar signal", "off: vision only\napplies next drive",
                                        initial_state=radar_signal_enabled(ui_state.params), toggle_callback=self._on_radar_signal)
+    self._sound_options = ["None", "Warning", "All"]
+    self._sound_toggle = BigMultiToggle("Sound", self._sound_options, select_callback=self._set_sound_mode)
+    self._sound_toggle.set_value(self._sound_options[get_sound_mode(ui_state.params)])
     is_metric_toggle = BigParamControl("use metric units", "IsMetric")
     ldw_toggle = BigParamControl("lane departure warnings", "IsLdwEnabled")
     always_on_dm_toggle = BigParamControl("always-on driver monitor", "AlwaysOnDM")
@@ -58,6 +62,7 @@ class TogglesLayoutMici(NavScroller):
       self._personality_toggle,
       self._experimental_btn,
       self._radar_signal_btn,
+      self._sound_toggle,
       is_metric_toggle,
       ldw_toggle,
       always_on_dm_toggle,
@@ -120,6 +125,10 @@ class TogglesLayoutMici(NavScroller):
     # Refresh toggles from params to mirror external changes
     for key, item in self._refresh_toggles:
       item.set_checked(radar_signal_enabled(ui_state.params) if key == "RadarSignal" else ui_state.params.get_bool(key))
+    self._sound_toggle.set_value(self._sound_options[get_sound_mode(ui_state.params)])
+
+  def _set_sound_mode(self, value: str):
+    ui_state.params.put("SoundMode", self._sound_options.index(value), block=True)
 
   def _on_radar_signal(self, state: bool):
     if ui_state.is_offroad():

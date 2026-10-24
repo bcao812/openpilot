@@ -5,20 +5,28 @@ import threading
 
 import openpilot.cereal.messaging as messaging
 from opendbc.car.structs import car
+from openpilot.common.params import Params
 from openpilot.common.realtime import Ratekeeper
+from openpilot.common.sound_mode import SoundMode, get_sound_mode
 
 AudibleAlert = car.CarControl.HUDControl.AudibleAlert
+WARNING_ALERTS = frozenset((AudibleAlert.refuse, AudibleAlert.warningSoft, AudibleAlert.prompt,
+                          AudibleAlert.promptRepeat, AudibleAlert.promptDistracted, AudibleAlert.warningImmediate))
 
 
 class Beepd:
-  def __init__(self):
+  def __init__(self, params=None):
+    self.params = Params() if params is None else params
+    self.sound_mode = get_sound_mode(self.params)
     self.current_alert = AudibleAlert.none
-    # Owned by whichever alert started a repeating pattern; see update_alert.
+    # Every pattern owns a token, so a retired thread cannot affect a new alert.
     self._repeat_stop = threading.Event()
     self.enable_gpio()
     self._gpio_lock = threading.Lock()
     self._closed = False
     self._gpio_failed = False
+    with self._gpio_lock:
+      self._set_gpio(False)
     #self.startup_beep()
 
   def enable_gpio(self):
@@ -60,9 +68,14 @@ class Beepd:
         print(f"[BEEP] Direct GPIO unavailable, using legacy GPIO: {error}")
     self._legacy_beep(on)
 
-  def _beep(self, on):
+  def _should_play_alert(self, alert):
+    return self.sound_mode == SoundMode.ALL or (self.sound_mode == SoundMode.WARNING and alert in WARNING_ALERTS)
+
+  def _beep(self, on, stop=None):
     with self._gpio_lock:
-      if self._closed:
+      if self._closed or (stop is not None and stop is not self._repeat_stop):
+        return
+      if on and (not self._should_play_alert(self.current_alert) or (stop is not None and stop.is_set())):
         return
       # Keep the GPIO steady for the whole pulse; timing belongs to the patterns.
       self._set_gpio(bool(on))
@@ -75,23 +88,23 @@ class Beepd:
       self._closed = True
       self._set_gpio(False)
 
-  def engage(self):
-    self._beep(True)
+  def engage(self, stop=None):
+    self._beep(True, stop)
     time.sleep(0.05)
-    self._beep(False)
+    self._beep(False, stop)
 
-  def disengage(self):
+  def disengage(self, stop=None):
     for _ in range(2):
-      self._beep(True)
+      self._beep(True, stop)
       time.sleep(0.01)
-      self._beep(False)
+      self._beep(False, stop)
       time.sleep(0.01)
 
-  def warning(self):
+  def warning(self, stop=None):
     for _ in range(3):
-      self._beep(True)
+      self._beep(True, stop)
       time.sleep(0.01)
-      self._beep(False)
+      self._beep(False, stop)
       time.sleep(0.01)
 
   def warning_immediate(self, stop):
@@ -108,19 +121,17 @@ class Beepd:
         for _ in range(4):
           if stop.is_set():
             return
-          self._beep(True)
+          self._beep(True, stop)
           if stop.wait(0.12):
             return
-          self._beep(False)
+          self._beep(False, stop)
           if stop.wait(0.08):
             return
         stop.wait(0.4)
     finally:
-      # Always release the buzzer, including when pre-empted mid-pulse. The incoming pattern may
-      # clip one of its own pulses on this, which is survivable because every pattern here is
-      # multi-pulse; a buzzer latched on is not. Handing the release to the next alert is not an
-      # option either -- AudibleAlert.none dispatches nothing at all.
-      self._beep(False)
+      # A current pattern releases its output; update_alert releases retired ones
+      # before publishing the replacement token, so they cannot clip a new pulse.
+      self._beep(False, stop)
 
   #def startup_beep(self):
     #self._beep(True)
@@ -131,14 +142,22 @@ class Beepd:
     threading.Thread(target=func, daemon=True).start()
 
   def update_alert(self, new_alert):
-    if new_alert != self.current_alert:
+    sound_mode = get_sound_mode(self.params)
+    with self._gpio_lock:
+      if self._closed or (new_alert == self.current_alert and sound_mode == self.sound_mode):
+        return
       self.current_alert = new_alert
-      print(f"[BEEP] New alert: {new_alert}")
+      self.sound_mode = sound_mode
+      print(f"[BEEP] Alert: {new_alert}, sound: {sound_mode.name}")
 
-      # A repeating pattern belongs to the alert that started it. Retire it here, on the reader
-      # thread, so the replacement event is in place before the new pattern is dispatched.
+      # Stop output immediately on a mode/alert change. Retired threads cannot
+      # restart a muted pulse or release a newer alert's GPIO output.
       self._repeat_stop.set()
+      self._set_gpio(False)
       self._repeat_stop = threading.Event()
+      stop = self._repeat_stop
+      if not self._should_play_alert(new_alert):
+        return
 
       # Exhaustive over car.capnp's AudibleAlert. It was not: warningImmediate and promptRepeat
       # fell through to nothing, and with soundd disabled (process_config.py) this is the only
@@ -146,20 +165,22 @@ class Beepd:
       # promptDistracted cannot currently fire -- DISABLE_DRIVER=1 stops dmonitoringd -- but it
       # is wired anyway so repairing the cabin camera does not quietly re-open the same hole.
       if new_alert == AudibleAlert.engage:
-        self.dispatch_beep(self.engage)
+        pattern = self.engage
       elif new_alert == AudibleAlert.disengage:
-        self.dispatch_beep(self.disengage)
+        pattern = self.disengage
       elif new_alert == AudibleAlert.warningImmediate:
-        stop = self._repeat_stop
-        self.dispatch_beep(lambda: self.warning_immediate(stop))
+        pattern = self.warning_immediate
       elif new_alert in (AudibleAlert.refuse, AudibleAlert.warningSoft, AudibleAlert.prompt,
                          AudibleAlert.promptRepeat, AudibleAlert.promptDistracted):
-        self.dispatch_beep(self.warning)
+        pattern = self.warning
+      else:
+        return
+    self.dispatch_beep(lambda: pattern(stop))
 
   def get_audible_alert(self, sm):
-    if sm.updated['selfdriveState']:
-      new_alert = sm['selfdriveState'].alertSound.raw
-      self.update_alert(new_alert)
+    new_alert = sm['selfdriveState'].alertSound.raw if sm.updated['selfdriveState'] else self.current_alert
+    # Poll the preference even without a new message, so None stops active audio.
+    self.update_alert(new_alert)
 
   def test_beepd_thread(self):
     frame = 0

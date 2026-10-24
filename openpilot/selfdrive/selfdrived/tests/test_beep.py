@@ -4,9 +4,18 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import call, mock_open, patch
+from unittest.mock import MagicMock, call, mock_open, patch
 
 from opendbc.car.structs import car
+from openpilot.common.sound_mode import SoundMode, get_sound_mode
+
+
+class MemoryParams:
+  def __init__(self, value=SoundMode.ALL):
+    self.value = value
+
+  def get(self, key, return_default=False):
+    return self.value
 
 
 def load_beep():
@@ -16,6 +25,7 @@ def load_beep():
   imports = {
     'openpilot.cereal': SimpleNamespace(messaging=SimpleNamespace()),
     'openpilot.cereal.messaging': SimpleNamespace(),
+    'openpilot.common.params': SimpleNamespace(Params=MemoryParams),
     'openpilot.common.realtime': SimpleNamespace(Ratekeeper=object),
   }
   with patch.dict('sys.modules', imports):
@@ -28,10 +38,12 @@ AudibleAlert = car.CarControl.HUDControl.AudibleAlert
 
 
 class RecordingBeepd(beep.Beepd):
-  def __init__(self):
+  def __init__(self, params=None):
     self.transitions = []
     self.transition_condition = threading.Condition()
-    super().__init__()
+    super().__init__(params)
+    self.startup_transitions = list(self.transitions)
+    self.transitions.clear()
 
   def enable_gpio(self):
     pass
@@ -163,7 +175,7 @@ class TestBeepAlerts(unittest.TestCase):
     for pattern, transitions, delays in patterns:
       with self.subTest(pattern=pattern.__name__), patch.object(self.driver, '_beep') as output, patch.object(beep.time, 'sleep') as sleep:
         pattern()
-        self.assertEqual(output.call_args_list, [call(on) for on in transitions])
+        self.assertEqual(output.call_args_list, [call(on, None) for on in transitions])
         self.assertEqual(sleep.call_args_list, [call(delay) for delay in delays])
 
   def test_all_audible_alerts_remain_mapped(self):
@@ -177,9 +189,11 @@ class TestBeepAlerts(unittest.TestCase):
       AudibleAlert.promptDistracted: 'warning',
     }
     for alert, pattern in patterns.items():
-      with self.subTest(alert=alert), patch.object(self.driver, 'dispatch_beep') as dispatch:
+      with self.subTest(alert=alert), patch.object(self.driver, 'dispatch_beep') as dispatch, patch.object(self.driver, pattern) as play:
         self.driver.update_alert(alert)
-        dispatch.assert_called_once_with(getattr(self.driver, pattern))
+        dispatch.assert_called_once()
+        dispatch.call_args.args[0]()
+        play.assert_called_once_with(self.driver._repeat_stop)
     with patch.object(self.driver, 'dispatch_beep') as dispatch, patch.object(self.driver, 'warning_immediate') as warning:
       self.driver.update_alert(AudibleAlert.warningImmediate)
       dispatch.call_args.args[0]()
@@ -190,7 +204,7 @@ class TestBeepAlerts(unittest.TestCase):
 
   def test_immediate_warning_repeats_and_cancels_low(self):
     bursts = []
-    with patch.object(self.driver, '_beep', side_effect=lambda on: bursts.append(on)):
+    with patch.object(self.driver, '_beep', side_effect=lambda on, stop=None: bursts.append(on)):
       self.driver.update_alert(AudibleAlert.warningImmediate)
       stop = self.driver._repeat_stop
       time.sleep(1.35)
@@ -202,6 +216,127 @@ class TestBeepAlerts(unittest.TestCase):
       burst_count = len(bursts)
       time.sleep(0.05)
       self.assertEqual(len(bursts), burst_count)
+
+
+class TestSoundModes(unittest.TestCase):
+  def setUp(self):
+    self.params = MemoryParams()
+    self.driver = RecordingBeepd(self.params)
+    self.addCleanup(self.driver.close)
+
+  def test_missing_and_invalid_values_preserve_all_sounds(self):
+    for value in (None, -1, 3, 'invalid'):
+      with self.subTest(value=value):
+        self.assertEqual(get_sound_mode(MemoryParams(value)), SoundMode.ALL)
+
+  def test_all_modes_start_with_gpio_low(self):
+    for mode in SoundMode:
+      with self.subTest(mode=mode):
+        driver = RecordingBeepd(MemoryParams(mode))
+        try:
+          self.assertEqual(driver.startup_transitions, [False])
+          self.assertEqual(driver.sound_mode, mode)
+        finally:
+          driver.close()
+
+  def test_mode_matrix_filters_dispatch_and_gpio(self):
+    alerts = (AudibleAlert.engage, AudibleAlert.disengage, AudibleAlert.refuse, AudibleAlert.warningSoft,
+              AudibleAlert.warningImmediate, AudibleAlert.prompt, AudibleAlert.promptRepeat, AudibleAlert.promptDistracted)
+    warnings = set(alerts) - {AudibleAlert.engage, AudibleAlert.disengage}
+    for mode in SoundMode:
+      self.params.value = mode
+      with patch.object(self.driver, 'dispatch_beep') as dispatch:
+        self.driver.update_alert(AudibleAlert.none)
+        for alert in alerts:
+          with self.subTest(mode=mode, alert=alert):
+            dispatch.reset_mock()
+            allowed = mode == SoundMode.ALL or (mode == SoundMode.WARNING and alert in warnings)
+            self.driver.update_alert(alert)
+            self.assertEqual(dispatch.call_count, int(allowed))
+            self.driver._beep(True, self.driver._repeat_stop)
+            self.assertEqual(self.driver.transitions[-1], allowed)
+            self.driver._beep(False, self.driver._repeat_stop)
+
+  def test_none_stops_active_warning_without_a_new_message(self):
+    workers = []
+
+    def dispatch(pattern):
+      worker = threading.Thread(target=pattern, daemon=True)
+      workers.append(worker)
+      worker.start()
+
+    with patch.object(self.driver, 'dispatch_beep', side_effect=dispatch):
+      try:
+        self.driver.update_alert(AudibleAlert.warningImmediate)
+        stop = self.driver._repeat_stop
+        with self.driver.transition_condition:
+          self.assertTrue(self.driver.transition_condition.wait_for(lambda: True in self.driver.transitions, timeout=1))
+        self.params.value = SoundMode.NONE
+        self.driver.get_audible_alert(SimpleNamespace(updated={'selfdriveState': False}))
+        self.assertTrue(stop.is_set())
+        for worker in workers:
+          worker.join(1)
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertFalse(self.driver.transitions[-1])
+      finally:
+        self.driver.close()
+        for worker in workers:
+          worker.join(1)
+      self.assertTrue(all(not worker.is_alive() for worker in workers))
+      self.assertFalse(self.driver.transitions[-1])
+
+  def test_mode_changes_retire_old_threads_and_resume_current_warning(self):
+    sm = SimpleNamespace(updated={'selfdriveState': False})
+    with patch.object(self.driver, 'dispatch_beep') as dispatch:
+      self.driver.update_alert(AudibleAlert.warningImmediate)
+      retired = self.driver._repeat_stop
+      self.driver._beep(True, retired)
+      self.params.value = SoundMode.NONE
+      self.driver.get_audible_alert(sm)
+      self.assertFalse(self.driver.transitions[-1])
+      self.driver._beep(True, retired)
+      self.driver._beep(True, self.driver._repeat_stop)
+      self.assertFalse(self.driver.transitions[-1])
+      self.assertEqual(dispatch.call_count, 1)
+
+      self.params.value = SoundMode.WARNING
+      self.driver.get_audible_alert(sm)
+      self.assertEqual(dispatch.call_count, 2)
+      self.driver._beep(True, self.driver._repeat_stop)
+      self.assertTrue(self.driver.transitions[-1])
+      transitions = list(self.driver.transitions)
+      self.driver._beep(False, retired)
+      self.driver._beep(True, retired)
+      self.driver.get_audible_alert(sm)
+      self.assertEqual(self.driver.transitions, transitions)
+      self.assertEqual(dispatch.call_count, 2)
+
+  def test_warning_mode_cancels_engagement_and_allows_new_warning(self):
+    with patch.object(self.driver, 'dispatch_beep') as dispatch:
+      self.driver.update_alert(AudibleAlert.engage)
+      retired = self.driver._repeat_stop
+      self.driver._beep(True, retired)
+      self.params.value = SoundMode.WARNING
+      self.driver.get_audible_alert(SimpleNamespace(updated={'selfdriveState': False}))
+      self.driver._beep(True, retired)
+      self.assertFalse(self.driver.transitions[-1])
+      self.assertEqual(dispatch.call_count, 1)
+      self.driver.update_alert(AudibleAlert.refuse)
+      self.driver._beep(True, self.driver._repeat_stop)
+      self.assertTrue(self.driver.transitions[-1])
+      self.assertEqual(dispatch.call_count, 2)
+
+  def test_unmute_uses_new_message_without_replaying_previous_alert(self):
+    self.params.value = SoundMode.NONE
+    with patch.object(self.driver, 'dispatch_beep') as dispatch:
+      self.driver.update_alert(AudibleAlert.warningImmediate)
+      self.params.value = SoundMode.ALL
+      sm = MagicMock()
+      sm.updated = {'selfdriveState': True}
+      sm.__getitem__.return_value = SimpleNamespace(alertSound=SimpleNamespace(raw=AudibleAlert.none))
+      self.driver.get_audible_alert(sm)
+      dispatch.assert_not_called()
+      self.assertFalse(self.driver.transitions[-1])
 
 
 if __name__ == '__main__':

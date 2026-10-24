@@ -1,6 +1,7 @@
 from openpilot.cereal import log
 from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.radar_signal import radar_signal_enabled
+from openpilot.common.sound_mode import SoundMode, get_sound_mode
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.list_view import multiple_button_item, toggle_item
 from openpilot.system.ui.widgets.scroller_tici import Scroller
@@ -25,6 +26,8 @@ DESCRIPTIONS = {
   "DisengageOnAccelerator": tr_noop("When enabled, pressing the accelerator pedal will disengage sunnypilot."),
   "RadarSignal": tr_noop("Use forward radar detections for driving assistance and onroad displays. When disabled, vision detections are still used. " +
                          "Changes take effect on the next drive."),
+  "SoundMode": tr_noop("None mutes all buzzer alerts, including emergency warnings. Warning plays warnings and refusal alerts only. " +
+                       "All also plays engagement and disengagement sounds. Changes apply immediately."),
   "LongitudinalPersonality": tr_noop(
     "Standard is recommended. In aggressive mode, sunnypilot will follow lead cars closer and be more aggressive with the gas and brake. " +
     "In relaxed mode sunnypilot will stay further away from lead cars. On supported cars, you can cycle through these personalities with " +
@@ -35,7 +38,7 @@ DESCRIPTIONS = {
     "without a turn signal activated while driving over 31 mph (50 km/h)."
   ),
   "AlwaysOnDM": tr_noop("Enable driver monitoring even when sunnypilot is not engaged."),
-  "RecordRoadCameras": tr_noop("Save high-resolution front and wide-road video while longitudinal control is active and for 10 seconds afterwards. "
+  "RecordRoadCameras": tr_noop("Save high-resolution front and wide-road video while longitudinal control is active and for 10 seconds afterwards. " +
                                "Low-resolution video and driving logs continue. Changes take effect on the next drive."),
   'RecordFront': tr_noop("Upload data from the driver facing camera and help improve the driver monitoring algorithm."),
   "IsMetric": tr_noop("Display speed in km/h instead of mph."),
@@ -113,6 +116,16 @@ class TogglesLayout(Widget):
       ),
     }
 
+    self._sound_setting = multiple_button_item(
+      lambda: tr("Sound"),
+      lambda: tr(DESCRIPTIONS["SoundMode"]),
+      buttons=[lambda: tr("None"), lambda: tr("Warning"), lambda: tr("All")],
+      button_width=300,
+      callback=self._set_sound_mode,
+      selected_index=int(get_sound_mode(self._params)),
+      icon="warning.png",
+    )
+
     self._long_personality_setting = multiple_button_item(
       lambda: tr("Driving Personality"),
       lambda: tr(DESCRIPTIONS["LongitudinalPersonality"]),
@@ -154,6 +167,9 @@ class TogglesLayout(Widget):
         self._locked_toggles.add(param)
 
       self._toggles[param] = toggle
+
+      if param == "RadarSignal":
+        self._toggles["SoundMode"] = self._sound_setting
 
       # insert longitudinal personality after NDOG toggle
       if param == "DisengageOnAccelerator":
@@ -230,6 +246,7 @@ class TogglesLayout(Widget):
     # refresh toggles from params to mirror external changes
     for param in self._toggle_defs:
       self._toggles[param].action_item.set_state(self._get_toggle_state(param))
+    self._sound_setting.action_item.set_selected_button(int(get_sound_mode(self._params)))
 
     # these toggles need restart, block while engaged
     for toggle_def in self._toggle_defs:
@@ -280,3 +297,6 @@ class TogglesLayout(Widget):
 
   def _set_longitudinal_personality(self, button_index: int):
     self._params.put("LongitudinalPersonality", button_index, block=True)
+
+  def _set_sound_mode(self, button_index: int):
+    self._params.put("SoundMode", int(SoundMode(button_index)), block=True)
