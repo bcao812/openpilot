@@ -20,6 +20,13 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 
 PREFERENCE_TIME_S = 2.5  # engineering scaling, not a vehicle-identified parameter
 FORWARD_HORIZON_S = float(ModelConstants.T_IDXS[CONTROL_N - 1])
+# Candidate domain for a stopped Accord with independently observed zero
+# wheels and no current lead. These are engineering budgets, not calibrated
+# model uncertainty: 0.03 m/s alone over 0.5 s could permit 15 mm, so position
+# and the integrated negative velocity must each also stay within 5 mm.
+STATIONARY_REVERSE_SPEED = 0.03
+STATIONARY_REVERSE_DISTANCE = 0.005
+STATIONARY_RECOVERY_TIME = 0.5
 
 
 def _immutable(values, *, dtype=float):
@@ -306,6 +313,57 @@ def stationary_lead_departure_compatible(evidence, *, actual_standstill, measure
   progress = np.interp(support, times, raw)
   distance = float(np.sum(0.5 * (progress[:-1] + progress[1:]) * np.diff(support)))
   return bool(np.isfinite(distance) and distance > 0.0)
+
+
+def stationary_no_lead_departure(evidence, raw_position, position_times, velocity_times, *,
+                                 actual_standstill, measured_speed, raw_speed, wheel_speeds, model_mono_time_ns):
+  """Certify bounded near-zero model residue, retaining its original UNKNOWN.
+
+  Caller must supply explicitly published current wheel measurements and gate
+  current no-lead, input health, action/stop, platform and actuation state. This
+  helper cannot grant release by itself; the planner/owner retain those gates.
+  Position and velocity are separate model means, not independent ground truth.
+  """
+  if (not stationary_lead_departure_compatible(
+        evidence, actual_standstill=actual_standstill, measured_speed=measured_speed, raw_speed=raw_speed)
+      or abs(measured_speed) > STANDSTILL_RESIDUE
+      or not _timestamp(model_mono_time_ns) or model_mono_time_ns != evidence.source.model_mono_time_ns):
+    return False
+  try:
+    wheels = tuple(wheel_speeds)
+    position = np.asarray(raw_position, dtype=float)
+    position_times = np.asarray(position_times, dtype=float)
+    velocity_times = np.asarray(velocity_times, dtype=float)
+  except (TypeError, ValueError):
+    return False
+  times = np.asarray(ModelConstants.T_IDXS, dtype=float)
+  if (len(wheels) != 4 or not finite_state(wheels) or any(value != 0.0 for value in wheels)
+      or position.shape != times.shape or not np.all(np.isfinite(position))
+      or not np.array_equal(position_times, times) or not np.array_equal(velocity_times, times)
+      or abs(position[0]) > STANDSTILL_RESIDUE):
+    return False
+  raw = evidence.raw_velocity
+  positive = np.flatnonzero(raw > 0.0)
+  first_positive = int(positive[0])  # The source/UNKNOWN helper proved a negative prefix then forward motion.
+  if np.min(raw) < -STATIONARY_REVERSE_SPEED or times[first_positive] > STATIONARY_RECOVERY_TIME:
+    return False
+  prefix = raw[:first_positive]
+  reverse_distance = -float(np.sum(0.5 * (prefix[:-1] + prefix[1:]) * np.diff(times[:first_positive])))
+  crossing_duration = (times[first_positive] - times[first_positive - 1]) * -prefix[-1] / (raw[first_positive] - prefix[-1])
+  reverse_distance += 0.5 * -prefix[-1] * crossing_duration
+  position = position - position[0]
+  positive_position = np.flatnonzero(position > STANDSTILL_RESIDUE)
+  if (reverse_distance > STATIONARY_REVERSE_DISTANCE or np.min(position) < -STATIONARY_REVERSE_DISTANCE
+      or not len(positive_position) or times[positive_position[0]] > STATIONARY_RECOVERY_TIME
+      or np.any(np.diff(position[positive_position[0]:]) < 0.0)):
+    return False
+  # Both current model means must support meaningful forward progress within
+  # the ordinary departure horizon. A positive action or a distant positive
+  # tail alone is not a stationary no-lead departure witness.
+  horizon = FORWARD_HORIZON_S
+  forward_velocity = float(np.interp(horizon, times, raw))
+  forward_position = float(np.interp(horizon, times, position))
+  return bool(forward_velocity > STOP_SPEED and forward_position > 0.5 * STOP_SPEED * horizon)
 
 
 def lead_launch_model_compatible(evidence):
