@@ -249,8 +249,6 @@ class TestBlendfulRenderer(HeadlessUITestCase):
     self.assertEqual(self.overlay._alpha.x, 0)
     self.assertEqual(self.overlay._control_epoch, 0)
     self.assertEqual(self.overlay._pull_display.x, 0)
-    self.assertEqual(self.overlay._opacity_epoch, 0)
-    self.assertEqual(self.overlay._opacity_deadline_ns, 0)
 
   def publish_model(self, stamp, capture_ns=None):
     sm = self.state.sm
@@ -260,14 +258,6 @@ class TestBlendfulRenderer(HeadlessUITestCase):
     sm['carControlSP'].blendfulModelMonoTime = stamp
     self.renderer._model_geometry_ns = stamp
     self.clock.return_value = stamp + 1
-
-  def publish_pending_model(self, stamp, capture_ns=None):
-    receipt = self.state.sm['carControlSP']
-    accepted_id = receipt.blendfulModelMonoTime
-    receipt_stamp = max(self.state.sm.logMonoTime['carControlSP'], stamp - 10_000_000)
-    self.publish_model(stamp, capture_ns)
-    receipt.blendfulModelMonoTime = accepted_id
-    self.state.sm.logMonoTime['carControlSP'] = receipt_stamp
 
   def test_cyan_center_uses_current_lines_without_changing_model_geometry(self):
     before = [line.raw_points.copy() for line in self.renderer._lane_lines]
@@ -494,120 +484,6 @@ class TestBlendfulRenderer(HeadlessUITestCase):
       self.overlay.draw(self.rect)
     self.assertGreater(self.overlay._pull_display.x, before)
     self.assertEqual(self.renderer._map_line_to_polygon.call_count, projected)
-
-  def test_repeating_model_control_ui_phase_keeps_only_opacity_while_receipt_is_in_flight(self):
-    self.overlay = self.module.BlendfulRenderer()
-    self.update()
-    expected_alpha = self.overlay._alpha.x
-    with patch.object(self.overlay, '_draw_readout') as readout:
-      for frame in range(1, 13):
-        # 20 Hz model at t=0, latest 100 Hz receipt at t=-10 ms, UI at t=0.
-        stamp = START + frame * 50_000_000
-        self.publish_pending_model(stamp)
-        self.update()
-        self.draw_polygon.reset_mock()
-        readout.reset_mock()
-        self.overlay.draw(self.rect)
-        self.assertAlmostEqual(self.overlay._alpha.x, expected_alpha)
-        self.assertEqual(self.overlay._center_points.size, 0)
-        self.assertEqual(self.overlay._pull_display.x, 0)
-        self.assertEqual(self.overlay._trust_display.x, 0)
-        self.draw_polygon.assert_not_called()
-        readout.assert_not_called()
-
-        # The next control tick accepts it; the next 60 Hz UI tick can draw it.
-        sm = self.state.sm
-        sm['carControlSP'].blendfulModelMonoTime = stamp
-        sm['carControlSP'].blendfulAppliedCurvature = 0.001 if frame % 2 else -0.001
-        sm.logMonoTime['carControlSP'] = sm.logMonoTime['carControl'] = stamp + 10_000_000
-        self.clock.return_value = stamp + 16_666_667
-        self.assertTrue(self.overlay.needs_update())
-        self.update()
-        self.overlay.draw(self.rect)
-        expected_alpha += (1 - expected_alpha) * self.overlay._alpha.alpha
-        self.assertAlmostEqual(self.overlay._alpha.x, expected_alpha)
-        self.assertEqual(self.draw_polygon.call_count, 1)
-        readout.assert_called_once()
-        self.assertEqual(np.sign(self.overlay._pull_display.x), 1 if frame % 2 else -1)
-
-        # t=33 ms has another current receipt, but no new model/projection.
-        projected = self.renderer._map_line_to_polygon.call_count
-        sm.logMonoTime['carControlSP'] = sm.logMonoTime['carControl'] = stamp + 30_000_000
-        self.clock.return_value = stamp + 33_333_333
-        self.assertFalse(self.overlay.needs_update())
-        self.overlay.draw(self.rect)
-        self.assertEqual(self.renderer._map_line_to_polygon.call_count, projected)
-    self.assertGreater(self.overlay._alpha.x, 0.85)
-    self.assertEqual(self.renderer._map_line_to_polygon.call_count, 13)
-
-  def test_in_flight_opacity_is_discarded_for_invalid_lines_withdrawal_or_new_session(self):
-    for case in ('no_lines', 'nonfinite_line', 'side_change', 'withdrawn', 'new_epoch', 'stale_receipt', 'inactive'):
-      with self.subTest(case=case):
-        self.overlay = self.module.BlendfulRenderer()
-        self.state.sm = model_messages()
-        self.renderer._model_geometry_ns = START
-        self.renderer._lane_lines = [SimpleNamespace(raw_points=np.array([line.x, line.y, line.z], dtype=np.float32).T)
-                                     for line in self.state.sm['modelV2'].laneLines]
-        self.clock.return_value = START + 1
-        self.update()
-        self.assertGreater(self.overlay._alpha.x, 0)
-        self.publish_pending_model(START + 50_000_000)
-        sm = self.state.sm
-        if case == 'no_lines':
-          sm['modelV2'].laneLineProbs[1:3] = [0.0, 0.0]
-        elif case == 'nonfinite_line':
-          self.renderer._lane_lines[1].raw_points[0, 1] = np.nan
-        elif case == 'side_change':
-          sm['modelV2'].laneLineProbs[2] = 0.0
-        elif case == 'withdrawn':
-          sm['carControlSP'].blendfulModelMonoTime = 0
-        elif case == 'new_epoch':
-          sm['carControlSP'].blendfulControlEpoch = sm['modelDataV2SP'].blendfulControlEpoch = START + 20_000_000
-        elif case == 'stale_receipt':
-          sm.logMonoTime['carControlSP'] = START - self.module.CONTROL_MAX_AGE_NS
-        else:
-          sm['carControl'].latActive = False
-        self.update()
-        self.draw_polygon.reset_mock()
-        with patch.object(self.overlay, '_draw_readout') as readout:
-          self.overlay.draw(self.rect)
-          readout.assert_not_called()
-        self.draw_polygon.assert_not_called()
-        self.assert_cleared()
-        self.assertEqual(self.overlay._opacity_deadline_ns, 0)
-
-  def test_pending_publications_do_not_renew_the_opacity_wait_deadline(self):
-    self.update()
-    self.publish_pending_model(START + 50_000_000)
-    self.update()
-    deadline = self.overlay._opacity_deadline_ns
-    self.assertEqual(deadline, START + 50_000_000 + self.module.RECEIPT_WAIT_MAX_AGE_NS)
-    self.publish_pending_model(START + 90_000_000)
-    self.update()
-    self.assertEqual(self.overlay._opacity_deadline_ns, deadline)
-    self.clock.return_value = deadline
-    self.overlay.draw(self.rect)
-    self.assertGreater(self.overlay._alpha.x, 0)
-    self.clock.return_value = deadline + 1
-    self.overlay.draw(self.rect)
-    self.assert_cleared()
-
-  def test_opacity_wait_does_not_extend_the_current_capture_deadline(self):
-    sm = self.state.sm
-    sm['carControlSP'].blendfulControlEpoch = sm['modelDataV2SP'].blendfulControlEpoch = START - 500_000_000
-    self.publish_model(START, capture_ns=START - 245_000_000)
-    self.update()
-    self.publish_pending_model(START + 1_000_000, capture_ns=START - 244_000_000)
-    self.update()
-    deadline = sm['modelV2'].timestampEof + self.module.MESSAGE_MAX_AGE_NS
-    self.assertEqual(self.overlay._opacity_deadline_ns, deadline)
-    self.clock.return_value = deadline
-    self.overlay.draw(self.rect)
-    self.assertGreater(self.overlay._alpha.x, 0)
-    self.assertEqual(self.overlay._center_points.size, 0)
-    self.clock.return_value = deadline + 1
-    self.overlay.draw(self.rect)
-    self.assert_cleared()
 
   def test_zero_weight_nonfinite_side_is_masked_and_zero_variance_is_bounded(self):
     output = self.state.sm['modelDataV2SP']
