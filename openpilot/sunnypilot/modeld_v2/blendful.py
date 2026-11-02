@@ -55,9 +55,13 @@ class Blendful:
       return False
     if (not np.isfinite(lines[0, 1:3]).all() or not np.isfinite(stds[0, 1:3]).all() or not np.all(stds[0, 1:3] > 0) or
         not np.isfinite(probs[0, (3, 5)]).all() or np.any(probs[0, (3, 5)] < 0) or np.any(probs[0, (3, 5)] > 1) or
-        not np.isfinite(plan).all() or np.any(np.diff(plan[0, :, 0]) < 0) or plan[0, -1, 0] <= plan[0, 0, 0]):
+        not np.isfinite(plan).all()):
       return False
     if active and v_ego >= MIN_SPEED:
+      # Source fading never fits the plan. Only enforce its interpolation/fit
+      # domain when the source algorithm will actually use those coordinates.
+      if np.any(np.diff(plan[0, :, 0]) < 0) or plan[0, -1, 0] <= plan[0, 0, 0]:
+        return False
       lookahead = max(v_ego * LOOKAHEAD_TIME, MIN_LOOKAHEAD)
       if np.count_nonzero((X_IDXS >= 0.5 * lookahead) & (X_IDXS <= 1.5 * lookahead)) < 3:
         return False

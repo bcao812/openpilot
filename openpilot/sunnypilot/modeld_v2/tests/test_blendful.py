@@ -4,6 +4,7 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+import copy
 import unittest
 import numpy as np
 
@@ -164,6 +165,32 @@ class TestBlendful(unittest.TestCase):
     self.assertFalse(bf.usual_offset.initialized)
     for history in (bf.line_probs, bf.line_probs_slow, bf.line_gone):
       np.testing.assert_array_equal(history.x, np.zeros(2))
+
+  def test_unfitted_finite_plan_preserves_source_fade(self):
+    for label, plan_x in (('zero_span', np.zeros(33)), ('descending', X[::-1])):
+      current = frame(center=0.5, k=0.002)
+      current['plan'][0, :, 0] = plan_x
+      for active, speed in ((False, 20.0), (True, MIN_SPEED - 1e-6)):
+        with self.subTest(plan=label, active=active, speed=speed):
+          bf = Blendful()
+          drive(bf, 6.0, center=0.5, k=0.002)
+          self.assertGreater(bf.curvature, 0.0)
+          source = copy.deepcopy(bf)
+          for index in range(5):
+            # Bypass only the target input adapter for the source reference;
+            # the retained source body ignores plan x throughout fading.
+            expected = source._update_source(current, speed, active, 0.002)
+            self.assertEqual(bf.update(current, speed, active, 0.002), expected)
+            self.assertEqual(bf.smooth, source.smooth)
+            np.testing.assert_array_equal(bf.line_probs.x, source.line_probs.x)
+            if index == 0:
+              self.assertGreater(expected, 0.0)
+      with self.subTest(plan=label, active=True, speed=MIN_SPEED):
+        bf = Blendful()
+        drive(bf, 6.0, center=0.5, k=0.002)
+        self.assertGreater(bf.curvature, 0.0)
+        self.assertEqual(bf.update(current, MIN_SPEED, True, 0.002), 0.0)
+        self.assert_reset(bf)
 
   def test_malformed_numerical_inputs_reset_instead_of_poisoning_history(self):
     cases = [None, {}, frame(plan_width=2), frame(plan_width=14)]
