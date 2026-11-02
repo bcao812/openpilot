@@ -602,10 +602,12 @@ def main(demo=False):
     model_execution_time = mt2 - mt1
 
     if model_output is not None:
-      if last_model_frame_ns and (meta_main.timestamp_eof <= last_model_frame_ns or
+      new_model_frame = meta_main.timestamp_eof > last_model_frame_ns
+      if not new_model_frame or (last_model_frame_ns and
                                  meta_main.timestamp_eof - last_model_frame_ns > BLENDFUL_MAX_FRAME_AGE_NS):
         blendful.reset()
-      last_model_frame_ns = meta_main.timestamp_eof
+      # A new publication does not make a duplicate/out-of-order capture new.
+      last_model_frame_ns = max(last_model_frame_ns, meta_main.timestamp_eof)
       modelv2_send = messaging.new_message('modelV2')
       drivingdata_send = messaging.new_message('drivingModelData')
       posenet_send = messaging.new_message('cameraOdometry')
@@ -632,7 +634,7 @@ def main(demo=False):
 
       # DH now describes the NEW current frame, including a newly requested turn
       # or lane change. A successful frame also sees toggle changes immediately.
-      blendful_active = (abs(meta_main.timestamp_sof - meta_extra.timestamp_sof) <= 10000000 and
+      blendful_active = (new_model_frame and abs(meta_main.timestamp_sof - meta_extra.timestamp_sof) <= 10000000 and
                          blendful_inputs_active(sm, DH, modelv2_send.valid, meta_main.timestamp_eof, transforms) and
                          np.isfinite(action.desiredCurvature))
       blendful.update(model_output, v_ego, blendful_active, model.model_curvature, enabled=params.get_bool('Blendful'))

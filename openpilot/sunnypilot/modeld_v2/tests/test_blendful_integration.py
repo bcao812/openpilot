@@ -269,7 +269,7 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
         return None
       client.frame_id += 1
       client.timestamp_sof = current['clock_ns']
-      client.timestamp_eof = client.timestamp_sof
+      client.timestamp_eof = client.timestamp_sof - scenario.get('capture_offset_ns', 0)
       current['clock_ns'] += scenario.get('frame_age_ns', 0)
       data['narrowRoadCameraState'].frameId = client.frame_id
       data['carState'].vEgo = scenario.get('speed', 20.0)
@@ -412,3 +412,17 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
       expected = fresh.update(outputs[index], 20.0, True, 0.00125)
       self.assertAlmostEqual(published[index]['sp']['blendfulCurvature'], expected, places=11)
       self.assertAlmostEqual(published[index]['sp']['blendfulTrust'], fresh.trust, places=8)
+
+  def test_duplicate_or_reversed_capture_is_not_a_new_observation(self):
+    scenarios = [{} for _ in range(60)]
+    scenarios.extend(({'capture_offset_ns': 50_000_000}, {'capture_offset_ns': 150_000_000},
+                      {'capture_offset_ns': 150_000_000}, {'center': -0.5}))
+    published, outputs, _, _, _ = self.run_frames(scenarios)
+    self.assertGreater(published[59]['sp']['blendfulCurvature'], 0.0)
+    for index in (60, 61, 62):
+      self.assertEqual(published[index]['sp']['blendfulCurvature'], 0.0)
+      self.assertEqual(published[index]['sp']['blendfulTrust'], 0.0)
+    fresh = Blendful()
+    expected = fresh.update(outputs[63], 20.0, True, 0.00125)
+    self.assertAlmostEqual(published[63]['sp']['blendfulCurvature'], expected, places=11)
+    self.assertAlmostEqual(published[63]['sp']['blendfulTrust'], fresh.trust, places=8)
