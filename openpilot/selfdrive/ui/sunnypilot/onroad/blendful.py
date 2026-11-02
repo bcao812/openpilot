@@ -24,6 +24,9 @@ FULL_BAR = 1.0
 # but never freeze the cyan line when either producer stops. Model/SP must
 # share the exact publication time accepted by the lateral consumer.
 MESSAGE_MAX_AGE_NS = int(5 * DT_MDL * 1e9)
+# Only opacity can bridge a healthy in-flight consumer receipt, for at most one
+# model period. Geometry/readout stay hidden; the first wait deadline never renews.
+RECEIPT_WAIT_MAX_AGE_NS = int(DT_MDL * 1e9)
 # carControl publishes at 100 Hz; ten periods match its normal alive window.
 CONTROL_MAX_AGE_NS = 100_000_000
 CURRENT_LINE_PROB_MIN = 0.3
@@ -44,17 +47,46 @@ class BlendfulRenderer:
     self._pull_display = FirstOrderFilter(0.0, 0.5, DT_MDL)
     self._trust_display = FirstOrderFilter(0.0, 0.5, DT_MDL)
     self._alpha = FirstOrderFilter(0.0, 0.3, DT_MDL)
+    self._clear_opacity_wait()
 
   def clear(self) -> None:
+    self._hide_geometry()
+    self._alpha.x = 0.0
+    self._clear_opacity_wait()
+
+  def _hide_geometry(self) -> None:
     self._center_points = np.empty((0, 2), dtype=np.float32)
     self._trust = 0.0
     self._model_ns = self._output_ns = 0
     self._control_epoch = self._receipt_ns = 0
     self._side_mask = (False, False)
-    self._alpha.x = self._pull_display.x = self._trust_display.x = 0.0
+    self._pull_display.x = self._trust_display.x = 0.0
+
+  def _clear_opacity_wait(self) -> None:
+    self._opacity_epoch = 0
+    self._opacity_sides = (False, False)
+    self._opacity_deadline_ns = 0
+    self._opacity_model_ns = 0
+
+  def _wait_for_receipt(self, epoch: int, side_mask: tuple[bool, bool]) -> None:
+    sm = ui_state.sm
+    if self._opacity_deadline_ns:
+      if (epoch != self._opacity_epoch or side_mask != self._opacity_sides or
+          time.monotonic_ns() > self._opacity_deadline_ns):
+        self.clear()
+        return
+    else:
+      if epoch != self._control_epoch or side_mask != self._side_mask:
+        self.clear()
+        return
+      self._opacity_epoch, self._opacity_sides = epoch, side_mask
+      self._opacity_deadline_ns = min(sm.logMonoTime["modelV2"] + RECEIPT_WAIT_MAX_AGE_NS,
+                                     sm["modelV2"].timestampEof + MESSAGE_MAX_AGE_NS)
+    self._opacity_model_ns = sm.logMonoTime["modelV2"]
+    self._hide_geometry()
 
   @staticmethod
-  def _current_messages() -> bool:
+  def _current_messages(allow_pending_receipt: bool = False) -> bool:
     sm = ui_state.sm
     if (not ui_state.active_runner_tinygrad or not ui_state.params.get_bool("Blendful") or
         ui_state.params.get("ModelRunnerTypeCache") != custom.ModelManagerSP.Runner.tinygrad or
@@ -71,10 +103,17 @@ class BlendfulRenderer:
     receipt = sm["carControlSP"]
     epoch = receipt.blendfulControlEpoch
     capture_ns = sm["modelV2"].timestampEof
-    return (sm["carControl"].latActive and 0 < epoch == sm["modelDataV2SP"].blendfulControlEpoch and
-            receipt.blendfulModelMonoTime == sm.logMonoTime["modelV2"] == sm.logMonoTime["modelDataV2SP"] and
-            epoch <= capture_ns <= now_ns and now_ns - capture_ns <= MESSAGE_MAX_AGE_NS and
-            np.isfinite(receipt.blendfulAppliedCurvature))
+    model_ns = sm.logMonoTime["modelV2"]
+    if not (sm["carControl"].latActive and 0 < epoch == sm["modelDataV2SP"].blendfulControlEpoch and
+            model_ns == sm.logMonoTime["modelDataV2SP"] and epoch <= capture_ns <= now_ns and
+            now_ns - capture_ns <= MESSAGE_MAX_AGE_NS and np.isfinite(receipt.blendfulAppliedCurvature)):
+      return False
+    if receipt.blendfulModelMonoTime == model_ns:
+      return True
+    # An explicit zero receipt is withdrawal. Only an accepted older frame whose
+    # receipt predates this publication can be a normal producer/consumer phase gap.
+    return (allow_pending_receipt and 0 < receipt.blendfulModelMonoTime < model_ns and
+            sm.logMonoTime["carControlSP"] < model_ns and now_ns - model_ns <= RECEIPT_WAIT_MAX_AGE_NS)
 
   def needs_update(self) -> bool:
     """A late consumer receipt can accept geometry that arrived a frame earlier.
@@ -89,7 +128,7 @@ class BlendfulRenderer:
 
   def update(self, renderer, max_idx: int, *map_args) -> None:
     sm = ui_state.sm
-    if not self._current_messages() or renderer._model_geometry_ns != sm.logMonoTime["modelV2"]:
+    if not self._current_messages(allow_pending_receipt=True) or renderer._model_geometry_ns != sm.logMonoTime["modelV2"]:
       self.clear()
       return
 
@@ -154,18 +193,27 @@ class BlendfulRenderer:
     if right is not None:
       center[:, 1] += (weights[1] / total_weight) * (right[:, 1] - half_width)
 
+    if not np.isfinite(center).all() or (self._readout and not np.isfinite(sm["carState"].vEgo)):
+      self.clear()
+      return
+
+    epoch = sm["carControlSP"].blendfulControlEpoch
+    if sm["carControlSP"].blendfulModelMonoTime != sm.logMonoTime["modelV2"]:
+      # Current lane geometry has been validated, but no old geometry or number
+      # is shown while waiting for the consumer to accept this observation.
+      self._wait_for_receipt(epoch, side_mask)
+      return
+
     points = renderer._map_line_to_polygon(center, 0.15, 0.0, max_idx, *map_args)
     if points.size == 0 or not np.isfinite(points).all():
       self.clear()
       return
-
     output_ns = sm.logMonoTime["modelDataV2SP"]
-    if self._readout and not np.isfinite(sm["carState"].vEgo):
-      self.clear()
-      return
-    epoch = sm["carControlSP"].blendfulControlEpoch
     if side_mask != self._side_mask or epoch != self._control_epoch:
-      self.clear()
+      if not (self._opacity_epoch == epoch and self._opacity_sides == side_mask and
+              time.monotonic_ns() <= self._opacity_deadline_ns):
+        self.clear()
+    self._clear_opacity_wait()
     if self._output_ns != output_ns:
       self._alpha.update(1.0)
     self._center_points = points
@@ -199,7 +247,16 @@ class BlendfulRenderer:
   def draw(self, rect: rl.Rectangle) -> None:
     # Draw also runs on frames with no new messages. Health and parameter checks
     # therefore cannot live only in the 20 Hz update branch.
-    if (not self._current_messages() or self._model_ns != ui_state.sm.logMonoTime["modelV2"] or
+    if not self._current_messages():
+      if (self._opacity_deadline_ns and time.monotonic_ns() <= self._opacity_deadline_ns and
+          self._opacity_model_ns == ui_state.sm.logMonoTime.get("modelV2", 0) and
+          self._opacity_epoch == ui_state.sm["carControlSP"].blendfulControlEpoch and
+          self._current_messages(allow_pending_receipt=True)):
+        self._hide_geometry()
+      else:
+        self.clear()
+      return
+    if (self._model_ns != ui_state.sm.logMonoTime["modelV2"] or
         self._output_ns != ui_state.sm.logMonoTime["modelDataV2SP"] or
         self._control_epoch != ui_state.sm["carControlSP"].blendfulControlEpoch or
         (self._readout and not np.isfinite(ui_state.sm["carState"].vEgo))):
