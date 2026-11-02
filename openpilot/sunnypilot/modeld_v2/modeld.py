@@ -91,13 +91,13 @@ def fill_blendful_msg(blendful: Blendful, modelv2_send, drivingdata_send, mdv2sp
   drivingdata_send.drivingModelData.action = action
   mdv2sp_send.valid = modelv2_send.valid
   mdv2sp_send.logMonoTime = modelv2_send.logMonoTime
-  mdv2sp_send.modelDataV2SP.blendfulCurvature = blendful.curvature
-  mdv2sp_send.modelDataV2SP.blendfulTrust = blendful.trust
-  mdv2sp_send.modelDataV2SP.modelCurvature = blendful.model_curvature
-  mdv2sp_send.modelDataV2SP.blendfulGoingAround = blendful.going_around
-  mdv2sp_send.modelDataV2SP.blendfulLeftProb = blendful.l_prob
-  mdv2sp_send.modelDataV2SP.blendfulRightProb = blendful.r_prob
-  mdv2sp_send.modelDataV2SP.blendfulLaneWidth = blendful.lane_width.x
+  mdv2sp_send.modelDataV2SP.blendfulCurvature = float(blendful.curvature)
+  mdv2sp_send.modelDataV2SP.blendfulTrust = float(blendful.trust)
+  mdv2sp_send.modelDataV2SP.modelCurvature = float(blendful.model_curvature)
+  mdv2sp_send.modelDataV2SP.blendfulGoingAround = bool(blendful.going_around)
+  mdv2sp_send.modelDataV2SP.blendfulLeftProb = float(blendful.l_prob)
+  mdv2sp_send.modelDataV2SP.blendfulRightProb = float(blendful.r_prob)
+  mdv2sp_send.modelDataV2SP.blendfulLaneWidth = float(blendful.lane_width.x)
 
 
 def _pkl_exists(path):
