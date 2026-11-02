@@ -471,12 +471,6 @@ struct CarControlSP @0xa5cd762cd951a455 {
   leadTwo @3 :LeadData;
   intelligentCruiseButtonManagement @4 :IntelligentCruiseButtonManagement;
 
-  # Blendful's current lateral-control session and accepted pre-limit correction.
-  # A zero model time means no correction was accepted in this control cycle.
-  blendfulControlEpoch @5 :UInt64;
-  blendfulModelMonoTime @6 :UInt64;
-  blendfulAppliedCurvature @7 :Float32;
-
   struct Param {
     key @0 :Text;
     type @2 :ParamType;
@@ -562,7 +556,6 @@ struct ModelDataV2SP @0xa1680744031fdb2d {
   blendfulLeftProb @7 :Float32;
   blendfulRightProb @8 :Float32;
   blendfulLaneWidth @9 :Float32;
-  blendfulControlEpoch @10 :UInt64;
 
   enum TurnDirection {
     none @0;

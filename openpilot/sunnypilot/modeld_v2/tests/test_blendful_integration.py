@@ -68,7 +68,6 @@ def healthy_inputs(now_ns=10_000_000_000):
   data = {
     'carState': SimpleNamespace(vEgo=20.0),
     'carControl': SimpleNamespace(latActive=True),
-    'carControlSP': SimpleNamespace(blendfulControlEpoch=now_ns - 50_000_000),
     'extrinsicsCalibration': SimpleNamespace(calStatus=log.ExtrinsicsCalibration.Status.calibrated, rpyCalib=[0.0] * 3),
   }
   sm = mock.MagicMock()
@@ -78,9 +77,7 @@ def healthy_inputs(now_ns=10_000_000_000):
   sm.alive = dict.fromkeys(data, True)
   sm.freq_ok = dict.fromkeys(data, True)
   sm.logMonoTime = dict.fromkeys(data, now_ns)
-  # Match the optional topic's generic ignore lists: feature qualification must
-  # inspect carControlSP explicitly instead of trusting all_checks for it.
-  sm.all_checks.side_effect = lambda services: all(sm.valid[s] and sm.alive[s] and sm.freq_ok[s] for s in services if s != 'carControlSP')
+  sm.all_checks.side_effect = lambda services: all(sm.valid[s] and sm.alive[s] and sm.freq_ok[s] for s in services)
   dh = SimpleNamespace(desire=log.Desire.none, lane_change_state=log.LaneChangeState.off)
   return sm, data, dh
 
@@ -113,7 +110,7 @@ class TestBlendfulAction(OpenpilotTestCase):
             self.assertEqual(action.to_dict(), nominal)
             self.assertAlmostEqual(messages[2].modelDataV2SP.modelCurvature, 0.00125)
 
-  def test_public_actions_and_history_stay_nominal_with_active_correction(self):
+  def test_nominal_smoothing_never_contains_feature_history(self):
     for generation in (None, 10, 12):
       for head in ('action', 'desired_curvature', 'plan'):
         with self.subTest(generation=generation, head=head):
@@ -139,13 +136,12 @@ class TestBlendfulAction(OpenpilotTestCase):
             self.assertEqual(nominal.to_dict(), nominal_before_publish)
             self.assertEqual(published.desiredAcceleration, baseline.desiredAcceleration)
             self.assertEqual(published.shouldStop, baseline.shouldStop)
-            self.assertEqual(published.to_dict(), baseline.to_dict())
-            self.assertAlmostEqual(messages[2].modelDataV2SP.blendfulCurvature, bf.curvature, places=9)
+            self.assertAlmostEqual(published.desiredCurvature, nominal.desiredCurvature + bf.curvature, places=9)
             self.assertEqual(messages[2].valid, messages[0].valid)
             self.assertEqual(messages[2].logMonoTime, messages[0].logMonoTime)
             if index == 99:
               self.assertGreater(bf.curvature, 0.0)
-              self.assertGreater(messages[2].modelDataV2SP.blendfulCurvature, 0.0)
+              self.assertGreater(published.desiredCurvature, baseline.desiredCurvature)
             elif index in (100, 101, 102):
               self.assertEqual(bf.curvature, 0.0)
               self.assertEqual(published.to_dict(), baseline.to_dict())
@@ -178,7 +174,7 @@ class TestBlendfulAction(OpenpilotTestCase):
       'laneTurnDirection': 'none', 'leftLaneChangeEdgeBlock': False, 'rightLaneChangeEdgeBlock': False,
       'blendfulCurvature': 0.0, 'blendfulTrust': 0.0, 'modelCurvature': float(np.float32(0.00125)),
       'blendfulGoingAround': False, 'blendfulLeftProb': 0.0, 'blendfulRightProb': 0.0,
-      'blendfulLaneWidth': float(np.float32(3.6)), 'blendfulControlEpoch': 0,
+      'blendfulLaneWidth': float(np.float32(3.6)),
     })
     self.assertTrue(np.signbit(messages[0].modelV2.action.desiredCurvature))
     self.assertEqual(messages[0].modelV2.action.to_dict(), nominal.to_dict())
@@ -189,12 +185,12 @@ class TestBlendfulAction(OpenpilotTestCase):
     transforms = {'img': np.eye(3), 'big_img': np.eye(3)}
     self.assertTrue(modeld.blendful_inputs_active(sm, dh, True, now, transforms, now_ns=now))
     for field in ('seen', 'valid', 'alive', 'freq_ok'):
-      for service in ('carState', 'carControl', 'extrinsicsCalibration', 'carControlSP'):
+      for service in ('carState', 'carControl', 'extrinsicsCalibration'):
         with self.subTest(field=field, service=service):
           getattr(sm, field)[service] = False
           self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, now, transforms, now_ns=now))
           getattr(sm, field)[service] = True
-    for service in ('carState', 'carControl', 'extrinsicsCalibration', 'carControlSP'):
+    for service in ('carState', 'carControl', 'extrinsicsCalibration'):
       max_age = int(10.0 / modeld.SERVICE_LIST[service].frequency * 1e9)
       for stamp in (0, now + 1, now - max_age):
         with self.subTest(service=service, stamp=stamp):
@@ -226,46 +222,6 @@ class TestBlendfulAction(OpenpilotTestCase):
     for bad_transforms in ({}, {'img': np.ones((2, 3))}, {'img': np.full((3, 3), np.nan)}):
       self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, now, bad_transforms, now_ns=now))
 
-  def test_producer_requires_a_nonzero_epoch_and_a_capture_from_that_session(self):
-    now = 10_000_000_000
-    sm, data, dh = healthy_inputs(now)
-    transforms = {'img': np.eye(3), 'big_img': np.eye(3)}
-    epoch = now - 25_000_000
-    data['carControlSP'].blendfulControlEpoch = epoch
-    for capture, expected in ((epoch - 1, False), (epoch, True), (now, True)):
-      with self.subTest(capture=capture):
-        self.assertEqual(modeld.blendful_inputs_active(sm, dh, True, capture, transforms, now_ns=now), expected)
-    for unavailable_epoch in (0, now + 1):
-      data['carControlSP'].blendfulControlEpoch = unavailable_epoch
-      self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, now, transforms, now_ns=now))
-
-  def test_submaster_qualifies_100hz_controls_sampled_by_20hz_modeld(self):
-    services = ['carState', 'carControl', 'carControlSP']
-    sm = messaging.SubMaster(services, frequency=ModelConstants.MODEL_FREQ,
-                             ignore_alive=['carControlSP'], ignore_avg_freq=['carControlSP'], ignore_valid=['carControlSP'])
-    for index in range(10):
-      now = 10.0 + index * DT_MDL
-      messages = [messaging.new_message(service, valid=True, logMonoTime=int(now * 1e9)) for service in services]
-      sm.update_msgs(now, messages)
-    self.assertTrue(sm.all_checks(['carState', 'carControl']))
-    self.assertTrue(sm.freq_ok['carControlSP'])
-    self.assertTrue(sm.alive['carControlSP'])
-    self.assertTrue(sm.valid['carControlSP'])
-
-  def test_epoch_publication_keeps_nominal_actions_unchanged(self):
-    bf = Blendful()
-    nominal = log.ModelDataV2.Action(desiredCurvature=-0.002, desiredAcceleration=0.1, shouldStop=True)
-    for _ in range(60):
-      bf.update(model_output(center=0.5), 20.0, True, 0.00125)
-    self.assertGreater(bf.curvature, 0.0)
-    epoch = (1 << 60) + 7
-    messages = action_messages(nominal)
-    modeld.fill_blendful_msg(bf, *messages, control_epoch=epoch)
-    self.assertEqual(messages[0].modelV2.action.to_dict(), nominal.to_dict())
-    self.assertEqual(messages[1].drivingModelData.action.to_dict(), nominal.to_dict())
-    self.assertEqual(messages[2].modelDataV2SP.blendfulControlEpoch, epoch)
-    self.assertAlmostEqual(messages[2].modelDataV2SP.blendfulCurvature, bf.curvature, places=9)
-
 
 class FrameLoopFinished(Exception):
   pass
@@ -279,7 +235,7 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
     put_bool = params.put_bool
     self.enterContext(mock.patch.object(params, 'put_bool', side_effect=lambda key, value, block=False: put_bool(key, value, block=True)))
     get_bool = self.enterContext(mock.patch.object(params, 'get_bool', wraps=params.get_bool))
-    current = {'index': -1, 'scenario': {}, 'clock_ns': 10_000_000_000, 'consumer_epoch': 9_950_000_000}
+    current = {'index': -1, 'scenario': {}, 'clock_ns': 10_000_000_000}
     sm, data, dh = healthy_inputs(current['clock_ns'])
     data.update({
       'driverMonitoringState': SimpleNamespace(isRHD=False),
@@ -319,20 +275,14 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
       data['carState'].vEgo = scenario.get('speed', 20.0)
       data['carControl'].latActive = scenario.get('lat_active', True)
       data['extrinsicsCalibration'].calStatus = scenario.get('calibration', log.ExtrinsicsCalibration.Status.calibrated)
-      if scenario.get('new_epoch'):
-        current['consumer_epoch'] = current['clock_ns']
-      data['carControlSP'].blendfulControlEpoch = scenario.get('control_epoch', current['consumer_epoch'])
-      sm.seen['carControlSP'] = not scenario.get('missing_control_sp', False)
       sm.frame += 1
-      for service in ('carState', 'carControl', 'extrinsicsCalibration', 'carControlSP'):
+      for service in ('carState', 'carControl', 'extrinsicsCalibration'):
         sm.logMonoTime[service] = current['clock_ns']
         sm.valid[service] = service != scenario.get('invalid_service')
         sm.alive[service] = True
         sm.freq_ok[service] = True
       if scenario.get('stale_control'):
         sm.logMonoTime['carControl'] -= 100_000_000
-      if scenario.get('stale_control_sp'):
-        sm.logMonoTime['carControlSP'] -= 100_000_000
       return object()
 
     client.recv.side_effect = recv
@@ -351,12 +301,6 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
           raise RuntimeError('offline eGPU failure')
         if scenario.get('missing_output'):
           return None
-        if scenario.get('epoch_during_inference'):
-          # controlsd exits/re-enters while inference is in flight. SubMaster
-          # still holds the old epoch until its next update, so this reply must
-          # keep the old echo rather than falsely claiming the new session.
-          current['clock_ns'] += 1
-          current['consumer_epoch'] = current['clock_ns']
         output = model_output(center=scenario.get('center', 0.5), v=scenario.get('speed', 20.0))
         if scenario.get('missing_lines'):
           output['lane_lines_prob'][:] = 0.0
@@ -390,19 +334,17 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
         record['sp'] = message.modelDataV2SP.to_dict()
         record['sp_valid'] = message.valid
         record['sp_stamp'] = message.logMonoTime
-        record['consumer_epoch'] = current['consumer_epoch']
 
     pub.send.side_effect = send
     camera = SimpleNamespace(narrow_road=SimpleNamespace(intrinsics=np.eye(3)), wide_road=SimpleNamespace(intrinsics=np.eye(3)))
     offset = mock.Mock()
     offset.update.side_effect = lambda main, extra, *args: (main, extra)
-    submaster_factory = mock.Mock(return_value=sm)
     patches = (
       mock.patch.object(modeld, 'config_realtime_process'), mock.patch.object(modeld, 'setproctitle'),
       mock.patch.object(modeld, 'chestnut_present', return_value=chestnut), mock.patch.object(modeld, 'Params', return_value=params),
       mock.patch.object(modeld, 'VisionIpcClient', vision_client),
       mock.patch.object(modeld, 'ModelState', side_effect=lambda **kwargs: large if kwargs['chestnut'] else small),
-      mock.patch.object(modeld, 'PubMaster', return_value=pub), mock.patch.object(modeld, 'SubMaster', submaster_factory),
+      mock.patch.object(modeld, 'PubMaster', return_value=pub), mock.patch.object(modeld, 'SubMaster', return_value=sm),
       mock.patch.object(modeld, 'ChestnutState', return_value=SimpleNamespace(big=chestnut, send=mock.Mock())),
       mock.patch.object(modeld, 'DesireHelper', return_value=dh), mock.patch.object(modeld, 'load_meta_constants', return_value=Meta),
       mock.patch.object(modeld, 'RoadEdgeLaneChangeController', return_value=SimpleNamespace(update_and_fill=lambda *args: (False, False))),
@@ -416,17 +358,13 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
       self.enterContext(patch)
     with self.assertRaises(FrameLoopFinished):
       modeld.main()
-    self.assertIn('carControlSP', submaster_factory.call_args.args[0])
-    self.assertEqual(submaster_factory.call_args.kwargs, {
-      'ignore_alive': ['carControlSP'], 'ignore_avg_freq': ['carControlSP'], 'ignore_valid': ['carControlSP'],
-      'frequency': ModelConstants.MODEL_FREQ,
-    })
     self.assertEqual(sum(call.args == ('Blendful',) for call in get_bool.call_args_list), len(nominal_actions))
     for index, record in published.items():
       self.assertEqual(record['model'], record['driving'])
       self.assertEqual(record['model']['desiredAcceleration'], nominal_actions[index]['desiredAcceleration'])
       self.assertEqual(record['model']['shouldStop'], nominal_actions[index]['shouldStop'])
-      self.assertEqual(record['model'], nominal_actions[index])
+      self.assertAlmostEqual(record['model']['desiredCurvature'],
+                             nominal_actions[index]['desiredCurvature'] + record['sp']['blendfulCurvature'], places=9)
       self.assertEqual(record['sp_valid'], record['valid'])
       self.assertEqual(record['sp_stamp'], record['stamp'])
     ordered = list(nominal_actions)
@@ -439,7 +377,6 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
       {'desire': log.Desire.turnLeft}, {'lane_change': log.LaneChangeState.preLaneChange},
       {'lat_active': False}, {'enabled': False}, {'speed': 4.99}, {'missing_lines': True},
       {'invalid_service': 'carState'}, {'invalid_service': 'carControl'}, {'stale_control': True},
-      {'missing_control_sp': True}, {'invalid_service': 'carControlSP'}, {'stale_control_sp': True}, {'control_epoch': 0},
       {'calibration': log.ExtrinsicsCalibration.Status.invalid}, {'frame_age_ns': 251_000_000},
       {'missing_output': True}, {'missing_camera': True},
     )
@@ -475,45 +412,6 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
       expected = fresh.update(outputs[index], 20.0, True, 0.00125)
       self.assertAlmostEqual(published[index]['sp']['blendfulCurvature'], expected, places=11)
       self.assertAlmostEqual(published[index]['sp']['blendfulTrust'], fresh.trust, places=8)
-
-  def test_optional_control_topic_can_be_missing_at_startup(self):
-    scenarios = [{'missing_control_sp': True}, {'control_epoch': 0}, {'missing_control_sp': True, 'enabled': False},
-                 {'new_epoch': True, 'center': -0.5}]
-    published, outputs, nominal, _, _ = self.run_frames(scenarios)
-    for index in range(3):
-      self.assertTrue(published[index]['valid'])
-      self.assertEqual(published[index]['model'], nominal[index])
-      self.assertEqual(published[index]['sp']['blendfulCurvature'], 0.0)
-      self.assertEqual(published[index]['sp']['blendfulTrust'], 0.0)
-      self.assertEqual(published[index]['sp']['blendfulControlEpoch'], 0)
-    fresh = Blendful()
-    expected = fresh.update(outputs[3], 20.0, True, 0.00125)
-    self.assertGreater(published[3]['sp']['blendfulControlEpoch'], 0)
-    self.assertAlmostEqual(published[3]['sp']['blendfulCurvature'], expected, places=11)
-
-  def test_epoch_changes_and_inflight_old_replies_do_not_inherit_history(self):
-    scenarios = [{} for _ in range(60)]
-    scenarios.extend(({'new_epoch': True, 'center': -0.5}, {'center': -0.5},
-                      {'epoch_during_inference': True}, {},
-                      {'new_epoch': True, 'capture_offset_ns': 10_000_000}, {'center': -0.5}))
-    published, outputs, _, _, _ = self.run_frames(scenarios)
-    self.assertGreater(published[59]['sp']['blendfulCurvature'], 0.0)
-    self.assertNotEqual(published[60]['sp']['blendfulControlEpoch'], published[59]['sp']['blendfulControlEpoch'])
-    self.assertEqual(published[60]['sp']['blendfulControlEpoch'], published[61]['sp']['blendfulControlEpoch'])
-    # The in-flight reply truthfully belongs to the old consumer epoch. Public
-    # model actions stay nominal even while that obsolete response is emitted.
-    self.assertEqual(published[62]['sp']['blendfulControlEpoch'], published[61]['sp']['blendfulControlEpoch'])
-    self.assertNotEqual(published[62]['sp']['blendfulControlEpoch'], published[62]['consumer_epoch'])
-    self.assertEqual(published[63]['sp']['blendfulControlEpoch'], published[62]['consumer_epoch'])
-    self.assertEqual(published[64]['sp']['blendfulCurvature'], 0.0)
-    self.assertEqual(published[64]['sp']['blendfulTrust'], 0.0)
-    self.assertEqual(published[64]['sp']['blendfulControlEpoch'], published[64]['consumer_epoch'])
-    for index in (60, 63, 65):
-      with self.subTest(index=index):
-        fresh = Blendful()
-        expected = fresh.update(outputs[index], 20.0, True, 0.00125)
-        self.assertAlmostEqual(published[index]['sp']['blendfulCurvature'], expected, places=11)
-        self.assertAlmostEqual(published[index]['sp']['blendfulTrust'], fresh.trust, places=8)
 
   def test_duplicate_or_reversed_capture_is_not_a_new_observation(self):
     scenarios = [{} for _ in range(60)]

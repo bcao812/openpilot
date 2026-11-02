@@ -42,19 +42,6 @@ def lead_fixture(index, source='fused', path_state='inPath'):
 
 
 class TestCarControlSPConversion(unittest.TestCase):
-  def test_blendful_receipt_survives_conversion_and_wire_roundtrip(self):
-    receipt = {'blendfulControlEpoch': (1 << 56) + 17, 'blendfulModelMonoTime': (1 << 56) + 53,
-               'blendfulAppliedCurvature': -.0003125}
-    message = custom.CarControlSP.new_message(**receipt)
-    converted = convert_carControlSP(message.as_reader())
-    rebuilt = custom.CarControlSP.new_message(**asdictref(converted))
-    for name in receipt:
-      self.assertEqual(getattr(converted, name), getattr(message, name))
-      self.assertEqual(getattr(rebuilt, name), getattr(message, name))
-    default = convert_carControlSP(custom.CarControlSP.new_message().as_reader())
-    for name in receipt:
-      self.assertEqual(getattr(default, name), 0)
-
   def assert_leads_roundtrip(self, message):
     reader = message.as_reader()
     converted = convert_carControlSP(reader)

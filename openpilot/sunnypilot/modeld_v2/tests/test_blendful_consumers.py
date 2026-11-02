@@ -1,4 +1,4 @@
-"""Offline checks that lane correction leaves nominal action/SCC behavior intact."""
+"""Offline characterization of the Blendful publication to adaptive SCC boundary."""
 from unittest import mock
 
 from openpilot.cereal import log, messaging
@@ -61,10 +61,6 @@ class PublishedCurve:
   def published_demand(self):
     return self.sm['modelV2'].action.desiredCurvature * SPEED ** 2
 
-  @property
-  def correction_demand(self):
-    return self.messages[2].modelDataV2SP.blendfulCurvature * SPEED ** 2
-
 
 class TestBlendfulSccConsumers(OpenpilotTestCase):
   def setUp(self):
@@ -72,60 +68,51 @@ class TestBlendfulSccConsumers(OpenpilotTestCase):
     params.get_bool.return_value = True
     self.enterContext(mock.patch.object(vision_controller, 'Params', return_value=params))
 
-  def assert_nominal_and_scc_match(self, feature, control):
-    self.assertEqual(feature.nominal.to_dict(), control.nominal.to_dict())
-    for fixture in (feature, control):
-      self.assertEqual(fixture.messages[0].modelV2.action.to_dict(), fixture.nominal.to_dict())
-      self.assertEqual(fixture.messages[1].drivingModelData.action.to_dict(), fixture.nominal.to_dict())
-    self.assertEqual(feature.controller.state, control.controller.state)
-    self.assertEqual(feature.controller.is_active, control.controller.is_active)
-    self.assertEqual(feature.controller.steering_limited, control.controller.steering_limited)
-    self.assertEqual(feature.controller.output_v_target, control.controller.output_v_target)
-    self.assertEqual(feature.controller.output_a_target, control.controller.output_a_target)
-
   def establish_pair(self):
     feature, control = PublishedCurve(), PublishedCurve()
     for _ in range(100):
       feature.step()
       control.step(enabled=False)
-      self.assert_nominal_and_scc_match(feature, control)
       self.assertFalse(control.controller.is_active)
       self.assertFalse(control.controller.steering_limited)
       self.assertEqual(control.controller.output_v_target, V_CRUISE_UNSET)
       self.assertAlmostEqual(control.published_demand, .9, places=6)
-      if feature.published_demand + feature.correction_demand >= 1.01:
+      if feature.published_demand >= 1.01:
         break
-    # There is enough real correction to cross SCC's entry threshold if leaked
-    # into model action. It remains available only in the lateral diagnostic.
-    self.assertGreaterEqual(feature.published_demand + feature.correction_demand, 1.01)
+    self.assertGreaterEqual(feature.published_demand, 1.01)
     self.assertAlmostEqual(feature.nominal.desiredCurvature * SPEED ** 2, .9, places=6)
     self.assertGreater(feature.blendful.curvature, 0.)
     self.assertAlmostEqual(feature.messages[2].modelDataV2SP.blendfulCurvature, feature.blendful.curvature, places=9)
-    self.assertFalse(feature.controller.is_active)
-    self.assertFalse(feature.controller.steering_limited)
-    self.assertEqual(feature.controller.output_v_target, V_CRUISE_UNSET)
-    self.assertEqual(feature.controller.output_a_target, .4)
+    self.assertEqual(feature.messages[0].modelV2.action.to_dict(), feature.messages[1].drivingModelData.action.to_dict())
+    self.assertTrue(feature.controller.is_active)
+    self.assertTrue(feature.controller.steering_limited)
+    self.assertEqual(feature.controller.output_v_target, SPEED)
+    self.assertEqual(feature.controller.output_a_target, 0.)
     return feature, control
 
-  def test_current_and_withdrawn_correction_leave_scc_unchanged(self):
-    # The pre-fix producer made SCC enter on correction and remain latched after
-    # withdrawal at nominal 0.9. Nominal-only publication prevents both effects.
+  def test_withdrawn_correction_keeps_scc_latched(self):
+    # This characterizes the current action/SCC coupling; the 0.5 s curve-clear
+    # timer is not an upper bound while demand remains above the 0.8 release line.
     for reason in ('missing_lines', 'disabled'):
       with self.subTest(reason=reason):
         feature, control = self.establish_pair()
         for _ in range(40):
           feature.step(lines=reason != 'missing_lines', enabled=reason != 'disabled')
           control.step(lines=reason != 'missing_lines', enabled=False)
-          self.assert_nominal_and_scc_match(feature, control)
           self.assertEqual(feature.blendful.curvature, 0.)
           self.assertEqual(feature.messages[2].modelDataV2SP.blendfulCurvature, 0.)
+          self.assertEqual(feature.sm['modelV2'].action.to_dict(), control.sm['modelV2'].action.to_dict())
           self.assertAlmostEqual(feature.published_demand, .9, places=6)
-          self.assertFalse(feature.controller.steering_limited)
-          self.assertFalse(feature.controller.is_active)
-          self.assertEqual(feature.controller.output_v_target, V_CRUISE_UNSET)
-          self.assertEqual(feature.controller.output_a_target, .4)
+          self.assertTrue(feature.controller.steering_limited)
+          self.assertTrue(feature.controller.is_active)
+          self.assertEqual(feature.controller.output_v_target, SPEED)
+          self.assertEqual(feature.controller.output_a_target, 0.)
+          self.assertFalse(control.controller.steering_limited)
+          self.assertFalse(control.controller.is_active)
+          self.assertEqual(control.controller.output_v_target, V_CRUISE_UNSET)
+          self.assertEqual(control.controller.output_a_target, .4)
 
-  def test_nominal_scc_hysteresis_and_release_conditions_are_preserved(self):
+  def test_scc_releases_on_current_authority_demand_or_timestamp_change(self):
     releases = {
       'lateral_exit': {'lateral_active': False},
       'unsaturated': {'saturated': False},
@@ -135,18 +122,7 @@ class TestBlendfulSccConsumers(OpenpilotTestCase):
     }
     for reason, release in releases.items():
       with self.subTest(reason=reason):
-        feature = PublishedCurve()
-        # A genuine nominal demand must retain the existing 1.0/0.8 hysteresis.
-        # No lane correction participates in establishing this SCC cycle.
-        for demand, limited in ((.9, False), (1.01, True), (.9, True)):
-          feature.step(lines=False, desired=demand)
-          self.assertEqual(feature.correction_demand, 0.)
-          self.assertAlmostEqual(feature.published_demand, demand, places=6)
-          self.assertEqual(feature.controller.steering_limited, limited)
-          self.assertEqual(feature.controller.is_active, limited)
-          if limited:
-            self.assertEqual(feature.controller.output_v_target, SPEED)
-            self.assertEqual(feature.controller.output_a_target, 0.)
+        feature, _ = self.establish_pair()
         feature.step(lines=False, **release)
         self.assertEqual(feature.blendful.curvature, 0.)
         self.assertFalse(feature.controller.steering_limited)
@@ -167,7 +143,9 @@ class TestBlendfulSccConsumers(OpenpilotTestCase):
       curve = {'desired': 2.5, 'predicted': 3., 'current': 2.3, 'saturated': False}
       feature.step(**curve)
       control.step(enabled=False, **curve)
-      self.assert_nominal_and_scc_match(feature, control)
+      self.assertEqual(feature.controller.is_active, control.controller.is_active)
+      self.assertEqual(feature.controller.output_v_target, control.controller.output_v_target)
+      self.assertEqual(feature.controller.output_a_target, control.controller.output_a_target)
     self.assertGreater(feature.blendful.curvature, 0.)
     self.assertTrue(feature.controller.is_active)
     self.assertFalse(feature.controller.steering_limited)

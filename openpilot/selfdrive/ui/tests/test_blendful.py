@@ -15,7 +15,6 @@ from openpilot.selfdrive.ui.translations.potools import parse_po
 from openpilot.selfdrive.ui.ui_state import UIStatus
 
 START = 1_000_000_000
-EPOCH = START - 100_000_000
 
 
 class Messages(dict):
@@ -23,7 +22,6 @@ class Messages(dict):
     super().__init__(messages)
     self.logMonoTime = dict.fromkeys(messages, START)
     self.valid = dict.fromkeys(messages, True)
-    self.seen = dict.fromkeys(messages, True)
     self.recv_frame = dict.fromkeys(messages, 10)
     self.updated = dict.fromkeys(messages, False)
 
@@ -43,19 +41,15 @@ def model_messages():
   x = np.linspace(1, 80, 33, dtype=np.float32)
   lines = [SimpleNamespace(x=x, y=np.full(33, y, dtype=np.float32), z=np.zeros(33, dtype=np.float32))
            for y in (-5.25, -1.75, 1.75, 5.25)]
-  model = SimpleNamespace(frameId=7, timestampEof=START - 10_000_000,
-                          position=SimpleNamespace(x=x, y=np.zeros(33), z=np.zeros(33)),
+  model = SimpleNamespace(frameId=7, position=SimpleNamespace(x=x, y=np.zeros(33), z=np.zeros(33)),
                           laneLines=lines, laneLineStds=[0.1] * 4, laneLineProbs=[1.0] * 4,
                           roadEdges=[lines[0], lines[3]], roadEdgeStds=[0.1, 0.1],
                           acceleration=SimpleNamespace(x=np.zeros(33)))
   sm = Messages(modelV2=model,
                 modelDataV2SP=SimpleNamespace(blendfulTrust=0.8, blendfulCurvature=0.001,
-                                            blendfulLeftProb=1.0, blendfulRightProb=1.0, blendfulLaneWidth=3.5,
-                                            blendfulControlEpoch=EPOCH),
+                                            blendfulLeftProb=1.0, blendfulRightProb=1.0, blendfulLaneWidth=3.5),
                 carState=SimpleNamespace(vEgo=15.0), carParams=SimpleNamespace(),
                 carControl=SimpleNamespace(latActive=True),
-                carControlSP=SimpleNamespace(blendfulControlEpoch=EPOCH, blendfulModelMonoTime=START,
-                                             blendfulAppliedCurvature=0.001),
                 carOutput=SimpleNamespace(actuatorsOutput=SimpleNamespace(torque=0.0)),
                 selfdriveState=SimpleNamespace(experimentalMode=False),
                 selfdriveStateSP=SimpleNamespace(mads=SimpleNamespace(available=False)),
@@ -65,12 +59,6 @@ def model_messages():
 
 
 class TestBlendfulSettings(HeadlessUITestCase):
-  def test_ui_subscribes_to_the_optional_consumer_receipt(self):
-    with patch('openpilot.selfdrive.ui.sunnypilot.ui_state.ScreenSaverSP'):
-      state = UIStateSP()
-    self.assertIn('carControlSP', state.sm_services_ext)
-    self.assertIn('modelDataV2SP', state.sm_services_ext)
-
   @contextmanager
   def settings(self, variant):
     from openpilot.selfdrive.ui.sunnypilot.layouts.settings import models
@@ -247,17 +235,6 @@ class TestBlendfulRenderer(HeadlessUITestCase):
     self.assertEqual(self.overlay._center_points.size, 0)
     self.assertEqual(self.overlay._trust, 0)
     self.assertEqual(self.overlay._alpha.x, 0)
-    self.assertEqual(self.overlay._control_epoch, 0)
-    self.assertEqual(self.overlay._pull_display.x, 0)
-
-  def publish_model(self, stamp, capture_ns=None):
-    sm = self.state.sm
-    for service in ('modelV2', 'modelDataV2SP', 'carControl', 'carControlSP'):
-      sm.logMonoTime[service] = stamp
-    sm['modelV2'].timestampEof = stamp - 10_000_000 if capture_ns is None else capture_ns
-    sm['carControlSP'].blendfulModelMonoTime = stamp
-    self.renderer._model_geometry_ns = stamp
-    self.clock.return_value = stamp + 1
 
   def test_cyan_center_uses_current_lines_without_changing_model_geometry(self):
     before = [line.raw_points.copy() for line in self.renderer._lane_lines]
@@ -322,7 +299,6 @@ class TestBlendfulRenderer(HeadlessUITestCase):
           elif case == 'old':
             self.clock.return_value = START + self.module.MESSAGE_MAX_AGE_NS + 1
             self.state.sm.logMonoTime['carControl'] = self.clock.return_value
-            self.state.sm.logMonoTime['carControlSP'] = self.clock.return_value
           elif case == 'future':
             self.state.sm.logMonoTime[service] = START + 2
           elif case == 'other_frame':
@@ -362,128 +338,8 @@ class TestBlendfulRenderer(HeadlessUITestCase):
           del self.state.sm.logMonoTime['carControl']
         else:
           self.clock.return_value = START + self.module.CONTROL_MAX_AGE_NS + 1
-          self.state.sm.logMonoTime['carControlSP'] = self.clock.return_value
         self.overlay.draw(self.rect)
         self.assert_cleared()
-
-  def test_consumer_receipt_is_required_current_and_finite_on_every_draw(self):
-    cases = ('invalid', 'unseen', 'missing', 'stale', 'future', 'previous_drive', 'zero_epoch',
-             'other_epoch', 'rejected', 'other_model', 'nan_term', 'infinite_term')
-    for case in cases:
-      with self.subTest(case=case):
-        self.state.sm = model_messages()
-        self.update()
-        self.assertGreater(self.overlay._center_points.size, 0)
-        sm, receipt = self.state.sm, self.state.sm['carControlSP']
-        if case == 'invalid':
-          sm.valid['carControlSP'] = False
-        elif case == 'unseen':
-          sm.seen['carControlSP'] = False
-        elif case == 'missing':
-          del sm.logMonoTime['carControlSP']
-        elif case == 'stale':
-          sm.logMonoTime['carControlSP'] = START - self.module.CONTROL_MAX_AGE_NS
-        elif case == 'future':
-          sm.logMonoTime['carControlSP'] = START + 2
-        elif case == 'previous_drive':
-          sm.recv_frame['carControlSP'] = -1
-        elif case == 'zero_epoch':
-          receipt.blendfulControlEpoch = 0
-        elif case == 'other_epoch':
-          receipt.blendfulControlEpoch = EPOCH + 1
-        elif case == 'rejected':
-          receipt.blendfulModelMonoTime = 0
-        elif case == 'other_model':
-          receipt.blendfulModelMonoTime = START - 1
-        else:
-          receipt.blendfulAppliedCurvature = np.nan if case == 'nan_term' else np.inf
-        self.draw_polygon.reset_mock()
-        self.overlay.draw(self.rect)
-        self.assert_cleared()
-        self.draw_polygon.assert_not_called()
-
-  def test_pairing_is_exact_and_fresh_publication_cannot_renew_old_capture(self):
-    self.update()
-    self.state.sm.logMonoTime['modelDataV2SP'] = START - 1
-    self.overlay.draw(self.rect)
-    self.assert_cleared()
-    self.state.sm = model_messages()
-    self.update()
-    self.publish_model(START + 300_000_000, capture_ns=START - 10_000_000)
-    self.update()
-    self.assert_cleared()
-
-  def test_capture_deadline_and_epoch_are_checked_independently_of_publication(self):
-    for case in ('deadline', 'pre_epoch', 'future'):
-      with self.subTest(case=case):
-        self.state.sm = model_messages()
-        self.clock.return_value = START
-        self.update()
-        sm = self.state.sm
-        if case == 'deadline':
-          sm['carControlSP'].blendfulControlEpoch = sm['modelDataV2SP'].blendfulControlEpoch = START - 300_000_000
-          sm['modelV2'].timestampEof = START - self.module.MESSAGE_MAX_AGE_NS
-          self.update()
-          self.assertGreater(self.overlay._center_points.size, 0)
-          self.clock.return_value = START + 1
-        elif case == 'pre_epoch':
-          sm['modelV2'].timestampEof = EPOCH - 1
-        else:
-          sm['modelV2'].timestampEof = START + 1
-        self.overlay.draw(self.rect)
-        self.assert_cleared()
-
-  def test_brief_exit_reentry_requires_new_epoch_capture_and_receipt(self):
-    self.update()
-    receipt = self.state.sm['carControlSP']
-    epoch = START + 20_000_000
-    self.clock.return_value = epoch + 1
-    self.state.sm.logMonoTime['carControlSP'] = epoch
-    receipt.blendfulControlEpoch, receipt.blendfulModelMonoTime = epoch, 0
-    # UI never observed carControl.latActive=False between these two receipts.
-    self.overlay.draw(self.rect)
-    self.assert_cleared()
-    receipt.blendfulModelMonoTime = START
-    self.update()
-    self.assert_cleared()
-    self.state.sm['modelDataV2SP'].blendfulControlEpoch = epoch
-    self.update()
-    self.assert_cleared()  # the old capture still predates this epoch
-    self.publish_model(START + 50_000_000)
-    self.update()
-    self.assertEqual(self.overlay._control_epoch, epoch)
-    self.assertGreater(self.overlay._center_points.size, 0)
-
-  def test_mici_readout_uses_accepted_preclip_term_and_allows_zero_accepted_term(self):
-    self.overlay = self.module.BlendfulRenderer()
-    self.state.sm['modelDataV2SP'].blendfulCurvature = 0.1
-    receipt = self.state.sm['carControlSP']
-    receipt.blendfulAppliedCurvature = -0.001
-    self.update()
-    self.assertLess(self.overlay._pull_display.x, 0)
-    self.overlay.clear()
-    receipt.blendfulAppliedCurvature = 0.0
-    self.update()
-    self.assertEqual(self.overlay._pull_display.x, 0)
-    self.assertGreater(self.overlay._center_points.size, 0)
-    self.draw_polygon.reset_mock()
-    with patch.object(self.overlay, '_draw_readout'):
-      self.overlay.draw(self.rect)
-    self.draw_polygon.assert_called_once()
-
-  def test_receipt_only_updates_refresh_mici_readout_without_new_projection(self):
-    self.overlay = self.module.BlendfulRenderer()
-    self.update()
-    before = self.overlay._pull_display.x
-    projected = self.renderer._map_line_to_polygon.call_count
-    self.state.sm.logMonoTime['carControlSP'] = START + 10_000_000
-    self.state.sm['carControlSP'].blendfulAppliedCurvature = 0.002
-    self.clock.return_value = START + 10_000_001
-    self.assertFalse(self.overlay.needs_update())
-    with patch.object(self.overlay, '_draw_readout'):
-      self.overlay.draw(self.rect)
-    self.assertGreater(self.overlay._pull_display.x, before)
-    self.assertEqual(self.renderer._map_line_to_polygon.call_count, projected)
 
   def test_zero_weight_nonfinite_side_is_masked_and_zero_variance_is_bounded(self):
     output = self.state.sm['modelDataV2SP']
@@ -522,8 +378,8 @@ class TestBlendfulRenderer(HeadlessUITestCase):
     self.assertGreater(self.overlay._pull_display.x, 0)
     self.state.sm['modelV2'].laneLineProbs[2] = 0.0
     self.state.sm['modelDataV2SP'].blendfulCurvature = 0.0
-    self.state.sm['carControlSP'].blendfulAppliedCurvature = 0.0
-    self.publish_model(START + 50_000_000)
+    self.state.sm.logMonoTime['modelV2'] = self.state.sm.logMonoTime['modelDataV2SP'] = START + 1
+    self.renderer._model_geometry_ns = START + 1
     self.update()
     self.assertEqual(self.overlay._side_mask, (True, False))
     self.assertEqual(self.overlay._pull_display.x, 0)
@@ -568,7 +424,7 @@ class TestBlendfulRenderer(HeadlessUITestCase):
     self.assertEqual(self.overlay._alpha.x, alpha)
     np.testing.assert_allclose(self.overlay._center_points[:, 1], 0.2, atol=1e-6)
 
-  def test_both_layouts_accept_late_receipts_and_keep_projection_caches_while_overlay_expires(self):
+  def test_both_layouts_keep_main_path_and_projection_caches_while_overlay_expires(self):
     from openpilot.selfdrive.ui.onroad import model_renderer as normal
     from openpilot.selfdrive.ui.mici.onroad import model_renderer as mici
     from openpilot.selfdrive.ui.sunnypilot.onroad import model_renderer as normal_sp
@@ -587,33 +443,17 @@ class TestBlendfulRenderer(HeadlessUITestCase):
         renderer._map_line_to_polygon = Mock(side_effect=lambda points, *args, **kwargs: points[:, :2].copy())
         renderer._update_experimental_gradient = Mock()
         renderer._draw_lane_lines, renderer._draw_path = Mock(), Mock()
-        self.state.sm['carControlSP'].blendfulModelMonoTime = 0
-        renderer._render(self.rect)
-        self.assertEqual(renderer.blendful._center_points.size, 0)
-
-        # controlsd's receipt arrives after the model/SP update, with no new geometry.
-        self.state.sm.updated = dict.fromkeys(self.state.sm, False)
-        self.state.sm.updated['carControlSP'] = True
-        self.state.sm['carControlSP'].blendfulModelMonoTime = START
-        self.state.sm.logMonoTime['carControlSP'] = START + 10_000_000
-        self.clock.return_value = START + 10_000_001
         renderer._render(self.rect)
         self.assertGreater(renderer.blendful._center_points.size, 0)
         self.assertEqual(renderer.blendful._readout, module is mici)
         projected = renderer._map_line_to_polygon.call_count
-
-        # The following ordinary 100 Hz receipt reuses that projection.
-        self.state.sm.logMonoTime['carControlSP'] = START + 20_000_000
-        self.clock.return_value = START + 20_000_001
-        renderer._render(self.rect)
-        self.assertEqual(renderer._map_line_to_polygon.call_count, projected)
         self.state.sm.updated = dict.fromkeys(self.state.sm, False)
         self.clock.return_value = START + self.module.MESSAGE_MAX_AGE_NS + 1
         renderer._render(self.rect)
         self.assertEqual(renderer._map_line_to_polygon.call_count, projected)
         self.assertEqual(renderer.blendful._center_points.size, 0)
-        self.assertEqual(renderer._draw_lane_lines.call_count, 4)
-        self.assertEqual(renderer._draw_path.call_count, 4)
+        self.assertEqual(renderer._draw_lane_lines.call_count, 2)
+        self.assertEqual(renderer._draw_path.call_count, 2)
 
   def test_sp_only_update_after_empty_model_path_or_lanes_does_not_crash_either_layout(self):
     from openpilot.selfdrive.ui.onroad import model_renderer as normal

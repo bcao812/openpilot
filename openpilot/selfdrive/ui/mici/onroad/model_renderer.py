@@ -146,8 +146,7 @@ class ModelRenderer(Widget, ModelRendererSP):
 
     # Update model data when needed
     model_updated = sm.updated['modelV2']
-    update_blendful = (model_updated or self._transform_dirty or sm.updated.get('modelDataV2SP', False) or
-                      (sm.updated.get('carControlSP', False) and self.blendful.needs_update()))
+    update_blendful = model_updated or self._transform_dirty or sm.updated.get('modelDataV2SP', False)
     if model_updated or sm.updated['radarState'] or self._transform_dirty:
       if model_updated:
         self._update_raw_points(model)
