@@ -15,7 +15,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP
 from openpilot.sunnypilot.modeld_v2.blendful import LANE_WIDTH_CLIP, LOOKAHEAD_TIME, MIN_LOOKAHEAD
 from openpilot.system.ui.lib.application import gui_app, FontWeight
-from openpilot.system.ui.lib.shader_polygon import draw_polygon
+from openpilot.system.ui.lib.shader_polygon import draw_polygon, PreparedPolygon
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 
 BLENDFUL_COLOR = (0, 200, 255)
@@ -33,7 +33,11 @@ class BlendfulRenderer:
   def __init__(self, readout: bool = True, rect_relative: bool = False):
     self._readout = readout
     self._rect_relative = rect_relative
-    self._center_points = np.empty((0, 2), dtype=np.float32)
+    self._empty_points = np.empty((0, 2), dtype=np.float32)
+    self._center_points = self._empty_points
+    self._prepared_polygon: PreparedPolygon | None = None
+    self._prepared_source: np.ndarray | None = None
+    self._prepared_origin: tuple[float, float] | None = None
     self._trust = 0.0
     self._model_ns = 0
     self._output_ns = 0
@@ -43,10 +47,17 @@ class BlendfulRenderer:
     self._alpha = FirstOrderFilter(0.0, 0.3, DT_MDL)
 
   def clear(self) -> None:
-    self._center_points = np.empty((0, 2), dtype=np.float32)
+    self._clear_geometry()
     self._trust = 0.0
     self._model_ns = self._output_ns = 0
     self._alpha.x = self._pull_display.x = self._trust_display.x = 0.0
+
+  def _invalidate_polygon(self) -> None:
+    self._prepared_polygon = self._prepared_source = self._prepared_origin = None
+
+  def _clear_geometry(self) -> None:
+    self._center_points = self._empty_points
+    self._invalidate_polygon()
 
   @staticmethod
   def _current_messages() -> bool:
@@ -101,7 +112,7 @@ class BlendfulRenderer:
     # Source behavior retains that fit while fresh confidence/alpha lets go.
     self._model_ns, self._output_ns = sm.logMonoTime["modelV2"], output_ns
     if self._alpha.x < 0.01:
-      self._center_points = np.empty((0, 2), dtype=np.float32)
+      self._clear_geometry()
       return
     if trust <= 0.0 or l_prob + r_prob <= 0.0:
       return
@@ -135,7 +146,9 @@ class BlendfulRenderer:
       self.clear()
       return
 
-    self._center_points = points
+    if self._center_points is not points:
+      self._invalidate_polygon()
+      self._center_points = points
 
   def _color(self, rgb, alpha: float) -> rl.Color:
     return rl.Color(*rgb, int(alpha * self._alpha.x))
@@ -148,8 +161,14 @@ class BlendfulRenderer:
       self.clear()
       return
     if self._center_points.size and self._trust > 0.05:
-      points = self._center_points + (rect.x, rect.y) if self._rect_relative else self._center_points
-      draw_polygon(rect, points, self._color(BLENDFUL_COLOR, np.clip(self._trust, 0.2, 1.0) * 255))
+      origin = (rect.x, rect.y) if self._rect_relative else None
+      if self._prepared_polygon is None or self._prepared_source is not self._center_points or self._prepared_origin != origin:
+        # Keep the original MICI addition before float32 conversion. One current
+        # snapshot also covers source-history holds; color/health stay per draw.
+        points = self._center_points + (rect.x, rect.y) if self._rect_relative else self._center_points
+        self._prepared_polygon = PreparedPolygon(points)
+        self._prepared_source, self._prepared_origin = self._center_points, origin
+      draw_polygon(rect, self._prepared_polygon, self._color(BLENDFUL_COLOR, np.clip(self._trust, 0.2, 1.0) * 255))
     if self._center_points.size and self._readout:
       self._draw_readout(rect)
 

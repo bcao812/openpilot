@@ -82,22 +82,22 @@ def blendful_inputs_healthy(sm, model_valid: bool, timestamp_eof: int,
 
 
 def fill_blendful_msg(blendful: Blendful, modelv2_send, drivingdata_send, mdv2sp_send) -> None:
-  # Copy after nominal-model smoothing. In particular, never write the added
-  # curvature into prev_action: it would survive withdrawal on generation >= 10.
-  action = log.ModelDataV2.Action(**modelv2_send.modelV2.action.to_dict())
+  # fill_model_msg already copied the nominal action into each message. Update
+  # only their curvature; the original action/prev_action remains nominal.
   if blendful.curvature != 0.0:
-    action.desiredCurvature += blendful.curvature
-  modelv2_send.modelV2.action = action
-  drivingdata_send.drivingModelData.action = action
+    curvature = float(modelv2_send.modelV2.action.desiredCurvature + blendful.curvature)
+    modelv2_send.modelV2.action.desiredCurvature = curvature
+    drivingdata_send.drivingModelData.action.desiredCurvature = curvature
   mdv2sp_send.valid = modelv2_send.valid
   mdv2sp_send.logMonoTime = modelv2_send.logMonoTime
-  mdv2sp_send.modelDataV2SP.blendfulCurvature = float(blendful.curvature)
-  mdv2sp_send.modelDataV2SP.blendfulTrust = float(blendful.trust)
-  mdv2sp_send.modelDataV2SP.modelCurvature = float(blendful.model_curvature)
-  mdv2sp_send.modelDataV2SP.blendfulGoingAround = bool(blendful.going_around)
-  mdv2sp_send.modelDataV2SP.blendfulLeftProb = float(blendful.l_prob)
-  mdv2sp_send.modelDataV2SP.blendfulRightProb = float(blendful.r_prob)
-  mdv2sp_send.modelDataV2SP.blendfulLaneWidth = float(blendful.lane_width.x)
+  diagnostics = mdv2sp_send.modelDataV2SP
+  diagnostics.blendfulCurvature = float(blendful.curvature)
+  diagnostics.blendfulTrust = float(blendful.trust)
+  diagnostics.modelCurvature = float(blendful.model_curvature)
+  diagnostics.blendfulGoingAround = bool(blendful.going_around)
+  diagnostics.blendfulLeftProb = float(blendful.l_prob)
+  diagnostics.blendfulRightProb = float(blendful.r_prob)
+  diagnostics.blendfulLaneWidth = float(blendful.lane_width.x)
 
 
 def _pkl_exists(path):

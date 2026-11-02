@@ -53,8 +53,9 @@ class Blendful:
     if (lines.shape != shape or stds.shape != shape or probs.shape != (1, 8) or
         plan.ndim != 3 or plan.shape[:2] != (1, len(X_IDXS)) or plan.shape[2] not in (3, 15)):
       return False
+    inner_probs = probs[0, 3:6:2]
     if (not np.isfinite(lines[0, 1:3]).all() or not np.isfinite(stds[0, 1:3]).all() or not np.all(stds[0, 1:3] > 0) or
-        not np.isfinite(probs[0, (3, 5)]).all() or np.any(probs[0, (3, 5)] < 0) or np.any(probs[0, (3, 5)] > 1) or
+        not np.isfinite(inner_probs).all() or np.any(inner_probs < 0) or np.any(inner_probs > 1) or
         not np.isfinite(plan).all()):
       return False
     if active and v_ego >= MIN_SPEED:
@@ -118,13 +119,14 @@ class Blendful:
     lookahead = max(v_ego * LOOKAHEAD_TIME, MIN_LOOKAHEAD)
     lines = model_output['lane_lines'][0, :, :, 0]
     stds = model_output['lane_lines_stds'][0, :, :, 0]
+    current_probs = model_output['lane_lines_prob'][0, 3:6:2]
 
     lone_weight = np.interp(abs(model_curvature) * v_ego ** 2, [0.18, 0.53], [0.5, 1.0])  # 0.5 on straights, 1.0 in curves
-    probs = self.line_probs.update(model_output['lane_lines_prob'][0, 1::2][1:3])
+    probs = self.line_probs.update(current_probs)
     absent = (probs < 0.3) & (lone_weight > 0.5)
-    gone = self.line_gone.update((model_output['lane_lines_prob'][0, 1::2][1:3] < 0.3).astype(float))
+    gone = self.line_gone.update((current_probs < 0.3).astype(float))
     missing = np.where(absent, 1.0, gone)
-    dropping = bool(np.any((probs < 0.6 * self.line_probs_slow.update(model_output['lane_lines_prob'][0, 1::2][1:3])) & ~absent))
+    dropping = bool(np.any((probs < 0.6 * self.line_probs_slow.update(current_probs)) & ~absent))
     l_prob = float(probs[0] * np.interp(np.interp(0.5 * lookahead, X_IDXS, stds[1]), LINE_STD, [1.0, 0.0]))
     r_prob = float(probs[1] * np.interp(np.interp(0.5 * lookahead, X_IDXS, stds[2]), LINE_STD, [1.0, 0.0]))
     self.l_prob, self.r_prob = l_prob, r_prob

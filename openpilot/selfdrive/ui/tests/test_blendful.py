@@ -9,12 +9,29 @@ import pyray as rl
 from openpilot.cereal import custom
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params, ParamKeyFlag, ParamKeyType
+from openpilot.selfdrive.ui.tests.test_polygon_cache import capture_polygons, reference_strip
 from openpilot.selfdrive.ui.tests.test_sunnylink_removed import HeadlessUITestCase
 from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP, MADSState
 from openpilot.selfdrive.ui.translations.potools import parse_po
 from openpilot.selfdrive.ui.ui_state import UIStatus
+from openpilot.system.ui.lib import shader_polygon as polygon
 
 START = 1_000_000_000
+
+
+@contextmanager
+def capture_native_polygons():
+  """Run real shader setup and pyray vertex conversion into a no-op native draw."""
+  with capture_polygons() as frames:
+    record_draw = rl.draw_triangle_strip
+
+    @rl.ffi.callback("void(*)(const struct Vector2 *, int)")
+    def receive(vertices, count):
+      record_draw(vertices, count, rl.WHITE)
+
+    native_draw = rl._wrap_function(receive)
+    with patch.object(rl, 'draw_triangle_strip', side_effect=lambda vertices, count, _color: native_draw(vertices, count)):
+      yield frames
 
 
 class Messages(dict):
@@ -252,6 +269,21 @@ class TestBlendfulRenderer(HeadlessUITestCase):
     self.assertEqual(self.overlay._center_points.size, 0)
     self.assertEqual(self.overlay._trust, 0)
     self.assertEqual(self.overlay._alpha.x, 0)
+    self.assertIs(self.overlay._center_points, self.overlay._empty_points)
+    self.assertIsNone(self.overlay._prepared_polygon)
+    self.assertIsNone(self.overlay._prepared_source)
+    self.assertIsNone(self.overlay._prepared_origin)
+
+  def assert_same_native_draw_as_raw(self, frames, rect):
+    count = len(frames)
+    self.overlay.draw(rect)
+    self.assertEqual(len(frames), count + 1)
+    points = self.overlay._center_points + (rect.x, rect.y) if self.overlay._rect_relative else self.overlay._center_points
+    color = rl.Color(0, 200, 255, int(np.clip(self.overlay._trust, 0.2, 1.0) * 255 * self.overlay._alpha.x))
+    polygon.draw_polygon(rect, points, color)
+    self.assertEqual(len(frames), count + 2)
+    self.assertEqual(frames[-2], frames[-1])
+    self.assertEqual(frames[-2][0], reference_strip(points).tobytes())
 
   def test_cyan_center_uses_current_lines_without_changing_model_geometry(self):
     before = [line.raw_points.copy() for line in self.renderer._lane_lines]
@@ -271,12 +303,148 @@ class TestBlendfulRenderer(HeadlessUITestCase):
     self.update()
     with patch.object(self.module, 'measure_text_cached', return_value=rl.Vector2(40, 44)), \
          patch.object(rl, 'draw_text_ex') as text, patch.object(rl, 'draw_triangle') as arrows, \
-         patch.object(rl, 'draw_rectangle_rounded') as bars, patch.object(rl, 'draw_rectangle'):
+         patch.object(rl, 'draw_rectangle_rounded') as bars, patch.object(rl, 'draw_rectangle'), \
+         patch.object(self.module, 'draw_polygon', polygon.draw_polygon), capture_native_polygons() as frames:
       self.overlay.draw(self.rect)
       text.assert_called_once()
       self.assertEqual(arrows.call_count, 2)
       self.assertGreaterEqual(bars.call_count, 2)
-    np.testing.assert_array_equal(self.draw_polygon.call_args.args[1], self.overlay._center_points + (10, 20))
+    self.assertEqual(frames[0][0], reference_strip(self.overlay._center_points + (10, 20)).tobytes())
+
+  def test_prepared_center_matches_native_raw_vertices_and_colors_in_both_layouts(self):
+    for relative in (False, True):
+      with self.subTest(relative=relative):
+        self.overlay = self.module.BlendfulRenderer(readout=False, rect_relative=relative)
+        self.update()
+        # Include noncontiguous, odd-count vertices and fractional origins to
+        # exercise the original addition, float32 conversion and strip ordering.
+        self.overlay._center_points = (np.arange(268, dtype=np.float64).reshape(67, 4) / 7 - 23)[:, ::2]
+        with patch.object(self.module, 'draw_polygon', polygon.draw_polygon), capture_native_polygons() as frames, \
+             patch.object(self.module, 'PreparedPolygon', wraps=polygon.PreparedPolygon) as prepare:
+          for alpha, trust in ((0.2, 0.1), (0.6, 0.8), (0.95, 1.0)):
+            self.overlay._alpha.x, self.overlay._trust = alpha, trust
+            self.assert_same_native_draw_as_raw(frames, rl.Rectangle(10.125, -20.375, 1280, 720))
+          self.assertEqual(prepare.call_count, 1)
+          self.assertNotEqual(frames[0][2]['fillColor'], frames[-2][2]['fillColor'])
+
+  def test_prepares_lazily_and_rebuilds_only_for_new_geometry_or_exact_mici_origin(self):
+    for relative in (False, True):
+      with self.subTest(relative=relative):
+        self.overlay = self.module.BlendfulRenderer(readout=False, rect_relative=relative)
+        self.update()
+        with patch.object(self.module, 'draw_polygon', polygon.draw_polygon), capture_native_polygons() as frames, \
+             patch.object(self.module, 'PreparedPolygon', wraps=polygon.PreparedPolygon) as prepare:
+          self.assertIsNone(self.overlay._prepared_polygon)
+          self.overlay._trust = 0.04
+          self.overlay.draw(self.rect)
+          prepare.assert_not_called()
+          self.assertEqual(frames, [])
+          self.overlay._trust = 0.8
+          self.assert_same_native_draw_as_raw(frames, self.rect)
+          first = self.overlay._prepared_polygon
+          self.assert_same_native_draw_as_raw(frames, self.rect)
+          self.assertIs(self.overlay._prepared_polygon, first)
+          self.assertEqual(prepare.call_count, 1)
+
+          changed = rl.Rectangle(self.rect.x + 0.125, self.rect.y - 0.25, 640, 480)
+          self.assert_same_native_draw_as_raw(frames, changed)
+          self.assertEqual(prepare.call_count, 2 if relative else 1)
+          if relative:
+            self.assertEqual(self.overlay._prepared_origin, (changed.x, changed.y))
+          else:
+            self.assertIs(self.overlay._prepared_polygon, first)
+          current = self.overlay._prepared_polygon
+          resized = rl.Rectangle(changed.x, changed.y, 1920, 1080)
+          self.assert_same_native_draw_as_raw(frames, resized)
+          self.assertIs(self.overlay._prepared_polygon, current)
+
+          # A real model update replaces the array even if the coordinates match.
+          self.advance_frame()
+          self.update()
+          self.assertIsNone(self.overlay._prepared_polygon)
+          self.assertIsNone(self.overlay._prepared_source)
+          self.assertIsNone(self.overlay._prepared_origin)
+          self.assert_same_native_draw_as_raw(frames, resized)
+          self.assertEqual(prepare.call_count, 3 if relative else 2)
+          self.assertIs(self.overlay._prepared_source, self.overlay._center_points)
+
+  def test_source_held_fit_reuses_one_prepared_snapshot_with_live_confidence_and_fade(self):
+    self.overlay = self.module.BlendfulRenderer(readout=False, rect_relative=True)
+    self.update()
+    source = self.overlay._center_points
+    with patch.object(self.module, 'draw_polygon', polygon.draw_polygon), capture_native_polygons() as frames, \
+         patch.object(self.module, 'PreparedPolygon', wraps=polygon.PreparedPolygon) as prepare:
+      self.assert_same_native_draw_as_raw(frames, self.rect)
+      prepared = self.overlay._prepared_polygon
+      output = self.state.sm['modelDataV2SP']
+      output.blendfulLeftProb = output.blendfulRightProb = 0.0
+      self.renderer._lane_lines[1].raw_points[:, 1] += 1.0
+      self.renderer._lane_lines[2].raw_points[:, 1] += 1.0
+      for trust in (0.4, 0.1, 0.0, 0.0):
+        output.blendfulTrust = trust
+        self.advance_frame()
+        self.update()
+        self.assertIs(self.overlay._center_points, source)
+        self.assert_same_native_draw_as_raw(frames, self.rect)
+        self.assertIs(self.overlay._prepared_polygon, prepared)
+      self.assertEqual(prepare.call_count, 1)
+      self.assertEqual(len({frame[2]['fillColor'] for frame in frames[::2]}), 5)
+
+  def test_20hz_geometry_60hz_draw_uses_one_snapshot_per_current_model_array(self):
+    for relative in (False, True):
+      with self.subTest(relative=relative):
+        self.state.sm = model_messages()
+        self.clock.return_value = START + 1
+        self.renderer._model_geometry_ns = START
+        self.overlay = self.module.BlendfulRenderer(readout=False, rect_relative=relative)
+        with patch.object(self.module, 'draw_polygon', polygon.draw_polygon), capture_native_polygons() as frames, \
+             patch.object(self.module, 'PreparedPolygon', wraps=polygon.PreparedPolygon) as prepare:
+          for frame in range(4):
+            if frame:
+              self.advance_frame()
+            self.update()
+            stamp = self.state.sm.logMonoTime['modelV2']
+            for tick in range(3):
+              self.clock.return_value = stamp + tick * 16_666_667 + 1
+              self.assert_same_native_draw_as_raw(frames, self.rect)
+            self.assertEqual(prepare.call_count, frame + 1)
+          self.assertEqual(len(frames), 24)
+
+  def test_hard_clear_reuses_empty_array_and_releases_prepared_references(self):
+    self.overlay = self.module.BlendfulRenderer(readout=False, rect_relative=True)
+    self.update()
+    self.overlay.draw(self.rect)
+    self.assertIsNotNone(self.overlay._prepared_polygon)
+    self.state.params.put_bool('Blendful', False, block=True)
+    with patch.object(self.module.np, 'empty', side_effect=AssertionError('clear allocated another empty array')):
+      for _ in range(10):
+        self.overlay.draw(self.rect)
+        self.overlay.clear()
+        self.assert_cleared()
+
+  def test_alpha_empty_path_releases_cache_but_preserves_source_filter_history(self):
+    self.overlay = self.module.BlendfulRenderer(rect_relative=True)
+    self.update()
+    with patch.object(self.overlay, '_draw_readout'):
+      self.overlay.draw(self.rect)
+    self.assertIsNotNone(self.overlay._prepared_polygon)
+    trust = self.overlay._trust
+    self.overlay._alpha.x = 0.009
+    output = self.state.sm['modelDataV2SP']
+    output.blendfulTrust = output.blendfulCurvature = 0.0
+    with patch.object(self.module.np, 'empty', side_effect=AssertionError('fade allocated another empty array')):
+      for _ in range(3):
+        self.advance_frame()
+        self.update()
+        self.assertIs(self.overlay._center_points, self.overlay._empty_points)
+        self.assertIsNone(self.overlay._prepared_polygon)
+        self.assertIsNone(self.overlay._prepared_source)
+        self.assertIsNone(self.overlay._prepared_origin)
+        self.assertEqual(self.overlay._trust, trust)
+        self.assertGreater(self.overlay._alpha.x, 0)
+        self.assertLess(self.overlay._alpha.x, 0.01)
+        self.assertGreater(self.overlay._pull_display.x, 0)
+        self.assertGreater(self.overlay._trust_display.x, 0)
 
   def test_disabled_unsupported_inactive_and_paused_clear_on_draw_without_updates(self):
     for case in ('disabled', 'stock', 'runner_cache_changed', 'inactive', 'paused'):
@@ -288,6 +456,8 @@ class TestBlendfulRenderer(HeadlessUITestCase):
         self.state.sm['selfdriveStateSP'].mads = SimpleNamespace(available=False)
         self.update()
         self.assertGreater(self.overlay._center_points.size, 0)
+        self.overlay.draw(self.rect)
+        self.assertIsNotNone(self.overlay._prepared_polygon)
         if case == 'disabled':
           self.state.params.put_bool('Blendful', False, block=True)
         elif case == 'stock':
@@ -309,6 +479,8 @@ class TestBlendfulRenderer(HeadlessUITestCase):
         with self.subTest(service=service, case=case):
           self.state.sm = model_messages()
           self.update()
+          self.overlay.draw(self.rect)
+          self.assertIsNotNone(self.overlay._prepared_polygon)
           if case == 'invalid':
             self.state.sm.valid[service] = False
           elif case == 'missing':
@@ -330,11 +502,15 @@ class TestBlendfulRenderer(HeadlessUITestCase):
 
   def test_projected_geometry_must_match_current_model_and_output(self):
     self.update()
+    self.overlay.draw(self.rect)
+    self.assertIsNotNone(self.overlay._prepared_polygon)
     self.renderer._model_geometry_ns = START - 1
     self.update()
     self.assert_cleared()
     self.renderer._model_geometry_ns = START
     self.update()
+    self.overlay.draw(self.rect)
+    self.assertIsNotNone(self.overlay._prepared_polygon)
     self.state.sm.logMonoTime['modelV2'] = START + 1
     self.overlay.draw(self.rect)
     self.assert_cleared()
@@ -347,6 +523,8 @@ class TestBlendfulRenderer(HeadlessUITestCase):
         self.state.sm['selfdriveStateSP'].mads = SimpleNamespace(available=True, enabled=True, state=MADSState.enabled)
         self.update()
         self.assertGreater(self.overlay._center_points.size, 0)
+        self.overlay.draw(self.rect)
+        self.assertIsNotNone(self.overlay._prepared_polygon)
         if case == 'inactive':
           self.state.sm['carControl'].latActive = False
         elif case == 'invalid':
@@ -436,10 +614,14 @@ class TestBlendfulRenderer(HeadlessUITestCase):
 
   def test_stream_loss_clears_retained_source_fit_without_another_sp_update(self):
     self.update()
+    self.overlay.draw(self.rect)
+    prepared = self.overlay._prepared_polygon
+    self.assertIsNotNone(prepared)
     self.state.sm['modelDataV2SP'].blendfulTrust = 0.0
     self.advance_frame()
     self.update()
     self.assertGreater(self.overlay._center_points.size, 0)
+    self.assertIs(self.overlay._prepared_polygon, prepared)
     self.clock.return_value = self.state.sm.logMonoTime['modelV2'] + self.module.MESSAGE_MAX_AGE_NS + 1
     self.state.sm.logMonoTime['carControl'] = self.clock.return_value
     self.overlay.draw(self.rect)
@@ -454,6 +636,8 @@ class TestBlendfulRenderer(HeadlessUITestCase):
                                      for line in self.state.sm['modelV2'].laneLines]
         self.update()
         self.assertGreater(self.overlay._center_points.size, 0)
+        self.overlay.draw(self.rect)
+        self.assertIsNotNone(self.overlay._prepared_polygon)
         output, model = self.state.sm['modelDataV2SP'], self.state.sm['modelV2']
         if case == 'nan_trust':
           output.blendfulTrust = np.nan
@@ -486,6 +670,16 @@ class TestBlendfulRenderer(HeadlessUITestCase):
     self.update()
     self.assertEqual(self.overlay._alpha.x, alpha)
     np.testing.assert_allclose(self.overlay._center_points[:, 1], 0.2, atol=1e-6)
+
+  def test_empty_or_nonfinite_projection_clears_a_prepared_snapshot(self):
+    for points in (np.empty((0, 2), dtype=np.float32), np.full((4, 2), np.nan, dtype=np.float32)):
+      with self.subTest(point_count=len(points)):
+        self.update()
+        self.overlay.draw(self.rect)
+        self.assertIsNotNone(self.overlay._prepared_polygon)
+        with patch.object(self.renderer, '_map_line_to_polygon', return_value=points):
+          self.update()
+        self.assert_cleared()
 
   def test_both_layouts_keep_main_path_and_projection_caches_while_overlay_expires(self):
     from openpilot.selfdrive.ui.onroad import model_renderer as normal

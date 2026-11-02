@@ -152,6 +152,41 @@ class TestBlendfulAction(OpenpilotTestCase):
               fresh = Blendful()
               self.assertEqual(bf.curvature, fresh.update(current, speed, True, enabled_state.model_curvature))
 
+  def test_publication_preserves_nominal_builder_and_message_size(self):
+    for correction in (0.0, -0.0, 0.000125, -0.000125):
+      with self.subTest(correction=correction):
+        nominal = log.ModelDataV2.Action(desiredCurvature=-0.0, desiredAcceleration=0.125, shouldStop=True)
+        nominal_values = nominal.to_dict()
+        output = model_output(center=0.5)
+        twins = []
+        for _ in range(2):
+          model = messaging.new_message('modelV2')
+          driving = messaging.new_message('drivingModelData')
+          sp = messaging.new_message('modelDataV2SP')
+          modeld.fill_model_msg(driving, model, output, nominal, modeld.PublishState(),
+                                1, 1, 1, 0.0, 1_000_000_000, 0.01, True, Meta)
+          twins.append((model, driving, sp))
+        reference, published = twins
+        bf = Blendful()
+        bf.curvature = correction
+        modeld.fill_blendful_msg(bf, *published)
+        expected = float(np.float32(correction)) if correction != 0.0 else nominal.desiredCurvature
+        self.assertEqual(nominal.to_dict(), nominal_values)
+        for service, before, after in zip(('modelV2', 'drivingModelData'), reference[:2], published[:2], strict=True):
+          self.assertEqual(getattr(before, service).action.to_dict(), nominal_values)
+          action = getattr(after, service).action
+          self.assertEqual(action.desiredCurvature, expected)
+          self.assertEqual(action.desiredAcceleration, nominal.desiredAcceleration)
+          self.assertEqual(action.shouldStop, nominal.shouldStop)
+          if correction == 0.0:
+            self.assertTrue(np.signbit(action.desiredCurvature))
+          # Serialize fresh twins once each: a scalar correction must not leave
+          # redundant Action allocations in either outgoing message arena.
+          self.assertEqual(len(after.to_bytes()), len(before.to_bytes()))
+        nominal.desiredCurvature = 0.5
+        self.assertEqual(published[0].modelV2.action.desiredCurvature, expected)
+        self.assertEqual(published[1].drivingModelData.action.desiredCurvature, expected)
+
   def test_planplus_remains_lateral_only_and_uses_the_selected_plan(self):
     state = model_state(12)
     output = model_output(head='plan', accel=0.6)
