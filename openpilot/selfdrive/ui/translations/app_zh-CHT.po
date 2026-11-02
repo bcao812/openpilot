@@ -2267,3 +2267,68 @@ msgstr[1] "{} 分鐘前"
 #: openpilot/selfdrive/ui/widgets/prime.py
 msgid "✓ SUBSCRIBED"
 msgstr "✓ 已訂閱"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "Blendful (Alpha)"
+msgstr "Blendful 車道置中（Alpha）"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "blendful (alpha)"
+msgstr "Blendful 車道置中（Alpha）"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "about blendful"
+msgstr "Blendful 功能說明"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "v2 model required"
+msgstr "需要 v2 模型"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "Adds a gentle lane-center correction to the model's steering when lane lines are reliable."
+msgstr "車道線可靠時，在模型轉向輸出上疊加輕微的車道置中修正。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "Starts at 18 km/h (5 m/s), outside turns and lane changes."
+msgstr "車速達到 18 km/h（5 m/s），且沒有轉彎或變換車道意圖時開始修正。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "A cyan line shows the lane center while active."
+msgstr "功能生效時，行車畫面以青色線顯示車道中心。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "The top readout shows the correction, its direction and strength."
+msgstr "頂部數值、箭頭及條形指示顯示修正量、方向與強度。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "Supports v2 models, including the bundled Default v2 model."
+msgstr "支援 v2 模型，包括本機內建的預設 v2 模型。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "The active model does not support Blendful. Switch to a v2 model to enable this setting."
+msgstr "目前執行的模型不支援 Blendful。請切換至 v2 模型以使用此設定。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "Uses only currently valid lane lines."
+msgstr "僅使用目前有效的車道線。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "Withdraws its correction when the lines are lost or lateral control is inactive."
+msgstr "車道線遺失或橫向控制退出時，撤除本功能的修正。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "With one valid lane line, uses a fixed nominal lane width of 3.6 m."
+msgstr "僅有一側有效車道線時，以固定的 3.6 公尺標稱車道寬度計算。"

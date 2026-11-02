@@ -80,6 +80,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     self._lane_lines = [ModelPoints() for _ in range(4)]
     self._road_edges = [ModelPoints() for _ in range(2)]
     self._acceleration_x = np.empty((0,), dtype=np.float32)
+    self._model_geometry_ns = 0
     self._path_geometry_key = None
     self._projected_path_half_width = None
     self._exp_gradient_key = None
@@ -120,6 +121,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     # Check if data is up-to-date
     if (sm.recv_frame["extrinsicsCalibration"] < ui_state.started_frame or
         sm.recv_frame["modelV2"] < ui_state.started_frame):
+      self.blendful.clear()
       return
 
     # Set up clipping region
@@ -158,6 +160,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
     # Update model data when needed
     model_updated = sm.updated['modelV2']
+    update_blendful = model_updated or self._transform_dirty or sm.updated.get('modelDataV2SP', False)
     if model_updated or sm.updated['radarState'] or self._transform_dirty:
       if model_updated:
         self._update_raw_points(model)
@@ -165,6 +168,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
       path_x_array = self._path.raw_points[:, 0]
       if path_x_array.size == 0:
+        self.blendful.clear()
         return
 
       self._update_model(lead_one, path_x_array, update_lane_geometry=model_updated or self._transform_dirty)
@@ -174,10 +178,19 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       self._transform_dirty = False
       gui_app.mark_phase('model_leads')
 
+    if update_blendful:
+      if self._path.raw_points.size == 0 or not self._lane_lines or self._lane_lines[0].raw_points.size == 0:
+        self.blendful.clear()
+      else:
+        max_distance = clamp(self._path.raw_points[-1, 0], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE)
+        max_idx = self._get_path_length_idx(self._lane_lines[0].raw_points[:, 0], max_distance)
+        self.blendful.update(self, max_idx, max_distance)
+
     # Draw elements
     self._draw_lane_lines()
     gui_app.mark_phase('model_lanes')
     self._draw_path(sm)
+    self.blendful.draw(self._rect)
     gui_app.mark_phase('model_path')
 
     if render_lead_indicator and radar_state:
@@ -187,6 +200,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
   def _update_raw_points(self, model):
     """Update raw 3D points from model data"""
+    self._model_geometry_ns = ui_state.sm.logMonoTime['modelV2']
     self._path.raw_points = np.array([model.position.x, np.array(model.position.y) + self._camera_offset, model.position.z], dtype=np.float32).T
 
     for i, lane_line in enumerate(model.laneLines):

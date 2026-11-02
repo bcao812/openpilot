@@ -72,6 +72,7 @@ class ModelRenderer(Widget, ModelRendererSP):
     self._lane_lines = [ModelPoints() for _ in range(4)]
     self._road_edges = [ModelPoints() for _ in range(2)]
     self._acceleration_x = np.empty((0,), dtype=np.float32)
+    self._model_geometry_ns = 0
 
     self._acceleration_x_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
     self._acceleration_x_filter2 = FirstOrderFilter(0.0, 1, 1 / gui_app.target_fps)
@@ -120,6 +121,7 @@ class ModelRenderer(Widget, ModelRendererSP):
     # Check if data is up-to-date
     if (sm.recv_frame["extrinsicsCalibration"] < ui_state.started_frame or
         sm.recv_frame["modelV2"] < ui_state.started_frame):
+      self.blendful.clear()
       return
 
     # Set up clipping region
@@ -144,12 +146,14 @@ class ModelRenderer(Widget, ModelRendererSP):
 
     # Update model data when needed
     model_updated = sm.updated['modelV2']
+    update_blendful = model_updated or self._transform_dirty or sm.updated.get('modelDataV2SP', False)
     if model_updated or sm.updated['radarState'] or self._transform_dirty:
       if model_updated:
         self._update_raw_points(model)
 
       path_x_array = self._path.raw_points[:, 0]
       if path_x_array.size == 0:
+        self.blendful.clear()
         return
 
       self._update_model(lead_one, path_x_array)
@@ -157,16 +161,26 @@ class ModelRenderer(Widget, ModelRendererSP):
         self._update_leads(radar_state, path_x_array)
       self._transform_dirty = False
 
+    if update_blendful:
+      if self._path.raw_points.size == 0 or not self._lane_lines or self._lane_lines[0].raw_points.size == 0:
+        self.blendful.clear()
+      else:
+        max_distance = np.clip(self._path.raw_points[-1, 0], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE)
+        max_idx = self._get_path_length_idx(self._lane_lines[0].raw_points[:, 0], max_distance)
+        self.blendful.update(self, max_idx)
+
     # Draw elements (hide when disengaged)
     if ui_state.status != UIStatus.DISENGAGED:
       self._draw_lane_lines()
       self._draw_path(sm)
+    self.blendful.draw(self._rect)
 
     # if render_lead_indicator and radar_state:
     #   self._draw_lead_indicator()
 
   def _update_raw_points(self, model):
     """Update raw 3D points from model data"""
+    self._model_geometry_ns = ui_state.sm.logMonoTime['modelV2']
     self._path.raw_points = np.array([model.position.x, np.array(model.position.y) + self._camera_offset, model.position.z], dtype=np.float32).T
 
     for i, lane_line in enumerate(model.laneLines):

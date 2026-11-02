@@ -57,6 +57,7 @@ class TestControlInfluenceRendering(HeadlessUITestCase):
       model._radar_signal = True
       model._counter, model._transform_dirty, model._longitudinal_control, model._rect = 1, False, True, rect
       model._draw_lane_lines, model._draw_path, model._update_leads = Mock(), Mock(), Mock()
+      model.blendful = Mock()
       model.chevron_metrics = chevron_metrics.ChevronMetrics()
       model.chevron_metrics._lead_status_alpha = 1.0
       model._lead_vehicles = [model._update_lead_vehicle(18.92, -1.07, (250, 170), rect),

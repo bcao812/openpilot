@@ -9,7 +9,7 @@ import pyray as rl
 from openpilot.cereal import custom
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigDialog
 from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_selected_bundle
-from openpilot.selfdrive.ui.mici.widgets.button import BigButton
+from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigParamControl, GreyBigButton
 from openpilot.selfdrive.ui.ui_state import ui_state, device
 from openpilot.selfdrive.ui.sunnypilot.model_info import (active_source, big_model_state, bundles_for_source, carrying_model,
                                                            default_model_name, model_info, queued_name)
@@ -84,8 +84,41 @@ class ModelsLayoutMici(NavScroller):
     self.cancel_download_btn = BigButton(tr("cancel download"))
     self.cancel_download_btn.set_click_callback(lambda: ui_state.params.remove("ModelManager_DownloadRef"))
 
-    self.main_items = [self.current_model_info, self.select_model_btn, self.cancel_download_btn]
+    self.blendful_toggle = BigParamControl(tr("blendful (alpha)"), "Blendful")
+    # This UI predates the source's long-press descriptions. Keep the complete
+    # explanation accessible through the existing card/scroller controls.
+    self.blendful_info_btn = BigButton(tr("about blendful"))
+    self.blendful_info_btn.set_click_callback(self._show_blendful_description)
+    self._update_blendful_toggle()
+
+    self.main_items = [self.current_model_info, self.select_model_btn, self.cancel_download_btn,
+                       self.blendful_toggle, self.blendful_info_btn]
     self._scroller.add_widgets(self.main_items)
+
+  def _update_blendful_toggle(self):
+    allowed = ui_state.active_runner_tinygrad
+    self.blendful_toggle.set_checked(allowed and ui_state.params.get_bool("Blendful"))
+    self.blendful_toggle.set_enabled(allowed)
+    value = "" if allowed else tr("v2 model required")
+    if self.blendful_toggle.value != value:
+      self.blendful_toggle.set_value(value)
+
+  def _show_blendful_description(self):
+    page = NavScroller()
+    descriptions = [
+      tr("Adds a gentle lane-center correction to the model's steering when lane lines are reliable."),
+      tr("Starts at 18 km/h (5 m/s), outside turns and lane changes."),
+      tr("Uses only currently valid lane lines."),
+      tr("Withdraws its correction when the lines are lost or lateral control is inactive."),
+      tr("With one valid lane line, uses a fixed nominal lane width of 3.6 m."),
+      tr("A cyan line shows the lane center while active."),
+      tr("The top readout shows the correction, its direction and strength."),
+      tr("Supports v2 models, including the bundled Default v2 model."),
+    ]
+    if not ui_state.active_runner_tinygrad:
+      descriptions.insert(0, tr("The active model does not support Blendful. Switch to a v2 model to enable this setting."))
+    page._scroller.add_widgets([GreyBigButton(tr("blendful (alpha)")), *(GreyBigButton("", text) for text in descriptions)])
+    gui_app.push_widget(page)
 
   @property
   def model_manager(self):
@@ -185,8 +218,14 @@ class ModelsLayoutMici(NavScroller):
       device.set_override_interactive_timeout(None)
       self._was_downloading = False
 
+  def show_event(self):
+    super().show_event()
+    self.blendful_toggle.refresh()
+    self._update_blendful_toggle()
+
   def _update_state(self):
     super()._update_state()
+    self._update_blendful_toggle()
 
     self.select_model_btn.set_enabled(ui_state.is_offroad())
     self.cancel_download_btn.set_visible(False)

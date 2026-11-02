@@ -46,6 +46,7 @@ from openpilot.sunnypilot.modeld_v2.parse_model_outputs import Parser
 from openpilot.sunnypilot.modeld_v2.constants import ModelConstants, Plan
 from openpilot.sunnypilot.modeld_v2.meta_helper import load_meta_constants
 from openpilot.sunnypilot.modeld_v2.camera_offset_helper import CameraOffsetHelper
+from openpilot.sunnypilot.modeld_v2.blendful import Blendful
 from openpilot.sunnypilot.modeld_v2.compile_modeld import (derive_frame_skip, make_split_input_queues,
                                                            make_supercombo_input_queues, nv12_copy_size,
                                                            WARP_INPUTS, POLICY_INPUTS)
@@ -56,6 +57,47 @@ from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeC
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld_tinygrad"
 BIG_MODEL_TIMEOUT = 60
+BLENDFUL_MAX_FRAME_AGE_NS = int(5 * DT_MDL * 1e9)
+
+
+def blendful_inputs_active(sm, desire_helper, model_valid: bool, timestamp_eof: int,
+                          transforms: dict[str, np.ndarray], now_ns: int | None = None) -> bool:
+  """Qualify this correction without changing the existing model/control health policy."""
+  if not model_valid or desire_helper.desire != log.Desire.none or desire_helper.lane_change_state != log.LaneChangeState.off:
+    return False
+  now_ns = time.monotonic_ns() if now_ns is None else now_ns
+  if not 0 < timestamp_eof <= now_ns or now_ns - timestamp_eof > BLENDFUL_MAX_FRAME_AGE_NS:
+    return False
+  for service in ('carState', 'carControl', 'extrinsicsCalibration'):
+    stamp = sm.logMonoTime[service]
+    if (not sm.seen[service] or not sm.all_checks([service]) or not 0 < stamp <= now_ns or
+        now_ns - stamp >= int(10.0 / SERVICE_LIST[service].frequency * 1e9)):
+      return False
+  calibration = sm['extrinsicsCalibration']
+  if (calibration.calStatus != log.ExtrinsicsCalibration.Status.calibrated or len(calibration.rpyCalib) != 3 or
+      not np.isfinite(calibration.rpyCalib).all() or not transforms or
+      any(transform.shape != (3, 3) or not np.isfinite(transform).all() for transform in transforms.values())):
+    return False
+  return bool(sm['carControl'].latActive and np.isfinite(sm['carState'].vEgo))
+
+
+def fill_blendful_msg(blendful: Blendful, modelv2_send, drivingdata_send, mdv2sp_send) -> None:
+  # Copy after nominal-model smoothing. In particular, never write the added
+  # curvature into prev_action: it would survive withdrawal on generation >= 10.
+  action = log.ModelDataV2.Action(**modelv2_send.modelV2.action.to_dict())
+  if blendful.curvature != 0.0:
+    action.desiredCurvature += blendful.curvature
+  modelv2_send.modelV2.action = action
+  drivingdata_send.drivingModelData.action = action
+  mdv2sp_send.valid = modelv2_send.valid
+  mdv2sp_send.logMonoTime = modelv2_send.logMonoTime
+  mdv2sp_send.modelDataV2SP.blendfulCurvature = blendful.curvature
+  mdv2sp_send.modelDataV2SP.blendfulTrust = blendful.trust
+  mdv2sp_send.modelDataV2SP.modelCurvature = blendful.model_curvature
+  mdv2sp_send.modelDataV2SP.blendfulGoingAround = blendful.going_around
+  mdv2sp_send.modelDataV2SP.blendfulLeftProb = blendful.l_prob
+  mdv2sp_send.modelDataV2SP.blendfulRightProb = blendful.r_prob
+  mdv2sp_send.modelDataV2SP.blendfulLaneWidth = blendful.lane_width.x
 
 
 def _pkl_exists(path):
@@ -322,6 +364,7 @@ class ModelState(ModelStateBase):
       desired_accel = model_output['action'][0, 1]
       desired_curvature = model_output['action'][0, 0] / (max(1.0, v_ego))**2
 
+    self.model_curvature = float(desired_curvature)
     stop = v_ego < 0.3 and desired_accel < 0.1
     desired_accel = smooth_value(desired_accel, prev_action.desiredAcceleration, self.LONG_SMOOTH_SECONDS)
 
@@ -425,6 +468,8 @@ def main(demo=False):
   meta_main = FrameMeta()
   meta_extra = FrameMeta()
   camera_offset_helper = CameraOffsetHelper()
+  blendful = Blendful()
+  last_model_frame_ns = 0
 
 
   if demo:
@@ -454,6 +499,7 @@ def main(demo=False):
         break
 
     if buf_main is None:
+      blendful.reset()
       cloudlog.debug("vipc_client_main no frame")
       continue
 
@@ -466,6 +512,7 @@ def main(demo=False):
           break
 
       if buf_extra is None:
+        blendful.reset()
         cloudlog.debug("vipc_client_extra no frame")
         continue
 
@@ -539,6 +586,7 @@ def main(demo=False):
                        run_count % round(model.constants.MODEL_FREQ / SERVICE_LIST['chestnutState'].frequency) == 0)
       model_output = model.run(bufs, transforms, inputs, chestnut_state.send if send_chestnut else None)
     except Exception:
+      blendful.reset()
       if not params.get_bool("ChestnutActive"):
         raise
       cloudlog.exception("chestnut failed, falling back to small")
@@ -554,13 +602,17 @@ def main(demo=False):
     model_execution_time = mt2 - mt1
 
     if model_output is not None:
+      if last_model_frame_ns and (meta_main.timestamp_eof <= last_model_frame_ns or
+                                 meta_main.timestamp_eof - last_model_frame_ns > BLENDFUL_MAX_FRAME_AGE_NS):
+        blendful.reset()
+      last_model_frame_ns = meta_main.timestamp_eof
       modelv2_send = messaging.new_message('modelV2')
       drivingdata_send = messaging.new_message('drivingModelData')
       posenet_send = messaging.new_message('cameraOdometry')
       mdv2sp_send = messaging.new_message('modelDataV2SP')
 
       action = model.get_action_from_model(model_output, prev_action, lat_action_t, long_action_t, v_ego)
-      prev_action = action
+      prev_action = action  # Nominal model action only; Blendful is applied to the published copy below.
       fill_model_msg(drivingdata_send, modelv2_send, model_output, action,
                      publish_state, meta_main.frame_id, meta_extra.frame_id, frame_id,
                      frame_drop_ratio, meta_main.timestamp_eof, model_execution_time, live_calib_seen, meta_constants)
@@ -578,11 +630,21 @@ def main(demo=False):
       drivingdata_send.drivingModelData.meta.laneChangeState = DH.lane_change_state
       drivingdata_send.drivingModelData.meta.laneChangeDirection = DH.lane_change_direction
 
+      # DH now describes the NEW current frame, including a newly requested turn
+      # or lane change. A successful frame also sees toggle changes immediately.
+      blendful_active = (abs(meta_main.timestamp_sof - meta_extra.timestamp_sof) <= 10000000 and
+                         blendful_inputs_active(sm, DH, modelv2_send.valid, meta_main.timestamp_eof, transforms) and
+                         np.isfinite(action.desiredCurvature))
+      blendful.update(model_output, v_ego, blendful_active, model.model_curvature, enabled=params.get_bool('Blendful'))
+      fill_blendful_msg(blendful, modelv2_send, drivingdata_send, mdv2sp_send)
+
       fill_pose_msg(posenet_send, model_output, meta_main.frame_id, vipc_dropped_frames, meta_main.timestamp_eof, live_calib_seen)
       pm.send('modelV2', modelv2_send)
       pm.send('drivingModelData', drivingdata_send)
       pm.send('cameraOdometry', posenet_send)
       pm.send('modelDataV2SP', mdv2sp_send)
+    else:
+      blendful.reset()
     last_vipc_frame_id = meta_main.frame_id
 
 if __name__ == "__main__":

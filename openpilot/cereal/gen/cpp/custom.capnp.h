@@ -308,6 +308,8 @@ enum class FusionState_d3baa0b2f838db55: uint16_t {
 CAPNP_DECLARE_ENUM(FusionState, d3baa0b2f838db55);
 CAPNP_DECLARE_SCHEMA(f4cd86fc8ea6ff07);
 CAPNP_DECLARE_SCHEMA(bd1fb53607e5962e);
+CAPNP_DECLARE_SCHEMA(cabffb098c2c25f1);
+CAPNP_DECLARE_SCHEMA(f17f60d7e2172eb5);
 CAPNP_DECLARE_SCHEMA(ea98382b85743821);
 CAPNP_DECLARE_SCHEMA(8a23793245ea91c1);
 CAPNP_DECLARE_SCHEMA(9d61f3786425e2d1);
@@ -928,7 +930,7 @@ struct ModelDataV2SP {
 
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(a1680744031fdb2d, 1, 0)
+    CAPNP_DECLARE_STRUCT_HEADER(a1680744031fdb2d, 4, 0)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1100,6 +1102,8 @@ struct HondaRadarObservations {
 
   struct FusionCounters;
   struct FusionTrack;
+  struct NativeMotionQuality;
+  struct PositionVelocityQuality;
   struct FusionLead;
   struct Scope;
   struct Counters;
@@ -1153,7 +1157,37 @@ struct HondaRadarObservations::FusionTrack {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(bd1fb53607e5962e, 31, 2)
+    CAPNP_DECLARE_STRUCT_HEADER(bd1fb53607e5962e, 31, 4)
+    #if !CAPNP_LITE
+    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
+    #endif  // !CAPNP_LITE
+  };
+};
+
+struct HondaRadarObservations::NativeMotionQuality {
+  NativeMotionQuality() = delete;
+
+  class Reader;
+  class Builder;
+  class Pipeline;
+
+  struct _capnpPrivate {
+    CAPNP_DECLARE_STRUCT_HEADER(cabffb098c2c25f1, 14, 1)
+    #if !CAPNP_LITE
+    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
+    #endif  // !CAPNP_LITE
+  };
+};
+
+struct HondaRadarObservations::PositionVelocityQuality {
+  PositionVelocityQuality() = delete;
+
+  class Reader;
+  class Builder;
+  class Pipeline;
+
+  struct _capnpPrivate {
+    CAPNP_DECLARE_STRUCT_HEADER(f17f60d7e2172eb5, 13, 1)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -5222,6 +5256,20 @@ public:
 
   inline bool getRightLaneChangeEdgeBlock() const;
 
+  inline float getBlendfulCurvature() const;
+
+  inline float getBlendfulTrust() const;
+
+  inline float getModelCurvature() const;
+
+  inline bool getBlendfulGoingAround() const;
+
+  inline float getBlendfulLeftProb() const;
+
+  inline float getBlendfulRightProb() const;
+
+  inline float getBlendfulLaneWidth() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -5258,6 +5306,27 @@ public:
 
   inline bool getRightLaneChangeEdgeBlock();
   inline void setRightLaneChangeEdgeBlock(bool value);
+
+  inline float getBlendfulCurvature();
+  inline void setBlendfulCurvature(float value);
+
+  inline float getBlendfulTrust();
+  inline void setBlendfulTrust(float value);
+
+  inline float getModelCurvature();
+  inline void setModelCurvature(float value);
+
+  inline bool getBlendfulGoingAround();
+  inline void setBlendfulGoingAround(bool value);
+
+  inline float getBlendfulLeftProb();
+  inline void setBlendfulLeftProb(float value);
+
+  inline float getBlendfulRightProb();
+  inline void setBlendfulRightProb(float value);
+
+  inline float getBlendfulLaneWidth();
+  inline void setBlendfulLaneWidth(float value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -6586,6 +6655,12 @@ public:
 
   inline bool getBodyValid() const;
 
+  inline bool hasPositionVelocity() const;
+  inline  ::cereal::HondaRadarObservations::PositionVelocityQuality::Reader getPositionVelocity() const;
+
+  inline bool hasNativeMotion() const;
+  inline  ::cereal::HondaRadarObservations::NativeMotionQuality::Reader getNativeMotion() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -6757,6 +6832,20 @@ public:
   inline bool getBodyValid();
   inline void setBodyValid(bool value);
 
+  inline bool hasPositionVelocity();
+  inline  ::cereal::HondaRadarObservations::PositionVelocityQuality::Builder getPositionVelocity();
+  inline void setPositionVelocity( ::cereal::HondaRadarObservations::PositionVelocityQuality::Reader value);
+  inline  ::cereal::HondaRadarObservations::PositionVelocityQuality::Builder initPositionVelocity();
+  inline void adoptPositionVelocity(::capnp::Orphan< ::cereal::HondaRadarObservations::PositionVelocityQuality>&& value);
+  inline ::capnp::Orphan< ::cereal::HondaRadarObservations::PositionVelocityQuality> disownPositionVelocity();
+
+  inline bool hasNativeMotion();
+  inline  ::cereal::HondaRadarObservations::NativeMotionQuality::Builder getNativeMotion();
+  inline void setNativeMotion( ::cereal::HondaRadarObservations::NativeMotionQuality::Reader value);
+  inline  ::cereal::HondaRadarObservations::NativeMotionQuality::Builder initNativeMotion();
+  inline void adoptNativeMotion(::capnp::Orphan< ::cereal::HondaRadarObservations::NativeMotionQuality>&& value);
+  inline ::capnp::Orphan< ::cereal::HondaRadarObservations::NativeMotionQuality> disownNativeMotion();
+
 private:
   ::capnp::_::StructBuilder _builder;
   template <typename, ::capnp::Kind>
@@ -6770,6 +6859,355 @@ private:
 class HondaRadarObservations::FusionTrack::Pipeline {
 public:
   typedef FusionTrack Pipelines;
+
+  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
+  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
+      : _typeless(kj::mv(typeless)) {}
+
+  inline  ::cereal::HondaRadarObservations::PositionVelocityQuality::Pipeline getPositionVelocity();
+  inline  ::cereal::HondaRadarObservations::NativeMotionQuality::Pipeline getNativeMotion();
+private:
+  ::capnp::AnyPointer::Pipeline _typeless;
+  friend class ::capnp::PipelineHook;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+};
+#endif  // !CAPNP_LITE
+
+class HondaRadarObservations::NativeMotionQuality::Reader {
+public:
+  typedef NativeMotionQuality Reads;
+
+  Reader() = default;
+  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
+
+  inline ::capnp::MessageSize totalSize() const {
+    return _reader.totalSize().asPublic();
+  }
+
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const {
+    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
+  }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint8_t getVersion() const;
+
+  inline bool getQualified() const;
+
+  inline bool hasReason() const;
+  inline  ::capnp::Text::Reader getReason() const;
+
+  inline  ::uint64_t getPositionSeq() const;
+
+  inline  ::uint64_t getPositionMonoTime() const;
+
+  inline  ::uint64_t getVelocitySeq() const;
+
+  inline  ::uint64_t getVelocityMonoTime() const;
+
+  inline  ::uint16_t getSampleCount() const;
+
+  inline  ::uint64_t getFirstPositionMonoTime() const;
+
+  inline  ::uint64_t getValidUntilMonoTime() const;
+
+  inline double getRawRelativeSpeed() const;
+
+  inline double getGroundSpeed() const;
+
+  inline double getVelocityVariance() const;
+
+  inline double getAcceleration() const;
+
+  inline bool getAccelerationValid() const;
+
+  inline  ::uint16_t getU10Raw() const;
+
+  inline  ::uint16_t getRangeSigmaRaw() const;
+
+  inline  ::uint16_t getExistenceRaw() const;
+
+  inline  ::uint64_t getPairCompleteMonoTime() const;
+
+  inline double getDistanceResidual() const;
+
+  inline bool getDistanceResidualValid() const;
+
+  inline  ::uint8_t getFrameIndex() const;
+
+private:
+  ::capnp::_::StructReader _reader;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::List;
+  friend class ::capnp::MessageBuilder;
+  friend class ::capnp::Orphanage;
+};
+
+class HondaRadarObservations::NativeMotionQuality::Builder {
+public:
+  typedef NativeMotionQuality Builds;
+
+  Builder() = delete;  // Deleted to discourage incorrect usage.
+                       // You can explicitly initialize to nullptr instead.
+  inline Builder(decltype(nullptr)) {}
+  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
+  inline operator Reader() const { return Reader(_builder.asReader()); }
+  inline Reader asReader() const { return *this; }
+
+  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const { return asReader().toString(); }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint8_t getVersion();
+  inline void setVersion( ::uint8_t value);
+
+  inline bool getQualified();
+  inline void setQualified(bool value);
+
+  inline bool hasReason();
+  inline  ::capnp::Text::Builder getReason();
+  inline void setReason( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initReason(unsigned int size);
+  inline void adoptReason(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownReason();
+
+  inline  ::uint64_t getPositionSeq();
+  inline void setPositionSeq( ::uint64_t value);
+
+  inline  ::uint64_t getPositionMonoTime();
+  inline void setPositionMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getVelocitySeq();
+  inline void setVelocitySeq( ::uint64_t value);
+
+  inline  ::uint64_t getVelocityMonoTime();
+  inline void setVelocityMonoTime( ::uint64_t value);
+
+  inline  ::uint16_t getSampleCount();
+  inline void setSampleCount( ::uint16_t value);
+
+  inline  ::uint64_t getFirstPositionMonoTime();
+  inline void setFirstPositionMonoTime( ::uint64_t value);
+
+  inline  ::uint64_t getValidUntilMonoTime();
+  inline void setValidUntilMonoTime( ::uint64_t value);
+
+  inline double getRawRelativeSpeed();
+  inline void setRawRelativeSpeed(double value);
+
+  inline double getGroundSpeed();
+  inline void setGroundSpeed(double value);
+
+  inline double getVelocityVariance();
+  inline void setVelocityVariance(double value);
+
+  inline double getAcceleration();
+  inline void setAcceleration(double value);
+
+  inline bool getAccelerationValid();
+  inline void setAccelerationValid(bool value);
+
+  inline  ::uint16_t getU10Raw();
+  inline void setU10Raw( ::uint16_t value);
+
+  inline  ::uint16_t getRangeSigmaRaw();
+  inline void setRangeSigmaRaw( ::uint16_t value);
+
+  inline  ::uint16_t getExistenceRaw();
+  inline void setExistenceRaw( ::uint16_t value);
+
+  inline  ::uint64_t getPairCompleteMonoTime();
+  inline void setPairCompleteMonoTime( ::uint64_t value);
+
+  inline double getDistanceResidual();
+  inline void setDistanceResidual(double value);
+
+  inline bool getDistanceResidualValid();
+  inline void setDistanceResidualValid(bool value);
+
+  inline  ::uint8_t getFrameIndex();
+  inline void setFrameIndex( ::uint8_t value);
+
+private:
+  ::capnp::_::StructBuilder _builder;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  friend class ::capnp::Orphanage;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+};
+
+#if !CAPNP_LITE
+class HondaRadarObservations::NativeMotionQuality::Pipeline {
+public:
+  typedef NativeMotionQuality Pipelines;
+
+  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
+  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
+      : _typeless(kj::mv(typeless)) {}
+
+private:
+  ::capnp::AnyPointer::Pipeline _typeless;
+  friend class ::capnp::PipelineHook;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+};
+#endif  // !CAPNP_LITE
+
+class HondaRadarObservations::PositionVelocityQuality::Reader {
+public:
+  typedef PositionVelocityQuality Reads;
+
+  Reader() = default;
+  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
+
+  inline ::capnp::MessageSize totalSize() const {
+    return _reader.totalSize().asPublic();
+  }
+
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const {
+    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
+  }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint8_t getVersion() const;
+
+  inline  ::uint64_t getPositionSeq() const;
+
+  inline  ::uint64_t getPositionMonoTime() const;
+
+  inline  ::uint16_t getSampleCount() const;
+
+  inline double getSpan() const;
+
+  inline double getShortSpeed() const;
+
+  inline double getLongSpeed() const;
+
+  inline double getSpeedStd() const;
+
+  inline double getWindowDifference() const;
+
+  inline double getWindowDifferenceStd() const;
+
+  inline double getInnovationBias() const;
+
+  inline double getPosteriorCorrection() const;
+
+  inline double getPosteriorCorrectionRatio() const;
+
+  inline double getPosteriorSpeedDifference() const;
+
+  inline  ::uint16_t getConsistentSamples() const;
+
+  inline bool getQualified() const;
+
+  inline bool hasReason() const;
+  inline  ::capnp::Text::Reader getReason() const;
+
+private:
+  ::capnp::_::StructReader _reader;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::List;
+  friend class ::capnp::MessageBuilder;
+  friend class ::capnp::Orphanage;
+};
+
+class HondaRadarObservations::PositionVelocityQuality::Builder {
+public:
+  typedef PositionVelocityQuality Builds;
+
+  Builder() = delete;  // Deleted to discourage incorrect usage.
+                       // You can explicitly initialize to nullptr instead.
+  inline Builder(decltype(nullptr)) {}
+  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
+  inline operator Reader() const { return Reader(_builder.asReader()); }
+  inline Reader asReader() const { return *this; }
+
+  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const { return asReader().toString(); }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint8_t getVersion();
+  inline void setVersion( ::uint8_t value);
+
+  inline  ::uint64_t getPositionSeq();
+  inline void setPositionSeq( ::uint64_t value);
+
+  inline  ::uint64_t getPositionMonoTime();
+  inline void setPositionMonoTime( ::uint64_t value);
+
+  inline  ::uint16_t getSampleCount();
+  inline void setSampleCount( ::uint16_t value);
+
+  inline double getSpan();
+  inline void setSpan(double value);
+
+  inline double getShortSpeed();
+  inline void setShortSpeed(double value);
+
+  inline double getLongSpeed();
+  inline void setLongSpeed(double value);
+
+  inline double getSpeedStd();
+  inline void setSpeedStd(double value);
+
+  inline double getWindowDifference();
+  inline void setWindowDifference(double value);
+
+  inline double getWindowDifferenceStd();
+  inline void setWindowDifferenceStd(double value);
+
+  inline double getInnovationBias();
+  inline void setInnovationBias(double value);
+
+  inline double getPosteriorCorrection();
+  inline void setPosteriorCorrection(double value);
+
+  inline double getPosteriorCorrectionRatio();
+  inline void setPosteriorCorrectionRatio(double value);
+
+  inline double getPosteriorSpeedDifference();
+  inline void setPosteriorSpeedDifference(double value);
+
+  inline  ::uint16_t getConsistentSamples();
+  inline void setConsistentSamples( ::uint16_t value);
+
+  inline bool getQualified();
+  inline void setQualified(bool value);
+
+  inline bool hasReason();
+  inline  ::capnp::Text::Builder getReason();
+  inline void setReason( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initReason(unsigned int size);
+  inline void adoptReason(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownReason();
+
+private:
+  ::capnp::_::StructBuilder _builder;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  friend class ::capnp::Orphanage;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+};
+
+#if !CAPNP_LITE
+class HondaRadarObservations::PositionVelocityQuality::Pipeline {
+public:
+  typedef PositionVelocityQuality Pipelines;
 
   inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
   inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
@@ -12094,6 +12532,104 @@ inline void ModelDataV2SP::Builder::setRightLaneChangeEdgeBlock(bool value) {
       ::capnp::bounded<17>() * ::capnp::ELEMENTS, value);
 }
 
+inline float ModelDataV2SP::Reader::getBlendfulCurvature() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline float ModelDataV2SP::Builder::getBlendfulCurvature() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void ModelDataV2SP::Builder::setBlendfulCurvature(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline float ModelDataV2SP::Reader::getBlendfulTrust() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline float ModelDataV2SP::Builder::getBlendfulTrust() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void ModelDataV2SP::Builder::setBlendfulTrust(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline float ModelDataV2SP::Reader::getModelCurvature() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline float ModelDataV2SP::Builder::getModelCurvature() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void ModelDataV2SP::Builder::setModelCurvature(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool ModelDataV2SP::Reader::getBlendfulGoingAround() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS);
+}
+
+inline bool ModelDataV2SP::Builder::getBlendfulGoingAround() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS);
+}
+inline void ModelDataV2SP::Builder::setBlendfulGoingAround(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<18>() * ::capnp::ELEMENTS, value);
+}
+
+inline float ModelDataV2SP::Reader::getBlendfulLeftProb() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline float ModelDataV2SP::Builder::getBlendfulLeftProb() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void ModelDataV2SP::Builder::setBlendfulLeftProb(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
+inline float ModelDataV2SP::Reader::getBlendfulRightProb() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+
+inline float ModelDataV2SP::Builder::getBlendfulRightProb() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+inline void ModelDataV2SP::Builder::setBlendfulRightProb(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
+}
+
+inline float ModelDataV2SP::Reader::getBlendfulLaneWidth() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+
+inline float ModelDataV2SP::Builder::getBlendfulLaneWidth() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+inline void ModelDataV2SP::Builder::setBlendfulLaneWidth(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS, value);
+}
+
 inline  ::uint16_t HondaRadarObservations::Reader::getSchemaVersion() const {
   return _reader.getDataField< ::uint16_t>(
       ::capnp::bounded<0>() * ::capnp::ELEMENTS, 1u);
@@ -13596,6 +14132,670 @@ inline bool HondaRadarObservations::FusionTrack::Builder::getBodyValid() {
 inline void HondaRadarObservations::FusionTrack::Builder::setBodyValid(bool value) {
   _builder.setDataField<bool>(
       ::capnp::bounded<94>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::FusionTrack::Reader::hasPositionVelocity() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline bool HondaRadarObservations::FusionTrack::Builder::hasPositionVelocity() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::HondaRadarObservations::PositionVelocityQuality::Reader HondaRadarObservations::FusionTrack::Reader::getPositionVelocity() const {
+  return ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::PositionVelocityQuality>::get(_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline  ::cereal::HondaRadarObservations::PositionVelocityQuality::Builder HondaRadarObservations::FusionTrack::Builder::getPositionVelocity() {
+  return ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::PositionVelocityQuality>::get(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::HondaRadarObservations::PositionVelocityQuality::Pipeline HondaRadarObservations::FusionTrack::Pipeline::getPositionVelocity() {
+  return  ::cereal::HondaRadarObservations::PositionVelocityQuality::Pipeline(_typeless.getPointerField(2));
+}
+#endif  // !CAPNP_LITE
+inline void HondaRadarObservations::FusionTrack::Builder::setPositionVelocity( ::cereal::HondaRadarObservations::PositionVelocityQuality::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::PositionVelocityQuality>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::HondaRadarObservations::PositionVelocityQuality::Builder HondaRadarObservations::FusionTrack::Builder::initPositionVelocity() {
+  return ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::PositionVelocityQuality>::init(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline void HondaRadarObservations::FusionTrack::Builder::adoptPositionVelocity(
+    ::capnp::Orphan< ::cereal::HondaRadarObservations::PositionVelocityQuality>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::PositionVelocityQuality>::adopt(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::HondaRadarObservations::PositionVelocityQuality> HondaRadarObservations::FusionTrack::Builder::disownPositionVelocity() {
+  return ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::PositionVelocityQuality>::disown(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+
+inline bool HondaRadarObservations::FusionTrack::Reader::hasNativeMotion() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS).isNull();
+}
+inline bool HondaRadarObservations::FusionTrack::Builder::hasNativeMotion() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::HondaRadarObservations::NativeMotionQuality::Reader HondaRadarObservations::FusionTrack::Reader::getNativeMotion() const {
+  return ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::NativeMotionQuality>::get(_reader.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+inline  ::cereal::HondaRadarObservations::NativeMotionQuality::Builder HondaRadarObservations::FusionTrack::Builder::getNativeMotion() {
+  return ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::NativeMotionQuality>::get(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::HondaRadarObservations::NativeMotionQuality::Pipeline HondaRadarObservations::FusionTrack::Pipeline::getNativeMotion() {
+  return  ::cereal::HondaRadarObservations::NativeMotionQuality::Pipeline(_typeless.getPointerField(3));
+}
+#endif  // !CAPNP_LITE
+inline void HondaRadarObservations::FusionTrack::Builder::setNativeMotion( ::cereal::HondaRadarObservations::NativeMotionQuality::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::NativeMotionQuality>::set(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::HondaRadarObservations::NativeMotionQuality::Builder HondaRadarObservations::FusionTrack::Builder::initNativeMotion() {
+  return ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::NativeMotionQuality>::init(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+inline void HondaRadarObservations::FusionTrack::Builder::adoptNativeMotion(
+    ::capnp::Orphan< ::cereal::HondaRadarObservations::NativeMotionQuality>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::NativeMotionQuality>::adopt(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::HondaRadarObservations::NativeMotionQuality> HondaRadarObservations::FusionTrack::Builder::disownNativeMotion() {
+  return ::capnp::_::PointerHelpers< ::cereal::HondaRadarObservations::NativeMotionQuality>::disown(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+
+inline  ::uint8_t HondaRadarObservations::NativeMotionQuality::Reader::getVersion() const {
+  return _reader.getDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint8_t HondaRadarObservations::NativeMotionQuality::Builder::getVersion() {
+  return _builder.getDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setVersion( ::uint8_t value) {
+  _builder.setDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::NativeMotionQuality::Reader::getQualified() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+
+inline bool HondaRadarObservations::NativeMotionQuality::Builder::getQualified() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setQualified(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::NativeMotionQuality::Reader::hasReason() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool HondaRadarObservations::NativeMotionQuality::Builder::hasReason() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader HondaRadarObservations::NativeMotionQuality::Reader::getReason() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::NativeMotionQuality::Builder::getReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setReason( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::NativeMotionQuality::Builder::initReason(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), size);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::adoptReason(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> HondaRadarObservations::NativeMotionQuality::Builder::disownReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Reader::getPositionSeq() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Builder::getPositionSeq() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setPositionSeq( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Reader::getPositionMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Builder::getPositionMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setPositionMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Reader::getVelocitySeq() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Builder::getVelocitySeq() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setVelocitySeq( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Reader::getVelocityMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Builder::getVelocityMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setVelocityMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t HondaRadarObservations::NativeMotionQuality::Reader::getSampleCount() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t HondaRadarObservations::NativeMotionQuality::Builder::getSampleCount() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setSampleCount( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Reader::getFirstPositionMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Builder::getFirstPositionMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setFirstPositionMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Reader::getValidUntilMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Builder::getValidUntilMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setValidUntilMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::NativeMotionQuality::Reader::getRawRelativeSpeed() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::NativeMotionQuality::Builder::getRawRelativeSpeed() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setRawRelativeSpeed(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::NativeMotionQuality::Reader::getGroundSpeed() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::NativeMotionQuality::Builder::getGroundSpeed() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setGroundSpeed(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::NativeMotionQuality::Reader::getVelocityVariance() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::NativeMotionQuality::Builder::getVelocityVariance() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setVelocityVariance(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::NativeMotionQuality::Reader::getAcceleration() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::NativeMotionQuality::Builder::getAcceleration() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setAcceleration(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::NativeMotionQuality::Reader::getAccelerationValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+
+inline bool HondaRadarObservations::NativeMotionQuality::Builder::getAccelerationValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setAccelerationValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t HondaRadarObservations::NativeMotionQuality::Reader::getU10Raw() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t HondaRadarObservations::NativeMotionQuality::Builder::getU10Raw() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setU10Raw( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t HondaRadarObservations::NativeMotionQuality::Reader::getRangeSigmaRaw() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t HondaRadarObservations::NativeMotionQuality::Builder::getRangeSigmaRaw() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setRangeSigmaRaw( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t HondaRadarObservations::NativeMotionQuality::Reader::getExistenceRaw() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<44>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t HondaRadarObservations::NativeMotionQuality::Builder::getExistenceRaw() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<44>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setExistenceRaw( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<44>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Reader::getPairCompleteMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::NativeMotionQuality::Builder::getPairCompleteMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setPairCompleteMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::NativeMotionQuality::Reader::getDistanceResidual() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::NativeMotionQuality::Builder::getDistanceResidual() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setDistanceResidual(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<13>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::NativeMotionQuality::Reader::getDistanceResidualValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+
+inline bool HondaRadarObservations::NativeMotionQuality::Builder::getDistanceResidualValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setDistanceResidualValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint8_t HondaRadarObservations::NativeMotionQuality::Reader::getFrameIndex() const {
+  return _reader.getDataField< ::uint8_t>(
+      ::capnp::bounded<90>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint8_t HondaRadarObservations::NativeMotionQuality::Builder::getFrameIndex() {
+  return _builder.getDataField< ::uint8_t>(
+      ::capnp::bounded<90>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::NativeMotionQuality::Builder::setFrameIndex( ::uint8_t value) {
+  _builder.setDataField< ::uint8_t>(
+      ::capnp::bounded<90>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint8_t HondaRadarObservations::PositionVelocityQuality::Reader::getVersion() const {
+  return _reader.getDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint8_t HondaRadarObservations::PositionVelocityQuality::Builder::getVersion() {
+  return _builder.getDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setVersion( ::uint8_t value) {
+  _builder.setDataField< ::uint8_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::PositionVelocityQuality::Reader::getPositionSeq() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::PositionVelocityQuality::Builder::getPositionSeq() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setPositionSeq( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t HondaRadarObservations::PositionVelocityQuality::Reader::getPositionMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t HondaRadarObservations::PositionVelocityQuality::Builder::getPositionMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setPositionMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t HondaRadarObservations::PositionVelocityQuality::Reader::getSampleCount() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t HondaRadarObservations::PositionVelocityQuality::Builder::getSampleCount() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setSampleCount( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Reader::getSpan() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Builder::getSpan() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setSpan(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Reader::getShortSpeed() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Builder::getShortSpeed() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setShortSpeed(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Reader::getLongSpeed() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Builder::getLongSpeed() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setLongSpeed(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Reader::getSpeedStd() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Builder::getSpeedStd() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setSpeedStd(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Reader::getWindowDifference() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Builder::getWindowDifference() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setWindowDifference(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<7>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Reader::getWindowDifferenceStd() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Builder::getWindowDifferenceStd() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setWindowDifferenceStd(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Reader::getInnovationBias() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Builder::getInnovationBias() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setInnovationBias(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<9>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Reader::getPosteriorCorrection() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Builder::getPosteriorCorrection() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setPosteriorCorrection(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<10>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Reader::getPosteriorCorrectionRatio() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Builder::getPosteriorCorrectionRatio() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setPosteriorCorrectionRatio(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS, value);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Reader::getPosteriorSpeedDifference() const {
+  return _reader.getDataField<double>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+
+inline double HondaRadarObservations::PositionVelocityQuality::Builder::getPosteriorSpeedDifference() {
+  return _builder.getDataField<double>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setPosteriorSpeedDifference(double value) {
+  _builder.setDataField<double>(
+      ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t HondaRadarObservations::PositionVelocityQuality::Reader::getConsistentSamples() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t HondaRadarObservations::PositionVelocityQuality::Builder::getConsistentSamples() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setConsistentSamples( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::PositionVelocityQuality::Reader::getQualified() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+
+inline bool HondaRadarObservations::PositionVelocityQuality::Builder::getQualified() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setQualified(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<8>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool HondaRadarObservations::PositionVelocityQuality::Reader::hasReason() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool HondaRadarObservations::PositionVelocityQuality::Builder::hasReason() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader HondaRadarObservations::PositionVelocityQuality::Reader::getReason() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::PositionVelocityQuality::Builder::getReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::setReason( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder HondaRadarObservations::PositionVelocityQuality::Builder::initReason(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), size);
+}
+inline void HondaRadarObservations::PositionVelocityQuality::Builder::adoptReason(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> HondaRadarObservations::PositionVelocityQuality::Builder::disownReason() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
 }
 
 inline  ::uint8_t HondaRadarObservations::FusionLead::Reader::getModelIndex() const {

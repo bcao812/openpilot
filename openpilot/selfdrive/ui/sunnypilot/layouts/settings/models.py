@@ -102,13 +102,35 @@ class ModelsLayout(Widget):
 
     self.lagd_toggle = toggle_item_sp(lambda: tr("Live Learning Steer Delay"), "", param="LagdToggle")
 
+    self.blendful_toggle = toggle_item_sp(lambda: tr("Blendful (Alpha)"), "", param="Blendful")
+    self._update_blendful_toggle()
+
     self.camera_offset = option_item_sp(lambda: tr("Adjust Camera Offset"), "CameraOffset", -35, 35,
                                         lambda: tr("Virtually shift camera's perspective to move model's center to Left(+ values) or Right (- values)"),
                                         1, None, True, "", style.BUTTON_ACTION_WIDTH, None, True,
                                         lambda v: f"{v / 100:.2f} m")
 
     self.items = [self.small_model_item, self.big_model_item, self.cancel_download_item, self.download_item, self.refresh_item, self.clear_cache_item,
-                  self.lane_turn_desire_toggle, self.lane_turn_value_control, self.lagd_toggle, self.delay_control, self.camera_offset]
+                  self.blendful_toggle, self.lane_turn_desire_toggle, self.lane_turn_value_control, self.lagd_toggle, self.delay_control, self.camera_offset]
+
+  def _update_blendful_toggle(self):
+    allowed = ui_state.active_runner_tinygrad
+    self.blendful_toggle.action_item.set_state(allowed and ui_state.params.get_bool("Blendful"))
+    self.blendful_toggle.action_item.set_enabled(allowed)
+    description = "<br><br>".join((
+      tr("Adds a gentle lane-center correction to the model's steering when lane lines are reliable."),
+      tr("Starts at 18 km/h (5 m/s), outside turns and lane changes."),
+      tr("Uses only currently valid lane lines."),
+      tr("Withdraws its correction when the lines are lost or lateral control is inactive."),
+      tr("With one valid lane line, uses a fixed nominal lane width of 3.6 m."),
+      tr("A cyan line shows the lane center while active."),
+      tr("Supports v2 models, including the bundled Default v2 model."),
+    ))
+    if not allowed:
+      description = f"<b>{tr('The active model does not support Blendful. Switch to a v2 model to enable this setting.')}</b><br><br>{description}"
+    if self.blendful_toggle.description != description:
+      self.blendful_toggle.set_description(description)
+      self.blendful_toggle.show_description(not allowed)
 
   def _update_lagd_description(self, lagd_toggle: bool):
     desc = tr("Enable this for the car to learn and adapt its steering response time. Disable to use a fixed steering response time. " +
@@ -325,6 +347,7 @@ class ModelsLayout(Widget):
     self.lane_turn_desire_toggle.action_item.set_state(turn_desire)
     self.lane_turn_value_control.set_visible(turn_desire and advanced_controls)
     self.lagd_toggle.action_item.set_state(live_delay)
+    self._update_blendful_toggle()
     self.delay_control.set_visible(not live_delay and advanced_controls)
     new_step = int(round(100 / CV.MPH_TO_KPH)) if ui_state.is_metric else 100
     if self.lane_turn_value_control.action_item is not None and self.lane_turn_value_control.action_item.value_change_step != new_step:
@@ -358,3 +381,6 @@ class ModelsLayout(Widget):
   def show_event(self):
     self._scroller.show_event()
     self._last_note = None  # re-expand the failover note every time the page opens
+    self._update_blendful_toggle()
+    if not ui_state.active_runner_tinygrad:
+      self.blendful_toggle.show_description(True)

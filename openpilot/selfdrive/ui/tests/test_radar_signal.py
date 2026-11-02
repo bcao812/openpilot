@@ -115,6 +115,8 @@ class TestRadarSignalUI(HeadlessUITestCase):
         renderer._longitudinal_control, renderer._transform_dirty, renderer._rect = True, False, rect
         renderer._torque_filter = Mock()
         renderer._path = SimpleNamespace(raw_points=np.array([[1.0, 0.0, 0.0], [100.0, 0.0, 0.0]]))
+        renderer.blendful = Mock()
+        renderer._lane_lines = [SimpleNamespace(raw_points=renderer._path.raw_points)] * 4
         renderer._lead_vehicles = [module.LeadVehicle(chevron=[(5, 5)]), module.LeadVehicle(chevron=[(5, 5)])]
         renderer._update_model, renderer._draw_lane_lines, renderer._draw_path = Mock(), Mock(), Mock()
         renderer._draw_lead_indicator, renderer.chevron_metrics = Mock(), Mock()
