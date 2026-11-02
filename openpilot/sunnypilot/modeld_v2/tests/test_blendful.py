@@ -143,7 +143,9 @@ class TestBlendful(unittest.TestCase):
         for _ in range(20):
           current = frame(center=-0.5, width=3.6, probs=probs)
           self.assertEqual(bf.update(current, 20.0, True, 0.0), fresh.update(current, 20.0, True, 0.0))
-        self.assertEqual(bf.lane_width.x, LANE_WIDTH_DEFAULT)
+        self.assertEqual(bf.lane_width.x, fresh.lane_width.x)
+        # A two-line width is computed from floating-point coordinates.
+        self.assertAlmostEqual(bf.lane_width.x, LANE_WIDTH_DEFAULT, places=12)
 
   def test_excluded_side_geometry_never_affects_single_side_fit(self):
     for missing_side in (0, 1):
