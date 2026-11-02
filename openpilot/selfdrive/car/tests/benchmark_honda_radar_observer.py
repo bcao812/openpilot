@@ -80,7 +80,7 @@ def measure(slots, seconds, level, valid_slots=None):
               dropped_events=observer.decoder.counts['dropped'])
 
 
-def measure_render_logic(slots, seconds):
+def measure_render_logic(slots, seconds, color_mode='red'):
   """Measure the actual overlay loop at 60 Hz, without a display/GPU.
 
   Fixed text dimensions stand in for warmed font measurements. Source-time
@@ -88,12 +88,14 @@ def measure_render_logic(slots, seconds):
   code and native message readers. Fixture creation is outside the timed region.
   """
   assert 1 <= slots <= 16
+  assert color_mode in ('orange', 'green', 'red')
   os.environ.setdefault('SCALE', '1')
   import numpy as np
   import pyray as rl
   from openpilot.cereal import log, messaging
   from openpilot.selfdrive.ui.sunnypilot.onroad import honda_radar_overlay as renderer
   from openpilot.selfdrive.ui.tests.test_honda_radar_boundaries import observation, publication, with_aux
+  from openpilot.selfdrive.ui.tests.test_radar_label_identity import qualified_track
 
   class ObservationSubMaster:
     def __init__(self):
@@ -124,9 +126,10 @@ def measure_render_logic(slots, seconds):
   overlay.next_params_ns = START + seconds * 1_000_000_000 + 1
   view = SimpleNamespace(frame=object(), client=SimpleNamespace(timestamp_eof=START), device_camera=object(),
                          model_renderer=SimpleNamespace(_car_space_transform=np.array(((1080., 1000., 0), (1000., 0, 1000.), (1., 0, 0)))))
-  ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm)
+  ui = SimpleNamespace(CP=configuration()[0], started=True, sm=sm, radar_signal=True)
   rect, size = rl.Rectangle(0, 0, 2160, 1080), rl.Vector2(120, 32)
   costs, cpu_ns = [], 0
+  frame_costs = {'new_message': [], 'cached_frame': []}
   now = START
   session = 'render-benchmark'
   with patch.object(renderer, 'ui_state', ui), patch.object(renderer.time, 'monotonic_ns', lambda: now), \
@@ -137,16 +140,18 @@ def measure_render_logic(slots, seconds):
       now = START + i * 1_000_000_000 // 60
       sm.logMonoTime = dict.fromkeys(sm, now)
       view.client.timestamp_eof = now
-      observer_sm.updated[renderer.SERVICE] = i % 4 == 0
-      if i % 4 == 0:
+      observer_sm.updated[renderer.SERVICE] = i % 3 == 0
+      if i % 3 == 0:
         scan_ns = now
         samples = [observation(slot=s, sequence=i * 32 + 2 * s + 1, generation=s + 1, stamp=now) for s in range(slots)]
-        tracks = [dict({field: sample[field] for field in ('slot', 'generation', 'positionSeq', 'positionMonoTime')},
-                       trackId=sample['slot'] + 1) for sample in samples]
+        tracks = [qualified_track(sample, sample['slot'] + 1) for sample in samples]
+        for track in tracks:
+          track['nativeMotion'].update(qualified=color_mode != 'orange', reason='insufficientSupport' if color_mode == 'orange' else 'qualified',
+                                       sampleCount=5, firstPositionMonoTime=now - 280_000_000)
         message = messaging.new_message(renderer.SERVICE)
         message.valid, message.logMonoTime = True, now
         setattr(message, renderer.SERVICE, publication(
-          [event for sample in samples for event in (sample, with_aux(sample, now))], sequence=i // 4 + 1, session=session,
+          [event for sample in samples for event in (sample, with_aux(sample, now))], sequence=i // 3 + 1, session=session,
           fusion={'version': 1, 'active': True, 'tracks': tracks}))
         decoded = messaging.log_from_bytes(message.to_bytes())
         observer_sm.body, observer_sm.logMonoTime[renderer.SERVICE] = getattr(decoded, renderer.SERVICE), decoded.logMonoTime
@@ -156,29 +161,36 @@ def measure_render_logic(slots, seconds):
         receipt.controlsState.motionState = {
           'enabled': True, 'planningMode': 2, 'phase': 'track', 'planMonoTime': now,
           'objectInfluences': [{'version': 1, 'sessionId': session, 'trackId': s + 1, 'modelMonoTime': now,
-                                'visionIndex': -1, 'kind': 'braking', 'strength': 0.5} for s in range(slots)],
+                                'visionIndex': -1, 'kind': 'braking', 'strength': 0.5} for s in range(slots) if color_mode == 'red'],
         }
         sm['controlsState'] = messaging.log_from_bytes(receipt.to_bytes()).controlsState
       start_cpu, begin = time.thread_time_ns(), time.perf_counter_ns()
       overlay._render(view, rect)  # exceptions must fail this benchmark
       costs.append(time.perf_counter_ns() - begin)
       cpu_ns += time.thread_time_ns() - start_cpu
+      frame_costs['new_message' if i % 3 == 0 else 'cached_frame'].append(costs[-1])
       # Coverage checks are untimed; an empty/stale fast path is not a result.
       assert len(overlay.labels) == slots
       assert all(label.point.time_ns == scan_ns for label in overlay.labels)
-      if i % 4 == 0:
+      if i % 3 == 0:
         influences = renderer.accepted_influences(sm, now)
         coverage = {'visible_labels': len(overlay.labels),
                     'boundary_labels': sum(label.point.boundary_laterals is not None for label in overlay.labels),
                     'boundary_lines': sum(len(label.lines) for label in overlay.labels),
                     'accepted_influences': len(influences),
                     'influenced_labels': sum(renderer.radar_influence_strength(label.point, influences) == 0.5
-                                             for label in overlay.labels)}
+                                             for label in overlay.labels),
+                    'qualified_labels': sum(overlay.state.is_qualified(label.point, now) for label in overlay.labels)}
         assert coverage == {'visible_labels': slots, 'boundary_labels': slots, 'boundary_lines': 3 * slots,
-                            'accepted_influences': slots, 'influenced_labels': slots}, coverage
+                            'accepted_influences': slots if color_mode == 'red' else 0,
+                            'influenced_labels': slots if color_mode == 'red' else 0,
+                            'qualified_labels': slots if color_mode != 'orange' else 0}, coverage
   assert len(overlay.state.points(now, now)) == slots
-  return dict(slots=slots, simulated_seconds=seconds, frames=len(costs), viewport=[2160, 1080],
-              observation_hz=15, render_hz=60, verified_coverage=coverage,
+  return dict(slots=slots, color_mode=color_mode, simulated_seconds=seconds, frames=len(costs), viewport=[2160, 1080],
+              observation_hz=20, render_hz=60, verified_coverage=coverage,
+              maximum_history=max(map(len, overlay.state.history)),
+              frame_costs={name: dict(**percentiles(values), mean_us=statistics.mean(values) / 1000)
+                           for name, values in frame_costs.items()},
               host_logic_one_core_percent_at_60fps=cpu_ns / (seconds * 1e9) * 100,
               cpu_mean_us=cpu_ns / len(costs) / 1000,
               **percentiles(costs), mean_us=statistics.mean(costs) / 1000)
@@ -199,8 +211,8 @@ def main():
     cases = [(0, 0), (1, 1), (16, 0), (16, 1), (16, 16)]
     measurements = [measure(total, args.seconds, level, valid) for total, valid in cases]
   with OpenpilotPrefix():  # UI module initialization must use a private host namespace
-    render_costs = [measure_render_logic(slots, args.seconds) for slots in (1, 16)]
-  results = {'method': 'synthetic-15Hz-host-v3', 'render_only': args.render_only, 'zstd_level': level,
+    render_costs = [measure_render_logic(slots, args.seconds, color) for slots in (1, 16) for color in ('orange', 'green', 'red')]
+  results = {'method': 'synthetic-observer-15Hz-render-20Hz-host-v4', 'render_only': args.render_only, 'zstd_level': level,
              'cases': measurements,
              'render_logic_60fps': render_costs,
              'limitations': ['Synthetic fields; real compression depends on traffic.',
