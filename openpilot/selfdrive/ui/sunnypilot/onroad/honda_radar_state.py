@@ -167,12 +167,14 @@ class RadarOverlayState:
     self.message_ns = 0
     self.active = False
     self.track_samples = {}
+    self.qualified_tracks = {}
 
   def clear(self):
     for history in self.history:
       history.clear()
     self.active = False
     self.track_samples = {}
+    self.qualified_tracks = {}
 
   def ingest(self, body, message_ns, now_ns):
     as_reader = getattr(body, 'as_reader', None)
@@ -199,7 +201,12 @@ class RadarOverlayState:
     if not self.active or len(events) > 64:
       self.clear()
       return
-    track_samples = self.track_samples = _track_samples(body, message_ns)
+    track_samples = _track_samples(body, message_ns)
+    self.track_samples.update(track_samples)
+    self.qualified_tracks = {}
+    for identifier, until_ns in track_samples.values():
+      if identifier > 0:
+        self.qualified_tracks[identifier] = min(self.qualified_tracks.get(identifier, until_ns), until_ns)
     if track_samples:
       for history in self.history:
         for index, point in enumerate(history):
@@ -247,12 +254,17 @@ class RadarOverlayState:
             self.invalid_before_ns[slot] = max(self.invalid_before_ns[slot], t)
             while history and history[0].time_ns <= t:
               history.popleft()
+    # Keep only the bounded camera history's original sample qualifications.
+    # A newer qualified scan of the same object cannot renew an older deadline.
+    self.track_samples = {point.sample_key: self.track_samples[point.sample_key]
+                          for history in self.history for point in history if point.sample_key in self.track_samples}
 
   def is_qualified(self, point, now_ns):
-    # Read the latest fusion snapshot even when camera geometry is cached. A
-    # late AUX can qualify the same sample; missing/replaced evidence withdraws
-    # green immediately without transferring it to a new slot occupant.
+    # Camera time may select an older scan. It needs both its own qualification
+    # and a currently qualified measurement of the same physical track. A late
+    # AUX updates the same sample; current withdrawal overrides camera history.
     identifier, until_ns = self.track_samples.get(point.sample_key, (0, 0))
+    until_ns = min(until_ns, self.qualified_tracks.get(identifier, 0))
     return bool(self.active and point.session_id == self.session and point.track_id > 0
                 and point.track_id == identifier and point.time_ns <= now_ns <= until_ns
                 and 0 <= now_ns - self.message_ns <= MESSAGE_MAX_AGE_NS)

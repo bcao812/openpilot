@@ -62,6 +62,41 @@ def test_qualification_expires_at_original_coasting_deadline_without_a_new_publi
   assert overlay.points(NOW, NOW + 100_000_001) == [point]
 
 
+def test_camera_lag_preserves_qualified_samples_without_renewing_their_deadlines():
+  body, overlay = observations(qualified=True), RadarOverlayState()
+  overlay.ingest(body, NOW + 1, NOW + 1)
+  first, = overlay.points(NOW, NOW + 1)
+  event = dict(body['observations'][0], positionSeq=19, positionMonoTime=NOW + 50_000_000)
+  body.update(sequence=2, observations=[event])
+  body['fusion']['tracks'] = [qualified_track(event)]
+  overlay.ingest(body, NOW + 50_000_001, NOW + 50_000_001)
+  displayed, = overlay.points(NOW + 20_000_000, NOW + 50_000_001)
+  second, = overlay.points(NOW + 50_000_000, NOW + 50_000_001)
+  assert displayed is first
+  assert overlay.is_qualified(displayed, NOW + 50_000_001)
+  assert overlay.is_qualified(second, NOW + 50_000_001)
+  assert not overlay.is_qualified(first, NOW + 100_000_001)
+  assert overlay.is_qualified(second, NOW + 100_000_001)
+  body.update(sequence=3, observations=[])
+  body['fusion']['tracks'][0]['nativeMotion']['qualified'] = False
+  overlay.ingest(body, NOW + 50_000_002, NOW + 50_000_002)
+  assert not overlay.is_qualified(first, NOW + 50_000_002)
+  assert not overlay.is_qualified(second, NOW + 50_000_002)
+
+
+def test_new_qualified_scan_cannot_retroactively_qualify_an_earlier_scan():
+  body, overlay = observations(), RadarOverlayState()
+  overlay.ingest(body, NOW + 1, NOW + 1)
+  first, = overlay.points(NOW, NOW + 1)
+  event = dict(body['observations'][0], positionSeq=19, positionMonoTime=NOW + 50_000_000)
+  body.update(sequence=2, observations=[event])
+  body['fusion']['tracks'] = [qualified_track(event)]
+  overlay.ingest(body, NOW + 50_000_001, NOW + 50_000_001)
+  assert not overlay.is_qualified(first, NOW + 50_000_001)
+  second, = overlay.points(NOW + 50_000_000, NOW + 50_000_001)
+  assert overlay.is_qualified(second, NOW + 50_000_001)
+
+
 @pytest.mark.parametrize('change', ('missing', 'inactive', 'coasting', 'velocity_pending', 'new_sample', 'invalid_fusion'))
 def test_latest_snapshot_immediately_withdraws_previous_qualification(change):
   body, overlay = observations(qualified=True), RadarOverlayState()
