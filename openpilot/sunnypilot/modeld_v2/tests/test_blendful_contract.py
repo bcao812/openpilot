@@ -26,9 +26,9 @@ class TestBlendfulContract(OpenpilotTestCase):
               'blendfulLeftProb', 'blendfulRightProb', 'blendfulLaneWidth')
     for ordinal, name in enumerate(fields):
       self.assertEqual(custom.ModelDataV2SP.schema.fields[name].proto.ordinal.explicit, ordinal)
-    values = dict(laneTurnDirection='turnLeft', leftLaneChangeEdgeBlock=True, rightLaneChangeEdgeBlock=False,
-                  blendfulCurvature=0.000125, blendfulTrust=0.75, modelCurvature=-0.002,
-                  blendfulGoingAround=True, blendfulLeftProb=0.875, blendfulRightProb=0.625, blendfulLaneWidth=3.5)
+    values = {'laneTurnDirection': 'turnLeft', 'leftLaneChangeEdgeBlock': True, 'rightLaneChangeEdgeBlock': False,
+              'blendfulCurvature': 0.000125, 'blendfulTrust': 0.75, 'modelCurvature': -0.002,
+              'blendfulGoingAround': True, 'blendfulLeftProb': 0.875, 'blendfulRightProb': 0.625, 'blendfulLaneWidth': 3.5}
     message = custom.ModelDataV2SP.new_message(**values)
     with custom.ModelDataV2SP.from_bytes(message.to_bytes()) as decoded:
       self.assertEqual(decoded.to_dict(), message.to_dict())

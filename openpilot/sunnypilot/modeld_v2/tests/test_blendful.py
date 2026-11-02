@@ -118,7 +118,7 @@ class TestBlendful(unittest.TestCase):
         bf = Blendful()
         drive(bf, 5.0, center=0.5, width=4.4)
         self.assertGreater(bf.curvature, 0.0)
-        args = dict(model_output=frame(center=0.5), v_ego=20.0, active=True, model_curvature=0.0, enabled=True)
+        args = {'model_output': frame(center=0.5), 'v_ego': 20.0, 'active': True, 'model_curvature': 0.0, 'enabled': True}
         self.assertEqual(bf.update(**(args | overrides)), 0.0)
         self.assert_reset(bf)
         fresh = Blendful()
