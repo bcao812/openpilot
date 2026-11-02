@@ -110,7 +110,8 @@ class HondaRadarOverlay:
     # Cached layout never caches validity or opacity.
     influences = accepted_influences(sm, now)
     for label in self.labels:
-      rgb = influence_rgb(radar_influence_strength(label.point, influences)) or (0, 255, 0)
+      base_rgb = (0, 255, 0) if self.state.is_qualified(label.point, now) else (255, 165, 0)
+      rgb = influence_rgb(radar_influence_strength(label.point, influences)) or base_rgb
       color = rl.Color(*rgb, 255 if frame_ns - label.point.time_ns <= 80_000_000 else 140)
       for start, end in label.lines:
         rl.draw_line_ex(start, end, BOUNDARY_LINE_WIDTH, color)

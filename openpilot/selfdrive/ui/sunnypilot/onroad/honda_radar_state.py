@@ -4,6 +4,11 @@ from dataclasses import dataclass, replace
 import math
 from numbers import Integral, Real
 
+from openpilot.selfdrive.car.honda_radar_native import (
+  MAX_AGE_NS as NATIVE_MAX_AGE_NS, MAX_GAP_NS as NATIVE_MAX_GAP_NS,
+  MAX_PAIR_NS as NATIVE_MAX_PAIR_NS, VERSION as NATIVE_VERSION,
+)
+
 POSITION_MAX_AGE_NS = 200_000_000
 MESSAGE_MAX_AGE_NS = 500_000_000
 
@@ -94,7 +99,34 @@ class RadarLabelPoint:
     return self.slot, self.generation, self.sequence, self.time_ns
 
 
-def _track_samples(body):
+def _qualified_until(track, key, message_ns):
+  """Use the producer's measurement admission, with its original source expiry.
+
+  This is eligibility to enter target selection, not path relevance or proof
+  that a controller has adopted the object. Those remain separate decisions.
+  """
+  native = _read(track, 'nativeMotion', {})
+  if (any(_read(track, field) is not True for field in ('active', 'mature', 'velocityGood'))
+      or _read(track, 'coasting') is not False
+      or _read(native, 'version') != NATIVE_VERSION or _read(native, 'qualified') is not True
+      or _read(native, 'reason') != 'qualified'):
+    return 0
+  sequence, position_ns, velocity_sequence, velocity_ns, complete_ns, until_ns = (
+    _read(native, field) for field in ('positionSeq', 'positionMonoTime', 'velocitySeq', 'velocityMonoTime',
+                                      'pairCompleteMonoTime', 'validUntilMonoTime'))
+  if (not all(_integer(value) for value in (sequence, position_ns, velocity_sequence, velocity_ns, complete_ns, until_ns))
+      or (sequence, position_ns) != key[2:] or velocity_sequence <= 0 or velocity_ns <= 0
+      or velocity_ns != _read(track, 'velocityMonoTime')
+      or abs(position_ns - velocity_ns) > NATIVE_MAX_PAIR_NS
+      or not max(position_ns, velocity_ns) <= complete_ns <= message_ns
+      or until_ns != min(position_ns, velocity_ns) + NATIVE_MAX_AGE_NS):
+    return 0
+  # A stopped publisher must not leave the last qualified sample green through
+  # the producer's coasting cutoff. Republication never renews these deadlines.
+  return min(until_ns, position_ns + NATIVE_MAX_GAP_NS)
+
+
+def _track_samples(body, message_ns):
   """Attach only the track that explicitly consumed this exact CAN sample.
 
   Spatial proximity cannot distinguish a nearby cut-in from a farther car.
@@ -106,16 +138,22 @@ def _track_samples(body):
   if (_read(fusion, 'version', 0) != 1 or _read(fusion, 'active', False) is not True
       or len(tracks) > 32):
     return {}
-  identities = {}
+  samples = {}
   for track in tracks:
     key = tuple(_read(track, field) for field in ('slot', 'generation', 'positionSeq', 'positionMonoTime'))
     identifier = _read(track, 'trackId')
     if (not all(_integer(value) for value in (*key, identifier))
         or not 0 <= key[0] < 16 or key[1] < 0 or min(*key[2:], identifier) <= 0):
       continue
-    # Conflicting identities never borrow the stronger target's red color.
-    identities[key] = identifier if key not in identities or identities[key] == identifier else -1
-  return identities
+    until_ns = _qualified_until(track, key, message_ns)
+    if key in samples:
+      previous_id, previous_until = samples[key]
+      # Conflicting identities never borrow the stronger target's color;
+      # duplicate claims cannot override an explicit qualification withdrawal.
+      identifier, until_ns = ((identifier, min(previous_until, until_ns))
+                              if previous_id == identifier else (-1, 0))
+    samples[key] = identifier, until_ns
+  return samples
 
 
 class RadarOverlayState:
@@ -128,11 +166,13 @@ class RadarOverlayState:
     self.dropped = 0
     self.message_ns = 0
     self.active = False
+    self.track_samples = {}
 
   def clear(self):
     for history in self.history:
       history.clear()
     self.active = False
+    self.track_samples = {}
 
   def ingest(self, body, message_ns, now_ns):
     as_reader = getattr(body, 'as_reader', None)
@@ -159,12 +199,12 @@ class RadarOverlayState:
     if not self.active or len(events) > 64:
       self.clear()
       return
-    track_samples = _track_samples(body)
+    track_samples = self.track_samples = _track_samples(body, message_ns)
     if track_samples:
       for history in self.history:
         for index, point in enumerate(history):
           if point.sample_key in track_samples:
-            identifier = track_samples[point.sample_key]
+            identifier, _ = track_samples[point.sample_key]
             if point.track_id == -1 or point.track_id > 0 and point.track_id != identifier:
               identifier = -1
             if identifier != point.track_id:
@@ -188,7 +228,7 @@ class RadarOverlayState:
           continue
         boundaries, boundary_ns = _estimate_boundaries(event, message_ns)
         point = RadarLabelPoint(slot, d, y, t, sequence, generation, session,
-                                track_samples.get((slot, generation, sequence, t), 0), boundaries, boundary_ns)
+                                track_samples.get((slot, generation, sequence, t), (0, 0))[0], boundaries, boundary_ns)
         if history and t < history[-1].time_ns:
           continue
         if history and point.generation != history[-1].generation:
@@ -207,6 +247,15 @@ class RadarOverlayState:
             self.invalid_before_ns[slot] = max(self.invalid_before_ns[slot], t)
             while history and history[0].time_ns <= t:
               history.popleft()
+
+  def is_qualified(self, point, now_ns):
+    # Read the latest fusion snapshot even when camera geometry is cached. A
+    # late AUX can qualify the same sample; missing/replaced evidence withdraws
+    # green immediately without transferring it to a new slot occupant.
+    identifier, until_ns = self.track_samples.get(point.sample_key, (0, 0))
+    return bool(self.active and point.session_id == self.session and point.track_id > 0
+                and point.track_id == identifier and point.time_ns <= now_ns <= until_ns
+                and 0 <= now_ns - self.message_ns <= MESSAGE_MAX_AGE_NS)
 
   def points(self, frame_ns, now_ns):
     if (not self.active or not 0 < frame_ns <= now_ns or now_ns - frame_ns > MESSAGE_MAX_AGE_NS

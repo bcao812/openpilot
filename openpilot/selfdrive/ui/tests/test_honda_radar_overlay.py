@@ -248,7 +248,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
     self.assertAlmostEqual(label_position.x + 32, (span[0].x + span[1].x) / 2, places=3)
     self.assertLess(label_position.y + 40, marker.y - renderer.BOUNDARY_TICK_HEIGHT / 2)
     for call in (*lines.call_args_list, circles.call_args, text.call_args):
-      self.assertEqual((call.args[-1].r, call.args[-1].g, call.args[-1].b, call.args[-1].a), (0, 255, 0, 255))
+      self.assertEqual((call.args[-1].r, call.args[-1].g, call.args[-1].b, call.args[-1].a), (255, 165, 0, 255))
     backgrounds.assert_not_called()
 
   def test_real_render_path_uses_text_and_camera_frame_time(self):
@@ -295,7 +295,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       self.assertAlmostEqual(marker.y, expected[1], places=3)
       self.assertAlmostEqual(draw.call_args.args[2].x + 32, marker.x, places=3)
       self.assertLess(draw.call_args.args[2].y + 40, marker.y - radius)
-      self.assertEqual((color.r, color.g, color.b), (0, 255, 0))
+      self.assertEqual((color.r, color.g, color.b), (255, 165, 0))
       backgrounds.assert_not_called()
       lines.assert_not_called()
       original_x = draw.call_args_list[0].args[2].x
@@ -338,7 +338,7 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       self.assertLess(original_marker.x, span[1].x)
       self.assertAlmostEqual(draw.call_args.args[2].x + 32, (span[0].x + span[1].x) / 2, places=3)
       for call in (*lines.call_args_list, circles.call_args, draw.call_args):
-        self.assertEqual((call.args[-1].r, call.args[-1].g, call.args[-1].b, call.args[-1].a), (0, 255, 0, 255))
+        self.assertEqual((call.args[-1].r, call.args[-1].g, call.args[-1].b, call.args[-1].a), (255, 165, 0, 255))
       backgrounds.assert_not_called()
       # Fading and expiry must remain live even when geometry is cached.
       clock.return_value = START + 120_000_000

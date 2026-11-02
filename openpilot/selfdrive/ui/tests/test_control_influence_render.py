@@ -9,6 +9,7 @@ from openpilot.selfdrive.car.tests.test_honda_radar_observer import START, confi
 from openpilot.selfdrive.ui.sunnypilot.onroad.honda_radar_state import project_radar_point
 from openpilot.selfdrive.ui.sunnypilot.onroad.lead_control_influence import accepted_influences, influence_rgb
 from openpilot.selfdrive.ui.tests.test_honda_radar_overlay import sample
+from openpilot.selfdrive.ui.tests.test_radar_label_identity import qualified_track
 from openpilot.selfdrive.ui.tests.test_sunnylink_removed import HeadlessUITestCase
 
 
@@ -281,12 +282,32 @@ class TestControlInfluenceRendering(HeadlessUITestCase):
       motion.objectInfluences[0].version = 1
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       unaccepted = circles.call_args.args[-1]
-      self.assertEqual((unaccepted.r, unaccepted.g, unaccepted.b), (0, 255, 0))
+      self.assertEqual((unaccepted.r, unaccepted.g, unaccepted.b), (255, 165, 0))
       motion.objectInfluences[0].version = 2
       sm['carState'].gasPressed = True
       overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
       reset = circles.call_args.args[-1]
-      self.assertEqual((reset.r, reset.g, reset.b), (0, 255, 0))
+      self.assertEqual((reset.r, reset.g, reset.b), (255, 165, 0))
+      # Qualification changes color without invalidating the cached geometry.
+      # Exercise the actual reader input, including same-sample late AUX and
+      # an explicit withdrawal with no new position observation.
+      data.update(sequence=2, observations=[])
+      data['fusion']['tracks'] = [qualified_track(measured)]
+      wire = messaging.new_message(renderer.SERVICE)
+      setattr(wire, renderer.SERVICE, data)
+      observer.__getitem__.return_value = getattr(wire, renderer.SERVICE).as_reader()
+      observer.updated[renderer.SERVICE] = True
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      ready = circles.call_args.args[-1]
+      self.assertEqual((ready.r, ready.g, ready.b), (0, 255, 0))
+      data['sequence'] = 3
+      data['fusion']['tracks'][0]['nativeMotion']['qualified'] = False
+      wire = messaging.new_message(renderer.SERVICE)
+      setattr(wire, renderer.SERVICE, data)
+      observer.__getitem__.return_value = getattr(wire, renderer.SERVICE).as_reader()
+      overlay.render(view, rl.Rectangle(0, 0, 1280, 720))
+      withdrawn = circles.call_args.args[-1]
+      self.assertEqual((withdrawn.r, withdrawn.g, withdrawn.b), (255, 165, 0))
       self.assertEqual(project.call_count, 1)
 
   def test_native_physical_mitigation_receipt_only_colors_the_adopted_target(self):
