@@ -803,7 +803,7 @@ struct CarControlSP {
 
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(a5cd762cd951a455, 0, 5)
+    CAPNP_DECLARE_STRUCT_HEADER(a5cd762cd951a455, 3, 5)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -930,7 +930,7 @@ struct ModelDataV2SP {
 
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(a1680744031fdb2d, 4, 0)
+    CAPNP_DECLARE_STRUCT_HEADER(a1680744031fdb2d, 5, 0)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -4385,6 +4385,12 @@ public:
   inline bool hasIntelligentCruiseButtonManagement() const;
   inline  ::cereal::IntelligentCruiseButtonManagement::Reader getIntelligentCruiseButtonManagement() const;
 
+  inline  ::uint64_t getBlendfulControlEpoch() const;
+
+  inline  ::uint64_t getBlendfulModelMonoTime() const;
+
+  inline float getBlendfulAppliedCurvature() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -4447,6 +4453,15 @@ public:
   inline  ::cereal::IntelligentCruiseButtonManagement::Builder initIntelligentCruiseButtonManagement();
   inline void adoptIntelligentCruiseButtonManagement(::capnp::Orphan< ::cereal::IntelligentCruiseButtonManagement>&& value);
   inline ::capnp::Orphan< ::cereal::IntelligentCruiseButtonManagement> disownIntelligentCruiseButtonManagement();
+
+  inline  ::uint64_t getBlendfulControlEpoch();
+  inline void setBlendfulControlEpoch( ::uint64_t value);
+
+  inline  ::uint64_t getBlendfulModelMonoTime();
+  inline void setBlendfulModelMonoTime( ::uint64_t value);
+
+  inline float getBlendfulAppliedCurvature();
+  inline void setBlendfulAppliedCurvature(float value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -5270,6 +5285,8 @@ public:
 
   inline float getBlendfulLaneWidth() const;
 
+  inline  ::uint64_t getBlendfulControlEpoch() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -5327,6 +5344,9 @@ public:
 
   inline float getBlendfulLaneWidth();
   inline void setBlendfulLaneWidth(float value);
+
+  inline  ::uint64_t getBlendfulControlEpoch();
+  inline void setBlendfulControlEpoch( ::uint64_t value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -11660,6 +11680,48 @@ inline ::capnp::Orphan< ::cereal::IntelligentCruiseButtonManagement> CarControlS
       ::capnp::bounded<4>() * ::capnp::POINTERS));
 }
 
+inline  ::uint64_t CarControlSP::Reader::getBlendfulControlEpoch() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t CarControlSP::Builder::getBlendfulControlEpoch() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void CarControlSP::Builder::setBlendfulControlEpoch( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t CarControlSP::Reader::getBlendfulModelMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t CarControlSP::Builder::getBlendfulModelMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void CarControlSP::Builder::setBlendfulModelMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline float CarControlSP::Reader::getBlendfulAppliedCurvature() const {
+  return _reader.getDataField<float>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline float CarControlSP::Builder::getBlendfulAppliedCurvature() {
+  return _builder.getDataField<float>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void CarControlSP::Builder::setBlendfulAppliedCurvature(float value) {
+  _builder.setDataField<float>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
 inline bool CarControlSP::Param::Reader::hasKey() const {
   return !_reader.getPointerField(
       ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
@@ -12628,6 +12690,20 @@ inline float ModelDataV2SP::Builder::getBlendfulLaneWidth() {
 inline void ModelDataV2SP::Builder::setBlendfulLaneWidth(float value) {
   _builder.setDataField<float>(
       ::capnp::bounded<6>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint64_t ModelDataV2SP::Reader::getBlendfulControlEpoch() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t ModelDataV2SP::Builder::getBlendfulControlEpoch() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void ModelDataV2SP::Builder::setBlendfulControlEpoch( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
 }
 
 inline  ::uint16_t HondaRadarObservations::Reader::getSchemaVersion() const {

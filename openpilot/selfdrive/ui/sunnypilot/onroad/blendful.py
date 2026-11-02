@@ -21,10 +21,9 @@ from openpilot.system.ui.lib.text_measure import measure_text_cached
 BLENDFUL_COLOR = (0, 200, 255)
 FULL_BAR = 1.0
 # Both messages normally arrive at 20 Hz. Allow five periods of transport delay,
-# but never freeze the cyan line when either producer stops. Adjacent model
-# frames must not borrow one another's Blendful confidence/geometry.
+# but never freeze the cyan line when either producer stops. Model/SP must
+# share the exact publication time accepted by the lateral consumer.
 MESSAGE_MAX_AGE_NS = int(5 * DT_MDL * 1e9)
-MESSAGE_PAIR_MAX_SKEW_NS = int(DT_MDL / 2 * 1e9)
 # carControl publishes at 100 Hz; ten periods match its normal alive window.
 CONTROL_MAX_AGE_NS = 100_000_000
 CURRENT_LINE_PROB_MIN = 0.3
@@ -38,6 +37,8 @@ class BlendfulRenderer:
     self._trust = 0.0
     self._model_ns = 0
     self._output_ns = 0
+    self._control_epoch = 0
+    self._receipt_ns = 0
     self._side_mask = (False, False)
     self._font = gui_app.font(FontWeight.BOLD) if readout else None
     self._pull_display = FirstOrderFilter(0.0, 0.5, DT_MDL)
@@ -48,6 +49,7 @@ class BlendfulRenderer:
     self._center_points = np.empty((0, 2), dtype=np.float32)
     self._trust = 0.0
     self._model_ns = self._output_ns = 0
+    self._control_epoch = self._receipt_ns = 0
     self._side_mask = (False, False)
     self._alpha.x = self._pull_display.x = self._trust_display.x = 0.0
 
@@ -60,13 +62,30 @@ class BlendfulRenderer:
       return False
     now_ns = time.monotonic_ns()
     for service, max_age in (("modelDataV2SP", MESSAGE_MAX_AGE_NS), ("modelV2", MESSAGE_MAX_AGE_NS),
-                             ("carControl", CONTROL_MAX_AGE_NS)):
+                             ("carControl", CONTROL_MAX_AGE_NS), ("carControlSP", CONTROL_MAX_AGE_NS)):
       stamp = sm.logMonoTime.get(service, 0)
-      if (not sm.valid.get(service, False) or sm.recv_frame.get(service, -1) < ui_state.started_frame or
+      if (not sm.valid.get(service, False) or not sm.seen.get(service, False) or
+          sm.recv_frame.get(service, -1) < ui_state.started_frame or
           not 0 < stamp <= now_ns or now_ns - stamp > max_age):
         return False
-    return (sm["carControl"].latActive and
-            abs(sm.logMonoTime["modelV2"] - sm.logMonoTime["modelDataV2SP"]) <= MESSAGE_PAIR_MAX_SKEW_NS)
+    receipt = sm["carControlSP"]
+    epoch = receipt.blendfulControlEpoch
+    capture_ns = sm["modelV2"].timestampEof
+    return (sm["carControl"].latActive and 0 < epoch == sm["modelDataV2SP"].blendfulControlEpoch and
+            receipt.blendfulModelMonoTime == sm.logMonoTime["modelV2"] == sm.logMonoTime["modelDataV2SP"] and
+            epoch <= capture_ns <= now_ns and now_ns - capture_ns <= MESSAGE_MAX_AGE_NS and
+            np.isfinite(receipt.blendfulAppliedCurvature))
+
+  def needs_update(self) -> bool:
+    """A late consumer receipt can accept geometry that arrived a frame earlier.
+
+    Routine receipt updates do not require another lane projection. Rebuild only
+    after withdrawal or when the accepted model/session has changed.
+    """
+    sm = ui_state.sm
+    return (self._model_ns != sm.logMonoTime.get("modelV2", 0) or
+            self._output_ns != sm.logMonoTime.get("modelDataV2SP", 0) or
+            self._control_epoch != sm["carControlSP"].blendfulControlEpoch)
 
   def update(self, renderer, max_idx: int, *map_args) -> None:
     sm = ui_state.sm
@@ -144,18 +163,35 @@ class BlendfulRenderer:
     if self._readout and not np.isfinite(sm["carState"].vEgo):
       self.clear()
       return
-    if side_mask != self._side_mask:
+    epoch = sm["carControlSP"].blendfulControlEpoch
+    if side_mask != self._side_mask or epoch != self._control_epoch:
       self.clear()
     if self._output_ns != output_ns:
       self._alpha.update(1.0)
-      if self._readout:
-        lookahead = max(sm["carState"].vEgo * LOOKAHEAD_TIME, MIN_LOOKAHEAD)
-        self._pull_display.update(blendful.blendfulCurvature * lookahead ** 2 / 2)
-        self._trust_display.update(trust)
     self._center_points = points
     self._trust = trust
     self._side_mask = side_mask
     self._model_ns, self._output_ns = sm.logMonoTime["modelV2"], output_ns
+    self._control_epoch = epoch
+    self._update_readout()
+
+  def _update_readout(self) -> None:
+    if not self._readout:
+      return
+    sm = ui_state.sm
+    receipt_ns = sm.logMonoTime["carControlSP"]
+    if receipt_ns == self._receipt_ns:
+      return
+    # This is the accepted request before curvature clipping, not a measurement
+    # of the wheel's response. Receipt cadence can be faster than model cadence.
+    dt = DT_MDL if not self._receipt_ns else max((receipt_ns - self._receipt_ns) * 1e-9, 0.0)
+    for display_filter in (self._pull_display, self._trust_display):
+      display_filter.dt = dt
+      display_filter.update_alpha(0.5)
+    lookahead = max(sm["carState"].vEgo * LOOKAHEAD_TIME, MIN_LOOKAHEAD)
+    self._pull_display.update(sm["carControlSP"].blendfulAppliedCurvature * lookahead ** 2 / 2)
+    self._trust_display.update(self._trust)
+    self._receipt_ns = receipt_ns
 
   def _color(self, rgb, alpha: float) -> rl.Color:
     return rl.Color(*rgb, int(alpha * self._alpha.x))
@@ -164,9 +200,12 @@ class BlendfulRenderer:
     # Draw also runs on frames with no new messages. Health and parameter checks
     # therefore cannot live only in the 20 Hz update branch.
     if (not self._current_messages() or self._model_ns != ui_state.sm.logMonoTime["modelV2"] or
-        self._output_ns != ui_state.sm.logMonoTime["modelDataV2SP"]):
+        self._output_ns != ui_state.sm.logMonoTime["modelDataV2SP"] or
+        self._control_epoch != ui_state.sm["carControlSP"].blendfulControlEpoch or
+        (self._readout and not np.isfinite(ui_state.sm["carState"].vEgo))):
       self.clear()
       return
+    self._update_readout()
     if self._center_points.size and self._trust > 0.05:
       points = self._center_points + (rect.x, rect.y) if self._rect_relative else self._center_points
       draw_polygon(rect, points, self._color(BLENDFUL_COLOR, np.clip(self._trust, 0.2, 1.0) * 255))

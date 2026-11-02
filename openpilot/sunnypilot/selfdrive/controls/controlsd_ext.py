@@ -16,6 +16,8 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD
 from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
+from openpilot.sunnypilot.models.helpers import get_active_model_runner
+from openpilot.sunnypilot.selfdrive.controls.lib.blendful import BlendfulConsumer
 from openpilot.sunnypilot.selfdrive.controls.lib.blinker_pause_lateral import BlinkerPauseLateral
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque as LatControlTorqueV0
 
@@ -28,12 +30,13 @@ class ControlsExt(ModelStateBase):
     self.radar_signal = radar_signal_enabled(params)
     self._param_update_time: float = 0.0
     self.blinker_pause_lateral = BlinkerPauseLateral()
+    self.blendful = BlendfulConsumer()
 
     cloudlog.info("controlsd_ext is waiting for CarParamsSP")
     self.CP_SP = messaging.log_from_bytes(params.get("CarParamsSP", block=True), custom.CarParamsSP)
     cloudlog.info("controlsd_ext got CarParamsSP")
 
-    self.sm_services_ext = ['radarState', 'selfdriveStateSP']
+    self.sm_services_ext = ['radarState', 'selfdriveStateSP', 'modelDataV2SP']
     self.pm_services_ext = ['carControlSP']
 
   def initialize_lateral_control(self, lac, CI, dt):
@@ -68,6 +71,15 @@ class ControlsExt(ModelStateBase):
 
     # MADS not available, use stock state to engage
     return bool(sm['selfdriveState'].active)
+
+  def update_blendful(self, sm: messaging.SubMaster, *, lat_active: bool, model_path: bool) -> float:
+    blendful = getattr(self, 'blendful', None)
+    if blendful is None:
+      return 0.0
+    # Read at the consumer cadence: the slower general parameter refresh must
+    # not keep correction authority after the setting or runner changes.
+    enabled = self.params.get_bool('Blendful') and get_active_model_runner(self.params) == custom.ModelManagerSP.Runner.tinygrad
+    return blendful.update(sm, enabled=enabled, lat_active=lat_active, model_path=model_path, now_ns=time.monotonic_ns())
 
   @staticmethod
   def get_lead_data(_lead, src: log.RadarState.LeadData) -> None:
@@ -107,6 +119,12 @@ class ControlsExt(ModelStateBase):
     CC_SP.intelligentCruiseButtonManagement.state = icbm_src.state
     CC_SP.intelligentCruiseButtonManagement.sendButton = icbm_src.sendButton
     CC_SP.intelligentCruiseButtonManagement.vTarget = icbm_src.vTarget
+
+    blendful = getattr(self, 'blendful', None)
+    if blendful is not None:
+      CC_SP.blendfulControlEpoch = blendful.epoch
+      CC_SP.blendfulModelMonoTime = blendful.model_mono_time
+      CC_SP.blendfulAppliedCurvature = blendful.curvature
 
     return CC_SP
 

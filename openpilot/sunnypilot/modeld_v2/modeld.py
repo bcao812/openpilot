@@ -73,6 +73,16 @@ def blendful_inputs_active(sm, desire_helper, model_valid: bool, timestamp_eof: 
     if (not sm.seen[service] or not sm.all_checks([service]) or not 0 < stamp <= now_ns or
         now_ns - stamp >= int(10.0 / SERVICE_LIST[service].frequency * 1e9)):
       return False
+  # This optional topic is ignored by generic SubMaster health checks. Inspect
+  # its own health explicitly; a control exit/reentry can happen between model
+  # frames even while the sampled carControl.latActive remains true.
+  service = 'carControlSP'
+  stamp = sm.logMonoTime[service]
+  control_epoch = int(sm[service].blendfulControlEpoch)
+  if (not sm.seen[service] or not sm.valid[service] or not sm.alive[service] or not sm.freq_ok[service] or
+      not 0 < stamp <= now_ns or now_ns - stamp >= int(10.0 / SERVICE_LIST[service].frequency * 1e9) or
+      not 0 < control_epoch <= timestamp_eof):
+    return False
   calibration = sm['extrinsicsCalibration']
   if (calibration.calStatus != log.ExtrinsicsCalibration.Status.calibrated or len(calibration.rpyCalib) != 3 or
       not np.isfinite(calibration.rpyCalib).all() or not transforms or
@@ -81,14 +91,9 @@ def blendful_inputs_active(sm, desire_helper, model_valid: bool, timestamp_eof: 
   return bool(sm['carControl'].latActive and np.isfinite(sm['carState'].vEgo))
 
 
-def fill_blendful_msg(blendful: Blendful, modelv2_send, drivingdata_send, mdv2sp_send) -> None:
-  # Copy after nominal-model smoothing. In particular, never write the added
-  # curvature into prev_action: it would survive withdrawal on generation >= 10.
-  action = log.ModelDataV2.Action(**modelv2_send.modelV2.action.to_dict())
-  if blendful.curvature != 0.0:
-    action.desiredCurvature += blendful.curvature
-  modelv2_send.modelV2.action = action
-  drivingdata_send.drivingModelData.action = action
+def fill_blendful_msg(blendful: Blendful, modelv2_send, drivingdata_send, mdv2sp_send, control_epoch: int = 0) -> None:
+  # Both public model actions remain nominal. Only the lateral consumer may add
+  # this separate correction after accepting its current session/capture lease.
   mdv2sp_send.valid = modelv2_send.valid
   mdv2sp_send.logMonoTime = modelv2_send.logMonoTime
   mdv2sp_send.modelDataV2SP.blendfulCurvature = float(blendful.curvature)
@@ -98,6 +103,7 @@ def fill_blendful_msg(blendful: Blendful, modelv2_send, drivingdata_send, mdv2sp
   mdv2sp_send.modelDataV2SP.blendfulLeftProb = float(blendful.l_prob)
   mdv2sp_send.modelDataV2SP.blendfulRightProb = float(blendful.r_prob)
   mdv2sp_send.modelDataV2SP.blendfulLaneWidth = float(blendful.lane_width.x)
+  mdv2sp_send.modelDataV2SP.blendfulControlEpoch = int(control_epoch)
 
 
 def _pkl_exists(path):
@@ -450,7 +456,10 @@ def main(demo=False):
   # messaging
   pub_socks = ["modelV2", "drivingModelData", "cameraOdometry", "modelDataV2SP"] + (["chestnutState"] if CHESTNUT else [])
   pm = PubMaster(pub_socks)
-  sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState", "carControl", "lateralDelay"])
+  sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState",
+                  "carControl", "lateralDelay", "carControlSP"],
+                 ignore_alive=["carControlSP"], ignore_avg_freq=["carControlSP"], ignore_valid=["carControlSP"],
+                 frequency=model.constants.MODEL_FREQ)
 
   publish_state = PublishState()
   chestnut_state = ChestnutState(pm, model.chestnut) if CHESTNUT else None
@@ -470,6 +479,7 @@ def main(demo=False):
   camera_offset_helper = CameraOffsetHelper()
   blendful = Blendful()
   last_model_frame_ns = 0
+  last_blendful_control_epoch = 0
 
 
   if demo:
@@ -614,7 +624,7 @@ def main(demo=False):
       mdv2sp_send = messaging.new_message('modelDataV2SP')
 
       action = model.get_action_from_model(model_output, prev_action, lat_action_t, long_action_t, v_ego)
-      prev_action = action  # Nominal model action only; Blendful is applied to the published copy below.
+      prev_action = action  # Blendful travels separately; every model action/history stays nominal.
       fill_model_msg(drivingdata_send, modelv2_send, model_output, action,
                      publish_state, meta_main.frame_id, meta_extra.frame_id, frame_id,
                      frame_drop_ratio, meta_main.timestamp_eof, model_execution_time, live_calib_seen, meta_constants)
@@ -634,11 +644,15 @@ def main(demo=False):
 
       # DH now describes the NEW current frame, including a newly requested turn
       # or lane change. A successful frame also sees toggle changes immediately.
+      control_epoch = int(sm['carControlSP'].blendfulControlEpoch) if sm.seen['carControlSP'] else 0
+      if control_epoch != last_blendful_control_epoch:
+        blendful.reset()
+        last_blendful_control_epoch = control_epoch
       blendful_active = (new_model_frame and abs(meta_main.timestamp_sof - meta_extra.timestamp_sof) <= 10000000 and
                          blendful_inputs_active(sm, DH, modelv2_send.valid, meta_main.timestamp_eof, transforms) and
                          np.isfinite(action.desiredCurvature))
       blendful.update(model_output, v_ego, blendful_active, model.model_curvature, enabled=params.get_bool('Blendful'))
-      fill_blendful_msg(blendful, modelv2_send, drivingdata_send, mdv2sp_send)
+      fill_blendful_msg(blendful, modelv2_send, drivingdata_send, mdv2sp_send, control_epoch=control_epoch)
 
       fill_pose_msg(posenet_send, model_output, meta_main.frame_id, vipc_dropped_frames, meta_main.timestamp_eof, live_calib_seen)
       pm.send('modelV2', modelv2_send)
