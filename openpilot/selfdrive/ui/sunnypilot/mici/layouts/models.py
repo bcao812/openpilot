@@ -108,11 +108,14 @@ class ModelsLayoutMici(NavScroller):
     descriptions = [
       tr("Adds a gentle lane-center correction to the model's steering when lane lines are reliable."),
       tr("Starts at 18 km/h (5 m/s), outside turns and lane changes."),
-      tr("Uses only currently valid lane lines."),
-      tr("Withdraws its correction when the lines are lost or lateral control is inactive."),
-      tr("With one valid lane line, uses a fixed nominal lane width of 3.6 m."),
+      tr("Uses filtered lane confidence and a learned lane width."),
+      tr("On lane-line loss, the previous fit and confidence can persist."),
+      tr("This history has no fixed hard timeout."),
+      tr("Correction fades at low speed, during turns or lane changes."),
+      tr("Model state can build while lateral control is inactive."),
       tr("A cyan line shows the lane center while active."),
       tr("The top readout shows the correction, its direction and strength."),
+      tr("The display clears if model data stops or becomes invalid."),
       tr("Supports v2 models, including the bundled Default v2 model."),
     ]
     if not ui_state.active_runner_tinygrad:

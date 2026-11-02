@@ -32,72 +32,61 @@ def frame(center=0.0, plan=0.0, k=0.0, probs=(0.9, 0.9), stds=(0.1, 0.1), width=
 
 def drive(bf, seconds, v=20.0, k=0.0, **kw):
   out = [bf.update(frame(k=k, **kw), v, True, k) for _ in range(int(seconds / DT_MDL))]
-  return np.array(out) * v ** 2
+  return np.array(out) * v ** 2  # m/s^2
 
 
 class TestBlendful(unittest.TestCase):
   def setUp(self):
     self.bf = Blendful()
 
-  def assert_reset(self, bf):
-    self.assertEqual((bf.curvature, bf.smooth, bf.trust, bf.line_trust, bf.dk, bf.l_prob, bf.r_prob), (0.0,) * 7)
-    self.assertEqual(bf.current_sides, (False, False))
-    self.assertFalse(bf.going_around)
-    self.assertEqual(bf.since_turning, 0.0)
-    self.assertEqual(bf.lane_width.x, LANE_WIDTH_DEFAULT)
-    self.assertFalse(bf.lane_width.initialized)
-    self.assertFalse(bf.usual_offset.initialized)
-    np.testing.assert_array_equal(bf.line_probs.x, np.zeros(2))
-    np.testing.assert_array_equal(bf.line_probs_slow.x, np.zeros(2))
-
   def test_centered_adds_nothing(self):
     push = drive(self.bf, 5.0)
-    self.assertGreater(self.bf.trust, 0.9)
-    self.assertLess(np.abs(push).max(), 1e-3)
+    assert self.bf.trust > 0.9
+    assert np.abs(push).max() < 1e-3
 
   def test_pulls_toward_lane_center(self):
     push = drive(self.bf, 5.0, center=0.5)
-    self.assertGreater(push[-1], 0.02)
-    self.assertGreater(self.bf.trust, 0.9)
-    self.assertTrue(np.all(np.diff(push) <= BUILD * DT_MDL + 1e-9))
+    assert push[-1] > 0.02  # + y side, where the lane center is
+    assert self.bf.trust > 0.9
+    assert np.all(np.diff(push) <= BUILD * DT_MDL + 1e-9)
 
   def test_flipping_sides_builds_slowly(self):
-    k = 0.002
+    k = 0.002  # 0.8 m/s^2 at 20 m/s
     drive(self.bf, 5.0, k=k, center=0.5)
     push = drive(self.bf, 5.0, k=k, center=-0.5)
     rate = np.diff(push) / DT_MDL
-    self.assertLess(push[-1], 0)
-    self.assertTrue(np.all(rate >= -RELEASE - 1e-6))
-    self.assertTrue(np.all(rate[push[:-1] <= 0] >= -BUILD - 1e-6))
+    assert push[-1] < 0
+    assert np.all(rate >= -RELEASE - 1e-6)
+    assert np.all(rate[push[:-1] <= 0] >= -BUILD - 1e-6)  # once past zero it builds
     crossing = push[1:][(push[:-1] > 0) & (push[1:] <= 0)]
-    self.assertTrue(len(crossing) and np.all(crossing >= -BUILD * DT_MDL - 1e-9))
+    assert len(crossing) and np.all(crossing >= -BUILD * DT_MDL - 1e-9)
 
   def test_weak_lines_drive_laneless(self):
-    for kwargs in ({'probs': (0.1, 0.1)}, {'stds': (0.8, 0.8)}):
-      with self.subTest(kwargs=kwargs):
-        bf = Blendful()
-        push = drive(bf, 5.0, center=0.5, **kwargs)
-        np.testing.assert_array_equal(push, np.zeros_like(push))
-        self.assert_reset(bf)
+    clear = drive(Blendful(), 5.0, center=0.5)[-1]
+    faint = Blendful()
+    push = drive(faint, 5.0, center=0.5, probs=(0.1, 0.1))
+    assert faint.trust < 0.25 and abs(push[-1]) < 0.25 * clear  # faint lines = trust and push scale down
+    blurry = Blendful()
+    push = drive(blurry, 5.0, center=0.5, stds=(0.8, 0.8))
+    assert blurry.trust == 0.0 and np.abs(push).max() < 1e-6  # lines too uncertain = laneless
 
-  def test_lone_line_withdraws_on_first_missed_observation(self):
+  def test_lone_line_holds_through_a_blink_in_a_curve(self):
     k, v = 1 / 20, 6.0
     drive(self.bf, 6.0, v=v, k=k, plan=0.4, probs=(0.9, 0.05))
-    self.assertGreater(self.bf.trust, 0.5)
-    self.assertNotEqual(self.bf.curvature, 0.0)
-    self.assertEqual(self.bf.update(frame(k=k, plan=0.4, probs=(0.1, 0.05), stds=(1.0, 0.1)), v, True, k), 0.0)
-    self.assert_reset(self.bf)
-    fresh = Blendful()
-    for _ in range(20):
-      current = frame(k=k, plan=-0.4, probs=(0.9, 0.05))
-      self.assertEqual(self.bf.update(current, v, True, k), fresh.update(current, v, True, k))
+    before = self.bf.trust
+    drive(self.bf, 0.25, v=v, k=k, plan=0.4, probs=(0.1, 0.05), stds=(1.0, 0.1))
+    bottom = self.bf.trust
+    drive(self.bf, 2.0, v=v, k=k, plan=0.4, probs=(0.9, 0.05))
+    assert before > 0.5
+    assert bottom > 0.5 * before  # keeps latched through flicker
+    assert self.bf.trust > 0.85 * before
 
   def test_yields_when_the_model_goes_around(self):
     drive(self.bf, 6.0)
     push = drive(self.bf, 3.0, plan=0.8)
-    self.assertTrue(self.bf.going_around)
-    self.assertLess(self.bf.trust, 0.05)
-    self.assertLess(abs(push[-1]), 0.01)
+    assert self.bf.going_around
+    assert self.bf.trust < 0.05
+    assert abs(push[-1]) < 0.01
 
   def test_fit_does_not_grow_while_trust_falls(self):
     drive(self.bf, 5.0, center=0.3)
@@ -106,99 +95,96 @@ class TestBlendful(unittest.TestCase):
       p = 0.9 - 0.02 * i
       self.bf.update(frame(center=0.3, plan=-0.02 * i, probs=(p, p)), 20.0, True, 0.0)
       if self.bf.trust < trust:
-        self.assertLessEqual(abs(self.bf.dk), abs(dk) + 1e-12)
+        assert abs(self.bf.dk) <= abs(dk) + 1e-12
 
-  def test_disqualification_clears_all_state_and_reentry_starts_fresh(self):
-    cases = (
-      {'enabled': False}, {'active': False}, {'v_ego': MIN_SPEED - 1e-6}, {'v_ego': 0.0},
-      {'v_ego': -1.0}, {'v_ego': np.nan}, {'v_ego': np.inf}, {'model_curvature': np.nan}, {'model_curvature': np.inf},
-    )
-    for overrides in cases:
-      with self.subTest(overrides=overrides):
-        bf = Blendful()
-        drive(bf, 5.0, center=0.5, width=4.4)
-        self.assertGreater(bf.curvature, 0.0)
-        args = {'model_output': frame(center=0.5), 'v_ego': 20.0, 'active': True, 'model_curvature': 0.0, 'enabled': True}
-        self.assertEqual(bf.update(**(args | overrides)), 0.0)
-        self.assert_reset(bf)
-        fresh = Blendful()
-        current = frame(center=-0.5)
-        self.assertEqual(bf.update(current, 20.0, True, 0.0), fresh.update(current, 20.0, True, 0.0))
-        self.assertLess(bf.curvature, 0.0)
-
-  def test_exact_speed_and_raw_probability_thresholds(self):
-    self.assertGreater(self.bf.update(frame(center=0.5, probs=(0.3, 0.3)), MIN_SPEED, True, 0.0), 0.0)
+  def test_toggle_off_returns_zero_and_resets(self):
     drive(self.bf, 5.0, center=0.5)
-    self.assertGreater(self.bf.line_probs.x.min(), 0.85)
-    self.assertEqual(self.bf.update(frame(center=0.5, probs=(0.3 - 1e-9, 0.3 - 1e-9)), 20.0, True, 0.0), 0.0)
-    self.assert_reset(self.bf)
+    assert self.bf.curvature != 0.0
+    assert self.bf.update(frame(center=0.5), 20.0, True, 0.0, enabled=False) == 0.0
+    assert self.bf.curvature == 0.0 and self.bf.trust == 0.0
 
-  def test_side_change_discards_old_width_and_fit(self):
-    for probs in ((0.9, 0.0), (0.0, 0.9), (0.9, 0.9)):
-      with self.subTest(probs=probs):
-        warm_probs = (0.9, 0.9) if not all(probs) else (0.9, 0.0)
+  def test_fades_below_min_speed(self):
+    drive(self.bf, 5.0, v=10.0, center=0.5)
+    start = self.bf.curvature
+    out = np.array([self.bf.update(frame(center=0.5), 4.0, True, 0.0) for _ in range(100)])
+    assert self.bf.trust == 0.0
+    assert abs(out[0]) < abs(start)
+    assert abs(out[-1]) < 1e-6
+
+  def test_learned_width_and_confidence_survive_a_side_disappearing(self):
+    drive(self.bf, 6.0, center=0.3, width=4.4)
+    old_prob = self.bf.line_probs.x[1]
+    self.assertAlmostEqual(self.bf.lane_width.x, 4.4)
+    current = frame(center=0.3, width=4.4, probs=(0.9, 0.0))
+    self.bf.update(current, 20.0, True, 0.0)
+    self.assertGreater(self.bf.line_probs.x[1], 0.5)
+    self.assertLess(self.bf.line_probs.x[1], old_prob)
+    self.assertGreater(self.bf.line_gone.x[1], 0.0)
+    fresh = Blendful()
+    for _ in range(100):
+      self.bf.update(current, 20.0, True, 0.0)
+      fresh.update(current, 20.0, True, 0.0)
+    self.assertAlmostEqual(self.bf.lane_width.x, 4.4)
+    self.assertEqual(fresh.lane_width.x, LANE_WIDTH_DEFAULT)
+    self.assertNotAlmostEqual(self.bf.curvature, fresh.curvature, places=8)
+
+  def test_zero_current_weights_can_reuse_last_fit_while_trust_releases(self):
+    k = 0.002
+    drive(self.bf, 6.0, center=0.5, k=k)
+    old_fit, old_trust = self.bf.dk, self.bf.trust
+    result = self.bf.update(frame(center=0.5, k=k, probs=(0.0, 0.0), stds=(1.0, 1.0)), 20.0, True, k)
+    self.assertEqual((self.bf.l_prob, self.bf.r_prob), (0.0, 0.0))
+    self.assertEqual(self.bf.dk, old_fit)
+    self.assertGreater(self.bf.trust, 0.0)
+    self.assertLess(self.bf.trust, old_trust)
+    self.assertGreater(result, 0.0)
+
+  def test_desire_and_low_speed_fade_without_resetting_probability_history(self):
+    for active, speed in ((False, 20.0), (True, MIN_SPEED - 1e-6)):
+      with self.subTest(active=active, speed=speed):
         bf = Blendful()
-        drive(bf, 6.0, center=0.7, width=4.4, probs=warm_probs)
-        fresh = Blendful()
-        for _ in range(20):
-          current = frame(center=-0.5, width=3.6, probs=probs)
-          self.assertEqual(bf.update(current, 20.0, True, 0.0), fresh.update(current, 20.0, True, 0.0))
-        self.assertEqual(bf.lane_width.x, fresh.lane_width.x)
-        # A two-line width is computed from floating-point coordinates.
-        self.assertAlmostEqual(bf.lane_width.x, LANE_WIDTH_DEFAULT, places=12)
+        drive(bf, 6.0, center=0.5, k=0.002)
+        before, probs = bf.curvature, bf.line_probs.x.copy()
+        result = bf.update(frame(center=0.5, k=0.002), speed, active, 0.002)
+        self.assertGreater(result, 0.0)
+        self.assertLess(result, before)
+        self.assertEqual(bf.trust, 0.0)
+        np.testing.assert_array_equal(bf.line_probs.x, probs)
+        self.assertFalse(bf.lane_width.initialized)
+        self.assertFalse(bf.usual_offset.initialized)
+    cold = Blendful()
+    self.assertEqual(cold.update(frame(center=0.5), MIN_SPEED - 1e-6, True, 0.0), 0.0)
+    self.assertGreater(cold.update(frame(center=0.5), MIN_SPEED, True, 0.0), 0.0)
 
-  def test_excluded_side_geometry_never_affects_single_side_fit(self):
-    for missing_side in (0, 1):
-      for garbage in (np.nan, np.inf, -np.inf, 1e100):
-        with self.subTest(missing_side=missing_side, garbage=garbage):
-          probs = [0.9, 0.9]
-          probs[missing_side] = 0.0
-          clean, broken = Blendful(), Blendful()
-          current = frame(center=0.5, width=3.6, probs=probs)
-          malformed = {key: value.copy() for key, value in current.items()}
-          malformed['lane_lines'][0, missing_side + 1] = garbage
-          malformed['lane_lines_stds'][0, missing_side + 1] = garbage
-          for _ in range(50):
-            self.assertEqual(broken.update(malformed, 20.0, True, 0.0), clean.update(current, 20.0, True, 0.0))
-          self.assertGreater(broken.curvature, 0.0)
-          self.assertEqual(broken.lane_width.x, LANE_WIDTH_DEFAULT)
+  def assert_reset(self, bf):
+    self.assertEqual((bf.curvature, bf.smooth, bf.trust, bf.line_trust, bf.dk, bf.l_prob, bf.r_prob), (0.0,) * 7)
+    self.assertFalse(bf.going_around)
+    self.assertEqual(bf.lane_width.x, LANE_WIDTH_DEFAULT)
+    self.assertFalse(bf.lane_width.initialized)
+    self.assertFalse(bf.usual_offset.initialized)
+    for history in (bf.line_probs, bf.line_probs_slow, bf.line_gone):
+      np.testing.assert_array_equal(history.x, np.zeros(2))
 
-  def test_std_weighting_prefers_the_more_precise_current_line(self):
-    for stds, sign in (((0.1, 0.5), -1), ((0.5, 0.1), 1)):
-      with self.subTest(stds=stds):
-        bf = Blendful()
-        push = drive(bf, 5.0, width=4.0, probs=(0.5, 0.5), stds=stds)
-        self.assertGreater(sign * push[-1], 0.0)
-
-  def test_invalid_current_std_probability_or_geometry_withdraws(self):
-    cases = []
-    for value in (0.0, -0.1, np.nan, np.inf, 0.6, 1e308):
-      cases.append(frame(center=0.5, stds=(value, value)))
-    for value in (-1.0, 1.1, np.nan, np.inf):
-      cases.append(frame(center=0.5, probs=(value, value)))
-    for value in (np.nan, np.inf):
-      malformed = frame(center=0.5)
-      malformed['lane_lines'][0, 1:3, 5, 0] = value
-      cases.append(malformed)
-    for index, malformed in enumerate(cases):
-      with self.subTest(index=index):
-        bf = Blendful()
-        drive(bf, 3.0, center=0.5)
-        self.assertEqual(bf.update(malformed, 20.0, True, 0.0), 0.0)
-        self.assert_reset(bf)
-
-  def test_malformed_shapes_plan_and_fit_windows_withdraw(self):
+  def test_malformed_numerical_inputs_reset_instead_of_poisoning_history(self):
     cases = [None, {}, frame(plan_width=2), frame(plan_width=14)]
     for key, shape in (('lane_lines', (4, 33, 2)), ('lane_lines_stds', (1, 4, 32, 2)),
                        ('lane_lines_prob', (1, 4)), ('plan', (1, 32, 15))):
       malformed = frame(center=0.5)
       malformed[key] = np.zeros(shape)
       cases.append(malformed)
-    for value in (np.nan, np.inf):
-      malformed = frame(center=0.5)
-      malformed['plan'][0, 10, 1] = value
-      cases.append(malformed)
-    for xs in (X[::-1], np.zeros(33), X + 100.0):
+    for std in (0.0, -0.1, np.nan, np.inf):
+      cases.append(frame(center=0.5, stds=(std, 0.1)))
+    for prob in (-0.1, 1.1, np.nan, np.inf):
+      cases.append(frame(center=0.5, probs=(prob, 0.9)))
+    for key in ('plan', 'lane_lines'):
+      for value in (np.nan, np.inf):
+        malformed = frame(center=0.5, probs=(0.0, 0.9))
+        if key == 'plan':
+          malformed[key][0, 10, 1] = value
+        else:
+          malformed[key][0, 1, 10, 0] = value
+        cases.append(malformed)
+    for xs in (X[::-1], np.zeros(33)):
       malformed = frame(center=0.5)
       malformed['plan'][0, :, 0] = xs
       cases.append(malformed)
@@ -206,23 +192,31 @@ class TestBlendful(unittest.TestCase):
       with self.subTest(index=index):
         bf = Blendful()
         drive(bf, 3.0, center=0.5)
+        self.assertGreater(bf.curvature, 0.0)
         self.assertEqual(bf.update(malformed, 20.0, True, 0.0), 0.0)
         self.assert_reset(bf)
-    for speed in (500.0, 1e308):
-      with self.subTest(speed=speed):
-        drive(self.bf, 3.0, center=0.5)
-        self.assertEqual(self.bf.update(frame(center=0.5), speed, True, 0.0), 0.0)
-        self.assert_reset(self.bf)
+        self.assertEqual(bf.update(frame(center=-0.5), 20.0, True, 0.0),
+                         Blendful().update(frame(center=-0.5), 20.0, True, 0.0))
 
-  def test_stopping_plan_plateau_and_short_horizon_keep_endpoint_interpolation(self):
-    expected = drive(Blendful(), 3.0, center=0.5)
-    for xs in (np.minimum(X, 20.0), X * 0.01):
+  def test_nonfinite_motion_and_empty_fit_windows_are_contained(self):
+    for speed, curvature in ((np.nan, 0.0), (np.inf, 0.0), (-1.0, 0.0), (20.0, np.nan),
+                              (20.0, np.inf), (500.0, 0.0), (1e308, 0.0)):
+      with self.subTest(speed=speed, curvature=curvature):
+        bf = Blendful()
+        drive(bf, 3.0, center=0.5)
+        self.assertEqual(bf.update(frame(center=0.5), speed, True, curvature), 0.0)
+        self.assert_reset(bf)
+
+  def test_source_endpoint_interpolation_accepts_short_or_flat_tail_plan(self):
+    for xs in (np.minimum(X, 20), X * 0.01, X + 100.0):
       with self.subTest(xs=xs):
         bf = Blendful()
         current = frame(center=0.5)
         current['plan'][0, :, 0] = xs
-        actual = np.array([bf.update(current, 20.0, True, 0.0) for _ in range(int(3.0 / DT_MDL))]) * 20.0 ** 2
-        np.testing.assert_array_equal(actual, expected)
+        for _ in range(80):
+          bf.update(current, 20.0, True, 0.0)
+        self.assertGreater(bf.trust, 0.8)
+        self.assertGreater(bf.curvature, 0.0)
 
   def test_full_plan_tensor_and_source_geometry_fixture_agree(self):
     full, source_fixture = Blendful(), Blendful()

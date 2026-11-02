@@ -142,7 +142,10 @@ class TestBlendfulAction(OpenpilotTestCase):
             if index == 99:
               self.assertGreater(bf.curvature, 0.0)
               self.assertGreater(published.desiredCurvature, baseline.desiredCurvature)
-            elif index in (100, 101, 102):
+            elif index == 100:
+              # Healthy missing lines retain the source correction history.
+              self.assertGreater(bf.curvature, 0.0)
+            elif index in (101, 102):
               self.assertEqual(bf.curvature, 0.0)
               self.assertEqual(published.to_dict(), baseline.to_dict())
             elif index == 103:
@@ -166,7 +169,7 @@ class TestBlendfulAction(OpenpilotTestCase):
     bf = Blendful()
     nominal = log.ModelDataV2.Action(desiredCurvature=-0.0, desiredAcceleration=0.1, shouldStop=True)
     bf.update(model_output(center=0.5), 20.0, True, 0.00125)
-    bf.update(model_output(center=0.5), 20.0, False, 0.00125)
+    bf.reset(0.00125)  # Broken input uses the explicit reset adapter, not ordinary source fading.
     messages = action_messages(nominal, valid=False)
     modeld.fill_blendful_msg(bf, *messages)
     self.assertFalse(messages[2].valid)
@@ -179,48 +182,46 @@ class TestBlendfulAction(OpenpilotTestCase):
     self.assertTrue(np.signbit(messages[0].modelV2.action.desiredCurvature))
     self.assertEqual(messages[0].modelV2.action.to_dict(), nominal.to_dict())
 
-  def test_input_health_and_current_desire_are_required(self):
+  def test_input_health_is_distinct_from_lateral_engagement(self):
     now = 10_000_000_000
-    sm, data, dh = healthy_inputs(now)
+    sm, data, _ = healthy_inputs(now)
     transforms = {'img': np.eye(3), 'big_img': np.eye(3)}
-    self.assertTrue(modeld.blendful_inputs_active(sm, dh, True, now, transforms, now_ns=now))
+    self.assertTrue(modeld.blendful_inputs_healthy(sm, True, now, transforms, now_ns=now))
     for field in ('seen', 'valid', 'alive', 'freq_ok'):
       for service in ('carState', 'carControl', 'extrinsicsCalibration'):
         with self.subTest(field=field, service=service):
           getattr(sm, field)[service] = False
-          self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, now, transforms, now_ns=now))
+          self.assertFalse(modeld.blendful_inputs_healthy(sm, True, now, transforms, now_ns=now))
           getattr(sm, field)[service] = True
     for service in ('carState', 'carControl', 'extrinsicsCalibration'):
       max_age = int(10.0 / modeld.SERVICE_LIST[service].frequency * 1e9)
       for stamp in (0, now + 1, now - max_age):
         with self.subTest(service=service, stamp=stamp):
           sm.logMonoTime[service] = stamp
-          self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, now, transforms, now_ns=now))
+          self.assertFalse(modeld.blendful_inputs_healthy(sm, True, now, transforms, now_ns=now))
       sm.logMonoTime[service] = now
-    for desire in (log.Desire.turnLeft, log.Desire.turnRight, log.Desire.laneChangeLeft,
-                   log.Desire.laneChangeRight, log.Desire.keepLeft, log.Desire.keepRight):
-      with self.subTest(desire=desire):
-        dh.desire = desire
-        self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, now, transforms, now_ns=now))
-    dh.desire = log.Desire.none
-    for change in (log.LaneChangeState.preLaneChange, log.LaneChangeState.laneChangeStarting, log.LaneChangeState.laneChangeFinishing):
-      with self.subTest(lane_change=change):
-        dh.lane_change_state = change
-        self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, now, transforms, now_ns=now))
-    dh.lane_change_state = log.LaneChangeState.off
     for status in (log.ExtrinsicsCalibration.Status.uncalibrated, log.ExtrinsicsCalibration.Status.invalid,
                    log.ExtrinsicsCalibration.Status.recalibrating):
       data['extrinsicsCalibration'].calStatus = status
-      self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, now, transforms, now_ns=now))
+      self.assertFalse(modeld.blendful_inputs_healthy(sm, True, now, transforms, now_ns=now))
     data['extrinsicsCalibration'].calStatus = log.ExtrinsicsCalibration.Status.calibrated
     data['carControl'].latActive = False
-    self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, now, transforms, now_ns=now))
+    self.assertTrue(modeld.blendful_inputs_healthy(sm, True, now, transforms, now_ns=now))
     data['carControl'].latActive = True
-    self.assertFalse(modeld.blendful_inputs_active(sm, dh, False, now, transforms, now_ns=now))
+    self.assertFalse(modeld.blendful_inputs_healthy(sm, False, now, transforms, now_ns=now))
     for stamp in (0, now + 1, now - modeld.BLENDFUL_MAX_FRAME_AGE_NS - 1):
-      self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, stamp, transforms, now_ns=now))
+      self.assertFalse(modeld.blendful_inputs_healthy(sm, True, stamp, transforms, now_ns=now))
     for bad_transforms in ({}, {'img': np.ones((2, 3))}, {'img': np.full((3, 3), np.nan)}):
-      self.assertFalse(modeld.blendful_inputs_active(sm, dh, True, now, bad_transforms, now_ns=now))
+      self.assertFalse(modeld.blendful_inputs_healthy(sm, True, now, bad_transforms, now_ns=now))
+
+  def test_submaster_qualifies_100hz_controls_sampled_by_20hz_modeld(self):
+    services = ['carState', 'carControl']
+    sm = messaging.SubMaster(services, frequency=ModelConstants.MODEL_FREQ)
+    for index in range(10):
+      now = 10.0 + index * DT_MDL
+      messages = [messaging.new_message(service, valid=True, logMonoTime=int(now * 1e9)) for service in services]
+      sm.update_msgs(now, messages)
+    self.assertTrue(sm.all_checks(services))
 
 
 class FrameLoopFinished(Exception):
@@ -339,12 +340,13 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
     camera = SimpleNamespace(narrow_road=SimpleNamespace(intrinsics=np.eye(3)), wide_road=SimpleNamespace(intrinsics=np.eye(3)))
     offset = mock.Mock()
     offset.update.side_effect = lambda main, extra, *args: (main, extra)
+    submaster_factory = mock.Mock(return_value=sm)
     patches = (
       mock.patch.object(modeld, 'config_realtime_process'), mock.patch.object(modeld, 'setproctitle'),
       mock.patch.object(modeld, 'chestnut_present', return_value=chestnut), mock.patch.object(modeld, 'Params', return_value=params),
       mock.patch.object(modeld, 'VisionIpcClient', vision_client),
       mock.patch.object(modeld, 'ModelState', side_effect=lambda **kwargs: large if kwargs['chestnut'] else small),
-      mock.patch.object(modeld, 'PubMaster', return_value=pub), mock.patch.object(modeld, 'SubMaster', return_value=sm),
+      mock.patch.object(modeld, 'PubMaster', return_value=pub), mock.patch.object(modeld, 'SubMaster', submaster_factory),
       mock.patch.object(modeld, 'ChestnutState', return_value=SimpleNamespace(big=chestnut, send=mock.Mock())),
       mock.patch.object(modeld, 'DesireHelper', return_value=dh), mock.patch.object(modeld, 'load_meta_constants', return_value=Meta),
       mock.patch.object(modeld, 'RoadEdgeLaneChangeController', return_value=SimpleNamespace(update_and_fill=lambda *args: (False, False))),
@@ -358,6 +360,7 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
       self.enterContext(patch)
     with self.assertRaises(FrameLoopFinished):
       modeld.main()
+    self.assertEqual(submaster_factory.call_args.kwargs, {'frequency': ModelConstants.MODEL_FREQ})
     self.assertEqual(sum(call.args == ('Blendful',) for call in get_bool.call_args_list), len(nominal_actions))
     for index, record in published.items():
       self.assertEqual(record['model'], record['driving'])
@@ -372,10 +375,9 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
       self.assertEqual(previous_actions[index], nominal_actions[last_index])
     return published, outputs, nominal_actions, large, small
 
-  def test_current_frame_gates_and_recovery_in_real_main_loop(self):
+  def test_bad_inputs_and_toggle_reset_in_real_main_loop(self):
     disqualifications = (
-      {'desire': log.Desire.turnLeft}, {'lane_change': log.LaneChangeState.preLaneChange},
-      {'lat_active': False}, {'enabled': False}, {'speed': 4.99}, {'missing_lines': True},
+      {'enabled': False},
       {'invalid_service': 'carState'}, {'invalid_service': 'carControl'}, {'stale_control': True},
       {'calibration': log.ExtrinsicsCalibration.Status.invalid}, {'frame_age_ns': 251_000_000},
       {'missing_output': True}, {'missing_camera': True},
@@ -398,6 +400,28 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
         expected = fresh.update(outputs[restored_index], 20.0, True, 0.00125)
         self.assertAlmostEqual(published[restored_index]['sp']['blendfulCurvature'], expected, places=11)
         self.assertAlmostEqual(published[restored_index]['sp']['blendfulTrust'], fresh.trust, places=8)
+
+  def test_source_history_fading_and_inactive_accumulation_in_real_main_loop(self):
+    scenarios = [{'lat_active': False} for _ in range(60)]
+    scenarios.extend(({'lat_active': False, 'missing_lines': True}, {'desire': log.Desire.turnLeft},
+                      {'lane_change': log.LaneChangeState.preLaneChange}, {'speed': 4.99}, {'lat_active': False}))
+    published, outputs, _, _, _ = self.run_frames(scenarios)
+    self.assertGreater(published[59]['sp']['blendfulCurvature'], 0.0)
+    self.assertGreater(published[59]['sp']['blendfulTrust'], 0.5)
+    self.assertGreater(published[60]['sp']['blendfulCurvature'], 0.0)
+    self.assertGreater(published[60]['sp']['blendfulLeftProb'], 0.0)
+    self.assertGreater(published[61]['sp']['blendfulCurvature'], 0.0)
+    self.assertLess(published[61]['sp']['blendfulCurvature'], published[60]['sp']['blendfulCurvature'])
+    for index in (61, 62, 63):
+      self.assertEqual(published[index]['sp']['blendfulTrust'], 0.0)
+    # The runtime dispatch must agree with the source algorithm driven directly:
+    # lateral engagement is independent, desire/lane-change controls fading.
+    source_behavior = Blendful()
+    for index, scenario in enumerate(scenarios):
+      active = index not in (61, 62)
+      source_behavior.update(outputs[index], scenario.get('speed', 20.0), active, 0.00125)
+      self.assertAlmostEqual(published[index]['sp']['blendfulCurvature'], source_behavior.curvature, places=9)
+      self.assertAlmostEqual(published[index]['sp']['blendfulTrust'], source_behavior.trust, places=7)
 
   def test_fallback_and_capture_gap_cannot_revive_old_correction(self):
     scenarios = [{} for _ in range(60)]

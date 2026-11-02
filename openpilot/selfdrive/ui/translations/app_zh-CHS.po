@@ -2431,15 +2431,30 @@ msgstr "当前运行的模型不支持 Blendful。请切换到 v2 模型以使�
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
-msgid "Uses only currently valid lane lines."
-msgstr "仅使用当前有效的车道线。"
+msgid "Uses filtered lane confidence and a learned lane width."
+msgstr "使用滤波后的车道线置信度和已学习的车道宽度。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
-msgid "Withdraws its correction when the lines are lost or lateral control is inactive."
-msgstr "车道线丢失或横向控制退出时，撤除本功能的纠偏。"
+msgid "On lane-line loss, the previous fit and confidence can persist."
+msgstr "车道线丢失后，可能继续沿用之前的拟合结果和置信度。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
 #: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
-msgid "With one valid lane line, uses a fixed nominal lane width of 3.6 m."
-msgstr "仅有一侧有效车道线时，按固定的 3.6 米标称车道宽度计算。"
+msgid "This history has no fixed hard timeout."
+msgstr "这种历史保留没有固定的强制超时。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "Correction fades at low speed, during turns or lane changes."
+msgstr "低速、转弯或换道时，纠偏会逐渐减弱。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "Model state can build while lateral control is inactive."
+msgstr "横向控制未启用时，也可能积累模型内部状态。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "The display clears if model data stops or becomes invalid."
+msgstr "模型数据中断或无效时，清除本功能的显示。"

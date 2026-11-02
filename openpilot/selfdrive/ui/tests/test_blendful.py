@@ -165,9 +165,13 @@ class TestBlendfulSettings(HeadlessUITestCase):
       self.assertIn('18 km/h (5 m/s)', text)
       self.assertIn('cyan line', text)
       self.assertIn('Default v2', text)
-      self.assertIn('currently valid lane lines', text)
-      self.assertIn('lateral control is inactive', text)
-      self.assertIn('3.6 m', text)
+      self.assertIn('filtered lane confidence', text)
+      self.assertIn('learned lane width', text)
+      self.assertIn('no fixed hard timeout', text)
+      self.assertIn('Model state can build while lateral control is inactive', text)
+      self.assertIn('display clears if model data stops', text)
+      self.assertNotIn('only currently valid', text)
+      self.assertNotIn('fixed nominal lane width', text)
     with self.settings('mici') as (module, _, layout, _, _, _):
       page = Mock()
       with patch.object(module, 'NavScroller', return_value=page), \
@@ -176,9 +180,12 @@ class TestBlendfulSettings(HeadlessUITestCase):
         layout.blendful_info_btn._click_callback()
         push.assert_called_once_with(page)
         text = ' '.join(value for card in page._scroller.add_widgets.call_args.args[0] for value in card)
-        for expected in ('18 km/h (5 m/s)', 'cyan line', 'top readout', 'Default v2', 'currently valid lane lines',
-                         'lateral control is inactive', '3.6 m'):
+        for expected in ('18 km/h (5 m/s)', 'cyan line', 'top readout', 'Default v2', 'filtered lane confidence',
+                         'learned lane width', 'no fixed hard timeout', 'Correction fades at low speed',
+                         'Model state can build while lateral control is inactive', 'display clears if model data stops'):
           self.assertIn(expected, text)
+        self.assertNotIn('only currently valid', text)
+        self.assertNotIn('fixed nominal lane width', text)
 
   def test_native_key_is_default_off_persistent_and_backed_up(self):
     params = Params()
@@ -199,9 +206,12 @@ class TestBlendfulSettings(HeadlessUITestCase):
       translations = {entry.msgid: entry.msgstr for entry in entries}
       for text in ('Blendful (Alpha)', 'blendful (alpha)', 'about blendful', 'v2 model required',
                    'Starts at 18 km/h (5 m/s), outside turns and lane changes.',
-                   'Uses only currently valid lane lines.',
-                   'Withdraws its correction when the lines are lost or lateral control is inactive.',
-                   'With one valid lane line, uses a fixed nominal lane width of 3.6 m.',
+                   'Uses filtered lane confidence and a learned lane width.',
+                   'On lane-line loss, the previous fit and confidence can persist.',
+                   'This history has no fixed hard timeout.',
+                   'Correction fades at low speed, during turns or lane changes.',
+                   'Model state can build while lateral control is inactive.',
+                   'The display clears if model data stops or becomes invalid.',
                    'A cyan line shows the lane center while active.',
                    'Supports v2 models, including the bundled Default v2 model.'):
         with self.subTest(language=language, text=text):
@@ -230,6 +240,13 @@ class TestBlendfulRenderer(HeadlessUITestCase):
 
   def update(self):
     self.overlay.update(self.renderer, 32, 80.0)
+
+  def advance_frame(self):
+    stamp = self.state.sm.logMonoTime['modelV2'] + 50_000_000
+    for service in ('modelV2', 'modelDataV2SP', 'carControl'):
+      self.state.sm.logMonoTime[service] = stamp
+    self.renderer._model_geometry_ns = stamp
+    self.clock.return_value = stamp + 1
 
   def assert_cleared(self):
     self.assertEqual(self.overlay._center_points.size, 0)
@@ -341,52 +358,96 @@ class TestBlendfulRenderer(HeadlessUITestCase):
         self.overlay.draw(self.rect)
         self.assert_cleared()
 
-  def test_zero_weight_nonfinite_side_is_masked_and_zero_variance_is_bounded(self):
-    output = self.state.sm['modelDataV2SP']
-    output.blendfulRightProb = 0.0
-    self.renderer._lane_lines[2].raw_points[:] = np.nan
-    self.state.sm['modelV2'].laneLineStds[2] = np.nan
-    self.state.sm['modelV2'].laneLineStds[1] = 0.0
-    with np.errstate(all='raise'):
-      self.update()
-    self.assertTrue(np.isfinite(self.overlay._center_points).all())
-    self.assertGreater(self.overlay._center_points.size, 0)
-    np.testing.assert_allclose(self.renderer._map_line_to_polygon.call_args.args[0][:, 1], 0.05, atol=1e-6)
-
-  def test_current_probability_masks_old_confidence_and_uses_fixed_single_line_width(self):
+  def test_source_variance_weighting_uses_filtered_probabilities_and_learned_width(self):
     output, model = self.state.sm['modelDataV2SP'], self.state.sm['modelV2']
-    model.laneLineProbs[1] = model.laneLineProbs[2] = 0.3
-    self.update()
-    self.assertEqual(self.overlay._side_mask, (True, True))
-    np.testing.assert_allclose(self.renderer._map_line_to_polygon.call_args.args[0][:, 1], 0)
-    # Both diagnostic probabilities remain high, but only the current left side qualifies.
-    output.blendfulLaneWidth = 4.5
-    self.renderer._lane_lines[2].raw_points[:] = np.nan
-    for probability in (0.0, 0.299, np.nan):
-      with self.subTest(probability=probability), np.errstate(all='raise'):
-        model.laneLineProbs[2] = probability
+    output.blendfulLaneWidth = 4.2
+    model.laneLineStds[1:3] = [0.12, 0.24]
+    for left_prob, right_prob in ((0.8, 0.1), (1.0, 0.0)):
+      with self.subTest(left_prob=left_prob, right_prob=right_prob), np.errstate(all='raise'):
+        output.blendfulLeftProb, output.blendfulRightProb = left_prob, right_prob
         self.update()
-        self.assertGreater(self.overlay._center_points.size, 0)
-        np.testing.assert_allclose(self.renderer._map_line_to_polygon.call_args.args[0][:, 1], 0.05, atol=1e-6)
-    model.laneLineProbs[1] = 0.299
-    self.update()
-    self.assert_cleared()
+        left_variance = 0.12 ** 2 / max(left_prob, 1e-4)
+        right_variance = 0.24 ** 2 / max(right_prob, 1e-4)
+        expected = (right_variance * (-1.75 + 2.1) + left_variance * (1.75 - 2.1)) / (left_variance + right_variance)
+        center = self.renderer._map_line_to_polygon.call_args.args[0]
+        np.testing.assert_allclose(center[:, 1], expected, atol=1e-6)
+        self.assertGreater(float(center[0, 1]), 0.3)  # A fixed 3.6 m width would give a different center.
 
-  def test_readout_filters_do_not_inherit_correction_from_a_lost_side(self):
+  def test_source_filtered_probabilities_are_not_remasked_by_current_raw_probabilities(self):
+    self.state.sm['modelV2'].laneLineProbs[1:3] = [0.0, 0.1]
+    self.update()
+    self.assertGreater(self.overlay._center_points.size, 0)
+    self.assertGreater(self.overlay._trust, 0)
+
+  def test_source_readout_and_opacity_continue_across_side_probability_changes(self):
     self.overlay = self.module.BlendfulRenderer()
     self.update()
-    self.assertGreater(self.overlay._pull_display.x, 0)
+    pull, alpha = self.overlay._pull_display.x, self.overlay._alpha.x
     self.state.sm['modelV2'].laneLineProbs[2] = 0.0
+    self.state.sm['modelDataV2SP'].blendfulRightProb = 0.0
+    self.state.sm['modelDataV2SP'].blendfulLaneWidth = 3.9
     self.state.sm['modelDataV2SP'].blendfulCurvature = 0.0
-    self.state.sm.logMonoTime['modelV2'] = self.state.sm.logMonoTime['modelDataV2SP'] = START + 1
-    self.renderer._model_geometry_ns = START + 1
+    self.advance_frame()
     self.update()
-    self.assertEqual(self.overlay._side_mask, (True, False))
-    self.assertEqual(self.overlay._pull_display.x, 0)
+    self.assertGreater(self.overlay._alpha.x, alpha)
+    self.assertGreater(self.overlay._pull_display.x, 0)
+    self.assertLess(self.overlay._pull_display.x, pull)
 
-  def test_current_geometry_loss_or_zero_trust_never_reuses_old_cyan_line(self):
-    for case in ('zero_prob', 'zero_trust', 'nan_trust', 'nan_weighted_line', 'empty_line', 'missing_line',
-                 'missing_std', 'missing_probs', 'nan_width'):
+  def test_source_last_fit_can_remain_while_fresh_diagnostics_have_no_effective_new_fit(self):
+    self.update()
+    previous = self.overlay._center_points.copy()
+    projected = self.renderer._map_line_to_polygon.call_count
+    output = self.state.sm['modelDataV2SP']
+    output.blendfulLeftProb = output.blendfulRightProb = 0.0
+    self.renderer._lane_lines[1].raw_points[:, 1] += 1.0
+    self.renderer._lane_lines[2].raw_points[:, 1] += 1.0
+    for _ in range(100):
+      self.advance_frame()
+      self.update()
+    np.testing.assert_array_equal(self.overlay._center_points, previous)
+    self.assertEqual(self.renderer._map_line_to_polygon.call_count, projected)
+    self.assertGreater(self.overlay._alpha.x, 0.99)
+    self.overlay.draw(self.rect)
+    self.draw_polygon.assert_called_once()
+
+  def test_source_zero_trust_fades_previous_center_and_remembers_confidence_until_hidden(self):
+    for _ in range(20):
+      self.advance_frame()
+      self.update()
+    previous, confidence = self.overlay._center_points.copy(), self.overlay._trust
+    alpha = self.overlay._alpha.x
+    output = self.state.sm['modelDataV2SP']
+    output.blendfulTrust = output.blendfulCurvature = 0.0
+    output.blendfulLeftProb = output.blendfulRightProb = 0.0
+    self.advance_frame()
+    self.update()
+    np.testing.assert_array_equal(self.overlay._center_points, previous)
+    self.assertEqual(self.overlay._trust, confidence)
+    self.assertAlmostEqual(self.overlay._alpha.x, alpha * (1 - self.overlay._alpha.alpha))
+    self.overlay.draw(self.rect)
+    self.draw_polygon.assert_called_once()
+    for _ in range(40):
+      self.advance_frame()
+      self.update()
+    self.assertEqual(self.overlay._center_points.size, 0)
+    self.assertGreater(self.overlay._alpha.x, 0)
+    self.assertLess(self.overlay._alpha.x, 0.01)
+    self.assertEqual(self.overlay._trust, confidence)
+
+  def test_stream_loss_clears_retained_source_fit_without_another_sp_update(self):
+    self.update()
+    self.state.sm['modelDataV2SP'].blendfulTrust = 0.0
+    self.advance_frame()
+    self.update()
+    self.assertGreater(self.overlay._center_points.size, 0)
+    self.clock.return_value = self.state.sm.logMonoTime['modelV2'] + self.module.MESSAGE_MAX_AGE_NS + 1
+    self.state.sm.logMonoTime['carControl'] = self.clock.return_value
+    self.overlay.draw(self.rect)
+    self.assert_cleared()
+
+  def test_malformed_geometry_or_diagnostics_clear_instead_of_using_invalid_values(self):
+    for case in ('nan_trust', 'nan_curvature', 'nan_line', 'nan_zero_prob_line', 'empty_line', 'missing_line',
+                 'missing_std', 'zero_variance', 'nan_width'):
       with self.subTest(case=case):
         self.state.sm = model_messages()
         self.renderer._lane_lines = [SimpleNamespace(raw_points=np.array([line.x, line.y, line.z], dtype=np.float32).T)
@@ -394,20 +455,22 @@ class TestBlendfulRenderer(HeadlessUITestCase):
         self.update()
         self.assertGreater(self.overlay._center_points.size, 0)
         output, model = self.state.sm['modelDataV2SP'], self.state.sm['modelV2']
-        if case == 'zero_prob':
-          output.blendfulLeftProb = output.blendfulRightProb = 0.0
-        elif case in ('zero_trust', 'nan_trust'):
-          output.blendfulTrust = 0.0 if case == 'zero_trust' else np.nan
-        elif case == 'nan_weighted_line':
+        if case == 'nan_trust':
+          output.blendfulTrust = np.nan
+        elif case == 'nan_curvature':
+          output.blendfulCurvature = np.nan
+        elif case in ('nan_line', 'nan_zero_prob_line'):
           self.renderer._lane_lines[1].raw_points[0, 1] = np.nan
+          if case == 'nan_zero_prob_line':
+            output.blendfulLeftProb = 0.0
         elif case == 'empty_line':
           self.renderer._lane_lines[1].raw_points = np.empty((0, 3))
         elif case == 'missing_line':
           model.laneLines = []
         elif case == 'missing_std':
           model.laneLineStds = []
-        elif case == 'missing_probs':
-          model.laneLineProbs = []
+        elif case == 'zero_variance':
+          model.laneLineStds[1:3] = [0.0, 0.0]
         else:
           output.blendfulLeftProb = output.blendfulRightProb = 0.5
           output.blendfulLaneWidth = np.nan
@@ -415,7 +478,7 @@ class TestBlendfulRenderer(HeadlessUITestCase):
           self.update()
         self.assert_cleared()
 
-  def test_alpha_advances_once_per_sp_output_and_retains_no_old_geometry(self):
+  def test_effective_fit_refreshes_geometry_without_advancing_alpha_twice(self):
     self.update()
     alpha = self.overlay._alpha.x
     self.renderer._lane_lines[1].raw_points[:, 1] += 0.2

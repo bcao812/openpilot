@@ -13,7 +13,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP
-from openpilot.sunnypilot.modeld_v2.blendful import LANE_WIDTH_CLIP, LANE_WIDTH_DEFAULT, LOOKAHEAD_TIME, MIN_LOOKAHEAD
+from openpilot.sunnypilot.modeld_v2.blendful import LANE_WIDTH_CLIP, LOOKAHEAD_TIME, MIN_LOOKAHEAD
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.shader_polygon import draw_polygon
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -27,7 +27,6 @@ MESSAGE_MAX_AGE_NS = int(5 * DT_MDL * 1e9)
 MESSAGE_PAIR_MAX_SKEW_NS = int(DT_MDL / 2 * 1e9)
 # carControl publishes at 100 Hz; ten periods match its normal alive window.
 CONTROL_MAX_AGE_NS = 100_000_000
-CURRENT_LINE_PROB_MIN = 0.3
 
 
 class BlendfulRenderer:
@@ -38,7 +37,6 @@ class BlendfulRenderer:
     self._trust = 0.0
     self._model_ns = 0
     self._output_ns = 0
-    self._side_mask = (False, False)
     self._font = gui_app.font(FontWeight.BOLD) if readout else None
     self._pull_display = FirstOrderFilter(0.0, 0.5, DT_MDL)
     self._trust_display = FirstOrderFilter(0.0, 0.5, DT_MDL)
@@ -48,7 +46,6 @@ class BlendfulRenderer:
     self._center_points = np.empty((0, 2), dtype=np.float32)
     self._trust = 0.0
     self._model_ns = self._output_ns = 0
-    self._side_mask = (False, False)
     self._alpha.x = self._pull_display.x = self._trust_display.x = 0.0
 
   @staticmethod
@@ -76,50 +73,40 @@ class BlendfulRenderer:
 
     blendful = sm["modelDataV2SP"]
     trust = blendful.blendfulTrust
-    probs = [blendful.blendfulLeftProb, blendful.blendfulRightProb]
-    current_probs = list(sm["modelV2"].laneLineProbs)
+    l_prob, r_prob = blendful.blendfulLeftProb, blendful.blendfulRightProb
     stds = list(sm["modelV2"].laneLineStds)
-    if (not np.isfinite(trust) or not 0 < trust <= 1 or not np.isfinite(blendful.blendfulCurvature) or
-        len(stds) < 3 or len(current_probs) < 3 or len(sm["modelV2"].laneLines) < 3 or
-        not all(np.isfinite(p) and 0 <= p <= 1 for p in probs)):
+    if (not np.isfinite(trust) or not 0 <= trust <= 1 or not np.isfinite(blendful.blendfulCurvature) or
+        len(stds) < 3 or len(sm["modelV2"].laneLines) < 3 or len(renderer._lane_lines) < 3 or
+        not all(np.isfinite(p) and 0 <= p <= 1 for p in (l_prob, r_prob)) or
+        (self._readout and not np.isfinite(sm["carState"].vEgo))):
       self.clear()
       return
 
-    # Diagnostic confidence cannot qualify a boundary absent from the current
-    # model observation. Do this before touching that side's geometry or std.
-    for side, current in enumerate(current_probs[1:3]):
-      if not np.isfinite(current) or not CURRENT_LINE_PROB_MIN <= current <= 1:
-        probs[side] = 0.0
-
-    # Ignore zero-weight sides before inspecting or multiplying their geometry:
-    # 0 * NaN is still NaN. A currently weighted invalid line withdraws the display.
-    lines, weights = [], []
-    for index, prob in zip((1, 2), probs, strict=True):
-      line = renderer._lane_lines[index].raw_points
-      if prob > 0:
-        if (line.ndim != 2 or line.shape[1] != 3 or len(line) < 2 or not np.isfinite(line).all() or
-            not np.isfinite(stds[index]) or stds[index] < 0):
-          self.clear()
-          return
-        lines.append(line)
-        weights.append(prob / max(stds[index] ** 2, 1e-4))
-      else:
-        lines.append(None)
-        weights.append(0.0)
-
-    total_weight = sum(weights)
-    if total_weight <= 0 or not np.isfinite(total_weight):
+    left, right = renderer._lane_lines[1].raw_points, renderer._lane_lines[2].raw_points
+    if (any(line.ndim != 2 or line.shape[1] != 3 or len(line) < 2 or not np.isfinite(line).all() for line in (left, right)) or
+        len(left) != len(right) or any(not np.isfinite(std) or std < 0 for std in stds[1:3])):
       self.clear()
       return
-    left, right = lines
-    if left is not None and right is not None and len(left) != len(right):
-      self.clear()
+
+    output_ns = sm.logMonoTime["modelDataV2SP"]
+    if self._output_ns != output_ns:
+      self._alpha.update(float(trust > 0.0))
+      if trust > 0.0:
+        self._trust = trust
+      if self._readout:
+        lookahead = max(sm["carState"].vEgo * LOOKAHEAD_TIME, MIN_LOOKAHEAD)
+        self._pull_display.update(blendful.blendfulCurvature * lookahead ** 2 / 2)
+        self._trust_display.update(self._trust)
+    # These identify the healthy inputs processed, not the age of the last fit.
+    # Source behavior retains that fit while fresh confidence/alpha lets go.
+    self._model_ns, self._output_ns = sm.logMonoTime["modelV2"], output_ns
+    if self._alpha.x < 0.01:
+      self._center_points = np.empty((0, 2), dtype=np.float32)
       return
-    side_mask = tuple(weight > 0 for weight in weights)
-    if not all(side_mask):
-      # A lone current boundary must not inherit width learned from a lost one.
-      half_width = LANE_WIDTH_DEFAULT / 2
-    elif probs[0] * probs[1] > 0.5:
+    if trust <= 0.0 or l_prob + r_prob <= 0.0:
+      return
+
+    if l_prob * r_prob > 0.5:
       half_width = np.clip(right[:, 1] - left[:, 1], *LANE_WIDTH_CLIP) / 2
     else:
       lane_width = blendful.blendfulLaneWidth
@@ -128,34 +115,27 @@ class BlendfulRenderer:
         return
       half_width = lane_width / 2
 
-    center = (left if left is not None else right).copy()
-    center[:, 1] = 0.0
-    if left is not None:
-      center[:, 1] += (weights[0] / total_weight) * (left[:, 1] + half_width)
-    if right is not None:
-      center[:, 1] += (weights[1] / total_weight) * (right[:, 1] - half_width)
+    # Match the source's variance weighting, including its probability floor and
+    # learned width for weak/single-sided confidence. Raw probabilities do not
+    # override modeld's filtered confidence here.
+    l_var = stds[1] ** 2 / max(l_prob, 1e-4)
+    r_var = stds[2] ** 2 / max(r_prob, 1e-4)
+    variance = l_var + r_var
+    if not np.isfinite(variance) or variance <= 0:
+      self.clear()
+      return
+    center = left.copy()
+    center[:, 1] = (r_var * (left[:, 1] + half_width) + l_var * (right[:, 1] - half_width)) / variance
+    if not np.isfinite(center).all():
+      self.clear()
+      return
 
     points = renderer._map_line_to_polygon(center, 0.15, 0.0, max_idx, *map_args)
     if points.size == 0 or not np.isfinite(points).all():
       self.clear()
       return
 
-    output_ns = sm.logMonoTime["modelDataV2SP"]
-    if self._readout and not np.isfinite(sm["carState"].vEgo):
-      self.clear()
-      return
-    if side_mask != self._side_mask:
-      self.clear()
-    if self._output_ns != output_ns:
-      self._alpha.update(1.0)
-      if self._readout:
-        lookahead = max(sm["carState"].vEgo * LOOKAHEAD_TIME, MIN_LOOKAHEAD)
-        self._pull_display.update(blendful.blendfulCurvature * lookahead ** 2 / 2)
-        self._trust_display.update(trust)
     self._center_points = points
-    self._trust = trust
-    self._side_mask = side_mask
-    self._model_ns, self._output_ns = sm.logMonoTime["modelV2"], output_ns
 
   def _color(self, rgb, alpha: float) -> rl.Color:
     return rl.Color(*rgb, int(alpha * self._alpha.x))

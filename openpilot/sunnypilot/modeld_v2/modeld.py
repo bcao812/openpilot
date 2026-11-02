@@ -60,10 +60,10 @@ BIG_MODEL_TIMEOUT = 60
 BLENDFUL_MAX_FRAME_AGE_NS = int(5 * DT_MDL * 1e9)
 
 
-def blendful_inputs_active(sm, desire_helper, model_valid: bool, timestamp_eof: int,
-                          transforms: dict[str, np.ndarray], now_ns: int | None = None) -> bool:
-  """Qualify this correction without changing the existing model/control health policy."""
-  if not model_valid or desire_helper.desire != log.Desire.none or desire_helper.lane_change_state != log.LaneChangeState.off:
+def blendful_inputs_healthy(sm, model_valid: bool, timestamp_eof: int,
+                           transforms: dict[str, np.ndarray], now_ns: int | None = None) -> bool:
+  """Separate broken inputs from the source algorithm's ordinary fading/history."""
+  if not model_valid:
     return False
   now_ns = time.monotonic_ns() if now_ns is None else now_ns
   if not 0 < timestamp_eof <= now_ns or now_ns - timestamp_eof > BLENDFUL_MAX_FRAME_AGE_NS:
@@ -78,7 +78,7 @@ def blendful_inputs_active(sm, desire_helper, model_valid: bool, timestamp_eof: 
       not np.isfinite(calibration.rpyCalib).all() or not transforms or
       any(transform.shape != (3, 3) or not np.isfinite(transform).all() for transform in transforms.values())):
     return False
-  return bool(sm['carControl'].latActive and np.isfinite(sm['carState'].vEgo))
+  return bool(np.isfinite(sm['carState'].vEgo))
 
 
 def fill_blendful_msg(blendful: Blendful, modelv2_send, drivingdata_send, mdv2sp_send) -> None:
@@ -450,7 +450,8 @@ def main(demo=False):
   # messaging
   pub_socks = ["modelV2", "drivingModelData", "cameraOdometry", "modelDataV2SP"] + (["chestnutState"] if CHESTNUT else [])
   pm = PubMaster(pub_socks)
-  sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState", "carControl", "lateralDelay"])
+  sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState", "carControl", "lateralDelay"],
+                 frequency=model.constants.MODEL_FREQ)
 
   publish_state = PublishState()
   chestnut_state = ChestnutState(pm, model.chestnut) if CHESTNUT else None
@@ -634,10 +635,17 @@ def main(demo=False):
 
       # DH now describes the NEW current frame, including a newly requested turn
       # or lane change. A successful frame also sees toggle changes immediately.
-      blendful_active = (new_model_frame and abs(meta_main.timestamp_sof - meta_extra.timestamp_sof) <= 10000000 and
-                         blendful_inputs_active(sm, DH, modelv2_send.valid, meta_main.timestamp_eof, transforms) and
-                         np.isfinite(action.desiredCurvature))
-      blendful.update(model_output, v_ego, blendful_active, model.model_curvature, enabled=params.get_bool('Blendful'))
+      blendful_enabled = params.get_bool('Blendful')
+      blendful_healthy = (new_model_frame and abs(meta_main.timestamp_sof - meta_extra.timestamp_sof) <= 10000000 and
+                          blendful_inputs_healthy(sm, modelv2_send.valid, meta_main.timestamp_eof, transforms) and
+                          np.isfinite(action.desiredCurvature))
+      if blendful_healthy:
+        # Source activation is independent of lateral engagement: healthy
+        # inactive frames may accumulate; low speed/turn/lane-change fades.
+        blendful_active = DH.desire == log.Desire.none and DH.lane_change_state == log.LaneChangeState.off
+        blendful.update(model_output, v_ego, blendful_active, model.model_curvature, enabled=blendful_enabled)
+      else:
+        blendful.reset(model.model_curvature if np.isfinite(model.model_curvature) else 0.0)
       fill_blendful_msg(blendful, modelv2_send, drivingdata_send, mdv2sp_send)
 
       fill_pose_msg(posenet_send, model_output, meta_main.frame_id, vipc_dropped_frames, meta_main.timestamp_eof, live_calib_seen)

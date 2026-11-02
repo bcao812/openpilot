@@ -41,7 +41,9 @@ class PublishedCurve:
       output['lane_lines_prob'][:] = 0.
     self.nominal = self.model_state.get_action_from_model(output, self.previous, .4, .4, SPEED)
     self.previous = self.nominal
-    self.blendful.update(output, SPEED, lateral_active, self.model_state.model_curvature, enabled=enabled)
+    # No turn/lane-change desire in this fixture. As in source, ordinary
+    # lateral inactivity does not stop the healthy model-side accumulation.
+    self.blendful.update(output, SPEED, True, self.model_state.model_curvature, enabled=enabled)
     self.messages = action_messages(self.nominal)
     self.sm.logMonoTime['modelV2'] += time_delta
     self.messages[0].logMonoTime = self.sm.logMonoTime['modelV2']
@@ -93,24 +95,35 @@ class TestBlendfulSccConsumers(OpenpilotTestCase):
   def test_withdrawn_correction_keeps_scc_latched(self):
     # This characterizes the current action/SCC coupling; the 0.5 s curve-clear
     # timer is not an upper bound while demand remains above the 0.8 release line.
-    for reason in ('missing_lines', 'disabled'):
-      with self.subTest(reason=reason):
-        feature, control = self.establish_pair()
-        for _ in range(40):
-          feature.step(lines=reason != 'missing_lines', enabled=reason != 'disabled')
-          control.step(lines=reason != 'missing_lines', enabled=False)
-          self.assertEqual(feature.blendful.curvature, 0.)
-          self.assertEqual(feature.messages[2].modelDataV2SP.blendfulCurvature, 0.)
-          self.assertEqual(feature.sm['modelV2'].action.to_dict(), control.sm['modelV2'].action.to_dict())
-          self.assertAlmostEqual(feature.published_demand, .9, places=6)
-          self.assertTrue(feature.controller.steering_limited)
-          self.assertTrue(feature.controller.is_active)
-          self.assertEqual(feature.controller.output_v_target, SPEED)
-          self.assertEqual(feature.controller.output_a_target, 0.)
-          self.assertFalse(control.controller.steering_limited)
-          self.assertFalse(control.controller.is_active)
-          self.assertEqual(control.controller.output_v_target, V_CRUISE_UNSET)
-          self.assertEqual(control.controller.output_a_target, .4)
+    feature, control = self.establish_pair()
+    for _ in range(40):
+      feature.step(enabled=False)
+      control.step(enabled=False)
+      self.assertEqual(feature.blendful.curvature, 0.)
+      self.assertEqual(feature.messages[2].modelDataV2SP.blendfulCurvature, 0.)
+      self.assertEqual(feature.sm['modelV2'].action.to_dict(), control.sm['modelV2'].action.to_dict())
+      self.assertAlmostEqual(feature.published_demand, .9, places=6)
+      self.assertTrue(feature.controller.steering_limited)
+      self.assertTrue(feature.controller.is_active)
+      self.assertEqual(feature.controller.output_v_target, SPEED)
+      self.assertEqual(feature.controller.output_a_target, 0.)
+      self.assertFalse(control.controller.steering_limited)
+      self.assertFalse(control.controller.is_active)
+      self.assertEqual(control.controller.output_v_target, V_CRUISE_UNSET)
+      self.assertEqual(control.controller.output_a_target, .4)
+
+  def test_missing_lines_keep_source_history_in_published_demand(self):
+    feature, control = self.establish_pair()
+    for _ in range(5):
+      feature.step(lines=False)
+      control.step(lines=False, enabled=False)
+      self.assertGreater(feature.blendful.curvature, 0.)
+      self.assertGreater(feature.blendful.l_prob, 0.)
+      self.assertGreater(feature.blendful.r_prob, 0.)
+      self.assertGreater(feature.published_demand, control.published_demand)
+      self.assertTrue(feature.controller.steering_limited)
+      self.assertTrue(feature.controller.is_active)
+      self.assertFalse(control.controller.is_active)
 
   def test_scc_releases_on_current_authority_demand_or_timestamp_change(self):
     releases = {
@@ -123,7 +136,7 @@ class TestBlendfulSccConsumers(OpenpilotTestCase):
     for reason, release in releases.items():
       with self.subTest(reason=reason):
         feature, _ = self.establish_pair()
-        feature.step(lines=False, **release)
+        feature.step(enabled=False, **release)
         self.assertEqual(feature.blendful.curvature, 0.)
         self.assertFalse(feature.controller.steering_limited)
         self.assertGreater(feature.controller.output_v_target, SPEED)
@@ -132,7 +145,7 @@ class TestBlendfulSccConsumers(OpenpilotTestCase):
           self.assertFalse(feature.controller.is_active)
         # With no renewed >=1.0 demand, the ordinary curve timer can now finish.
         for _ in range(10):
-          feature.step(lines=False)
+          feature.step(enabled=False)
           self.assertFalse(feature.controller.steering_limited)
         self.assertFalse(feature.controller.is_active)
         self.assertEqual(feature.controller.output_v_target, V_CRUISE_UNSET)
