@@ -8,7 +8,8 @@ NOW = 1_000_000_000
 
 def qualified_track(sample, track_id=42):
   stamp = sample['positionMonoTime']
-  return dict(sample, trackId=track_id, active=True, coasting=False, mature=True, velocityGood=True, velocityMonoTime=stamp,
+  identity = {field: sample[field] for field in ('slot', 'generation', 'positionSeq', 'positionMonoTime')}
+  return dict(identity, trackId=track_id, active=True, coasting=False, mature=True, velocityGood=True, velocityMonoTime=stamp,
               nativeMotion={'version': 2, 'qualified': True, 'reason': 'qualified', 'positionSeq': sample['positionSeq'],
                             'positionMonoTime': stamp, 'velocitySeq': 1, 'velocityMonoTime': stamp,
                             'pairCompleteMonoTime': stamp, 'validUntilMonoTime': stamp + 200_000_000})
