@@ -1259,7 +1259,7 @@ struct RadarState {
   struct Deprecated;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(9a185389d6fdd05f, 5, 12)
+    CAPNP_DECLARE_STRUCT_HEADER(9a185389d6fdd05f, 7, 13)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1305,7 +1305,7 @@ struct RadarState::Deprecated {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(d3d7444954de9a4d, 5, 12)
+    CAPNP_DECLARE_STRUCT_HEADER(d3d7444954de9a4d, 7, 13)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -1996,7 +1996,7 @@ struct LongitudinalPlan {
   struct Deprecated;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(e00b5b3eba12876c, 11, 11)
+    CAPNP_DECLARE_STRUCT_HEADER(e00b5b3eba12876c, 12, 11)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -2011,7 +2011,7 @@ struct LongitudinalPlan::Deprecated {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(f241315ad87f2721, 11, 11)
+    CAPNP_DECLARE_STRUCT_HEADER(f241315ad87f2721, 12, 11)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -7720,6 +7720,15 @@ public:
 
   inline bool getFusionRiskUnresolved() const;
 
+  inline  ::uint64_t getFusionInputMonoTime() const;
+
+  inline bool hasFusionInputSessionId() const;
+  inline  ::capnp::Text::Reader getFusionInputSessionId() const;
+
+  inline  ::uint64_t getFusionInputSequence() const;
+
+  inline bool getFusionInputAttempted() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -7829,6 +7838,22 @@ public:
 
   inline bool getFusionRiskUnresolved();
   inline void setFusionRiskUnresolved(bool value);
+
+  inline  ::uint64_t getFusionInputMonoTime();
+  inline void setFusionInputMonoTime( ::uint64_t value);
+
+  inline bool hasFusionInputSessionId();
+  inline  ::capnp::Text::Builder getFusionInputSessionId();
+  inline void setFusionInputSessionId( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initFusionInputSessionId(unsigned int size);
+  inline void adoptFusionInputSessionId(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownFusionInputSessionId();
+
+  inline  ::uint64_t getFusionInputSequence();
+  inline void setFusionInputSequence( ::uint64_t value);
+
+  inline bool getFusionInputAttempted();
+  inline void setFusionInputAttempted(bool value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -14289,6 +14314,8 @@ public:
   inline bool hasContinuation() const;
   inline  ::cereal::LongitudinalContinuation::Reader getContinuation() const;
 
+  inline  ::uint64_t getRadarStateInputMonoTime() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -14414,6 +14441,9 @@ public:
   inline  ::cereal::LongitudinalContinuation::Builder initContinuation();
   inline void adoptContinuation(::capnp::Orphan< ::cereal::LongitudinalContinuation>&& value);
   inline ::capnp::Orphan< ::cereal::LongitudinalContinuation> disownContinuation();
+
+  inline  ::uint64_t getRadarStateInputMonoTime();
+  inline void setRadarStateInputMonoTime( ::uint64_t value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -34209,6 +34239,82 @@ inline void RadarState::Builder::setFusionRiskUnresolved(bool value) {
       ::capnp::bounded<51>() * ::capnp::ELEMENTS, value);
 }
 
+inline  ::uint64_t RadarState::Reader::getFusionInputMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t RadarState::Builder::getFusionInputMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
+}
+inline void RadarState::Builder::setFusionInputMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarState::Reader::hasFusionInputSessionId() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<12>() * ::capnp::POINTERS).isNull();
+}
+inline bool RadarState::Builder::hasFusionInputSessionId() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<12>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader RadarState::Reader::getFusionInputSessionId() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<12>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder RadarState::Builder::getFusionInputSessionId() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<12>() * ::capnp::POINTERS));
+}
+inline void RadarState::Builder::setFusionInputSessionId( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<12>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder RadarState::Builder::initFusionInputSessionId(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<12>() * ::capnp::POINTERS), size);
+}
+inline void RadarState::Builder::adoptFusionInputSessionId(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<12>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> RadarState::Builder::disownFusionInputSessionId() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<12>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t RadarState::Reader::getFusionInputSequence() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t RadarState::Builder::getFusionInputSequence() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
+}
+inline void RadarState::Builder::setFusionInputSequence( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<6>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool RadarState::Reader::getFusionInputAttempted() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<52>() * ::capnp::ELEMENTS);
+}
+
+inline bool RadarState::Builder::getFusionInputAttempted() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<52>() * ::capnp::ELEMENTS);
+}
+inline void RadarState::Builder::setFusionInputAttempted(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<52>() * ::capnp::ELEMENTS, value);
+}
+
 inline float RadarState::LeadData::Reader::getDRel() const {
   return _reader.getDataField<float>(
       ::capnp::bounded<0>() * ::capnp::ELEMENTS);
@@ -44613,6 +44719,20 @@ inline void LongitudinalPlan::Builder::adoptContinuation(
 inline ::capnp::Orphan< ::cereal::LongitudinalContinuation> LongitudinalPlan::Builder::disownContinuation() {
   return ::capnp::_::PointerHelpers< ::cereal::LongitudinalContinuation>::disown(_builder.getPointerField(
       ::capnp::bounded<10>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t LongitudinalPlan::Reader::getRadarStateInputMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t LongitudinalPlan::Builder::getRadarStateInputMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
+}
+inline void LongitudinalPlan::Builder::setRadarStateInputMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<11>() * ::capnp::ELEMENTS, value);
 }
 
 inline bool LongitudinalPlan::Deprecated::Reader::getLateralValid() const {
