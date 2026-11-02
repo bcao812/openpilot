@@ -202,20 +202,10 @@ class RadarOverlayState:
       self.clear()
       return
     track_samples = _track_samples(body, message_ns)
-    self.track_samples.update(track_samples)
     self.qualified_tracks = {}
     for identifier, until_ns in track_samples.values():
       if identifier > 0:
         self.qualified_tracks[identifier] = min(self.qualified_tracks.get(identifier, until_ns), until_ns)
-    if track_samples:
-      for history in self.history:
-        for index, point in enumerate(history):
-          if point.sample_key in track_samples:
-            identifier, _ = track_samples[point.sample_key]
-            if point.track_id == -1 or point.track_id > 0 and point.track_id != identifier:
-              identifier = -1
-            if identifier != point.track_id:
-              history[index] = replace(point, track_id=identifier)
     for event in events:
       slot = _read(event, 'slot')
       if not _integer(slot) or not 0 <= slot < 16:
@@ -254,10 +244,25 @@ class RadarOverlayState:
             self.invalid_before_ns[slot] = max(self.invalid_before_ns[slot], t)
             while history and history[0].time_ns <= t:
               history.popleft()
-    # Keep only the bounded camera history's original sample qualifications.
-    # A newer qualified scan of the same object cannot renew an older deadline.
-    self.track_samples = {point.sample_key: self.track_samples[point.sample_key]
-                          for history in self.history for point in history if point.sample_key in self.track_samples}
+    # Refresh identities and retain qualifications in one bounded history pass.
+    # Only an exact current sample updates its saved qualification; a newer
+    # scan of the same object cannot renew an older sample's deadline.
+    retained_samples = {}
+    for history in self.history:
+      for index, point in enumerate(history):
+        key = point.sample_key
+        sample = track_samples.get(key)
+        if sample is None:
+          sample = self.track_samples.get(key)
+        else:
+          identifier, _ = sample
+          if point.track_id == -1 or point.track_id > 0 and point.track_id != identifier:
+            identifier = -1
+          if identifier != point.track_id:
+            history[index] = replace(point, track_id=identifier)
+        if sample is not None:
+          retained_samples[key] = sample
+    self.track_samples = retained_samples
 
   def is_qualified(self, point, now_ns):
     # Camera time may select an older scan. It needs both its own qualification
