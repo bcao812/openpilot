@@ -28,6 +28,26 @@ class Gradient:
       self.stops = [i / max(1, color_count - 1) for i in range(color_count)]
 
 
+class PreparedGradient:
+  """Independent snapshot of a gradient's normalized shader inputs.
+
+  Use this only when the caller replaces the snapshot when its current gradient
+  changes. Mutable Gradient callers keep their per-draw behavior. Screen-space
+  endpoints are still calculated from the live origin rectangle on every draw.
+  """
+  def __init__(self, gradient: Gradient):
+    self.start = tuple(gradient.start)
+    self.end = tuple(gradient.end)
+    self.color_count = len(gradient.colors)
+    self.stop_count = len(gradient.stops)
+    if max(self.color_count, self.stop_count) > MAX_GRADIENT_COLORS:
+      raise ValueError("PreparedGradient exceeds the shader's color/stop capacity")
+    self._colors = rl.ffi.new("float[]", [channel / 255.0 for color in gradient.colors
+                                        for channel in (color.r, color.g, color.b, color.a)])
+    stops = [float(stop) for stop in gradient.stops]
+    self._stops = rl.ffi.new("float[]", [0.0 if stop < 0.0 else 1.0 if stop > 1.0 else stop for stop in stops])
+
+
 FRAGMENT_SHADER = GL_VERSION + """
 in vec2 fragTexCoord;
 out vec4 finalColor;
@@ -153,26 +173,36 @@ class ShaderState:
 
 
 def _configure_shader_color(state: ShaderState, color: Optional[rl.Color],  # noqa: UP045  # rl.Color is a function, so `rl.Color | None` fails
-                            gradient: Gradient | None, origin_rect: rl.Rectangle):
+                            gradient: Gradient | PreparedGradient | None, origin_rect: rl.Rectangle):
   assert (color is not None) != (gradient is not None), "Either color or gradient must be provided"
 
-  use_gradient = 1 if (gradient is not None and len(gradient.colors) >= 1) else 0
+  if gradient is None:
+    color_count = 0
+  else:
+    color_count = gradient.color_count if isinstance(gradient, PreparedGradient) else len(gradient.colors)
+  use_gradient = 1 if color_count else 0
   state.use_gradient_ptr[0] = use_gradient
   rl.set_shader_value(state.shader, state.locations['useGradient'], state.use_gradient_ptr, UNIFORM_INT)
 
   if use_gradient:
-    gradient = cast(Gradient, gradient)
-    state.color_count_ptr[0] = len(gradient.colors)
-    for i in range(len(gradient.colors)):
-      c = gradient.colors[i]
-      base = i * 4
-      state.gradient_colors_ptr[base:base + 4] = [c.r / 255.0, c.g / 255.0, c.b / 255.0, c.a / 255.0]
-    rl.set_shader_value_v(state.shader, state.locations['gradientColors'], state.gradient_colors_ptr, UNIFORM_VEC4, len(gradient.colors))
+    gradient = cast(Gradient | PreparedGradient, gradient)
+    if isinstance(gradient, PreparedGradient):
+      colors_ptr, stops_ptr, stop_count = gradient._colors, gradient._stops, gradient.stop_count
+    else:
+      # Ordinary gradients remain mutable, including in-place color and stop edits.
+      colors_ptr, stops_ptr, stop_count = state.gradient_colors_ptr, state.gradient_stops_ptr, len(gradient.stops)
+      for i in range(len(gradient.colors)):
+        c = gradient.colors[i]
+        base = i * 4
+        colors_ptr[base:base + 4] = [c.r / 255.0, c.g / 255.0, c.b / 255.0, c.a / 255.0]
+      for i in range(len(gradient.stops)):
+        s = float(gradient.stops[i])
+        stops_ptr[i] = 0.0 if s < 0.0 else 1.0 if s > 1.0 else s
 
-    for i in range(len(gradient.stops)):
-      s = float(gradient.stops[i])
-      state.gradient_stops_ptr[i] = 0.0 if s < 0.0 else 1.0 if s > 1.0 else s
-    rl.set_shader_value_v(state.shader, state.locations['gradientStops'], state.gradient_stops_ptr, UNIFORM_FLOAT, len(gradient.stops))
+    # Other polygons share this shader. Re-upload even when the CPU buffers are reused.
+    state.color_count_ptr[0] = color_count
+    rl.set_shader_value_v(state.shader, state.locations['gradientColors'], colors_ptr, UNIFORM_VEC4, color_count)
+    rl.set_shader_value_v(state.shader, state.locations['gradientStops'], stops_ptr, UNIFORM_FLOAT, stop_count)
     rl.set_shader_value(state.shader, state.locations['gradientColorCount'], state.color_count_ptr, UNIFORM_INT)
 
     # Map normalized start/end to screen pixels
@@ -267,7 +297,7 @@ class PreparedPolygon:
 
 
 def draw_polygon(origin_rect: rl.Rectangle, points: np.ndarray | PreparedPolygon,
-                 color: Optional[rl.Color] = None, gradient: Gradient | None = None):  # noqa: UP045  # rl.Color is a function, so `rl.Color | None` fails
+                 color: Optional[rl.Color] = None, gradient: Gradient | PreparedGradient | None = None):  # noqa: UP045  # rl.Color is a function, so `rl.Color | None` fails
 
   """
   Draw a ribbon polygon (two chains) with a triangle strip and gradient.

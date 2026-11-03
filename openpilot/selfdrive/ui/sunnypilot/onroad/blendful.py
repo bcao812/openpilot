@@ -4,6 +4,7 @@ Copyright (c) 2021-, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+import math
 import time
 import numpy as np
 import pyray as rl
@@ -15,6 +16,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP
 from openpilot.sunnypilot.modeld_v2.blendful import LANE_WIDTH_CLIP, LOOKAHEAD_TIME, MIN_LOOKAHEAD
 from openpilot.system.ui.lib.application import gui_app, FontWeight
+from openpilot.system.ui.lib.fastmath import clamp
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, PreparedPolygon
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 
@@ -86,16 +88,16 @@ class BlendfulRenderer:
     trust = blendful.blendfulTrust
     l_prob, r_prob = blendful.blendfulLeftProb, blendful.blendfulRightProb
     stds = list(sm["modelV2"].laneLineStds)
-    if (not np.isfinite(trust) or not 0 <= trust <= 1 or not np.isfinite(blendful.blendfulCurvature) or
+    if (not math.isfinite(trust) or not 0 <= trust <= 1 or not math.isfinite(blendful.blendfulCurvature) or
         len(stds) < 3 or len(sm["modelV2"].laneLines) < 3 or len(renderer._lane_lines) < 3 or
-        not all(np.isfinite(p) and 0 <= p <= 1 for p in (l_prob, r_prob)) or
-        (self._readout and not np.isfinite(sm["carState"].vEgo))):
+        not all(math.isfinite(p) and 0 <= p <= 1 for p in (l_prob, r_prob)) or
+        (self._readout and not math.isfinite(sm["carState"].vEgo))):
       self.clear()
       return
 
     left, right = renderer._lane_lines[1].raw_points, renderer._lane_lines[2].raw_points
     if (any(line.ndim != 2 or line.shape[1] != 3 or len(line) < 2 or not np.isfinite(line).all() for line in (left, right)) or
-        len(left) != len(right) or any(not np.isfinite(std) or std < 0 for std in stds[1:3])):
+        len(left) != len(right) or any(not math.isfinite(std) or std < 0 for std in stds[1:3])):
       self.clear()
       return
 
@@ -121,7 +123,7 @@ class BlendfulRenderer:
       half_width = np.clip(right[:, 1] - left[:, 1], *LANE_WIDTH_CLIP) / 2
     else:
       lane_width = blendful.blendfulLaneWidth
-      if not np.isfinite(lane_width) or not LANE_WIDTH_CLIP[0] <= lane_width <= LANE_WIDTH_CLIP[1]:
+      if not math.isfinite(lane_width) or not LANE_WIDTH_CLIP[0] <= lane_width <= LANE_WIDTH_CLIP[1]:
         self.clear()
         return
       half_width = lane_width / 2
@@ -132,7 +134,7 @@ class BlendfulRenderer:
     l_var = stds[1] ** 2 / max(l_prob, 1e-4)
     r_var = stds[2] ** 2 / max(r_prob, 1e-4)
     variance = l_var + r_var
-    if not np.isfinite(variance) or variance <= 0:
+    if not math.isfinite(variance) or variance <= 0:
       self.clear()
       return
     center = left.copy()
@@ -168,7 +170,7 @@ class BlendfulRenderer:
         points = self._center_points + (rect.x, rect.y) if self._rect_relative else self._center_points
         self._prepared_polygon = PreparedPolygon(points)
         self._prepared_source, self._prepared_origin = self._center_points, origin
-      draw_polygon(rect, self._prepared_polygon, self._color(BLENDFUL_COLOR, np.clip(self._trust, 0.2, 1.0) * 255))
+      draw_polygon(rect, self._prepared_polygon, self._color(BLENDFUL_COLOR, clamp(self._trust, 0.2, 1.0) * 255))
     if self._center_points.size and self._readout:
       self._draw_readout(rect)
 
@@ -183,7 +185,7 @@ class BlendfulRenderer:
     text_w = measure_text_cached(self._font, text, 44, 0).x
     rl.draw_text_ex(self._font, text, rl.Vector2(cx - text_w / 2, cy - 24), 44, 0, self._color((255, 255, 255), 255))
 
-    active = self._color(BLENDFUL_COLOR, np.clip(abs(pull) / 0.1, 0.0, 1.0) * 255)
+    active = self._color(BLENDFUL_COLOR, clamp(abs(pull) / 0.1, 0.0, 1.0) * 255)
     idle = self._color((255, 255, 255), 40)
     lx, rx = x + 18, x + w - 18
     rl.draw_triangle(rl.Vector2(lx, cy), rl.Vector2(lx + 16, cy + 12), rl.Vector2(lx + 16, cy - 12), active if pull < 0 else idle)
@@ -192,8 +194,8 @@ class BlendfulRenderer:
     bar = rl.Rectangle(x + 24, y + h - 16, w - 48, 6)
     rl.draw_rectangle_rounded(bar, 1.0, 6, self._color((255, 255, 255), 40))
     rl.draw_rectangle(int(cx - 1), int(bar.y - 2), 2, int(bar.height + 4), self._color((255, 255, 255), 120))
-    fill = bar.width / 2 * float(np.sqrt(np.clip(abs(pull) / FULL_BAR, 0.0, 1.0)))
+    fill = bar.width / 2 * float(np.sqrt(clamp(abs(pull) / FULL_BAR, 0.0, 1.0)))
     if fill > 1:
       fill_x = cx if pull > 0 else cx - fill
       rl.draw_rectangle_rounded(rl.Rectangle(fill_x, bar.y, fill, bar.height), 1.0, 6,
-                                self._color(BLENDFUL_COLOR, np.clip(0.3 + 0.7 * trust, 0.0, 1.0) * 255))
+                                self._color(BLENDFUL_COLOR, clamp(0.3 + 0.7 * trust, 0.0, 1.0) * 255))

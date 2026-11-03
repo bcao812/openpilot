@@ -62,6 +62,104 @@ def capture_polygons():
     yield frames
 
 
+@contextmanager
+def capture_shader_uploads():
+  """Capture the actual float32/int uniform bytes, including NaNs and signed zero."""
+  uploads = []
+
+  def scalar(shader, location, value, kind):
+    count = 2 if kind == polygon.UNIFORM_VEC2 else 4 if kind == polygon.UNIFORM_VEC4 else 1
+    pointer = rl.ffi.addressof(value) if kind == polygon.UNIFORM_VEC2 else value
+    uploads.append((location, kind, count, bytes(rl.ffi.buffer(pointer, count * 4))))
+
+  def array(shader, location, value, kind, count):
+    size = count * (4 if kind == polygon.UNIFORM_VEC4 else 1)
+    uploads.append((location, kind, count, bytes(rl.ffi.buffer(value, size * 4))))
+
+  with patch.object(polygon.ShaderState, '_instance', None):
+    state = polygon.ShaderState.get_instance()
+    state.locations = {name: name for name in state.locations}
+    with patch.object(rl, 'set_shader_value', side_effect=scalar), patch.object(rl, 'set_shader_value_v', side_effect=array):
+      yield state, uploads
+
+
+class TestPreparedGradient(HeadlessUITestCase):
+  @staticmethod
+  def configure(state, uploads, gradient, rect):
+    start = len(uploads)
+    polygon._configure_shader_color(state, None, gradient, rect)
+    return uploads[start:]
+
+  def test_uniform_bytes_match_raw_for_color_limits_defaults_and_stop_boundaries(self):
+    stops = [float('-inf'), -0.0, 1 / 3, 1.0, float('inf'), float('nan')]
+    for count in (0, 1, 2, 8, 20, 23):
+      for default_stops in (False, True):
+        colors = [rl.Color(i * 37 % 256, i * 19 % 256, 255 - i * 11 % 256, i * 47 % 256) for i in range(count)]
+        gradient = polygon.Gradient((0.2, 0.1), (0.7, 0.9), colors,
+                                    [] if default_stops else [stops[i % len(stops)] for i in range(count)])
+        prepared = polygon.PreparedGradient(gradient)
+        with self.subTest(count=count, default_stops=default_stops), capture_shader_uploads() as (state, uploads):
+          for rect in (rl.Rectangle(0, 0, 100, 200), rl.Rectangle(-11, 23, 71, 133)):
+            expected = self.configure(state, uploads, gradient, rect)
+            self.assertEqual(self.configure(state, uploads, prepared, rect), expected)
+
+  def test_snapshot_owns_packed_values_and_raw_gradient_remains_live(self):
+    gradient = polygon.Gradient((0.2, 0.1), (0.7, 0.9), [rl.Color(*rl.RED), rl.Color(*rl.BLUE)], [0, 1])
+    prepared = polygon.PreparedGradient(gradient)
+    rect = rl.Rectangle(5, 10, 70, 150)
+    with capture_shader_uploads() as (state, uploads):
+      original = self.configure(state, uploads, gradient, rect)
+      gradient.colors[0].r = 81
+      gradient.colors.append(rl.Color(0, 255, 0, 37))
+      gradient.stops[0] = 0.25
+      gradient.stops.append(0.75)
+      gradient.start = (0.4, 0.3)
+      self.assertEqual(self.configure(state, uploads, prepared, rect), original)
+      changed = self.configure(state, uploads, gradient, rect)
+      self.assertNotEqual(changed, original)
+      self.assertEqual(self.configure(state, uploads, polygon.PreparedGradient(gradient), rect), changed)
+      source = weakref.ref(gradient)
+      del gradient
+      gc.collect()
+      self.assertIsNone(source())
+      self.assertEqual(self.configure(state, uploads, prepared, rect), original)
+
+  def test_every_draw_restores_uniforms_after_other_gradient_and_solid_draws(self):
+    gradient = polygon.Gradient((0.2, 0.1), (0.7, 0.9), [rl.Color(*rl.RED), rl.Color(*rl.BLUE)], [0, 1])
+    other = polygon.Gradient((1, 1), (0, 0), [rl.Color(0, 255, 0, 47)], [0.75])
+    prepared = polygon.PreparedGradient(gradient)
+    with capture_shader_uploads() as (state, uploads):
+      for rect in (rl.Rectangle(0, 0, 100, 200), rl.Rectangle(7, 15, 80, 120)):
+        expected = self.configure(state, uploads, gradient, rect)
+        self.configure(state, uploads, other, rect)
+        self.assertEqual(self.configure(state, uploads, prepared, rect), expected)
+        polygon._configure_shader_color(state, rl.Color(*rl.WHITE), None, rect)
+        self.assertEqual(self.configure(state, uploads, prepared, rect), expected)
+
+  def test_packed_arrays_pass_through_native_binding_with_exact_bytes(self):
+    prepared = polygon.PreparedGradient(polygon.Gradient((0, 1), (0, 0), [rl.Color(*rl.RED), rl.Color(*rl.BLUE)], [0, 1]))
+    received = []
+
+    @rl.ffi.callback('void(*)(const void *, int)')
+    def receive(pointer, count):
+      received.append(bytes(rl.ffi.buffer(rl.ffi.cast('const char *', pointer), count * 4)))
+
+    wrapped = rl._wrap_function(receive)
+    for array, count in ((prepared._colors, prepared.color_count * 4), (prepared._stops, prepared.stop_count)):
+      wrapped(array, count)
+      self.assertEqual(received[-1], bytes(rl.ffi.buffer(array, count * 4)))
+
+  def test_mutated_source_cannot_exceed_shader_uniform_capacity(self):
+    gradient = polygon.Gradient((0, 1), (0, 0), [rl.Color(*rl.RED)], [0])
+    gradient.colors *= polygon.MAX_GRADIENT_COLORS + 1
+    with self.assertRaises(ValueError):
+      polygon.PreparedGradient(gradient)
+    gradient.colors = [rl.Color(*rl.RED)]
+    gradient.stops *= polygon.MAX_GRADIENT_COLORS + 1
+    with self.assertRaises(ValueError):
+      polygon.PreparedGradient(gradient)
+
+
 class TestPreparedPolygon(HeadlessUITestCase):
   def test_exact_vertices_for_float_conversion_strides_and_odd_counts(self):
     for count in (0, 1, 2, 3, 4, 5, 33, 66, 67, 99, 226):
@@ -253,6 +351,30 @@ class TestModelPolygonCache(HeadlessUITestCase):
         self.assertEqual(renderer._get_path_half_width.call_count, width_calls + 1)
         self.assertIs(renderer._path.polygon, old_path)
         self.assertIs(renderer._exp_gradient, old_gradient)
+
+  def test_experimental_gradient_packing_reuses_only_current_content(self):
+    from openpilot.selfdrive.ui.onroad import model_renderer as model
+
+    renderer, sm = self.make_renderer()
+    sm['selfdriveState'].experimentalMode = True
+    with capture_polygons() as frames, patch.object(model, 'PreparedGradient', wraps=polygon.PreparedGradient) as prepare:
+      renderer._render(renderer.rect)
+      self.assertEqual(prepare.call_count, 1)
+      snapshot = renderer._exp_gradient
+      self.assertIsInstance(snapshot, polygon.PreparedGradient)
+      sm.updated['modelV2'] = False
+      sm.updated['radarState'] = True
+      for _ in range(3):
+        renderer._render(renderer.rect)
+        self.assertIs(renderer._exp_gradient, snapshot)
+      self.assertEqual(prepare.call_count, 1)
+      before = frames[-1]
+      # Changed acceleration in the same model timestamp still replaces the snapshot.
+      renderer._acceleration_x[:] = np.linspace(-2, 2, 33)
+      renderer._render(renderer.rect)
+      self.assertEqual(prepare.call_count, 2)
+      self.assertIsNot(renderer._exp_gradient, snapshot)
+      self.assertNotEqual(frames[-1], before)
 
   def test_path_cache_invalidates_current_geometry_inputs_without_timestamp_shortcuts(self):
     renderer, sm = self.make_renderer()
