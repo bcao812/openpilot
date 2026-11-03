@@ -92,7 +92,9 @@ class TestPreparedGradient(HeadlessUITestCase):
 
   def test_uniform_bytes_match_raw_for_color_limits_defaults_and_stop_boundaries(self):
     stops = [float('-inf'), -0.0, 1 / 3, 1.0, float('inf'), float('nan')]
-    for count in (0, 1, 2, 8, 20, 23):
+    # Empty experimental gradients use ModelRenderer's solid-color fallback,
+    # rather than entering the gradient uniform configuration path.
+    for count in (1, 2, 8, 20, 23):
       for default_stops in (False, True):
         colors = [rl.Color(i * 37 % 256, i * 19 % 256, 255 - i * 11 % 256, i * 47 % 256) for i in range(count)]
         gradient = polygon.Gradient((0.2, 0.1), (0.7, 0.9), colors,
@@ -375,6 +377,19 @@ class TestModelPolygonCache(HeadlessUITestCase):
       self.assertEqual(prepare.call_count, 2)
       self.assertIsNot(renderer._exp_gradient, snapshot)
       self.assertNotEqual(frames[-1], before)
+
+  def test_empty_and_single_color_experimental_snapshots_keep_solid_path_fallback(self):
+    renderer, sm = self.make_renderer()
+    sm['selfdriveState'].experimentalMode = True
+    with capture_polygons() as frames:
+      renderer._render(renderer.rect)
+      for count in (0, 1):
+        renderer._exp_gradient = polygon.PreparedGradient(polygon.Gradient(
+          (0, 1), (0, 0), [rl.Color(*rl.RED)] * count, []))
+        renderer._draw_path(sm)
+        actual = frames[-1]
+        polygon.draw_polygon(renderer._rect, renderer._path.polygon, rl.Color(255, 255, 255, 30))
+        self.assertEqual(actual, frames[-1])
 
   def test_path_cache_invalidates_current_geometry_inputs_without_timestamp_shortcuts(self):
     renderer, sm = self.make_renderer()
