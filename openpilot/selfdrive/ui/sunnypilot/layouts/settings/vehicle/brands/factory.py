@@ -9,7 +9,6 @@ from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.body impo
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.chrysler import ChryslerSettings
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.ford import FordSettings
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.gm import GMSettings
-from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.honda import HondaSettings
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.hyundai import HyundaiSettings
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.mazda import MazdaSettings
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.nissan import NissanSettings
@@ -27,7 +26,6 @@ class BrandSettingsFactory:
     "chrysler": ChryslerSettings,
     "ford": FordSettings,
     "gm": GMSettings,
-    "honda": HondaSettings,
     "hyundai": HyundaiSettings,
     "mazda": MazdaSettings,
     "nissan": NissanSettings,

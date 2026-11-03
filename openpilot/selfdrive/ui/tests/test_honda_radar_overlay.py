@@ -424,18 +424,21 @@ class TestHondaRadarOverlay(HeadlessUITestCase):
       self.assertAlmostEqual(call.args[2].x + 32, marker.x, places=3)
       self.assertLess(call.args[2].y + 40, marker.y - renderer.MARKER_RADIUS)
 
-  def test_only_overlay_setting_remains_and_changes_are_offroad_only(self):
-    from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands import honda
+  def test_visuals_overlay_follows_steering_arc_and_changes_are_offroad_only(self):
+    from openpilot.selfdrive.ui.sunnypilot.layouts.settings import visuals
     params = Mock()
     params.get_bool.return_value = False
     fake_ui = SimpleNamespace(params=params, started=False)
-    with patch.object(honda, 'ui_state', fake_ui), patch.object(honda, 'toggle_item_sp', side_effect=lambda *a, **kw: Mock()):
-      settings = honda.HondaSettings()
-      self.assertEqual(settings.items, [settings.overlay])
-      settings._set_overlay(True)
+    with patch.object(visuals, 'ui_state', fake_ui), patch.object(visuals, 'toggle_item_sp', side_effect=lambda *a, **kw: Mock()), \
+         patch.object(visuals, 'multiple_button_item_sp'):
+      settings = visuals.VisualsLayout.__new__(visuals.VisualsLayout)
+      settings._params = params
+      items = settings._initialize_items()
+      self.assertIs(items[items.index(settings._toggles['TorqueBar']) + 1], settings._toggles['HondaBoschARadarOverlay'])
+      settings._set_radar_overlay(True)
       params.put_bool.assert_called_once_with('HondaBoschARadarOverlay', True, block=True)
       fake_ui.started = True
-      settings._set_overlay(False)
+      settings._set_radar_overlay(False)
       params.put_bool.assert_called_once()
       params.get.assert_not_called()
       params.put.assert_not_called()

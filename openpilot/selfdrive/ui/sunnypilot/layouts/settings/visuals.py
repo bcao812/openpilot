@@ -97,6 +97,14 @@ class VisualsLayout(Widget):
         callback=callback,
       )
       self._toggles[param] = toggle
+      if param == "TorqueBar":
+        self._toggles["HondaBoschARadarOverlay"] = toggle_item_sp(
+          title=lambda: tr("Radar Target Labels"),
+          description=lambda: tr("Show radar detections with longitudinal distance in meters to the right. Radar-camera alignment is uncalibrated."),
+          initial_state=self._params.get_bool("HondaBoschARadarOverlay"),
+          callback=self._set_radar_overlay,
+          enabled=lambda: not ui_state.started,
+        )
 
     self._chevron_info = multiple_button_item_sp(
       title=lambda: tr("Display Metrics Below Chevron"),
@@ -123,7 +131,7 @@ class VisualsLayout(Widget):
   def _update_state(self):
     super()._update_state()
 
-    for param in self._toggle_defs:
+    for param in self._toggles:
       self._toggles[param].action_item.set_state(self._params.get_bool(param))
 
     self._dev_ui_info.action_item.set_selected_button(ui_state.params.get("DevUIInfo", return_default=True))
@@ -136,6 +144,11 @@ class VisualsLayout(Widget):
       self._chevron_info.set_description(tr(CHEVRON_INFO_DESCRIPTION["disabled"]))
       self._chevron_info.action_item.set_enabled(False)
       ui_state.params.put("ChevronInfo", 0)
+
+  def _set_radar_overlay(self, enabled):
+    if not ui_state.started:
+      self._params.put_bool("HondaBoschARadarOverlay", enabled, block=True)
+    self._toggles["HondaBoschARadarOverlay"].action_item.set_state(self._params.get_bool("HondaBoschARadarOverlay"))
 
   def _render(self, rect):
     self._scroller.render(rect)

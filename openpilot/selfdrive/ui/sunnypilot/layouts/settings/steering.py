@@ -58,6 +58,9 @@ class SteeringLayout(Widget):
       button_width=800,
       callback=lambda: self._set_current_panel(PanelType.LANE_CHANGE)
     )
+    self.blendful_toggle = toggle_item_sp(lambda: tr("Blendful (Alpha)"), "", param="Blendful")
+    self._update_blendful_toggle()
+
     self._blinker_control_toggle = toggle_item_sp(
       param="BlinkerPauseLateralControl",
       description=lambda: tr("Pause lateral control with blinker when traveling below the desired speed selected."),
@@ -103,6 +106,7 @@ class SteeringLayout(Widget):
       LineSeparatorSP(40),
       self._lane_change_settings_button,
       LineSeparatorSP(40),
+      self.blendful_toggle,
       self._blinker_control_toggle,
       self._blinker_control_options,
       self._blinker_reengage_delay,
@@ -114,11 +118,34 @@ class SteeringLayout(Widget):
     ]
     return items
 
+  def _update_blendful_toggle(self):
+    allowed = ui_state.active_runner_tinygrad
+    self.blendful_toggle.action_item.set_state(allowed and ui_state.params.get_bool("Blendful"))
+    self.blendful_toggle.action_item.set_enabled(allowed)
+    description = "<br><br>".join((
+      tr("Adds a gentle lane-center correction to the model's steering when lane lines are reliable."),
+      tr("Starts at 18 km/h (5 m/s), outside turns and lane changes."),
+      tr("Uses filtered lane confidence and a learned lane width."),
+      tr("On lane-line loss, the previous fit and confidence can persist."),
+      tr("This history has no fixed hard timeout."),
+      tr("Correction fades at low speed, during turns or lane changes."),
+      tr("Model state can build while lateral control is inactive."),
+      tr("A cyan line shows the lane center while active."),
+      tr("The display clears if model data stops or becomes invalid."),
+      tr("Supports v2 models, including the bundled Default v2 model."),
+    ))
+    if not allowed:
+      description = f"<b>{tr('The active model does not support Blendful. Switch to a v2 model to enable this setting.')}</b><br><br>{description}"
+    if self.blendful_toggle.description != description:
+      self.blendful_toggle.set_description(description)
+      self.blendful_toggle.show_description(not allowed)
+
   def _set_current_panel(self, panel: PanelType):
     self._current_panel = panel
 
   def _update_state(self):
     super()._update_state()
+    self._update_blendful_toggle()
 
     torque_allowed = ui_state.CP is not None and ui_state.CP.steerControlType != car.CarParams.SteerControlType.angle
     if ui_state.CP is not None:
@@ -157,3 +184,6 @@ class SteeringLayout(Widget):
   def show_event(self):
     self._set_current_panel(PanelType.STEERING)
     self._scroller.show_event()
+    self._update_blendful_toggle()
+    if not ui_state.active_runner_tinygrad:
+      self.blendful_toggle.show_description(True)

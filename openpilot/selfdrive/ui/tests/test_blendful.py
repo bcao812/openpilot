@@ -78,16 +78,17 @@ def model_messages():
 class TestBlendfulSettings(HeadlessUITestCase):
   @contextmanager
   def settings(self, variant):
-    from openpilot.selfdrive.ui.sunnypilot.layouts.settings import models
+    from openpilot.selfdrive.ui.sunnypilot.layouts.settings import steering
     from openpilot.selfdrive.ui.sunnypilot.mici.layouts import models as mici
+    from openpilot.system.ui.lib.application import gui_app
     from openpilot.system.ui.sunnypilot.widgets.list_view import ToggleActionSP
 
-    module = models if variant == 'big' else mici
+    module = steering if variant == 'big' else mici
     state = state_with_runner()
     with ExitStack() as stack:
       stack.enter_context(patch.object(module, 'ui_state', state))
       stack.enter_context(patch.object(module, 'tr', side_effect=lambda value: value))
-      stack.enter_context(patch.object(module.gui_app, 'font', return_value=rl.Font()))
+      stack.enter_context(patch.object(gui_app, 'font', return_value=rl.Font()))
       if variant == 'big':
         def toggle_item(title, description=None, **kwargs):
           item = Mock()
@@ -99,10 +100,10 @@ class TestBlendfulSettings(HeadlessUITestCase):
           return item
 
         stack.enter_context(patch.object(module, 'toggle_item_sp', side_effect=toggle_item))
-        for name in ('ListItemSP', 'button_item', 'download_status_item', 'option_item_sp', 'ScrollingButtonAction', 'NoElideButtonAction', 'Scroller'):
-          stack.enter_context(patch.object(module, name, create=True))
-        stack.enter_context(patch.object(module.ModelsLayout, 'calculate_cache_size', return_value=0))
-        layout = module.ModelsLayout()
+        for name in ('simple_button_item_sp', 'option_item_sp', 'LineSeparatorSP', 'Scroller',
+                     'LaneChangeSettingsLayout', 'MadsSettingsLayout', 'TorqueSettingsLayout'):
+          stack.enter_context(patch.object(module, name))
+        layout = module.SteeringLayout()
         control = layout.blendful_toggle.action_item
 
         def selected():
@@ -137,10 +138,13 @@ class TestBlendfulSettings(HeadlessUITestCase):
 
   def test_default_v2_exposes_switch_and_changes_persist_without_restart(self):
     for variant in ('big', 'mici'):
-      with self.subTest(variant=variant), self.settings(variant) as (_, state, layout, control, selected, select):
+      with self.subTest(variant=variant), self.settings(variant) as (module, state, layout, control, selected, select):
         self.assertIsNone(state.active_bundle)
         self.assertTrue(control.enabled)
-        self.assertIn(layout.blendful_toggle, layout.items if variant == 'big' else layout.main_items)
+        items = module.Scroller.call_args.args[0] if variant == 'big' else layout.main_items
+        self.assertIn(layout.blendful_toggle, items)
+        if variant == 'big':
+          self.assertEqual(items.index(layout._blinker_control_toggle), items.index(layout.blendful_toggle) + 1)
         state.params.put_bool('Blendful', False, block=True)
         layout.show_event()
         self.assertFalse(selected())

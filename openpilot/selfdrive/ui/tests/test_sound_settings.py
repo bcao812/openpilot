@@ -61,13 +61,13 @@ class TestSoundSettings(HeadlessUITestCase):
           layout._sound_toggle._select_callback(layout._sound_options[index])
       yield layout, selected, select
 
-  def test_sound_follows_radar_with_three_choices_and_default_all(self):
+  def test_sound_position_with_three_choices_and_default_all(self):
     Params().remove('SoundMode')
     for variant in ('big', 'mici'):
       with self.subTest(variant=variant), self.settings(variant) as (layout, selected, _):
         if variant == 'big':
           keys = list(layout._toggles)
-          self.assertEqual(keys[keys.index('RadarSignal') + 1], 'SoundMode')
+          self.assertEqual(keys[keys.index('ExperimentalMode') + 1], 'SoundMode')
           self.assertEqual(layout._sound_setting.title(), 'Sound')
           self.assertEqual([label() for label in layout._sound_setting.action_item.buttons], ['None', 'Warning', 'All'])
         else:

@@ -1,5 +1,4 @@
 import importlib
-from functools import partial
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -31,23 +30,26 @@ def radar_message():
 
 class TestRadarSignalUI(HeadlessUITestCase):
   def test_default_and_offroad_write_guard_in_both_settings_layouts(self):
-    from openpilot.selfdrive.ui.layouts.settings import toggles
+    from openpilot.selfdrive.ui.sunnypilot.layouts.settings import cruise
     from openpilot.selfdrive.ui.mici.layouts.settings import toggles as mici
 
     params = Params()
     state = SimpleNamespace(params=params, started=False, CP=None, update_params=Mock())
     state.is_offroad = lambda: not state.started
-    for module, cls in ((toggles, toggles.TogglesLayout), (mici, mici.TogglesLayoutMici)):
+    for module, cls in ((cruise, cruise.CruiseLayout), (mici, mici.TogglesLayoutMici)):
       with self.subTest(layout=module.__name__), patch.object(module, 'ui_state', state):
         params.remove('RadarSignal')
         params.remove('OnroadCycleRequested')
         state.started = False
         layout = cls.__new__(cls)
-        if module is toggles:
-          layout._params = params
-          layout._toggles = {'RadarSignal': SimpleNamespace(action_item=Mock())}
-          self.assertTrue(layout._get_toggle_state('RadarSignal'))
-          callback = partial(layout._toggle_callback, param='RadarSignal')
+        if module is cruise:
+          with patch.object(cruise, 'toggle_item_sp', side_effect=lambda *a, **kw: Mock()), \
+               patch.object(cruise, 'option_item_sp'), patch.object(cruise, 'simple_button_item_sp'):
+            items = layout._initialize_items()
+          self.assertIs(items[items.index(layout.dec_toggle) + 1], layout.radar_signal_toggle)
+          layout._update_radar_signal()
+          layout.radar_signal_toggle.action_item.set_state.assert_called_with(True)
+          callback = layout._on_radar_signal
         else:
           layout._radar_signal_btn = Mock()
           layout._sound_toggle = Mock()

@@ -6,6 +6,8 @@ See the LICENSE.md file in the root directory for more details.
 """
 from enum import IntEnum
 
+from openpilot.common.params import UnknownKeyName
+from openpilot.common.radar_signal import radar_signal_enabled
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.cruise_sub_layouts.speed_limit_settings import SpeedLimitSettingsLayout
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.multilang import tr, tr_noop
@@ -82,9 +84,24 @@ class CruiseLayout(Widget):
       description=lambda: tr("Enable toggle to allow the model to determine when to use sunnypilot ACC or sunnypilot End to End Longitudinal."),
       param="DynamicExperimentalControl")
 
+    try:
+      self._radar_signal_locked = ui_state.params.get_bool("RadarSignalLock")
+    except UnknownKeyName:
+      self._radar_signal_locked = False
+    self.radar_signal_toggle = toggle_item_sp(
+      title=lambda: tr("Radar Signal"),
+      description=lambda: tr("Use forward radar detections for driving assistance and onroad displays. When disabled, vision detections are still used. " +
+                             "Changes take effect on the next drive."),
+      initial_state=radar_signal_enabled(ui_state.params),
+      callback=self._on_radar_signal,
+      enabled=lambda: not self._radar_signal_locked and ui_state.is_offroad(),
+      icon="speed_limit.png",
+    )
+
     items = [
       self.icbm_toggle,
       self.dec_toggle,
+      self.radar_signal_toggle,
       self.scc_v_toggle,
       self.custom_acc_toggle,
       self.custom_acc_short_increment,
@@ -101,6 +118,7 @@ class CruiseLayout(Widget):
 
   def show_event(self):
     self._set_current_panel(PanelType.CRUISE)
+    self._update_radar_signal()
     self._scroller.show_event()
     self.icbm_toggle.show_description(True)
     self.custom_acc_toggle.show_description(True)
@@ -112,6 +130,7 @@ class CruiseLayout(Widget):
 
   def _update_state(self):
     super()._update_state()
+    self._update_radar_signal()
 
     if ui_state.CP is not None and ui_state.CP_SP is not None:
       has_icbm = ui_state.has_icbm
@@ -176,6 +195,14 @@ class CruiseLayout(Widget):
         self.custom_acc_toggle.show_description(True)
 
     self._on_custom_acc_toggle(self.custom_acc_toggle.action_item.get_state())
+
+  def _update_radar_signal(self):
+    self.radar_signal_toggle.action_item.set_state(radar_signal_enabled(ui_state.params))
+
+  def _on_radar_signal(self, state: bool):
+    if ui_state.is_offroad():
+      ui_state.params.put_bool("RadarSignal", state, block=True)
+    self._update_radar_signal()
 
   def _on_custom_acc_toggle(self, state):
     self.custom_acc_short_increment.set_visible(state)
