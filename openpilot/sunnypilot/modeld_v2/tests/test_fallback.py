@@ -146,6 +146,9 @@ class TestFallback(OpenpilotTestCase):
     vision_client.available_streams.return_value = [modeld_module.VisionStreamType.VISION_STREAM_NARROW_ROAD]
 
     self.enterContext(mock.patch.object(modeld_module, 'config_realtime_process'))
+    self.enterContext(mock.patch.object(modeld_module, 'drop_realtime'))
+    self.enterContext(mock.patch.object(modeld_module, 'set_core_affinity'))
+    self.enterContext(mock.patch.object(modeld_module.gc, 'disable'))
     self.enterContext(mock.patch.object(modeld_module, 'setproctitle'))
     self.enterContext(mock.patch.object(modeld_module, 'chestnut_present', return_value=chestnut_present))
     self.enterContext(mock.patch.object(modeld_module, 'Params', return_value=params))

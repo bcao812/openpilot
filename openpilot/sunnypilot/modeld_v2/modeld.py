@@ -8,6 +8,7 @@ See the LICENSE.md file in the root directory for more details.
 
 from collections.abc import Callable
 from multiprocessing import current_process
+import gc
 import os
 os.environ['GMMU'] = '0'
 import numpy as np
@@ -29,7 +30,7 @@ from openpilot.common.file_chunker import open_file_chunked
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
-from openpilot.common.realtime import config_realtime_process, DT_MDL
+from openpilot.common.realtime import config_realtime_process, drop_realtime, set_core_affinity, DT_MDL
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
 from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.system import sentry
@@ -378,6 +379,38 @@ class ModelState(ModelStateBase):
     return log.ModelDataV2.Action(desiredCurvature=float(desired_curvature), desiredAcceleration=float(desired_accel), shouldStop=bool(stop))
 
 
+class _ModelStartupScheduler:
+  def __init__(self):
+    # Deserialization and the first real inference can exceed AGNOS's RT CPU
+    # budget. Keep CPU placement and GC behavior, but defer FIFO until this
+    # model has completed its first real output, including lazy graph setup.
+    gc.disable()
+    drop_realtime()
+    set_core_affinity([7])
+    self._realtime_enabled = False
+    self._ready_models: list[ModelState] = []
+
+  def _set_realtime(self, enabled: bool) -> None:
+    if enabled == self._realtime_enabled:
+      return
+    if enabled:
+      config_realtime_process(7, 54)
+    else:
+      drop_realtime()
+    self._realtime_enabled = enabled
+
+  def prepare(self, model: ModelState) -> None:
+    self._set_realtime(any(ready is model for ready in self._ready_models))
+
+  def complete(self, model: ModelState, output: dict | None) -> None:
+    if output is None:
+      return
+    # At most the selected model and the pre-created fallback are retained.
+    if not any(ready is model for ready in self._ready_models):
+      self._ready_models.append(model)
+    self._set_realtime(True)
+
+
 def main(demo=False):
   if current_process().name == "modeld_tinygrad":
     # NativeProcess previously selected this working directory before exec.
@@ -390,7 +423,7 @@ def main(demo=False):
   sentry.set_tag("daemon", PROCESS_NAME)
   cloudlog.bind(daemon=PROCESS_NAME)
   setproctitle(PROCESS_NAME)
-  config_realtime_process(7, 54)
+  startup_scheduler = _ModelStartupScheduler()
 
   CHESTNUT = chestnut_present()
   if CHESTNUT:
@@ -588,6 +621,7 @@ def main(demo=False):
     if 'action_t' in model.numpy_inputs:
       inputs['action_t'] = np.array([lat_action_t, long_action_t], dtype=np.float32)
 
+    startup_scheduler.prepare(model)
     mt1 = time.perf_counter()
     try:
       send_chestnut = (chestnut_state is not None and
@@ -602,12 +636,14 @@ def main(demo=False):
       params.put_bool("ChestnutActive", False)
       assert small_model is not None
       model = small_model
+      startup_scheduler.prepare(model)
       if chestnut_state is not None:
         chestnut_state.big = False
       run_count = 0
       model_output = None
     mt2 = time.perf_counter()
     model_execution_time = mt2 - mt1
+    startup_scheduler.complete(model, model_output)
 
     if model_output is not None:
       new_model_frame = meta_main.timestamp_eof > last_model_frame_ns

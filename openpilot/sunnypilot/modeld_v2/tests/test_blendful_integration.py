@@ -378,6 +378,7 @@ class TestBlendfulFrameLoop(OpenpilotTestCase):
     submaster_factory = mock.Mock(return_value=sm)
     patches = (
       mock.patch.object(modeld, 'config_realtime_process'), mock.patch.object(modeld, 'setproctitle'),
+      mock.patch.object(modeld, 'drop_realtime'), mock.patch.object(modeld, 'set_core_affinity'), mock.patch.object(modeld.gc, 'disable'),
       mock.patch.object(modeld, 'chestnut_present', return_value=chestnut), mock.patch.object(modeld, 'Params', return_value=params),
       mock.patch.object(modeld, 'VisionIpcClient', vision_client),
       mock.patch.object(modeld, 'ModelState', side_effect=lambda **kwargs: large if kwargs['chestnut'] else small),
