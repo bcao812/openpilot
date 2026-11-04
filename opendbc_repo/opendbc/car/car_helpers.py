@@ -156,7 +156,14 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
       carlog.warning({"event": "fixed_fingerprint_query_fallback", "platform": fixed_fingerprint,
                       "fw_count": len(car_fw), "exact": exact_fw_match, "matches": len(fw_candidates)})
       ecu_rx_addrs = get_present_ecus(can_recv, can_send, set_obd_multiplexing)
-      car_fw = get_fw_versions_ordered(can_recv, can_send, set_obd_multiplexing, vin, ecu_rx_addrs)
+      fallback_fw = get_fw_versions_ordered(can_recv, can_send, set_obd_multiplexing, vin, ecu_rx_addrs)
+      # Both queries belong to this startup discovery. A later missed response
+      # must not erase an EPS modification already observed in the first query.
+      seen_fw = [fw.to_dict() for fw in car_fw]
+      for fw in fallback_fw:
+        if (data := fw.to_dict()) not in seen_fw:
+          car_fw.append(fw)
+          seen_fw.append(data)
       exact_fw_match, fw_candidates = match_fw_to_car(car_fw, vin)
       query_brand = None
   else:

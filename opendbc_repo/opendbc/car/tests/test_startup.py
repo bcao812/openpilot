@@ -13,6 +13,7 @@ from opendbc.car.honda.values import CAR, FW_QUERY_CONFIG, HondaFlags, HondaSafe
 from opendbc.car.interfaces import get_interface_attr, get_platform
 from opendbc.car.structs import CarParams
 from opendbc.car.vin import VIN_UNKNOWN
+from opendbc.sunnypilot.car.honda.values import HondaFlagsSP
 
 
 def accord_firmware():
@@ -166,6 +167,23 @@ class TestHondaStartupQueries(unittest.TestCase):
         self.assertEqual(query.call_count, 1)
         self.assertEqual(present.call_count, 1)
         self.assertIsNone(query.call_args.kwargs['query_brand'])
+
+  def test_fallback_cannot_erase_an_already_observed_modified_eps(self):
+    modified = CarParams.CarFw(ecu='eps', address=0x18da30f1, fwVersion=b'39990-TVA,A150\x00\x00', brand='honda')
+    for fallback_firmware in ([], [modified], [fw for fw in accord_firmware() if fw.ecu != 'eps']):
+      with self.subTest(fallback_count=len(fallback_firmware)):
+        result, _, query = self._fingerprint('HONDA_ACCORD', [(False, set()), (True, set())],
+                                             [modified], fallback_firmware)
+        self.assertEqual(query.call_count, 2)
+        firmware = result[3]
+        self.assertEqual(sum(fw.to_dict() == modified.to_dict() for fw in firmware), 1)
+        interface = car_helpers.interfaces['HONDA_ACCORD']
+        cp = interface.get_params('HONDA_ACCORD', result[1], firmware, True, False, False)
+        cp_sp = interface.get_params_sp(cp, 'HONDA_ACCORD', result[1], firmware, True, False, False)
+        self.assertTrue(cp_sp.flags & HondaFlagsSP.EPS_MODIFIED)
+        self.assertEqual(cp.lateralTuning.which(), 'pid')
+        self.assertAlmostEqual(cp.lateralTuning.pid.kpV[0], 0.3)
+        self.assertAlmostEqual(cp.lateralTuning.pid.kiV[0], 0.09)
 
   def test_observed_can_configuration_still_controls_honda_flags(self):
     interface = car_helpers.interfaces['HONDA_ACCORD']

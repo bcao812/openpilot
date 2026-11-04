@@ -12,8 +12,8 @@ PERSISTENT_METADATA = {"Version", "GitCommit", "GitCommitDate", "GitBranch", "Gi
 
 class TestStartupMetadata(OpenpilotTestCase):
   def metadata(self, **changes):
-    source = dict(version="test-version", git_commit="test-commit", git_commit_date="test-date",
-                  git_origin="test-origin", git_normalized_origin="test-origin", is_dirty=True)
+    source = {"version": "test-version", "git_commit": "test-commit", "git_commit_date": "test-date",
+              "git_origin": "test-origin", "git_normalized_origin": "test-origin", "is_dirty": True}
     source.update(changes)
     return SimpleNamespace(channel="c3xl-dev", development_channel=True, tested_channel=False,
                            release_channel=False, release_sp_channel=False, openpilot=SimpleNamespace(**source))
