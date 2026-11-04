@@ -1,3 +1,4 @@
+import math
 import numpy as np
 
 from opendbc.can import CANPacker
@@ -160,34 +161,37 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # Send steering command.
     can_sends.append(hondacan.create_steering_control(self.packer, self.CAN, apply_torque, CC.latActive, self.tja_control))
 
-    # wind brake from air resistance decel at high speed
-    wind_brake = np.interp(CS.out.vEgo, [0.0, 2.3, 35.0], [0.001, 0.002, 0.15])
-    # all of this is only relevant for HONDA NIDEC
-    max_accel = np.interp(CS.out.vEgo, self.params.NIDEC_MAX_ACCEL_BP, self.params.NIDEC_MAX_ACCEL_V)
-    # TODO this 1.44 is just to maintain previous behavior
-    pcm_speed_BP = [-wind_brake,
-                    -wind_brake * (3 / 4),
-                    0.0,
-                    0.5]
-    # The Honda ODYSSEY seems to have different PCM_ACCEL
-    # msgs, is it other cars too?
-    if self.CP_SP.enableGasInterceptor or not CC.longActive:
-      pcm_speed = 0.0
-      pcm_accel = int(0.0)
-    elif self.CP.flags & HondaFlags.NIDEC_ALT_PCM_ACCEL:
-      pcm_speed_V = [0.0,
-                     np.clip(CS.out.vEgo - 3.0, 0.0, 100.0),
-                     np.clip(CS.out.vEgo + 0.0, 0.0, 100.0),
-                     np.clip(CS.out.vEgo + 5.0, 0.0, 100.0)]
-      pcm_speed = float(np.interp(gas - brake, pcm_speed_BP, pcm_speed_V))
-      pcm_accel = int(1.0 * self.params.NIDEC_GAS_MAX)
-    else:
-      pcm_speed_V = [0.0,
-                     np.clip(CS.out.vEgo - 2.0, 0.0, 100.0),
-                     np.clip(CS.out.vEgo + 2.0, 0.0, 100.0),
-                     np.clip(CS.out.vEgo + 5.0, 0.0, 100.0)]
-      pcm_speed = float(np.interp(gas - brake, pcm_speed_BP, pcm_speed_V))
-      pcm_accel = int(np.clip((accel / 1.44) / max_accel, 0.0, 1.0) * self.params.NIDEC_GAS_MAX)
+    # Bosch HUD messages do not use PCM_SPEED/PCM_GAS. Keep the original
+    # calculation for non-finite inputs, including its exception behavior.
+    pcm_speed, pcm_accel = 0.0, 0
+    if not (self.CP.flags & HondaFlags.BOSCH) or not math.isfinite(CS.out.vEgo) or not math.isfinite(accel):
+      # wind brake from air resistance decel at high speed
+      wind_brake = np.interp(CS.out.vEgo, [0.0, 2.3, 35.0], [0.001, 0.002, 0.15])
+      max_accel = np.interp(CS.out.vEgo, self.params.NIDEC_MAX_ACCEL_BP, self.params.NIDEC_MAX_ACCEL_V)
+      # TODO this 1.44 is just to maintain previous behavior
+      pcm_speed_BP = [-wind_brake,
+                      -wind_brake * (3 / 4),
+                      0.0,
+                      0.5]
+      # The Honda ODYSSEY seems to have different PCM_ACCEL
+      # msgs, is it other cars too?
+      if self.CP_SP.enableGasInterceptor or not CC.longActive:
+        pcm_speed = 0.0
+        pcm_accel = int(0.0)
+      elif self.CP.flags & HondaFlags.NIDEC_ALT_PCM_ACCEL:
+        pcm_speed_V = [0.0,
+                       np.clip(CS.out.vEgo - 3.0, 0.0, 100.0),
+                       np.clip(CS.out.vEgo + 0.0, 0.0, 100.0),
+                       np.clip(CS.out.vEgo + 5.0, 0.0, 100.0)]
+        pcm_speed = float(np.interp(gas - brake, pcm_speed_BP, pcm_speed_V))
+        pcm_accel = int(1.0 * self.params.NIDEC_GAS_MAX)
+      else:
+        pcm_speed_V = [0.0,
+                       np.clip(CS.out.vEgo - 2.0, 0.0, 100.0),
+                       np.clip(CS.out.vEgo + 2.0, 0.0, 100.0),
+                       np.clip(CS.out.vEgo + 5.0, 0.0, 100.0)]
+        pcm_speed = float(np.interp(gas - brake, pcm_speed_BP, pcm_speed_V))
+        pcm_accel = int(np.clip((accel / 1.44) / max_accel, 0.0, 1.0) * self.params.NIDEC_GAS_MAX)
 
     if not self.CP.openpilotLongitudinalControl:
       if self.frame % 2 == 0 and not (self.CP.flags & (HondaFlags.BOSCH_RADARLESS | HondaFlags.BOSCH_CANFD)):

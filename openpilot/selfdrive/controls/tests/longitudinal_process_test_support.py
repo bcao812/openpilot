@@ -218,7 +218,7 @@ def selfdrive_event_harness(control_state):
     'last_steering_pressed_frame', 'distance_traveled',
   ):
     setattr(daemon, name, 0)
-  for name in ('startup_event', 'usbgpu_active', 'calibrated_pose', 'not_running_prev', 'logged_comm_issue'):
+  for name in ('startup_event', 'usbgpu_active', 'calibrated_actuation', 'not_running_prev', 'logged_comm_issue'):
     setattr(daemon, name, None)
   daemon.not_running_frame = -1
   daemon.radar_any_error_frame = -1

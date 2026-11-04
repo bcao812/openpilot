@@ -6,6 +6,8 @@ See the LICENSE.md file in the root directory for more details.
 """
 import time
 
+import capnp
+
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import log, custom
 
@@ -20,6 +22,10 @@ from openpilot.sunnypilot.selfdrive.controls.lib.blinker_pause_lateral import Bl
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque as LatControlTorqueV0
 
 
+_RADAR_LEAD_SCHEMA = log.RadarState.LeadData.schema
+_CAPNP_STRUCT_TYPES = (capnp.lib.capnp._DynamicStructReader, capnp.lib.capnp._DynamicStructBuilder)
+
+
 class ControlsExt(ModelStateBase):
   def __init__(self, CP: structs.CarParams, params: Params):
     ModelStateBase.__init__(self)
@@ -28,6 +34,7 @@ class ControlsExt(ModelStateBase):
     self.radar_signal = radar_signal_enabled(params)
     self._param_update_time: float = 0.0
     self.blinker_pause_lateral = BlinkerPauseLateral()
+    self._lead_projection_cache = [None, None]
 
     cloudlog.info("controlsd_ext is waiting for CarParamsSP")
     self.CP_SP = messaging.log_from_bytes(params.get("CarParamsSP", block=True), custom.CarParamsSP)
@@ -88,12 +95,42 @@ class ControlsExt(ModelStateBase):
     _lead.radarTrackId = src.radarTrackId
     _lead.evidence = src.evidence
 
+  def _copy_current_lead(self, output, name, src, index, cache):
+    # A reader may still alias a mutable builder. Compare the complete current
+    # contents, not reader identity, track ID, timestamps or presence alone.
+    # Unknown schemas/types and overridden mappers retain the original path.
+    mapper = self.get_lead_data
+    payload = None
+    if mapper is _DEFAULT_LEAD_MAPPER and isinstance(src, _CAPNP_STRUCT_TYPES) and src.schema == _RADAR_LEAD_SCHEMA:
+      try:
+        reader = src.as_reader() if isinstance(src, capnp.lib.capnp._DynamicStructBuilder) else src
+        payload = reader.as_builder().to_bytes()
+      except (AttributeError, TypeError, capnp.KjException):
+        pass
+    if payload is None:
+      cache[index] = None
+      mapper(getattr(output, name), src)
+      return
+
+    cached = cache[index]
+    if cached is None or cached[0] != payload:
+      template = custom.LeadData.new_message()
+      mapper(template, src)
+      cached = (payload, template.as_reader())
+      cache[index] = cached
+    # Cap'n Proto copies this private template into the new output's arena.
+    # Neither a previous output nor the source can mutate a later output.
+    setattr(output, name, cached[1])
+
   def state_control_ext(self, sm: messaging.SubMaster) -> custom.CarControlSP:
     CC_SP = custom.CarControlSP.new_message()
 
     radar = radar_state_for_mode(sm['radarState'], self.radar_signal)
-    self.get_lead_data(CC_SP.leadOne, radar.leadOne)
-    self.get_lead_data(CC_SP.leadTwo, radar.leadTwo)
+    cache = getattr(self, '_lead_projection_cache', None)
+    if cache is None:
+      self._lead_projection_cache = cache = [None, None]
+    self._copy_current_lead(CC_SP, 'leadOne', radar.leadOne, 0, cache)
+    self._copy_current_lead(CC_SP, 'leadTwo', radar.leadTwo, 1, cache)
 
     # MADS state
     mads_src = sm['selfdriveStateSP'].mads
@@ -121,3 +158,6 @@ class ControlsExt(ModelStateBase):
   def run_ext(self, sm: messaging.SubMaster, pm: messaging.PubMaster) -> None:
     CC_SP = self.state_control_ext(sm)
     self.publish_ext(CC_SP, sm, pm)
+
+
+_DEFAULT_LEAD_MAPPER = ControlsExt.get_lead_data

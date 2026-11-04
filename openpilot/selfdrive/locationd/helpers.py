@@ -173,6 +173,24 @@ class PoseCalibrator:
   def build_calibrated_angular_velocity(self, device_motion: log.DeviceMotion) -> Measurement:
     return self._transform_calib_from_device(Measurement.from_measurement_xyz(device_motion.angularVelocityDevice))
 
+  def build_calibrated_actuation(self, device_motion: log.DeviceMotion) -> tuple[float, float]:
+    """The two calibrated means used by excessive-actuation detection.
+
+    Keep the full matrix/vector operations and their order from
+    build_calibrated_pose; only the unused pose components and uncertainties
+    are omitted. No measurement or calibration is retained here.
+    """
+    if self.calib_from_device.shape != (3, 3):
+      # Preserve the full-pose failure behavior for a malformed calibration.
+      pose = self.build_calibrated_pose(Pose.from_device_motion(device_motion))
+      return pose.acceleration.x, pose.angular_velocity.yaw
+
+    angular_velocity = device_motion.angularVelocityDevice
+    acceleration = device_motion.accelerationDevice
+    angular_velocity_calib = self.calib_from_device @ np.array([angular_velocity.x, angular_velocity.y, angular_velocity.z])
+    acceleration_calib = self.calib_from_device @ np.array([acceleration.x, acceleration.y, acceleration.z])
+    return acceleration_calib[0], angular_velocity_calib[2]
+
   def build_calibrated_pose(self, pose: Pose) -> Pose:
     ned_from_calib_euler = self._ned_from_calib(pose.orientation)
     angular_velocity_calib = self._transform_calib_from_device(pose.angular_velocity)

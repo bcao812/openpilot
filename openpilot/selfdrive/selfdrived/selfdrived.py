@@ -30,7 +30,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_continuation import (
   continuation_reference, execution_target, inactive_native_recovery, validate_continuation,
 )
 from openpilot.selfdrive.controls.lib.reference_timing import REFERENCE_TIMING_VERSION, ReferenceTimingConsumer, valid_timestamp
-from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
+from openpilot.selfdrive.locationd.helpers import PoseCalibrator
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.engagement_policy import EngagementPolicy, LongitudinalEvents
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
@@ -156,7 +156,7 @@ class SelfdriveD(CruiseHelper):
     self.cp_safety_configs = [(sc.safetyModel, sc.safetyParam) for sc in self.CP.safetyConfigs]
 
     self.pose_calibrator = PoseCalibrator()
-    self.calibrated_pose: Pose | None = None
+    self.calibrated_actuation: tuple[float, float] | None = None
     self.excessive_actuation_check = ExcessiveActuationCheck()
     self.excessive_actuation = self.params.get("Offroad_ExcessiveActuation") is not None
     self.big_model_loading = False
@@ -581,11 +581,10 @@ class SelfdriveD(CruiseHelper):
     if self.sm.updated['extrinsicsCalibration']:
       self.pose_calibrator.feed_extrinsics_calibration(self.sm['extrinsicsCalibration'])
     if self.sm.updated['deviceMotion']:
-      device_motion = Pose.from_device_motion(self.sm['deviceMotion'])
-      self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_motion)
+      self.calibrated_actuation = self.pose_calibrator.build_calibrated_actuation(self.sm['deviceMotion'])
 
-    if self.calibrated_pose is not None and not self.cp_not_car:
-      excessive_actuation = self.excessive_actuation_check.update(self.sm, CS, self.calibrated_pose)
+    if self.calibrated_actuation is not None and not self.cp_not_car:
+      excessive_actuation = self.excessive_actuation_check.update_from_values(self.sm, CS, *self.calibrated_actuation)
       if not self.excessive_actuation and excessive_actuation is not None:
         set_offroad_alert("Offroad_ExcessiveActuation", True, extra_text=str(excessive_actuation))
         self.excessive_actuation = True
