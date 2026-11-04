@@ -121,7 +121,7 @@ def test_lateral_detection_keeps_engagement_buffer_and_override_reset():
 
 
 def event_harness():
-  daemon, CS = selfdrive_event_harness(new_event('controlsState'))
+  daemon, CS = selfdrive_event_harness(new_event('controlsState').as_reader())
   daemon.pose_calibrator = PoseCalibrator()
   daemon.excessive_actuation_check = ExcessiveActuationCheck()
   daemon.sm.data['carControl'] = car.CarControl(longActive=True, latActive=True)
