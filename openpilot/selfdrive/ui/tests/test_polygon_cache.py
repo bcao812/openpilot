@@ -90,6 +90,17 @@ class TestPreparedGradient(HeadlessUITestCase):
     polygon._configure_shader_color(state, None, gradient, rect)
     return uploads[start:]
 
+  def test_short_gradients_stay_live_without_packing_and_larger_gradients_are_snapshots(self):
+    for count in (0, 1, 2, 7, 8, 16, 20):
+      gradient = polygon.Gradient((0, 1), (0, 0), [rl.Color(*rl.RED)] * count, [])
+      with self.subTest(count=count), patch.object(polygon, 'PreparedGradient', wraps=polygon.PreparedGradient) as prepare:
+        result = polygon.prepare_gradient(gradient)
+        self.assertEqual(prepare.call_count, int(count >= 8))
+        if count < 8:
+          self.assertIs(result, gradient)
+          gradient.colors[:] = [rl.Color(*rl.BLUE)]
+          self.assertIs(result.colors, gradient.colors)
+
   def test_uniform_bytes_match_raw_for_color_limits_defaults_and_stop_boundaries(self):
     stops = [float('-inf'), -0.0, 1 / 3, 1.0, float('inf'), float('nan')]
     # Empty experimental gradients use ModelRenderer's solid-color fallback,
@@ -359,7 +370,7 @@ class TestModelPolygonCache(HeadlessUITestCase):
 
     renderer, sm = self.make_renderer()
     sm['selfdriveState'].experimentalMode = True
-    with capture_polygons() as frames, patch.object(model, 'PreparedGradient', wraps=polygon.PreparedGradient) as prepare:
+    with capture_polygons() as frames, patch.object(model, 'prepare_gradient', wraps=polygon.prepare_gradient) as prepare:
       renderer._render(renderer.rect)
       self.assertEqual(prepare.call_count, 1)
       snapshot = renderer._exp_gradient

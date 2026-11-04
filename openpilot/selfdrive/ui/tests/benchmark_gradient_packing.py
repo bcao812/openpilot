@@ -62,7 +62,7 @@ def equivalent(modules, states, count):
   for arm, module in modules.items():
     gradient = source_gradient(module, count)
     if arm == 'candidate':
-      gradient = module.PreparedGradient(gradient)
+      gradient = module.prepare_gradient(gradient)
     with capture_uploads(module) as uploads:
       for rect in (rl.Rectangle(0, 0, 2160, 1080), rl.Rectangle(-11, 23, 400, 600)):
         module._configure_shader_color(states[arm], None, gradient, rect)
@@ -81,7 +81,7 @@ def measure(module, state, prepared, count, update_every, frames):
   def build(index):
     source = sources[index % len(sources)]
     gradient = module.Gradient(source.start, source.end, source.colors, source.stops)
-    return module.PreparedGradient(gradient) if prepared else gradient
+    return module.prepare_gradient(gradient) if prepared else gradient
 
   gradient = build(0)
   rects = (rl.Rectangle(0, 0, 2160, 1080), rl.Rectangle(7, 15, 2153, 1065))

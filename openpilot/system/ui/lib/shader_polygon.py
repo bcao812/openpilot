@@ -48,6 +48,13 @@ class PreparedGradient:
     self._stops = rl.ffi.new("float[]", [0.0 if stop < 0.0 else 1.0 if stop > 1.0 else stop for stop in stops])
 
 
+def prepare_gradient(gradient: Gradient) -> Gradient | PreparedGradient:
+  # Packing a short, frequently replaced gradient costs more than its small
+  # normalization loop. The measured 8/16-color paths benefit from reuse;
+  # leave shorter gradients on the existing mutable path without allocations.
+  return PreparedGradient(gradient) if len(gradient.colors) >= 8 else gradient
+
+
 FRAGMENT_SHADER = GL_VERSION + """
 in vec2 fragTexCoord;
 out vec4 finalColor;

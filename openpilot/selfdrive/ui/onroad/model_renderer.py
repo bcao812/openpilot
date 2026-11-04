@@ -12,7 +12,7 @@ from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.fastmath import clamp, lerp
-from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient, PreparedGradient, PreparedPolygon
+from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient, PreparedGradient, PreparedPolygon, prepare_gradient
 from openpilot.system.ui.widgets import Widget
 
 from openpilot.selfdrive.ui.sunnypilot.onroad.model_renderer import ChevronMetrics, ModelRendererSP
@@ -90,7 +90,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     self._transform_dirty = True
     self._clip_region = None
 
-    self._exp_gradient = PreparedGradient(Gradient(
+    self._exp_gradient = prepare_gradient(Gradient(
       start=(0.0, 1.0),  # Bottom of path
       end=(0.0, 0.0),  # Top of path
       colors=[],
@@ -331,7 +331,7 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       i += 1 + (1 if (i + 2) < n else 0)
 
     # Store the gradient in the path object
-    self._exp_gradient = PreparedGradient(Gradient(
+    self._exp_gradient = prepare_gradient(Gradient(
       start=(0.0, 1.0),  # Bottom of path
       end=(0.0, 0.0),  # Top of path
       colors=segment_colors,
@@ -395,7 +395,8 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
     if self._experimental_mode:
       # Draw with acceleration coloring
-      if self._exp_gradient.color_count > 1:
+      color_count = self._exp_gradient.color_count if isinstance(self._exp_gradient, PreparedGradient) else len(self._exp_gradient.colors)
+      if color_count > 1:
         draw_polygon(self._rect, self._path.polygon, gradient=self._exp_gradient)
       else:
         draw_polygon(self._rect, self._path.polygon, rl.Color(255, 255, 255, 30))
