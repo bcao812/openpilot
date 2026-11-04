@@ -12,6 +12,24 @@ CAN_INVALID_CNT = 5
 
 
 def get_raw_value(dat: bytes | bytearray, sig: Signal) -> int:
+  # Most signals fit in one byte. Full, contiguous wider fields can use the
+  # built-in integer decoder instead of visiting each byte in Python. Read the
+  # metadata on every call: DBC Signal instances are shared and mutable.
+  msb, bits = sig.msb, sig.size
+  first = msb // 8
+  if 0 <= first < len(dat) and bits > 0:
+    lsb = sig.lsb
+    last = lsb // 8
+    if first == last and bits == msb - lsb + 1:
+      return (dat[first] >> (lsb % 8)) & ((1 << bits) - 1)
+    if sig.is_little_endian:
+      if 0 <= last < first and bits == msb - lsb + 1:
+        return (int.from_bytes(dat[last:first + 1], "little") >> (lsb % 8)) & ((1 << bits) - 1)
+    elif first < last < len(dat) and bits == (last - first) * 8 + msb % 8 - lsb % 8 + 1:
+      return (int.from_bytes(dat[first:last + 1], "big") >> (lsb % 8)) & ((1 << bits) - 1)
+
+  # Preserve partial-frame and unusual metadata behavior, including the point
+  # at which malformed bit ranges raise rather than silently zero-padding.
   ret = 0
   i = sig.msb // 8
   bits = sig.size
