@@ -1,5 +1,8 @@
 import os
 import time
+from collections.abc import Mapping
+from functools import cache
+from importlib import import_module
 
 from opendbc.car import gen_empty_fingerprint
 from opendbc.car.can_definitions import CanRecvCallable, CanSendCallable
@@ -8,7 +11,6 @@ from opendbc.car.structs import CarParams, CarParamsT
 from opendbc.car.fingerprints import eliminate_incompatible_cars, all_legacy_fingerprint_cars
 from opendbc.car.fw_versions import ObdCallback, get_fw_versions_ordered, get_present_ecus, match_fw_to_car
 from opendbc.car.mock.values import CAR as MOCK
-from opendbc.car.values import BRANDS
 from opendbc.car.vin import get_vin, is_valid_vin, VIN_UNKNOWN
 
 from opendbc.sunnypilot.car.interfaces import setup_interfaces as sunnypilot_interfaces
@@ -26,8 +28,10 @@ def load_interfaces(brand_names):
   return ret
 
 
+@cache
 def _get_interface_names() -> dict[str, list[str]]:
   # returns a dict of brand name and its respective models
+  from opendbc.car.values import BRANDS
   brand_names = {}
   for brand in BRANDS:
     brand_name = brand.__module__.split('.')[-2]
@@ -36,9 +40,41 @@ def _get_interface_names() -> dict[str, list[str]]:
   return brand_names
 
 
-# imports from directory opendbc/car/<name>/
-interface_names = _get_interface_names()
-interfaces = load_interfaces(interface_names)
+class _Interfaces(Mapping):
+  def __init__(self):
+    self._loaded = {}
+
+  def __getitem__(self, candidate):
+    if candidate not in self._loaded:
+      # These startup callers need one known interface, not every manufacturer's
+      # controller, parser and supporting modules. Enumeration still includes all.
+      brand = {'HONDA_ACCORD': 'honda', 'MOCK': 'mock'}.get(candidate)
+      if brand is None:
+        brand = next((b for b, models in _get_interface_names().items() if candidate in models), None)
+      if brand is None:
+        raise KeyError(candidate)
+      self._loaded[candidate] = import_module(f'opendbc.car.{brand}.interface').CarInterface
+    return self._loaded[candidate]
+
+  def __iter__(self):
+    return (model for models in _get_interface_names().values() for model in models)
+
+  def __len__(self):
+    return sum(len(models) for models in _get_interface_names().values())
+
+  def copy(self):
+    return dict(self)
+
+
+interfaces = _Interfaces()
+
+
+def __getattr__(name):
+  if name == 'interface_names':
+    value = _get_interface_names()
+    globals()[name] = value
+    return value
+  raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 def can_fingerprint(can_recv: CanRecvCallable) -> tuple[str | None, dict[int, dict]]:
@@ -90,6 +126,7 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
   skip_fw_query = os.environ.get('SKIP_FW_QUERY', False)
   disable_fw_cache = os.environ.get('DISABLE_FW_CACHE', False)
   ecu_rx_addrs = set()
+  query_brand = None
 
   start_time = time.monotonic()
   if not skip_fw_query:
@@ -106,11 +143,22 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
       set_obd_multiplexing(True)
       # VIN query only reliably works through OBDII
       vin_rx_addr, vin_rx_bus, vin = get_vin(can_recv, can_send, (0, 1))
-      ecu_rx_addrs = get_present_ecus(can_recv, can_send, set_obd_multiplexing)
-      car_fw = get_fw_versions_ordered(can_recv, can_send, set_obd_multiplexing, vin, ecu_rx_addrs)
+      query_brand = 'honda' if fixed_fingerprint == 'HONDA_ACCORD' else None
+      ecu_rx_addrs = get_present_ecus(can_recv, can_send, set_obd_multiplexing, query_brand=query_brand)
+      car_fw = get_fw_versions_ordered(can_recv, can_send, set_obd_multiplexing, vin, ecu_rx_addrs, query_brand=query_brand)
       cached = False
 
-    exact_fw_match, fw_candidates = match_fw_to_car(car_fw, vin)
+    exact_fw_match, fw_candidates = match_fw_to_car(car_fw, vin, query_brand=query_brand)
+    if query_brand is not None and (not exact_fw_match or fw_candidates != {fixed_fingerprint}):
+      # All Honda ECU addresses and request variants were queried above, including
+      # EPS and logging requests. A missing/modified/unrecognized response must
+      # retain the full discovery path instead of making an empty query "match".
+      carlog.warning({"event": "fixed_fingerprint_query_fallback", "platform": fixed_fingerprint,
+                      "fw_count": len(car_fw), "exact": exact_fw_match, "matches": len(fw_candidates)})
+      ecu_rx_addrs = get_present_ecus(can_recv, can_send, set_obd_multiplexing)
+      car_fw = get_fw_versions_ordered(can_recv, can_send, set_obd_multiplexing, vin, ecu_rx_addrs)
+      exact_fw_match, fw_candidates = match_fw_to_car(car_fw, vin)
+      query_brand = None
   else:
     vin_rx_addr, vin_rx_bus, vin = -1, -1, VIN_UNKNOWN
     exact_fw_match, fw_candidates, car_fw = True, set(), []
@@ -146,7 +194,8 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
 
   carlog.error({"event": "fingerprinted", "car_fingerprint": str(car_fingerprint), "source": source, "fuzzy": not exact_match,
                 "cached": cached, "fw_count": len(car_fw), "ecu_responses": list(ecu_rx_addrs), "vin_rx_addr": vin_rx_addr,
-                "vin_rx_bus": vin_rx_bus, "fingerprints": repr(finger), "fw_query_time": fw_query_time})
+                "vin_rx_bus": vin_rx_bus, "fingerprints": repr(finger), "fw_query_time": fw_query_time,
+                "query_brand": query_brand})
 
   return car_fingerprint, finger, vin, car_fw, source, exact_match
 

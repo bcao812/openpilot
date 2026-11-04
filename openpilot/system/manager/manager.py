@@ -69,16 +69,23 @@ def manager_init() -> None:
 
   # set params
   serial = HARDWARE.get_serial()
-  params.put("Version", build_metadata.openpilot.version, block=True)
-  params.put("GitCommit", build_metadata.openpilot.git_commit, block=True)
-  params.put("GitCommitDate", build_metadata.openpilot.git_commit_date, block=True)
-  params.put("GitBranch", build_metadata.channel, block=True)
-  params.put("GitRemote", build_metadata.openpilot.git_origin, block=True)
+  # These values persist across boots. Avoid a file and directory fsync for
+  # each unchanged value, while still publishing updates before starting services.
+  for key, value in (
+    ("Version", build_metadata.openpilot.version),
+    ("GitCommit", build_metadata.openpilot.git_commit),
+    ("GitCommitDate", build_metadata.openpilot.git_commit_date),
+    ("GitBranch", build_metadata.channel),
+    ("GitRemote", build_metadata.openpilot.git_origin),
+  ):
+    if params.get(key) != value:
+      params.put(key, value, block=True)
   params.put_bool("IsDevelopmentBranch", build_metadata.development_channel, block=True)
   params.put_bool("IsTestedBranch", build_metadata.tested_channel, block=True)
   params.put_bool("IsReleaseBranch", build_metadata.release_channel, block=True)
   params.put_bool("IsReleaseSpBranch", build_metadata.release_sp_channel, block=True)
-  params.put("HardwareSerial", serial, block=True)
+  if params.get("HardwareSerial") != serial:
+    params.put("HardwareSerial", serial, block=True)
 
   # set dongle id
   reg_res = register(show_spinner=True)

@@ -4,6 +4,44 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 
 source "$DIR/launch_env.sh"
 
+function ensure_agnos_pyserial {
+  # Only the AGNOS updater zipapp needs this bootstrap. Keep normal boots
+  # independent of updater dependency checks and pip/network availability.
+  if ! python3 -c "import serial" > /dev/null 2>&1; then
+    echo "[bootstrap] pyserial missing before AGNOS check; installing..."
+    local wheel_dir="$DIR/third_party/wheels"
+    if [ -d "$wheel_dir" ] && ls "$wheel_dir"/pyserial*.whl > /dev/null 2>&1; then
+      echo "[bootstrap] pyserial: installing from local wheel..."
+      python3 -m pip install --no-index --no-deps --find-links "$wheel_dir" --target "$PYDEPS" --upgrade pyserial > /tmp/pip_pyserial.log 2>&1
+    fi
+    if ! python3 -c "import serial" > /dev/null 2>&1; then
+      echo "[bootstrap] pyserial: installing from PyPI (needs network)..."
+      python3 -m pip install --target "$PYDEPS" --upgrade pyserial > /tmp/pip_pyserial.log 2>&1
+    fi
+    if python3 -c "import serial" > /dev/null 2>&1; then
+      echo "[bootstrap] pyserial: ok"
+    else
+      echo "[bootstrap] pyserial NOT available; AGNOS updater may fail importing serial"
+    fi
+  fi
+}
+
+function update_agnos_if_needed {
+  if [ "$1" = "$AGNOS_VERSION" ]; then
+    return
+  fi
+
+  ensure_agnos_pyserial
+  local agnos_py="$DIR/openpilot/common/hardware/comma/agnos.py"
+  local manifest="$DIR/openpilot/system/hardware/comma/agnos.json"
+  if "$agnos_py" --verify "$manifest"; then
+    sudo reboot
+  fi
+  while true; do
+    "$DIR/openpilot/common/hardware/comma/updater" "$agnos_py" "$manifest"
+  done
+}
+
 function agnos_init {
   # TODO: move this to agnos
   sudo rm -f /data/etc/NetworkManager/system-connections/*.nmmeta
@@ -17,17 +55,7 @@ function agnos_init {
   sudo chgrp gpu /dev/adsprpc-smd /dev/ion /dev/kgsl-3d0
   sudo chmod 660 /dev/adsprpc-smd /dev/ion /dev/kgsl-3d0
 
-  # Check if AGNOS update is required
-  if [ $(< /VERSION) != "$AGNOS_VERSION" ]; then
-    AGNOS_PY="$DIR/openpilot/common/hardware/comma/agnos.py"
-    MANIFEST="$DIR/openpilot/system/hardware/comma/agnos.json"
-    if $AGNOS_PY --verify $MANIFEST; then
-      sudo reboot
-    fi
-    while true; do
-      $DIR/openpilot/common/hardware/comma/updater $AGNOS_PY $MANIFEST
-    done
-  fi
+  update_agnos_if_needed "$(< /VERSION)"
 }
 
 function launch {
@@ -80,38 +108,15 @@ function launch {
   ln -sfn teleoprtc_repo/teleoprtc teleoprtc
   ln -sfn tinygrad_repo/tinygrad tinygrad
 
-  # The bundled AGNOS updater zipapp imports pyserial (tici/lpa.py inside the
-  # archive). agnos_init may invoke that updater, so make sure serial is
-  # importable first. Offline wheel in third_party/wheels is tried before the
-  # PyPI fallback. Installs into $DIR/pydeps without touching the device venv.
+  # Keep installed extra dependencies available on every boot. The updater's
+  # pyserial check/install runs only when agnos_init finds an OS version mismatch.
   if [ -f /AGNOS ]; then
-    # Put pydeps on PYTHONPATH unconditionally BEFORE the import test and the
-    # AGNOS updater run. Previously the export was gated on an import test that
-    # ran without pydeps on PYTHONPATH, so it never fired even when the wheel
-    # install succeeded, and the updater still crashed on `import serial`.
     PYDEPS="${PYDEPS:-$DIR/pydeps}"
     mkdir -p "$PYDEPS"
     case ":$PYTHONPATH:" in
       *":$PYDEPS:"*) ;;
       *) export PYTHONPATH="$PYDEPS:$PYTHONPATH" ;;
     esac
-    if ! python3 -c "import serial" > /dev/null 2>&1; then
-      echo "[bootstrap] pyserial missing before AGNOS check; installing..."
-      wheel_dir="$DIR/third_party/wheels"
-      if [ -d "$wheel_dir" ] && ls "$wheel_dir"/pyserial*.whl > /dev/null 2>&1; then
-        echo "[bootstrap] pyserial: installing from local wheel..."
-        python3 -m pip install --no-index --no-deps --find-links "$wheel_dir" --target "$PYDEPS" --upgrade pyserial > /tmp/pip_pyserial.log 2>&1
-      fi
-      if ! python3 -c "import serial" > /dev/null 2>&1; then
-        echo "[bootstrap] pyserial: installing from PyPI (needs network)..."
-        python3 -m pip install --target "$PYDEPS" --upgrade pyserial > /tmp/pip_pyserial.log 2>&1
-      fi
-      if python3 -c "import serial" > /dev/null 2>&1; then
-        echo "[bootstrap] pyserial: ok"
-      else
-        echo "[bootstrap] pyserial NOT available; AGNOS updater may fail importing serial"
-      fi
-    fi
   fi
 
   # hardware specific init

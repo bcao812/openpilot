@@ -47,6 +47,12 @@ def _migrate_car_platform_bundle(_params):
   old_platform = bundle.get("platform")
   if not old_platform:
     return
+  # This tree's fixed Accord platform is already current. Avoid loading the
+  # legacy multi-brand enum map before manager starts the device processes.
+  # Keep this exact-name shortcut covered against the migration table; other
+  # canonical-looking names can still be legacy aliases and must be checked.
+  if old_platform == "HONDA_ACCORD":
+    return
 
   from opendbc.car.fingerprints import MIGRATION  # lazy: avoids heavy import at module level
   if old_platform not in MIGRATION:

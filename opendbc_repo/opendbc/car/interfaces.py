@@ -14,7 +14,6 @@ from opendbc.car.can_definitions import CanData, CanRecvCallable, CanSendCallabl
 from opendbc.car.common.basedir import BASEDIR
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.simple_kalman import KF1D, get_kalman_gain
-from opendbc.car.values import PLATFORMS
 from opendbc.can import CANParser
 from opendbc.car.carlog import carlog
 
@@ -46,6 +45,16 @@ GEAR_SHIFTER_MAP: dict[str, structs.CarState.GearShifter] = {
 
 TorqueFromLateralAccelCallbackType = Callable[[float, structs.CarParams.LateralTorqueTuning], float]
 LateralAccelFromTorqueCallbackType = Callable[[float, structs.CarParams.LateralTorqueTuning], float]
+
+
+def get_platform(candidate):
+  # Fixed Accord startup should not import every manufacturer's platform table.
+  # Keep the full table as the source of truth for all other callers/platforms.
+  if candidate == 'HONDA_ACCORD':
+    from opendbc.car.honda.values import CAR
+    return CAR.HONDA_ACCORD
+  from opendbc.car.values import PLATFORMS
+  return PLATFORMS[candidate]
 
 
 @cache
@@ -141,7 +150,7 @@ class CarInterfaceBase(ABC, CarInterfaceBaseSP):
                  alpha_long: bool, is_release: bool, docs: bool) -> structs.CarParams:
     ret = CarInterfaceBase.get_std_params(candidate)
 
-    platform = PLATFORMS[candidate]
+    platform = get_platform(candidate)
     ret.mass = platform.config.specs.mass
     ret.wheelbase = platform.config.specs.wheelbase
     ret.steerRatio = platform.config.specs.steerRatio
@@ -168,7 +177,7 @@ class CarInterfaceBase(ABC, CarInterfaceBaseSP):
                     is_release_sp: bool, docs: bool) -> structs.CarParamsSP:
     car_params_sp = structs.CarParamsSP()
 
-    platform = PLATFORMS[candidate]
+    platform = get_platform(candidate)
     car_params_sp.flags |= int(platform.config.sp_flags)
     car_params_sp.pcmCruiseSpeed = True
 

@@ -5,26 +5,51 @@ from typing import Protocol, TypeVar
 from tqdm import tqdm
 
 from opendbc.car import uds
+from opendbc.car.brand_data import BrandData
 from opendbc.car.can_definitions import CanRecvCallable, CanSendCallable
 from opendbc.car.carlog import carlog
 from opendbc.car.structs import CarParams
 from opendbc.car.ecu_addrs import get_ecu_addrs
-from opendbc.car.fingerprints import FW_VERSIONS
-from opendbc.car.fw_query_definitions import ESSENTIAL_ECUS, AddrType, EcuAddrBusType, FwQueryConfig, LiveFwVersions, OfflineFwVersions
-from opendbc.car.interfaces import get_interface_attr
+from opendbc.car.fw_query_definitions import ESSENTIAL_ECUS, AddrType, EcuAddrBusType, LiveFwVersions, OfflineFwVersions
 from opendbc.car.isotp_parallel_query import IsoTpParallelQuery
 
 Ecu = CarParams.Ecu
 FUZZY_EXCLUDE_ECUS = [Ecu.fwdCamera, Ecu.fwdRadar, Ecu.eps, Ecu.debug]
 
-FW_QUERY_CONFIGS: dict[str, FwQueryConfig] = get_interface_attr('FW_QUERY_CONFIG', ignore_none=True)
-VERSIONS = get_interface_attr('FW_VERSIONS', ignore_none=True)
-
-MODEL_TO_BRAND = {c: b for b, e in VERSIONS.items() for c in e}
-REQUESTS = [(brand, config, r) for brand, config in FW_QUERY_CONFIGS.items() for r in config.requests]
+FW_QUERY_CONFIGS = BrandData('FW_QUERY_CONFIG')
+VERSIONS = BrandData('FW_VERSIONS')
 
 T = TypeVar('T')
 ObdCallback = Callable[[bool], None]
+
+
+def _versions_for_brand(brand: str | None):
+  if brand is None:
+    return VERSIONS
+  try:
+    return {brand: VERSIONS[brand]}
+  except KeyError:
+    return {}
+
+
+def _requests_for_brand(brand: str | None):
+  configs = FW_QUERY_CONFIGS if brand is None else {brand: FW_QUERY_CONFIGS[brand]}
+  return [(b, config, request) for b, config in configs.items() for request in config.requests]
+
+
+def __getattr__(name):
+  # Preserve the full-database API for offline tools without constructing it
+  # merely to import the live query helpers or their callback type.
+  if name == 'MODEL_TO_BRAND':
+    value = {c: b for b, models in VERSIONS.items() for c in models}
+  elif name == 'REQUESTS':
+    value = _requests_for_brand(None)
+  elif name == 'FW_VERSIONS':
+    value = {c: versions for models in VERSIONS.values() for c, versions in models.items()}
+  else:
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+  globals()[name] = value
+  return value
 
 
 def chunks(l: list[T], n: int = 128) -> Iterator[list[T]]:
@@ -58,9 +83,8 @@ def match_fw_to_car_fuzzy(live_fw_versions: LiveFwVersions, match_brand: str | N
 
   # Build lookup table from (addr, sub_addr, fw) to list of candidate cars
   all_fw_versions = defaultdict(list)
-  for candidate, fw_by_addr in FW_VERSIONS.items():
-    if not is_brand(MODEL_TO_BRAND[candidate], match_brand):
-      continue
+  candidates = {c: fw for models in _versions_for_brand(match_brand).values() for c, fw in models.items()}
+  for candidate, fw_by_addr in candidates.items():
 
     if candidate == exclude:
       continue
@@ -111,11 +135,12 @@ def match_fw_to_car_exact(live_fw_versions: LiveFwVersions, match_brand: str | N
     extra_fw_versions = {}
 
   invalid = set()
-  candidates = {c: f for c, f in FW_VERSIONS.items() if
-                is_brand(MODEL_TO_BRAND[c], match_brand)}
+  versions = _versions_for_brand(match_brand)
+  model_to_brand = {c: b for b, models in versions.items() for c in models}
+  candidates = {c: f for models in versions.values() for c, f in models.items()}
 
   for candidate, fws in candidates.items():
-    config = FW_QUERY_CONFIGS[MODEL_TO_BRAND[candidate]]
+    config = FW_QUERY_CONFIGS[model_to_brand[candidate]]
     for ecu, expected_versions in fws.items():
       expected_versions = expected_versions + extra_fw_versions.get(candidate, {}).get(ecu, [])
       ecu_type = ecu[0]
@@ -144,7 +169,7 @@ def match_fw_to_car_exact(live_fw_versions: LiveFwVersions, match_brand: str | N
 
 
 def match_fw_to_car(fw_versions: list[CarParams.CarFw], vin: str, allow_exact: bool = True,
-                    allow_fuzzy: bool = True, log: bool = True) -> tuple[bool, set[str]]:
+                    allow_fuzzy: bool = True, log: bool = True, query_brand: str | None = None) -> tuple[bool, set[str]]:
   # Try exact matching first
   exact_matches: list[tuple[bool, MatchFwToCar]] = []
   if allow_exact:
@@ -155,7 +180,7 @@ def match_fw_to_car(fw_versions: list[CarParams.CarFw], vin: str, allow_exact: b
   for exact_match, match_func in exact_matches:
     # For each brand, attempt to fingerprint using all FW returned from its queries
     matches: set[str] = set()
-    for brand in VERSIONS.keys():
+    for brand in _versions_for_brand(query_brand):
       fw_versions_dict = build_fw_dict(fw_versions, filter_brand=brand)
       matches |= match_func(fw_versions_dict, match_brand=brand, log=log)
 
@@ -170,13 +195,14 @@ def match_fw_to_car(fw_versions: list[CarParams.CarFw], vin: str, allow_exact: b
   return True, set()
 
 
-def get_present_ecus(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multiplexing: ObdCallback) -> set[EcuAddrBusType]:
+def get_present_ecus(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multiplexing: ObdCallback,
+                     query_brand: str | None = None) -> set[EcuAddrBusType]:
   # queries are split by OBD multiplexing mode
   queries: dict[bool, list[list[EcuAddrBusType]]] = {True: [], False: []}
   parallel_queries: dict[bool, list[EcuAddrBusType]] = {True: [], False: []}
   responses: set[EcuAddrBusType] = set()
 
-  for brand, config, r in REQUESTS:
+  for brand, config, r in _requests_for_brand(query_brand):
     for ecu_type, addr, sub_addr in config.get_all_ecus(VERSIONS[brand]):
       # Only query ecus in whitelist if whitelist is not empty
       if len(r.whitelist_ecus) == 0 or ecu_type in r.whitelist_ecus:
@@ -204,14 +230,16 @@ def get_present_ecus(can_recv: CanRecvCallable, can_send: CanSendCallable, set_o
   return ecu_responses
 
 
-def get_brand_ecu_matches(ecu_rx_addrs: set[EcuAddrBusType]) -> dict[str, list[bool]]:
+def get_brand_ecu_matches(ecu_rx_addrs: set[EcuAddrBusType], query_brand: str | None = None) -> dict[str, list[bool]]:
   """Returns dictionary of brands and matches with ECUs in their FW versions"""
 
-  brand_rx_addrs = {brand: set() for brand in FW_QUERY_CONFIGS}
-  brand_matches = {brand: [] for brand, _, _ in REQUESTS}
+  configs = FW_QUERY_CONFIGS if query_brand is None else {query_brand: FW_QUERY_CONFIGS[query_brand]}
+  requests = _requests_for_brand(query_brand)
+  brand_rx_addrs = {brand: set() for brand in configs}
+  brand_matches = {brand: [] for brand, _, _ in requests}
 
   # Since we can't know what request an ecu responded to, add matches for all possible rx offsets
-  for brand, config, r in REQUESTS:
+  for brand, config, r in requests:
     for ecu in config.get_all_ecus(VERSIONS[brand]):
       if len(r.whitelist_ecus) == 0 or ecu[0] in r.whitelist_ecus:
         brand_rx_addrs[brand].add((uds.get_rx_addr_for_tx_addr(ecu[1], r.rx_offset), ecu[2]))
@@ -225,11 +253,12 @@ def get_brand_ecu_matches(ecu_rx_addrs: set[EcuAddrBusType]) -> dict[str, list[b
 
 
 def get_fw_versions_ordered(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multiplexing: ObdCallback, vin: str,
-                            ecu_rx_addrs: set[EcuAddrBusType], timeout: float = 0.1, progress: bool = False) -> list[CarParams.CarFw]:
+                            ecu_rx_addrs: set[EcuAddrBusType], timeout: float = 0.1, progress: bool = False,
+                            query_brand: str | None = None) -> list[CarParams.CarFw]:
   """Queries for FW versions ordering brands by likelihood, breaks when exact match is found"""
 
   all_car_fw = []
-  brand_matches = get_brand_ecu_matches(ecu_rx_addrs)
+  brand_matches = get_brand_ecu_matches(ecu_rx_addrs, query_brand)
 
   # Sort brands by number of matching ECUs first, then percentage of matching ECUs in the database
   # This allows brands with only one ECU to be queried first (e.g. Tesla)
@@ -242,7 +271,7 @@ def get_fw_versions_ordered(can_recv: CanRecvCallable, can_send: CanSendCallable
     all_car_fw.extend(car_fw)
 
     # If there is a match using this brand's FW alone, finish querying early
-    _, matches = match_fw_to_car(car_fw, vin, log=False)
+    _, matches = match_fw_to_car(car_fw, vin, log=False, query_brand=query_brand)
     if len(matches) == 1:
       break
 
@@ -251,10 +280,7 @@ def get_fw_versions_ordered(can_recv: CanRecvCallable, can_send: CanSendCallable
 
 def get_fw_versions(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multiplexing: ObdCallback, query_brand: str | None = None,
                     extra: OfflineFwVersions | None = None, timeout: float = 0.1, progress: bool = False) -> list[CarParams.CarFw]:
-  versions = VERSIONS.copy()
-
-  if query_brand is not None:
-    versions = {query_brand: versions[query_brand]}
+  versions = VERSIONS.copy() if query_brand is None else {query_brand: VERSIONS[query_brand]}
 
   if extra is not None:
     versions.update(extra)
@@ -283,7 +309,7 @@ def get_fw_versions(can_recv: CanRecvCallable, can_send: CanSendCallable, set_ob
 
   # Get versions and build capnp list to put into CarParams
   car_fw = []
-  requests = [(brand, config, r) for brand, config, r in REQUESTS if is_brand(brand, query_brand)]
+  requests = _requests_for_brand(query_brand)
   for addr_group in tqdm(addrs, disable=not progress):  # split by subaddr, if any
     for addr_chunk in chunks(addr_group):
       for brand, config, r in requests:

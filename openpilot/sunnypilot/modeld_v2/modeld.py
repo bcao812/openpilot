@@ -7,6 +7,7 @@ See the LICENSE.md file in the root directory for more details.
 """
 
 from collections.abc import Callable
+from multiprocessing import current_process
 import os
 os.environ['GMMU'] = '0'
 import numpy as np
@@ -35,7 +36,7 @@ from openpilot.system import sentry
 from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, smooth_value
-from openpilot.selfdrive.modeld.modeld import ChestnutState
+from openpilot.selfdrive.modeld.chestnut_state import ChestnutState
 
 from openpilot.selfdrive.modeld.compile_modeld import (
   MODELD_INPUTS,
@@ -378,6 +379,12 @@ class ModelState(ModelStateBase):
 
 
 def main(demo=False):
+  if current_process().name == "modeld_tinygrad":
+    # NativeProcess previously selected this working directory before exec.
+    # Preserve relative model overrides under the forked manager launcher;
+    # direct command-line and imported test/demo calls keep their caller's cwd.
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
   cloudlog.warning("modeld init")
 
   sentry.set_tag("daemon", PROCESS_NAME)

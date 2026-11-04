@@ -193,6 +193,22 @@ class TestFallback(OpenpilotTestCase):
     assert not params.get_bool('ChestnutActive')
     assert not params.get_bool('ChestnutModelError')
 
+  def test_managed_start_keeps_the_native_model_working_directory(self):
+    self._prepare_main_loop(1, chestnut_present=False)
+    with mock.patch.object(modeld_module, 'current_process', return_value=SimpleNamespace(name='modeld_tinygrad')), \
+         mock.patch.object(modeld_module.os, 'chdir') as chdir:
+      with self.assertRaises(FrameLoopFinished):
+        modeld_module.main()
+    chdir.assert_called_once_with(os.path.dirname(os.path.abspath(modeld_module.__file__)))
+
+  def test_direct_start_preserves_the_callers_working_directory(self):
+    self._prepare_main_loop(1, chestnut_present=False)
+    with mock.patch.object(modeld_module, 'current_process', return_value=SimpleNamespace(name='MainProcess')), \
+         mock.patch.object(modeld_module.os, 'chdir') as chdir:
+      with self.assertRaises(FrameLoopFinished):
+        modeld_module.main()
+    chdir.assert_not_called()
+
 
 @unittest.skipUnless(os.environ.get('RUN_INTEGRATION_TESTS') == '1', 'requires external network; set RUN_INTEGRATION_TESTS=1')
 class TestLiveFallbackCatalogs(OpenpilotTestCase):

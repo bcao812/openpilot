@@ -46,6 +46,25 @@ def sudo_write(val: str, path: str) -> None:
       subprocess.run(f"sudo su -c 'echo {val} > {path}'", shell=True)
 
 
+def sudo_write_many(writes: list[tuple[str, str]]) -> None:
+  """Prepare permissions together, then retain ordered writes and per-file fallbacks."""
+  # The paths must already exist. In particular, callers must bring CPU cores
+  # online before preparing the policy files which that operation creates.
+  # Missing paths keep the original error at their position in the write list.
+  if len(writes) > 1:
+    paths = list(dict.fromkeys(path for _, path in writes if not os.access(path, os.W_OK)))
+    if paths and all(os.path.isfile(path) for _, path in writes):
+      try:
+        subprocess.run(["sudo", "chmod", "a+w", "--", *paths])
+      except OSError:
+        # Permission preparation is optional. The original writer below still
+        # handles permission failures, including debugfs files which reject chmod.
+        pass
+
+  for val, path in writes:
+    sudo_write(val, path)
+
+
 def sudo_read(path: str) -> str:
   try:
     return subprocess.check_output(["sudo", "cat", "--", path], encoding='utf8').strip()

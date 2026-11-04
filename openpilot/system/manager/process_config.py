@@ -114,6 +114,10 @@ procs = [
   PythonProcess("timed", "openpilot.system.timed", always_run, enabled=not PC),
 
   PythonProcess("modeld", "openpilot.selfdrive.modeld.modeld", and_(only_onroad, is_stock_model)),
+  # Both model runners use the forked Python launcher, which reuses manager's
+  # imports and resets the child messaging context. Start either selected
+  # runner here so model initialization overlaps the remaining onroad starts.
+  PythonProcess("modeld_tinygrad", "openpilot.sunnypilot.modeld_v2.modeld", and_(only_onroad, is_tinygrad_model)),
   PythonProcess("dmonitoringmodeld", "openpilot.selfdrive.modeld.dmonitoringmodeld", driverview, enabled=(WEBCAM or not PC) and not DM_DISABLED),
 
   PythonProcess("sensord", "openpilot.system.sensord.sensord", only_onroad, enabled=not PC),
@@ -162,7 +166,6 @@ procs = [
 procs += [
   # Models
   PythonProcess("models_manager", "openpilot.sunnypilot.models.manager", always_run),
-  NativeProcess("modeld_tinygrad", "openpilot/sunnypilot/modeld_v2", ["./modeld"], and_(only_onroad, is_tinygrad_model)),
 
   # locationd
   NativeProcess("locationd_llk", "openpilot/sunnypilot/selfdrive/locationd", ["./locationd"], only_onroad),

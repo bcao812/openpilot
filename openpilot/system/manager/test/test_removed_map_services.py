@@ -7,6 +7,7 @@ from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.system.manager import process_config
+from openpilot.system.manager.process import PythonProcess
 
 
 class TestRemovedMapServices(OpenpilotTestCase):
@@ -69,3 +70,17 @@ class TestRemovedMapServices(OpenpilotTestCase):
             with self.subTest(selected=selected_name, started=started, process=name):
               expected = started and name == selected_name
               self.assertEqual(process_config.managed_processes[name].should_run(started, params, car_params), expected)
+
+  def test_model_runners_start_before_their_control_consumers(self):
+    names = [process.name for process in process_config.procs]
+    modules = {
+      "modeld": "openpilot.selfdrive.modeld.modeld",
+      "modeld_tinygrad": "openpilot.sunnypilot.modeld_v2.modeld",
+    }
+    for name, module in modules.items():
+      with self.subTest(process=name):
+        process = process_config.managed_processes[name]
+        self.assertIsInstance(process, PythonProcess)
+        self.assertEqual(process.module, module)
+        for consumer in ("card", "controlsd", "selfdrived", "plannerd", "radard"):
+          self.assertLess(names.index(name), names.index(consumer))

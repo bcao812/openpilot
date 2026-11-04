@@ -8,7 +8,7 @@ from functools import cached_property, lru_cache
 from pathlib import Path
 
 from openpilot.cereal import log
-from openpilot.common.utils import sudo_read, sudo_write
+from openpilot.common.utils import sudo_read, sudo_write, sudo_write_many
 from openpilot.common.gpio import gpio_set, gpio_init, get_irqs_for_action
 from openpilot.common.esim.base import LPABase
 from openpilot.common.hardware.base import HardwareBase, ThermalConfig, ThermalZone
@@ -27,8 +27,7 @@ def affine_irq(val, action):
     print(f"No IRQs found for '{action}'")
     return
 
-  for i in irqs:
-    sudo_write(str(val), f"/proc/irq/{i}/smp_affinity_list")
+  sudo_write_many([(str(val), f"/proc/irq/{i}/smp_affinity_list") for i in irqs])
 
 @lru_cache
 def get_device_type():
@@ -309,18 +308,20 @@ class HardwareComma(HardwareBase):
     # *** CPU config ***
 
     # offline big cluster
-    for i in range(4, 8):
-      val = '0' if powersave_enabled else '1'
-      sudo_write(val, f'/sys/devices/system/cpu/cpu{i}/online')
+    val = '0' if powersave_enabled else '1'
+    sudo_write_many([(val, f'/sys/devices/system/cpu/cpu{i}/online') for i in range(4, 8)])
 
+    # Policy files may appear only after the online writes above have completed.
+    cpu_config = []
     for n in ('0', '4'):
       if powersave_enabled and n == '4':
         continue
       gov = 'ondemand' if powersave_enabled else 'performance'
-      sudo_write(gov, f'/sys/devices/system/cpu/cpufreq/policy{n}/scaling_governor')
+      cpu_config.append((gov, f'/sys/devices/system/cpu/cpufreq/policy{n}/scaling_governor'))
       if not powersave_enabled:
         # cap max core freq to 1689 Mhz
-        sudo_write('1689600', f'/sys/devices/system/cpu/cpufreq/policy{n}/scaling_max_freq')
+        cpu_config.append(('1689600', f'/sys/devices/system/cpu/cpufreq/policy{n}/scaling_max_freq'))
+    sudo_write_many(cpu_config)
 
     # *** IRQ config ***
 
@@ -364,23 +365,25 @@ class HardwareComma(HardwareBase):
     # https://github.com/commaai/agnos-kernel-sdm845/blob/master/arch/arm64/boot/dts/qcom/sdm845-gpu.dtsi#L216
     affine_irq(5, "fts_ts")    # touch
     affine_irq(5, "msm_drm")   # display
-    sudo_write("1", "/sys/class/kgsl/kgsl-3d0/min_pwrlevel")
-    sudo_write("1", "/sys/class/kgsl/kgsl-3d0/max_pwrlevel")
-    sudo_write("1", "/sys/class/kgsl/kgsl-3d0/force_bus_on")
-    sudo_write("1", "/sys/class/kgsl/kgsl-3d0/force_clk_on")
-    sudo_write("1", "/sys/class/kgsl/kgsl-3d0/force_rail_on")
-    sudo_write("1000", "/sys/class/kgsl/kgsl-3d0/idle_timer")
-    sudo_write("performance", "/sys/class/kgsl/kgsl-3d0/devfreq/governor")
-    sudo_write("710", "/sys/class/kgsl/kgsl-3d0/max_clock_mhz")
+    sudo_write_many([
+      ("1", "/sys/class/kgsl/kgsl-3d0/min_pwrlevel"),
+      ("1", "/sys/class/kgsl/kgsl-3d0/max_pwrlevel"),
+      ("1", "/sys/class/kgsl/kgsl-3d0/force_bus_on"),
+      ("1", "/sys/class/kgsl/kgsl-3d0/force_clk_on"),
+      ("1", "/sys/class/kgsl/kgsl-3d0/force_rail_on"),
+      ("1000", "/sys/class/kgsl/kgsl-3d0/idle_timer"),
+      ("performance", "/sys/class/kgsl/kgsl-3d0/devfreq/governor"),
+      ("710", "/sys/class/kgsl/kgsl-3d0/max_clock_mhz"),
 
-    # setup governors
-    sudo_write("performance", "/sys/class/devfreq/soc:qcom,cpubw/governor")
-    sudo_write("performance", "/sys/class/devfreq/soc:qcom,memlat-cpu0/governor")
-    sudo_write("performance", "/sys/class/devfreq/soc:qcom,memlat-cpu4/governor")
+      # setup governors
+      ("performance", "/sys/class/devfreq/soc:qcom,cpubw/governor"),
+      ("performance", "/sys/class/devfreq/soc:qcom,memlat-cpu0/governor"),
+      ("performance", "/sys/class/devfreq/soc:qcom,memlat-cpu4/governor"),
 
-    # *** VIDC (encoder) config ***
-    sudo_write("N", "/sys/kernel/debug/msm_vidc/clock_scaling")
-    sudo_write("Y", "/sys/kernel/debug/msm_vidc/disable_thermal_mitigation")
+      # VIDC (encoder) config
+      ("N", "/sys/kernel/debug/msm_vidc/clock_scaling"),
+      ("Y", "/sys/kernel/debug/msm_vidc/disable_thermal_mitigation"),
+    ])
 
     # pandad core
     affine_irq(3, "spi_geni")         # SPI
