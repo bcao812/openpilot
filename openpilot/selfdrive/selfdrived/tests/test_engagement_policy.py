@@ -490,3 +490,101 @@ def test_takeover_alert_never_masks_an_earlier_collision_warning(collision):
   manager.add_many(2, [daemon.engagement_policy.alert(daemon, CS)])
   manager.process_alerts(2, set())
   assert manager.current_alert in collision_alerts
+
+
+def configure_pandas(daemon, permissions, *, ignored_tail=None):
+  """Independent configured boards, optionally followed by an unused board."""
+  daemon.CP.safetyConfigs = [{'safetyModel': 'hondaBosch', 'safetyParam': i + 3} for i in range(len(permissions))]
+  event = messaging.new_message('pandaStates', len(permissions) + (ignored_tail is not None))
+  for i, (lateral, longitudinal) in enumerate(permissions):
+    panda = event.pandaStates[i]
+    panda.safetyModel = 'hondaBosch'
+    panda.safetyParam = i + 3
+    panda.alternativeExperience = daemon.CP.alternativeExperience
+    panda.controlsAllowedLateral = lateral
+    panda.controlsAllowed = longitudinal
+  if ignored_tail is not None:
+    event.pandaStates[len(permissions)].safetyModel = ignored_tail
+  daemon.sm['pandaStates'] = event.pandaStates
+
+
+@pytest.mark.parametrize('denied_index', [0, 1])
+@pytest.mark.parametrize('permissions', [(True, True), (False, True), (True, False), (False, False)])
+@pytest.mark.parametrize('ignored_tail', [None, 'silent', 'noOutput'])
+def test_each_configured_panda_must_independently_permit_each_axis(denied_index, permissions, ignored_tail):
+  daemon, CS = make_daemon()
+  boards = [(True, True), (True, True)]
+  boards[denied_index] = permissions
+  configure_pandas(daemon, boards, ignored_tail=ignored_tail)
+  daemon.engagement_policy.update(daemon, CS, NOW)
+  assert daemon.engagement_policy.lateral_available is permissions[0]
+  assert daemon.engagement_policy.longitudinal_available is permissions[1]
+
+
+@pytest.mark.parametrize('defect', ['config', 'model', 'parameter', 'experience', 'rx', 'faults', 'valid', 'time'])
+def test_current_panda_and_configuration_changes_are_not_cached_across_control_frames(defect):
+  daemon, CS = make_daemon()
+  configure_pandas(daemon, [(True, True), (True, True)])
+  policy = daemon.engagement_policy
+  policy.update(daemon, CS, NOW)
+  assert policy.lateral_available and policy.longitudinal_available
+  panda = daemon.sm['pandaStates'][1]
+  if defect == 'config':
+    target, field, invalid = daemon.CP.safetyConfigs[1], 'safetyParam', 8
+  elif defect == 'valid':
+    target, field, invalid = daemon.sm.valid, 'pandaStates', False
+  elif defect == 'time':
+    target, field, invalid = daemon.sm.logMonoTime, 'pandaStates', NOW - INPUT_LEASE_NS
+  else:
+    field, invalid = {'model': ('safetyModel', 'toyota'), 'parameter': ('safetyParam', 8),
+                      'experience': ('alternativeExperience', 0), 'rx': ('safetyRxChecksInvalid', True),
+                      'faults': ('faults', ['relayMalfunction'])}[defect]
+    target = panda
+  is_mapping = isinstance(target, dict)
+  original = target[field] if is_mapping else getattr(target, field)
+  if field == 'faults':
+    original = list(original)
+  elif field == 'safetyModel':
+    original = str(original)
+
+  def set_value(value):
+    if is_mapping:
+      target[field] = value
+    else:
+      setattr(target, field, value)
+
+  set_value(invalid)
+  # The payload may change without a new logMonoTime. These are new control
+  # calls, and all common checks must be evaluated again before either axis.
+  policy.update(daemon, CS, NOW + CONTROL_STEP_NS)
+  assert not policy.lateral_available and not policy.longitudinal_available
+  set_value(original)
+  policy.update(daemon, CS, NOW + 2 * CONTROL_STEP_NS)
+  assert policy.lateral_available and policy.longitudinal_available
+
+
+def test_panda_permission_short_circuit_does_not_read_an_unused_later_board():
+  daemon, CS = make_daemon()
+  configure_pandas(daemon, [(False, False), (True, True)])
+
+  class UnreadablePanda:
+    def __getattribute__(self, name):
+      raise AssertionError('The denied axis must stop before reading the next board')
+
+  daemon.sm['pandaStates'] = [daemon.sm['pandaStates'][0], UnreadablePanda()]
+  daemon.engagement_policy.update(daemon, CS, NOW)
+  assert not daemon.engagement_policy.lateral_available
+  assert not daemon.engagement_policy.longitudinal_available
+
+
+@pytest.mark.parametrize('field,expected', [('controlsAllowedLateral', (False, True)), ('controlsAllowed', (True, False))])
+def test_panda_axis_permission_changes_apply_on_the_next_frame_with_the_same_receipt(field, expected):
+  daemon, CS = make_daemon()
+  policy = daemon.engagement_policy
+  policy.update(daemon, CS, NOW)
+  setattr(daemon.sm['pandaStates'][0], field, False)
+  policy.update(daemon, CS, NOW + CONTROL_STEP_NS)
+  assert (policy.lateral_available, policy.longitudinal_available) == expected
+  setattr(daemon.sm['pandaStates'][0], field, True)
+  policy.update(daemon, CS, NOW + 2 * CONTROL_STEP_NS)
+  assert policy.lateral_available and policy.longitudinal_available

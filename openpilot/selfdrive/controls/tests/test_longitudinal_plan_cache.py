@@ -28,6 +28,7 @@ def test_received_plan_is_decoded_once_while_every_control_frame_consumes_its_ti
   harness = make_harness()
   with patch.object(controlsd.MotionIntent, 'from_message', wraps=controlsd.MotionIntent.from_message) as decode, \
        patch.object(controlsd, 'get_departure_accel_from_plan', wraps=controlsd.get_departure_accel_from_plan) as departure, \
+       patch.object(controlsd._ReferenceTimingFields, 'from_message', wraps=controlsd._ReferenceTimingFields.from_message) as timing, \
        patch.object(harness.control.reference_timing, 'consume', wraps=harness.control.reference_timing.consume) as consume:
     harness.step()
     cached = harness.control._longitudinal_plan_cache
@@ -38,11 +39,14 @@ def test_received_plan_is_decoded_once_while_every_control_frame_consumes_its_ti
       assert command.longActive and command.actuators.accel > 0.0
       assert motion.referenceTimingValid and not motion.referenceSourceAdvanced
       assert motion.referenceConsumerMonoTime == harness.now_ns
-    assert decode.call_count == departure.call_count == 1
+    assert decode.call_count == departure.call_count == timing.call_count == 1
     assert consume.call_count == 5
+    assert all(call.args[0] is cached.reference_timing for call in consume.call_args_list)
+    with pytest.raises(AttributeError):
+      cached.reference_timing.sourceCarStateMonoTime = harness.now_ns
     harness.step()
     assert harness.control._longitudinal_plan_cache is not cached
-    assert decode.call_count == departure.call_count == 2
+    assert decode.call_count == departure.call_count == timing.call_count == 2
     assert consume.call_count == 6
 
 
@@ -211,7 +215,8 @@ def test_unknown_reader_ownership_falls_back_to_decoding_on_every_frame(ownershi
 
 
 @pytest.mark.parametrize('backing_kind', ['bytearray', 'readonly_memoryview'])
-def test_reader_with_mutable_backing_redecodes_and_rejects_mutation_without_a_new_receipt(backing_kind):
+@pytest.mark.parametrize('mutation', ['target', 'reference_source'])
+def test_reader_with_mutable_backing_redecodes_and_rejects_mutation_without_a_new_receipt(backing_kind, mutation):
   harness = make_harness()
   harness.hold()
   event = harness.events['longitudinalPlan']
@@ -229,17 +234,21 @@ def test_reader_with_mutable_backing_redecodes_and_rejects_mutation_without_a_ne
     assert harness.control._longitudinal_plan_cache is None
     receipt = harness.control.sm.recv_frame['longitudinalPlan']
     message = harness.control.sm['longitudinalPlan']
-    harness.plan.aTarget = 1.0
+    if mutation == 'target':
+      harness.plan.aTarget = 1.0
+    else:
+      harness.plan.reference.sourceAEgo = 0.125
     event.clear_write_flag()
     changed = event.to_bytes()
     assert len(changed) == len(backing)
     backing[:] = changed
-    assert message.aTarget == 1.0
+    assert (message.aTarget == 1.0 if mutation == 'target' else message.reference.sourceAEgo == 0.125)
     command, motion = harness.step(new_plan=False)
     assert harness.control.sm['longitudinalPlan'] is message
     assert harness.control.sm.recv_frame['longitudinalPlan'] == receipt
     assert harness.control._longitudinal_plan_cache is None
-    assert motion.referenceTimingReason == 'changed_producer_identity'
+    expected_reason = 'changed_producer_identity' if mutation == 'target' else 'changed_source_identity'
+    assert motion.referenceTimingReason == expected_reason
     assert motion.degraded and command.actuators.accel <= -2.0
     assert not command.cruiseControl.resume
 
@@ -285,3 +294,52 @@ def test_nan_projection_keeps_original_nonreflexive_identity_checks(field):
   assert motion.referenceTimingReason == 'changed_producer_identity'
   assert motion.degraded and command.actuators.accel <= -2.0
   assert not command.cruiseControl.resume
+
+
+@pytest.mark.parametrize('field', ['sourceVEgo', 'sourceAEgo', 'initialVEgo', 'initialAEgo'])
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), float('-inf')])
+def test_nonfinite_reference_state_uses_current_wire_fields_on_every_frame(field, value):
+  harness = make_harness()
+  command, motion = harness.step(reference_fields={field: value})
+  assert harness.control._longitudinal_plan_cache is None
+  assert motion.referenceTimingReason == 'unknown_reference_initial_state'
+  command, motion = harness.step(new_plan=False)
+  assert harness.control._longitudinal_plan_cache is None
+  assert motion.referenceTimingReason == 'unknown_reference_initial_state'
+  assert harness.control.reference_timing.last_consumer_ns == harness.now_ns
+  assert motion.degraded and not command.cruiseControl.resume
+
+
+@pytest.mark.parametrize('field', ['sourceVEgo', 'sourceAEgo', 'initialVEgo', 'initialAEgo'])
+def test_new_received_reference_content_at_the_same_timestamp_cannot_reuse_projection(field):
+  harness = make_harness()
+  harness.step()
+  origin = harness.now_ns
+  cached = harness.control._longitudinal_plan_cache
+  setattr(harness.plan.reference, field, getattr(harness.plan.reference, field) + 0.125)
+  command, motion = harness.step(plan_time_ns=origin, model_time_ns=origin)
+  assert harness.control._longitudinal_plan_cache is not cached
+  assert motion.referenceTimingReason == 'changed_source_identity'
+  assert motion.degraded and not command.cruiseControl.resume
+  _, motion = harness.step()
+  assert motion.referenceTimingValid and not motion.degraded
+
+
+@pytest.mark.parametrize('plan_every', [1, 5, 30])
+def test_reference_projection_matches_wire_consumption_through_reuse_expiry_and_override(plan_every):
+  projected, wire = make_harness(), make_harness()
+  consume_wire = wire.control.reference_timing.consume
+
+  def original_input(_message, *args, **kwargs):
+    return consume_wire(wire.control.sm['longitudinalPlan'].reference, *args, **kwargs)
+
+  with patch.object(wire.control.reference_timing, 'consume', side_effect=original_input):
+    for frame in range(65):
+      for harness in (projected, wire):
+        harness.car_state.gasPressed = 35 <= frame < 38
+      actual = projected.step(new_plan=frame % plan_every == 0)
+      expected = wire.step(new_plan=frame % plan_every == 0)
+      assert [message.to_dict() for message in actual] == [message.to_dict() for message in expected]
+      assert projected.control.reference_timing_check == wire.control.reference_timing_check
+      for name in ('last_consumer_ns', 'last_timing', 'last_available_ns', 'last_command_identity'):
+        assert getattr(projected.control.reference_timing, name) == getattr(wire.control.reference_timing, name)

@@ -30,6 +30,8 @@ INPUT_LEASE_NS = 250_000_000
 HOLD_CONFIRM_NS = 500_000_000
 HOLD_EXTRA_NS = 3_000_000_000
 CONTROL_STEP_NS = round(DT_CTRL * 1e9)
+IGNORED_SAFETY_MODELS = (car.CarParams.SafetyModel.silent, car.CarParams.SafetyModel.noOutput)
+_UNCHECKED_PANDA = object()
 
 
 def fresh_time(stamp, now_ns, lease_ns):
@@ -172,29 +174,36 @@ class EngagementPolicy:
     self.decision = EngagementDecision()
 
   @staticmethod
-  def _panda_healthy(CP, sm, now_ns, lateral):
+  def _panda_healthy(CP, sm, now_ns, lateral, checked_states=None):
     if not fresh_service(sm, 'pandaStates', now_ns, INPUT_LEASE_NS):
       return False
     pandas = sm['pandaStates']
     configs = CP.safetyConfigs
-    ignored = (car.CarParams.SafetyModel.silent, car.CarParams.SafetyModel.noOutput)
     if not configs or len(pandas) < len(configs):
       return False
     checked = False
     for i, ps in enumerate(pandas):
-      if i >= len(configs):
-        if ps.safetyModel not in ignored:
-          return False
-        continue
-      config = configs[i]
-      if config.safetyModel in ignored:
-        if ps.safetyModel not in ignored:
-          return False
+      common = checked_states.get(i, _UNCHECKED_PANDA) if checked_states is not None else _UNCHECKED_PANDA
+      if common is _UNCHECKED_PANDA:
+        if i >= len(configs):
+          common = None if ps.safetyModel in IGNORED_SAFETY_MODELS else False
+        else:
+          config = configs[i]
+          safety_model = config.safetyModel
+          if safety_model in IGNORED_SAFETY_MODELS:
+            common = None if ps.safetyModel in IGNORED_SAFETY_MODELS else False
+          else:
+            common = ps if (ps.safetyModel == safety_model and ps.safetyParam == config.safetyParam
+                            and ps.alternativeExperience == CP.alternativeExperience
+                            and not ps.safetyRxChecksInvalid and not len(ps.faults)) else False
+        if checked_states is not None:
+          checked_states[i] = common
+      if common is False:
+        return False
+      if common is None:
         continue
       checked = True
-      if (ps.safetyModel != config.safetyModel or ps.safetyParam != config.safetyParam
-          or ps.alternativeExperience != CP.alternativeExperience or ps.safetyRxChecksInvalid or len(ps.faults)
-          or not (ps.controlsAllowedLateral if lateral else ps.controlsAllowed)):
+      if not (common.controlsAllowedLateral if lateral else common.controlsAllowed):
         return False
     return checked
 
@@ -214,15 +223,19 @@ class EngagementPolicy:
 
   @staticmethod
   def _lateral_inputs_healthy(sm, CS, now_ns, *, standstill_output_gated=False):
-    return bool(
-      not (CS.steerFaultTemporary or CS.steerFaultPermanent)
-      and all(fresh_service(sm, name, now_ns, INPUT_LEASE_NS) for name in ('modelV2', 'deviceMotion', 'vehicleParameters'))
-      and sm['deviceMotion'].inputsOK and sm['deviceMotion'].posenetOK and sm['vehicleParameters'].valid
-      and finite(CS.steeringAngleDeg, CS.steeringRateDeg, sm['modelV2'].action.desiredCurvature,
-                 sm['vehicleParameters'].steerRatio, sm['vehicleParameters'].stiffnessFactor)
-      and sm['vehicleParameters'].steerRatio > 0 and sm['vehicleParameters'].stiffnessFactor > 0
-      and (sm['carControl'].latActive or standstill_output_gated)
-    )
+    if ((CS.steerFaultTemporary or CS.steerFaultPermanent)
+        or not all(fresh_service(sm, name, now_ns, INPUT_LEASE_NS) for name in ('modelV2', 'deviceMotion', 'vehicleParameters'))):
+      return False
+    device = sm['deviceMotion']
+    if not device.inputsOK or not device.posenetOK:
+      return False
+    vehicle = sm['vehicleParameters']
+    if not vehicle.valid:
+      return False
+    angle, rate, curvature = CS.steeringAngleDeg, CS.steeringRateDeg, sm['modelV2'].action.desiredCurvature
+    steer_ratio, stiffness = vehicle.steerRatio, vehicle.stiffnessFactor
+    return bool(finite(angle, rate, curvature, steer_ratio, stiffness) and steer_ratio > 0 and stiffness > 0
+                and (sm['carControl'].latActive or standstill_output_gated))
 
   @staticmethod
   def _longitudinal_inputs_healthy(sm, now_ns):
@@ -276,16 +289,21 @@ class EngagementPolicy:
       execution = supported and clock_valid and self._execution_healthy(daemon, CS, now_ns)
       mads_enabled = daemon.mads.enabled_toggle is True and bool(daemon.CP.alternativeExperience & MADS_FLAG)
       if execution:
+        # CP and SubMaster are not updated during this synchronous call. Share
+        # only checks already reached by an axis, preserving short circuits;
+        # permissions and freshness remain independently checked. This mapping
+        # is discarded before the next control frame, even for the same receipt.
+        panda_checks = {}
         self.lateral_available = bool(
           mads_enabled and daemon.mads.active
           and self._lateral_inputs_healthy(daemon.sm, CS, now_ns)
-          and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=True)
+          and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=True, checked_states=panda_checks)
         )
         preserve_lateral = self.lateral_available and fault_present and only_long_fault
         self.longitudinal_available = bool(
           daemon.enabled and not (CS.gasPressed or CS.brakePressed or CS.regenBraking)
           and self._longitudinal_inputs_healthy(daemon.sm, now_ns)
-          and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=False)
+          and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=False, checked_states=panda_checks)
         )
         preserve_longitudinal = bool(
           mads_enabled and daemon.enabled and daemon.state_machine.state in (State.enabled, State.overriding)
@@ -308,9 +326,10 @@ class EngagementPolicy:
         recovered_model_lag_lateral = bool(
           recovered_model_lag and mads_enabled and daemon.mads.active
           and self._lateral_inputs_healthy(daemon.sm, CS, now_ns, standstill_output_gated=standstill_output_gated)
-          and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=True)
+          and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=True, checked_states=panda_checks)
         )
-        hold_valid = bool(self._holding(daemon, CS) and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=False))
+        hold_valid = bool(self._holding(daemon, CS)
+                          and self._panda_healthy(daemon.CP, daemon.sm, now_ns, lateral=False, checked_states=panda_checks))
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
       # Unknown inputs may not authorize an exception to the existing exits.
       preserve_lateral = preserve_longitudinal = hold_valid = recovered_model_lag = False

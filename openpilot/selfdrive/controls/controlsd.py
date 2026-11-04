@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass, replace
 from functools import cache
 from numbers import Number
+from typing import NamedTuple
 
 import capnp
 
@@ -49,6 +50,28 @@ LaneChangeDirection = log.LaneChangeDirection
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
 
+class _ReferenceTimingFields(NamedTuple):
+  """Wire fields from one proven immutable plan; no age or authority decision."""
+  timingVersion: int
+  timingKnown: bool
+  sourceCarStateMonoTime: int
+  referenceMonoTime: int
+  producerMonoTime: int
+  producerInstanceMonoTime: int
+  sourceVEgo: float
+  sourceAEgo: float
+  initialVEgo: float
+  initialAEgo: float
+  initialStateKnown: bool
+
+  @classmethod
+  def from_message(cls, message):
+    return cls(message.timingVersion, message.timingKnown, message.sourceCarStateMonoTime,
+               message.referenceMonoTime, message.producerMonoTime, message.producerInstanceMonoTime,
+               message.sourceVEgo, message.sourceAEgo, message.initialVEgo, message.initialAEgo,
+               message.initialStateKnown)
+
+
 @dataclass(frozen=True)
 class _LongitudinalPlanCache:
   message: object
@@ -57,6 +80,7 @@ class _LongitudinalPlanCache:
   key: tuple
   intent: MotionIntent
   command_identity: tuple
+  reference_timing: _ReferenceTimingFields
 
 
 @cache
@@ -194,8 +218,10 @@ class Controls(ControlsExt):
       # is not equal to itself). Preserve the original decoding path for it.
       if intent.braking_accel is not None:
         projection_numbers += (intent.braking_accel,)
+      timing = _ReferenceTimingFields.from_message(long_plan.reference)
+      projection_numbers += (timing.sourceVEgo, timing.sourceAEgo, timing.initialVEgo, timing.initialAEgo)
       if all(math.isfinite(value) for value in projection_numbers):
-        self._longitudinal_plan_cache = _LongitudinalPlanCache(long_plan, self.CP, self.sm, key, intent, command_identity)
+        self._longitudinal_plan_cache = _LongitudinalPlanCache(long_plan, self.CP, self.sm, key, intent, command_identity, timing)
     return intent, command_identity
 
   def state_control(self):
@@ -269,8 +295,10 @@ class Controls(ControlsExt):
     if self.LoC.longitudinal_mode == LongitudinalMode.UNIFIED:
       # Preserve all three times: source epoch, LP Event availability and this
       # actual consumption. Only source age can qualify a measured reference.
+      cached_plan = self._longitudinal_plan_cache
+      timing_message = cached_plan.reference_timing if cached_plan is not None else long_plan.reference
       self.reference_timing_check = self.reference_timing.consume(
-        long_plan.reference, self.sm.logMonoTime['longitudinalPlan'], now_ns,
+        timing_message, self.sm.logMonoTime['longitudinalPlan'], now_ns,
         command_identity=command_identity)
       if (self.reference_timing_check.valid
           and (motion_intent.producer_instance_ns <= 0 or motion_intent.producer_instance_ns != self.reference_timing_check.timing.instance_ns)):

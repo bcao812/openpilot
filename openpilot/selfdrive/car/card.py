@@ -24,7 +24,7 @@ from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
 from openpilot.selfdrive.car.actuation_observation import ActuationObservation
-from openpilot.selfdrive.car.helpers import convert_carControlSP, convert_to_capnp
+from openpilot.selfdrive.car.helpers import CarControlSPConverter, convert_to_capnp
 from openpilot.selfdrive.car.longitudinal_authority import restrict_longitudinal_authority
 
 from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_car_specific_params
@@ -330,7 +330,9 @@ class Car:
       CC = restrict_longitudinal_authority(self.CP, self.CP_SP, CS, CC)
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
-      control_sp = convert_carControlSP(CC_SP)
+      if not hasattr(self, '_car_control_sp_converter'):
+        self._car_control_sp_converter = CarControlSPConverter()
+      control_sp = self._car_control_sp_converter(CC_SP)
       observe(longitudinal_observation, "disposition", "applying", self.sm.frame, initialized=True, passive=self.CP.passive)
       apply_attempt = observe(longitudinal_observation, "begin_apply", self.sm, self.CI, CS, requested_control, CC)
       self.last_actuators_output, can_sends = self.CI.apply(CC, control_sp, now_nanos)
