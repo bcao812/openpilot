@@ -15,6 +15,14 @@ FW_VERSIONS_EXT = {
     (Ecu.eps, 0x18da30f1, None): [
       b'39990-TVA,A150\x00\x00',
     ],
+    # 2019 Accord Hybrid: identical live replies in routes 000000b9/000000ba
+    # (2026-11-03/04). Keep these as ECU-specific versions, not cached CarParams.
+    (Ecu.fwdRadar, 0x18dab0f1, None): [
+      b'36802-TBY-H050\x00\x00',
+    ],
+    (Ecu.fwdCamera, 0x18dab5f1, None): [
+      b'36161-TBY-H030\x00\x00',
+    ],
   },
   CAR.HONDA_CIVIC: {
     (Ecu.eps, 0x18da30f1, None): [

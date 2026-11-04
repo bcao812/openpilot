@@ -22,6 +22,15 @@ def accord_firmware():
           for (ecu, address, sub_address), versions in fw_versions.VERSIONS['honda'][CAR.HONDA_ACCORD].items()]
 
 
+def recorded_accord_firmware():
+  # Actual ECU replies from the user's 2019 Accord Hybrid, independently
+  # recorded at both 2026-11-03 and 2026-11-04 starts (b9/ba segment 0).
+  return [
+    CarParams.CarFw(ecu='fwdCamera', address=0x18dab5f1, fwVersion=b'36161-TBY-H030\x00\x00', brand='honda', bus=1),
+    CarParams.CarFw(ecu='fwdRadar', address=0x18dab0f1, fwVersion=b'36802-TBY-H050\x00\x00', brand='honda', bus=1),
+  ]
+
+
 class TestStartupImports(unittest.TestCase):
   def test_accord_lookup_and_matching_do_not_import_other_interfaces_or_firmware(self):
     # Use a fresh interpreter: ordinary test collection intentionally imports
@@ -90,6 +99,23 @@ class TestStartupImports(unittest.TestCase):
 
 
 class TestHondaStartupQueries(unittest.TestCase):
+  def test_recorded_current_car_has_one_exact_match(self):
+    for brand in (None, 'honda'):
+      with self.subTest(brand=brand):
+        self.assertEqual(fw_versions.match_fw_to_car(recorded_accord_firmware(), VIN_UNKNOWN, query_brand=brand),
+                         (True, {'HONDA_ACCORD'}))
+
+  def test_recorded_match_still_requires_both_current_known_ecus(self):
+    for missing in range(2):
+      for unknown in (False, True):
+        with self.subTest(missing=missing, unknown=unknown):
+          firmware = recorded_accord_firmware()
+          if unknown:
+            firmware[missing].fwVersion = b'unknown'
+          else:
+            firmware.pop(missing)
+          self.assertEqual(fw_versions.match_fw_to_car(firmware, VIN_UNKNOWN, query_brand='honda'), (True, set()))
+
   def test_scoped_match_agrees_with_full_match(self):
     for firmware in (accord_firmware(), [], [CarParams.CarFw(ecu='fwdCamera', address=0x18dab5f1,
                                                            fwVersion=b'unknown', brand='honda')]):
