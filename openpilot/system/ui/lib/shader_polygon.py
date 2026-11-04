@@ -185,15 +185,17 @@ def _configure_shader_color(state: ShaderState, color: Optional[rl.Color],  # no
 
   if gradient is None:
     color_count = 0
+    prepared = False
   else:
-    color_count = gradient.color_count if isinstance(gradient, PreparedGradient) else len(gradient.colors)
+    prepared = isinstance(gradient, PreparedGradient)
+    color_count = gradient.color_count if prepared else len(gradient.colors)
   use_gradient = 1 if color_count else 0
   state.use_gradient_ptr[0] = use_gradient
   rl.set_shader_value(state.shader, state.locations['useGradient'], state.use_gradient_ptr, UNIFORM_INT)
 
   if use_gradient:
-    gradient = cast(Gradient | PreparedGradient, gradient)
-    if isinstance(gradient, PreparedGradient):
+    gradient = cast("Gradient | PreparedGradient", gradient)
+    if prepared:
       colors_ptr, stops_ptr, stop_count = gradient._colors, gradient._stops, gradient.stop_count
     else:
       # Ordinary gradients remain mutable, including in-place color and stop edits.
