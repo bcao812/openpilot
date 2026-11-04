@@ -133,7 +133,7 @@ def main():
     messages = plans(args.frames // reuse, reuse)
     equivalent_frames = check_equivalence(baseline, messages, reuse)
     timings = {'baseline': [], 'candidate': []}
-    for arm, module, projected in (('baseline', baseline, False), ('candidate', controlsd, True)):
+    for module, projected in ((baseline, False), (controlsd, True)):
       measure(module, projected, messages, reuse, min(args.frames, 1000))
     for iteration in range(args.rounds):
       order = ('baseline', 'candidate') if iteration % 2 == 0 else ('candidate', 'baseline')

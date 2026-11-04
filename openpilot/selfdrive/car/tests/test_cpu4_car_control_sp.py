@@ -1,8 +1,14 @@
 """Preserve the complete wire/dataclass and Honda apply contracts when caching."""
 import struct
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+import capnp
 
 from openpilot.cereal import custom
+from openpilot.selfdrive.car import helpers
 from openpilot.selfdrive.car.helpers import CarControlSPConverter, asdictref, convert_carControlSP
 from openpilot.selfdrive.car.tests.test_car_control_sp_conversion import lead_fixture
 
@@ -47,6 +53,7 @@ class TestCPU4CarControlSP(unittest.TestCase):
       with self.subTest(payload=message.to_dict()):
         self.assert_matches_full_converter(converter, message)
         self.assert_matches_full_converter(converter, message.as_reader())
+        message.clear_write_flag()
         with custom.CarControlSP.from_bytes(message.to_bytes()) as received:
           self.assert_matches_full_converter(converter, received)
 
@@ -54,6 +61,51 @@ class TestCPU4CarControlSP(unittest.TestCase):
     present = converter(custom.CarControlSP.new_message(leadOne={}))
     self.assertEqual(missing.leadOne.radarTrackId, 0)
     self.assertEqual(present.leadOne.radarTrackId, -1)
+
+  def test_schema_proof_rejects_nested_values_and_other_schemas_use_full_conversion(self):
+    self.assertTrue(helpers._CAR_CONTROL_SP_CACHE_SUPPORTED)
+    self.assertTrue(helpers._lead_template_schema_supported(custom.LeadData.schema))
+    source = '''@0xfdf34348251fc831;
+struct Evidence {
+  reason @0 :Text;
+  samples @1 :List(Float32);
+}
+struct Lead {
+  dRel @0 :Float32;
+  evidence @1 :Evidence;
+}
+struct Control {
+  leadOne @0 :Lead;
+}
+'''
+    with TemporaryDirectory() as directory:
+      path = Path(directory) / 'nested-evidence.capnp'
+      path.write_text(source)
+      parser = capnp.SchemaParser()
+      schema = parser.load(str(path))
+      self.assertFalse(helpers._lead_template_schema_supported(schema.Lead.schema))
+      message = schema.Control.new_message(leadOne={'dRel': 17.5, 'evidence': {'reason': 'future', 'samples': [1.0, 2.0]}})
+      converter = CarControlSPConverter()
+      self.assert_matches_full_converter(converter, populated_message())
+      with patch.object(helpers, 'convert_carControlSP', wraps=convert_carControlSP) as full:
+        first = self.assert_matches_full_converter(converter, message)
+        self.assertEqual(full.call_count, 1)
+        first.leadOne.evidence['samples'][0] = 99.0
+        second = self.assert_matches_full_converter(converter, message.as_reader())
+        self.assertEqual(full.call_count, 2)
+        self.assertEqual(second.leadOne.evidence['samples'], [1.0, 2.0])
+      self.assertEqual(converter._leads, [None, None])
+
+  def test_unqualified_schema_layout_falls_back_without_reusing_an_old_template(self):
+    converter = CarControlSPConverter()
+    message = populated_message()
+    self.assert_matches_full_converter(converter, message)
+    with patch.object(helpers, '_CAR_CONTROL_SP_CACHE_SUPPORTED', False), \
+         patch.object(helpers, 'convert_carControlSP', wraps=convert_carControlSP) as full:
+      message.leadOne.evidence.reason = 'current replacement'
+      self.assert_matches_full_converter(converter, message)
+      self.assertEqual(full.call_count, 1)
+      self.assertEqual(converter._leads, [None, None])
 
   def test_mutable_reader_and_same_measurement_timestamps_take_current_contents(self):
     message = populated_message()
