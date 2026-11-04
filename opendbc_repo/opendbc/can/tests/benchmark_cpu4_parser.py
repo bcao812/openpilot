@@ -55,7 +55,7 @@ def subscriptions():
   params = CarInterface.get_non_essential_params(CAR.HONDA_ACCORD)
   params.openpilotLongitudinalControl = True
   params.pcmCruise = False
-  params.flags |= HondaFlags.HYBRID
+  params.flags = int(params.flags | HondaFlags.HYBRID)
   params.transmissionType = structs.CarParams.TransmissionType.automatic
   extension = CarInterface.get_non_essential_params_sp(params, CAR.HONDA_ACCORD)
   state = CarState(params, extension)

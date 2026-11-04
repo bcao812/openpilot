@@ -21,8 +21,8 @@ CALIBRATIONS = ((0.0, 0.0, 0.0), (0.12, -0.08, 0.2), (-0.16, 0.05, -0.1))
 def device_motion(acceleration=(0.2, -0.3, 0.4), angular_velocity=(0.004, -0.002, 0.03),
                   std=(0.01, 0.02, 0.03)):
   def measurement(values):
-    return log.DeviceMotion.XYZMeasurement(x=values[0], y=values[1], z=values[2],
-                                          xStd=std[0], yStd=std[1], zStd=std[2], valid=True)
+    return log.DeviceMotion.XYZMeasurement(x=float(values[0]), y=float(values[1]), z=float(values[2]),
+                                          xStd=float(std[0]), yStd=float(std[1]), zStd=float(std[2]), valid=True)
 
   return log.DeviceMotion(
     timestamp=5_000_000_000,
@@ -35,7 +35,7 @@ def device_motion(acceleration=(0.2, -0.3, 0.4), angular_velocity=(0.004, -0.002
 
 
 def calibrate(calibrator, rpy, status=log.ExtrinsicsCalibration.Status.calibrated):
-  calibrator.feed_extrinsics_calibration(log.ExtrinsicsCalibration(rpyCalib=list(rpy), calStatus=status))
+  calibrator.feed_extrinsics_calibration(log.ExtrinsicsCalibration(rpyCalib=[float(value) for value in rpy], calStatus=status))
 
 
 def full_pose_values(calibrator, motion):

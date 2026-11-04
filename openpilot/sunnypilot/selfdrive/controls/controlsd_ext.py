@@ -101,10 +101,11 @@ class ControlsExt(ModelStateBase):
     # Unknown schemas/types and overridden mappers retain the original path.
     mapper = self.get_lead_data
     payload = None
-    if mapper is _DEFAULT_LEAD_MAPPER and isinstance(src, _CAPNP_STRUCT_TYPES) and src.schema == _RADAR_LEAD_SCHEMA:
+    if mapper is _DEFAULT_LEAD_MAPPER and isinstance(src, _CAPNP_STRUCT_TYPES):
       try:
-        reader = src.as_reader() if isinstance(src, capnp.lib.capnp._DynamicStructBuilder) else src
-        payload = reader.as_builder().to_bytes()
+        if src.schema == _RADAR_LEAD_SCHEMA:
+          reader = src.as_reader() if isinstance(src, capnp.lib.capnp._DynamicStructBuilder) else src
+          payload = reader.as_builder().to_bytes()
       except (AttributeError, TypeError, capnp.KjException):
         pass
     if payload is None:
