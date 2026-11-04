@@ -13,7 +13,7 @@ from opendbc.car.honda.values import CAR, FW_QUERY_CONFIG, HondaFlags, HondaSafe
 from opendbc.car.interfaces import get_interface_attr, get_platform
 from opendbc.car.structs import CarParams
 from opendbc.car.vin import VIN_UNKNOWN
-from opendbc.sunnypilot.car.honda.values import HondaFlagsSP
+from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 
 def accord_firmware():
