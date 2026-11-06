@@ -1,12 +1,13 @@
 # 本地修改与优化说明
 
-本文仅列出 `c3xl-dev` 从本地开发起点 `b6c8ff1c6` 到源码版本 `ad81a3991` 之间，由本地开发新增且当前仍生效的修改与优化，供安装前比较。不包含上游仓库的同步、cherry-pick 或直接移植；在上游功能上额外完成的本地修正，只说明本地增加的部分。按首次本地修改的先后顺序排列，同一功能的后续修订合并为当前行为；未列入已撤回或仅用于离线试验的方案。
+本文仅列出 `c3xl-dev` 从本地开发起点 `b6c8ff1c6` 到源码版本 `796e5921e` 之间，由本地开发新增且当前仍生效的修改与优化，供安装前比较。不包含上游仓库的同步、cherry-pick 或直接移植；在上游功能上额外完成的本地修正，只说明本地增加的部分。按首次本地修改的先后顺序排列，同一功能的后续修订合并为当前行为；未列入已撤回或仅用于离线试验的方案。
 
 安装前请先了解适用条件：
 
 - **当前包含专用硬件及开发配置。** 驾驶员摄像头监控停用，使用 C3XL 的 GPIO 蜂鸣器；未系安全带事件检查也在代码中关闭，源码将其标为台架／开发用途。这些是当前版本的实际行为，不能当成通用设备配置。
 - **统一纵向控制限定雅阁平台。** 仅在 `HONDA_ACCORD`、启用 openpilot 纵向控制且没有油门拦截器时启用。下文的统一纵向跟车、停车、起步及故障恢复均指这一组合；使用原厂 ACC 或其他车型时，不会自动获得这些优化。
 - **雅阁雷达融合还有额外条件。** 需要开启 Alpha Longitudinal、Experimental Mode、DEC 和 Radar Signal，并满足当前输入及控制条件；雷达叠加显示还需要单独打开显示开关。
+- **Blendful 是默认关闭的上游可选功能。** 在 Steering／转向设置中开启后，用于 v2 模型。它保留滤波车道置信度、已学习宽度和历史拟合；新画面不再检测到车道线时，仍可能使用此前有效观测形成的拟合，没有固定硬超时。低速、转弯或变道等条件下会渐退，损坏／失效输入会清空修正状态，关闭功能后不再输出该修正；模型状态也可以在横向控制未接通时积累。其曲率修正既影响转向，也可能经自适应 SCC 改变加减速，并非只影响显示；不另行取得启用或重新启用控制的权限，也没有独立改动 FCW 开关，经曲率和 SCC 产生的间接影响未在本次发布中单独验证。
 
 1. **调整停车、低速拖行和起步衔接。** 增加防拖行判断、停车保持和起步输出渐变。当前防拖行辅助必须有仍然有效的停车依据；新的有效观测撤销停车原因后，行驶中的车辆可以继续跟随，避免仅凭旧停车状态反复制动。
 
@@ -22,7 +23,7 @@
 
 7. **移除局域网录像网页和 C3 Director 远程命令服务。** 不再提供原来的 LAN dashcam 网页与 C3 Director 服务。该项不代表关闭 SSH、所有后台连接或所有数据上传。
 
-8. **降低启动、控制和界面的运行开销。** 为当前设备指定 QCOM 后端，减少启动时不必要的后端探测与模块加载，调整后台进程的 CPU 分配；复用控制消息、雷达解码和路径投影结果，减少重复校验与内存分配。界面减少重复布局和文字测量，IP 地址查询移到后台。学习器对已确认无效的窗口提前退出，三个姿态消费者只转换所需角速度；规划器跳过空目标归因和已安装的相同默认约束，界面在同一更新内共享归因解码，并减少两个硬件状态参数的重复写入。状态变化、输入有效期和失败恢复仍逐次检查。仅归纳当前保留的优化，不承诺固定的帧率、温度或耗时收益。
+8. **降低启动、控制和界面的运行开销。** 为当前设备指定 QCOM 后端，减少启动时不必要的后端探测与模块加载，调整后台进程的 CPU 分配；复用控制消息、雷达解码和路径投影结果，减少重复校验与内存分配。界面减少重复布局和文字测量，IP 地址查询移到后台。学习器对已确认无效的窗口提前退出，三个姿态消费者只转换所需角速度；规划器跳过空目标归因和已安装的相同默认约束，界面在同一更新内共享归因解码，并减少两个硬件状态参数的重复写入。补充 CPU4 消息处理与 CAN 解码优化，按需执行启动依赖检查；模型冷启动完成首次有效推理后才启用实时调度，避免冷初始化过早占用实时线程。状态变化、输入有效期和失败恢复仍逐次检查。仅归纳当前保留的优化，不承诺固定的帧率、温度或耗时收益。
 
 9. **完善 C3XL 蜂鸣提示。** 补上紧急接管和重复提醒原先没有声音的问题，区分紧急与普通提醒；使用稳定 GPIO 电平驱动，移除软件 PWM 循环，保留各提示的名义鸣响时长。适用于当前 GPIO 蜂鸣器配置，实际是否播放还受 Sound 选项控制。
 
@@ -46,7 +47,7 @@
 
 19. **增加有条件的低速紧凑停车目标。** 持续低速跟随、前车身份稳定、确认正在停车且满足当前停车余量检查时，可采用更紧凑的目标间距；目标变化或观测异常后重新确认。舒适目标可以收紧到约 3 米，但不是对实际停车距离的保证。
 
-20. **增加雅阁雷达目标可视化。** 显示目标位置、距离和横向边界，并略微加宽辅助生效时的路线显示；在已有目标标记上展示其是否影响当前控制以及作用强弱。未参与控制的雷达点为绿色，参与控制的目标用由浅到深的红色表示。颜色不是检测置信度、碰撞概率或实测制动力。雷达叠加显示默认关闭。
+20. **增加雅阁雷达目标可视化。** 显示目标位置、距离和横向边界，并略微加宽辅助生效时的路线显示；在已有目标标记上展示其是否影响当前控制以及作用强弱。尚未通过测量资格的雷达点为橙色，已通过资格但未被控制采用的点为绿色，参与控制的目标用由浅到深的红色表示。颜色不是检测置信度、碰撞概率或实测制动力。雷达叠加显示默认关闭。
 
 21. **按纵向控制状态保存高清道路录像。** 高清前向／广角录像在纵向控制期间记录，退出后再保留 10 秒；对应开关当前默认开启，可停车设置、下次行程生效。低清录像与驾驶日志继续记录，不随高清录像窗口一起停止。
 
@@ -70,20 +71,26 @@
 
 31. **按当前有效目标重新规划。** 目标被新观测撤销、过期或失去资格后，撤销相关控制约束，并重建依赖该目标的历史规划代价，避免旧目标继续保留停车或减速要求。正常异步扫描仍有短暂复用：测距和测速按各自最后真实测量计龄，消费上限约 200 毫秒；测距超过约 100 毫秒进入预测状态，或收到明确撤销时，会更早失去雷达控制资格。非活动目标身份最多保留 500 毫秒用于关联，不保留旧目标的停车／制动要求。普通有效计划交接不超过原计划／模型／参考的最早 250 毫秒截止时间，不能靠重复使用续期。
 
-32. **加强雷达原始测距、测速的一致性检查。** 正式控制要求连续的原生距离与速度配对，并检查其与距离变化是否一致；改进同一扫描分批到达、目标槽位迁移及重新获取的处理。正式雷达纵向速度不再由位置差分或视觉速度代替。
+32. **加强雷达原始测距、测速的一致性检查。** 正式控制要求连续的原生距离与速度配对，并检查其与距离变化是否一致；改进同一扫描分批到达、目标槽位迁移及重新获取的处理。首次准入后仍持续核对原生测距与 AUX 速度，考虑量化及离散观测区间；矛盾的新观测会撤销原有资格。正式雷达纵向速度不再由位置差分或视觉速度代替。
 
 33. **改进模型短暂延迟后的恢复和提示。** 连续健康的新模型输入至少持续 1 秒，并通过规划和实际消费检查后，允许尚未退出的控制恢复正常状态，减少历史丢帧统计持续触发退出。合并相关模型与定位延迟提示，并区分输入已恢复和仍需接管转向。已经退出的控制不会因此自动重新接管车辆。
 
-34. **新增 Radar Signal 开关。** 默认开启；停车时可选择下一次行程是否采用雷达目标，整次行程保持该选择。关闭后，辅助驾驶及相关目标显示只采用视觉目标；车辆原始 CAN、安全状态和其他输入健康检查仍独立保留。
+34. **新增 Radar Signal 开关。** 入口位于 Cruise／巡航，默认开启；停车时可选择下一次行程是否采用雷达目标，整次行程保持该选择。雷达目标显示开关位于 Visuals／外观。关闭后，辅助驾驶及相关目标显示只采用视觉目标；车辆原始 CAN、安全状态和其他输入健康检查仍独立保留。
 
 35. **新增 Sound 蜂鸣模式。** 普通／Sunnypilot 和 mici 设置页均可选择 None、Warning、All，默认 All。None 关闭全部已映射蜂鸣，包括紧急警告，并停止当前鸣响；Warning 保留警告、提醒和拒绝启用提示，屏蔽启用／退出提示；All 允许全部现有提示。选择会在蜂鸣器主循环中生效并持久保存，参与参数备份；不改变上游告警生成和车辆控制逻辑。参数库同时修复按标志枚举时名称缓冲区被复用的问题，新参数需要匹配的设备 ARM 库。
+
+36. **改善无前车停车后的正常起步识别。** 仅在雅阁停车状态、原始／估计车速及四轮当前测量都支持停稳、没有当前前车、输入健康且模型明确支持前行时，允许有界的近零预测残差，避免极小的预测负速度一直挡住起步。实际轮速必须有新测量，缺失或过期不会当成零速；停车、制动及故障否决仍保留。
+
+37. **完善 Blendful 的本地接入和异常输入处理。** 拒绝重复或倒序的摄像头观测重新建立修正，隔离名义模型动作历史，并完善异常输入处理、渐退和界面缓存。此项仅列本地增加的处理；上游算法本身及其车道历史行为见开头的适用条件。
+
+38. **保留启动时已收到的雅阁固件信息并补充识别。** 启动查询回退时，保留同次启动已经实际收到的 EPS 回复，避免后续漏答抹掉已观察到的转向固件信息；补充本地记录的雅阁摄像头和雷达固件回复。该修改不代表新增所有雅阁车型支持。
 
 <!--
 维护依据：以下信息供核对本地来源、顺序与当前代码使用，不是安装验证报告。
 repository: openpilot-3xl-0817
 branch: c3xl-dev
 baseline: b6c8ff1c6472dbcfec84a7f7d61015f2ad3314d0
-source: ad81a39914a7c06687262ab2386795462ce55564
+source: 796e5921e382fae827430b5a9faa26bb7ac631ce
 scope: local-only; upstream imports excluded; mixed entries describe only the local delta
 order: first local-change commit in git log --first-parent --reverse baseline..source
 来源判定使用提交正文、原始提交和已获取的远端历史，不仅凭作者或本地提交时间。
@@ -123,7 +130,10 @@ d522a554d | 30 | openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.
 62845e719 | 31 | openpilot/selfdrive/car/honda_radar_control.py; openpilot/selfdrive/car/honda_radar_fusion.py; openpilot/selfdrive/controls/lib/lead_qualification.py; openpilot/selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py; openpilot/selfdrive/controls/lib/reference_timing.py
 cc0c60269 | 32 | openpilot/selfdrive/car/honda_radar_native.py; openpilot/selfdrive/car/honda_radar_control.py
 4afacfc1d | 33 | openpilot/selfdrive/selfdrived/model_lag_recovery.py; openpilot/selfdrive/selfdrived/perception_alerts.py; openpilot/selfdrive/selfdrived/engagement_policy.py
-0aff8a3b2 | 34 | openpilot/common/radar_signal.py; openpilot/selfdrive/ui/layouts/settings/toggles.py
+0aff8a3b2 | 34 | openpilot/common/radar_signal.py; openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise.py; openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
 d5f78ebae | 35 | openpilot/common/sound_mode.py; openpilot/common/params_keys.h; openpilot/common/params_c.cc; openpilot/selfdrive/selfdrived/beep.py; openpilot/selfdrive/ui/layouts/settings/toggles.py; openpilot/selfdrive/ui/mici/layouts/settings/toggles.py
 后续修订：ad81a3991 补充条目 8 的六项性能优化；5addda768 将条目 9 改为稳定 GPIO 输出；4d51d5731／68c86683a 修正条目 24 的生产身份条件；e8e3f5311 修复条目 35 的参数名称枚举。
+13005eb52 | 36 | openpilot/selfdrive/controls/lib/model_reference.py; openpilot/selfdrive/controls/lib/unified_longitudinal_planner.py; opendbc_repo/opendbc/car/honda/carstate.py
+14afa9d50 | 37 | openpilot/sunnypilot/modeld_v2/modeld.py; openpilot/sunnypilot/modeld_v2/blendful.py
+2b4873f0b | 38 | opendbc_repo/opendbc/car/car_helpers.py; opendbc_repo/opendbc/sunnypilot/car/honda/fingerprints_ext.py
 -->

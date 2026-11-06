@@ -1,6 +1,35 @@
 ![](https://user-images.githubusercontent.com/47793918/233812617-beab2e71-57b9-479e-8bff-c3931347ca40.png)
 
-> **本地 C3XL 版本：安装前请阅读[本地修改与适用条件](CHANGELOG.zh-CN.md)。** 该说明聚焦本地修改，不包含上游同步／移植的改动；下方保留上游项目介绍。
+# C3XL Accord 分发分支
+
+本仓库的 `c3xl-accord` 分支分发 `c3xl-dev` 当前源码与受跟踪的 ARM 运行文件，车辆代码基于 `796e5921e382fae827430b5a9faa26bb7ac631ce`。安装前请阅读[本地修改与适用条件](CHANGELOG.zh-CN.md)；该清单仅列本地增量。
+
+当前配置面向既有 C3XL／雅阁使用场景，包含停用驾驶员摄像头监控、关闭安全带事件检查和 GPIO 蜂鸣器等专用设置，不能据上游介绍推定为所有 comma 硬件或车型的通用安装包。原有 mr-one API／Athena 服务、自动接受条款／培训和上海时区配置仍保留。
+
+**在设备安装界面选择自定义软件，填写：**
+
+```text
+installer.comma.ai/bcao812/c3xl-accord
+```
+
+安装服务会从本仓库克隆指定分支。不要在该输入框填写普通 GitHub 网页或 ZIP 下载地址。
+
+**下载完整代码并保留版本／更新信息：**
+
+```bash
+git clone --depth 1 --branch c3xl-accord https://github.com/bcao812/openpilot.git
+```
+
+仓库包含模型分片、预编译文件和随树依赖，没有需要额外初始化的 Git 子模块。手工部署应保留克隆生成的 `.git`。启动环境要求 AGNOS 19.7；需要升级系统时，启动流程仍依赖外部 AGNOS 镜像下载。
+
+[下载源码 ZIP](https://github.com/bcao812/openpilot/archive/refs/heads/c3xl-accord.zip) 可用于查看或保存源码。ZIP 不含 `.git`，当前仓库也不提供替代版本元数据的 `build.json`，请使用上述 Git clone 或设备安装入口完成可更新的安装。
+
+本次源码已有相同车辆代码的主机及 ARM 启动相关测试记录，发布前另核对了受跟踪产物的架构和文件完整性。新设备全量安装、真实相机冷启动和道路验证仍为 **NOT RUN**。既有设备测试保留了本机二进制差异（包括 `liblive.so`），不能等同于此 Git 快照已在新设备完整验证。
+
+---
+
+以下保留上游项目介绍与归属信息；上游的车型和硬件范围不代表本分支的验证范围。
+
 
 ## 🌞 What is sunnypilot?
 [sunnypilot](https://github.com/sunnyhaibin/sunnypilot) is a fork of comma.ai's openpilot, an open source driver assistance system. sunnypilot offers the user a unique driving experience for over 300+ supported car makes and models with modified behaviors of driving assist engagements. sunnypilot complies with comma.ai's safety rules as accurately as possible.
